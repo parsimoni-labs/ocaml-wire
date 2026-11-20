@@ -285,6 +285,21 @@ let[@inline always] fold buf off len ~invalid ~valid =
     let stop = len in
     fold_record ~buf ~base ~stop ~invalid ~valid
 
+let[@inline never] fold_frames_short buf ~stride ~last ~off ~init ~invalid
+    ~valid =
+  let acc = ref init in
+  let cursor = ref off in
+  while !cursor <= last do
+    let base = !cursor in
+    let current = !acc in
+    acc :=
+      fold buf base stride
+        ~invalid:(fun () -> invalid current)
+        ~valid:(valid current);
+    cursor := base + stride
+  done;
+  !acc
+
 let[@inline always] frames_opaque ~current ~valid ~f3_ether_type
     ~f5_ipv4_version ~f6_ipv4_ihl ~f7_ipv4_dscp ~f8_ipv4_ecn
     ~f9_ipv4_total_length ~f10_ipv4_identification ~f11_ipv4_flags
@@ -561,52 +576,8 @@ let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
   let cursor = ref off in
   let last = off + len - stride in
   if stride < 34 then
-    while !cursor <= last do
-      let base = !cursor in
-      let current = !acc in
-      acc :=
-        fold buf base stride
-          ~invalid:(fun () -> invalid current)
-          ~valid:(valid current);
-      cursor := base + stride
-    done
-  else (
-    (if stride <= len / 4 then
-       let last_4 = off + len - (4 * stride) in
-       let stride_2 = 2 * stride in
-       let stride_3 = 3 * stride in
-       let stride_4 = 4 * stride in
-       while !cursor <= last_4 do
-         let base = !cursor in
-         let current = !acc in
-         let next =
-           let stop = stride in
-           frames_record ~buf ~base ~stop ~current ~invalid ~valid
-         in
-         acc := next;
-         let base = !cursor + stride in
-         let current = !acc in
-         let next =
-           let stop = stride in
-           frames_record ~buf ~base ~stop ~current ~invalid ~valid
-         in
-         acc := next;
-         let base = !cursor + stride_2 in
-         let current = !acc in
-         let next =
-           let stop = stride in
-           frames_record ~buf ~base ~stop ~current ~invalid ~valid
-         in
-         acc := next;
-         let base = !cursor + stride_3 in
-         let current = !acc in
-         let next =
-           let stop = stride in
-           frames_record ~buf ~base ~stop ~current ~invalid ~valid
-         in
-         acc := next;
-         cursor := !cursor + stride_4
-       done);
+    acc := fold_frames_short buf ~stride ~last ~off ~init:!acc ~invalid ~valid
+  else
     while !cursor <= last do
       let base = !cursor in
       let current = !acc in
@@ -616,7 +587,7 @@ let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
       in
       acc := next;
       cursor := !cursor + stride
-    done);
+    done;
   !acc
 
 type t = {

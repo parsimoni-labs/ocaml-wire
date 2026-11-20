@@ -285,3 +285,11 @@ val shared : shared Codec.t
 (** [shared] has three optional fields whose conditions exclude each other,
     [a = 1 && b = 1], [a = 2 && b = 1] and [c = 1 && b = 2], so the decision
     tree reaches the test of the third from two paths. *)
+
+type stacked = UInt16.t * UInt16.t * checked option
+(** A {!val-stacked} record. *)
+
+val stacked : stacked Codec.t
+(** [stacked] is a kind and flags, then a {!val-checked} record when the kind is
+    [0x0800], as Ethernet carries IPv4. One 64-bit word holds the kind and the
+    fields of the record after it. *)

@@ -87,8 +87,7 @@
   s_bigspan.ml
   s_bigspan.mli
   s_nested.ml
-  s_nested.mli
-  s_nested_step.ml)
+  s_nested.mli)
  (action
   (run ../ocaml/gen.exe --oxcaml --simd)))
 
@@ -165,8 +164,7 @@
   s_bigspan.ml
   s_bigspan.mli
   s_nested.ml
-  s_nested.mli
-  s_nested_step.ml)
+  s_nested.mli)
  (action
   (run ../ocaml/gen.exe --oxcaml)))
 
@@ -239,10 +237,31 @@
   s_bigspan.ml
   s_bigspan.mli
   s_nested.ml
-  s_nested.mli
-  s_nested_step.ml)
+  s_nested.mli)
  (action
   (run ../ocaml/gen.exe)))
+
+; Whether a 64-bit load of wire.runtime returns a boxed int64 to the code
+; generated: never on OxCaml, whose loads give an int64_u; in the dev profile
+; elsewhere, which compiles wire.runtime with -opaque.
+
+(rule
+ (target boxed_loads.ml)
+ (enabled_if
+  (or
+   (= %{ocaml-config:ox} true)
+   (<> %{profile} dev)))
+ (action
+  (write-file %{target} "let v = false\n")))
+
+(rule
+ (target boxed_loads.ml)
+ (enabled_if
+  (and
+   (<> %{ocaml-config:ox} true)
+   (= %{profile} dev)))
+ (action
+  (write-file %{target} "let v = true\n")))
 
 (library
  (name gens_ox)
@@ -283,13 +302,14 @@
   s_huge
   s_bigspan
   s_nested
-  s_nested_step)
+  boxed_loads)
  (libraries
   schemas
   wire
   wire.runtime
   wire.ocaml
   diff_codecs
+  net
   diff_driver
   diff_ocaml
   ocaml_index_ox

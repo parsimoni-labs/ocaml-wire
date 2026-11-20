@@ -13,8 +13,21 @@ open Planner
    assign, so the code for [n] optional fields grows with [n], nested or
    not. *)
 
-(* How the code holds integers: as [int], or on OxCaml as [int64_u]. *)
-type num = Tagged | Unboxed
+(* How the code holds integers. [Tagged] is [int]. [Boxed] is [int64] for
+   values and [int] for positions; the stock compiler keeps such an [int64]
+   unboxed in a register. [Unboxed] is OxCaml's [int64_u]. *)
+type num = Tagged | Boxed | Unboxed
+
+(* How the code holds positions, sizes and bounds: a load takes an [int]. *)
+let pos_num = function Boxed -> Tagged | num -> num
+
+(* The module of the operations on values held as [num], other than [int]. *)
+let i64_ops = function Unboxed -> "U" | Boxed | Tagged -> "Int64"
+
+(* A 64-bit literal written as [digits], an OCaml literal without its
+   suffix. *)
+let lit64 num digits =
+  match num with Unboxed -> "#" ^ digits ^ "L" | _ -> digits ^ "L"
 
 (* The buffer the generated code reads: its type, its unchecked accessors, its
    length, the module of its bounds-checked loads and string copies, the
@@ -140,6 +153,10 @@ type w = {
   sums : (string * sum) list;
       (* The end of each span, by its variable, as a sum over the plan's
          variables. *)
+  ints : Sset.t;
+      (* With [Boxed], the variables that hold an [int]: the window's length
+         and the positions and sizes the walk binds. An expression over values
+         reads them through [Int64.of_int]. *)
   base : string; (* The offset in the buffer of the current window. *)
   limit : string; (* The length of the current window. *)
   known : int; (* Bytes known to be in the window after the position. *)
@@ -155,6 +172,9 @@ type w = {
       (* The outputs known here to be present, or absent. *)
   pinned : bool;
   section : string; (* The case being written, which names its functions. *)
+  held : int list;
+      (* With [Boxed], the words already loaded at constant offsets of the
+         window, by offset. Later prefixes at constant offsets read them. *)
 }
 
 let is_ident_char = function
@@ -303,6 +323,7 @@ let pp_slots m ppf outputs =
         Fmt.pf ppf "let %s = %s in@\n" o.id
           (if o.is_bool then "ref false"
            else if cell m.num ~is_bool:false then "{ B.cell = #0L }"
+           else if m.num = Boxed then "ref 0L"
            else "ref 0"))
     outputs
 
@@ -315,6 +336,7 @@ let output_value m (o : output) =
 let lit num n =
   match num with
   | Tagged -> int_lit n
+  | Boxed -> if n < 0 then Fmt.str "(%dL)" n else Fmt.str "%dL" n
   | Unboxed ->
       if n < 0 then Fmt.str "(-#%LdL)" (Int64.neg (Int64.of_int n))
       else Fmt.str "#%dL" n
@@ -331,15 +353,20 @@ let unboxed_op = function
 let binop num op a b =
   match num with
   | Tagged -> Fmt.str "(%s %s %s)" a op b
-  | Unboxed -> Fmt.str "(U.%s %s %s)" (unboxed_op op) a b
+  | Boxed | Unboxed -> Fmt.str "(%s.%s %s %s)" (i64_ops num) (unboxed_op op) a b
 
+(* The type annotation lets the stock compiler compare two [int64] inline. *)
 let relation num op a b =
   match num with
   | Tagged -> Fmt.str "((%s : int) %s %s)" a op b
+  | Boxed -> Fmt.str "((%s : int64) %s %s)" a op b
   | Unboxed -> Fmt.str "(U.compare %s %s %s 0)" a b op
 
-(* An [int64_u] holds the value of a 63-bit [int] sign-extended. *)
-let normalise63 v = Fmt.str "(U.shift_right (U.shift_left %s 1) 1)" v
+(* An [int64] or [int64_u] holds the value of a 63-bit [int]
+   sign-extended. *)
+let normalise63 num v =
+  let u = i64_ops num in
+  Fmt.str "(%s.shift_right (%s.shift_left %s 1) 1)" u u v
 
 (* [e] as OCaml over the variables bound so far. [ov] is set when it holds an
    operation that may overflow, which then raises: [Arith.Overflow] in a walk
@@ -357,9 +384,18 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
       in
       match num with
       | Tagged -> Fmt.str "(%s %s %s)" fn (p a) (p b)
-      | Unboxed ->
-          Fmt.str "(U.of_int (%s (U.to_int %s) (U.to_int %s)))" fn (p a) (p b)
+      | Boxed | Unboxed ->
+          let u = i64_ops num in
+          Fmt.str "(%s.of_int (%s (%s.to_int %s) (%s.to_int %s)))" u fn u (p a)
+            u (p b)
     end
+  in
+  (* A shift's distance is an [int]. With [Boxed], a literal is written as
+     is. *)
+  let distance (b : int T.expr) =
+    match (num, b) with
+    | Boxed, T.Int n -> string_of_int n
+    | _ -> Fmt.str "(%s.to_int %s)" (i64_ops num) (p b)
   in
   let cmp : type b. string -> b T.expr -> b T.expr -> string =
    fun op a b ->
@@ -378,7 +414,10 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
   | T.Ref (T.I, v) -> (
       match List.assoc_opt v w.settled with
       | Some _ -> lit num 0
-      | None -> if is_slot w.m v then slot_read num ~is_bool:false v else v)
+      | None when is_slot w.m v -> slot_read num ~is_bool:false v
+      | None when num = Boxed && Sset.mem v w.ints ->
+          Fmt.str "(Int64.of_int %s)" v
+      | None -> v)
   | T.Add (a, b) -> arith_op T.checked_add "add" "+" a b
   | T.Sub (a, b) -> arith_op T.checked_sub "sub" "-" a b
   | T.Mul (a, b) -> arith_op T.checked_mul "mul" "*" a b
@@ -388,27 +427,32 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
   | T.Lnot a -> (
       match num with
       | Tagged -> Fmt.str "(lnot %s)" (p a)
-      | Unboxed -> Fmt.str "(U.lognot %s)" (p a))
+      | Boxed | Unboxed -> Fmt.str "(%s.lognot %s)" (i64_ops num) (p a))
   | T.Lsl (a, b) -> (
       match num with
       | Tagged -> Fmt.str "(%s lsl %s)" (p a) (p b)
-      | Unboxed ->
-          let v = Fmt.str "(U.shift_left %s (U.to_int %s))" (p a) (p b) in
-          if fst (range w.ranges e) >= 0 then v else normalise63 v)
+      | Boxed | Unboxed ->
+          let v =
+            Fmt.str "(%s.shift_left %s %s)" (i64_ops num) (p a) (distance b)
+          in
+          if fst (range w.ranges e) >= 0 then v else normalise63 num v)
   | T.Lsr (a, b) -> (
       match num with
       | Tagged -> Fmt.str "(%s lsr %s)" (p a) (p b)
-      | Unboxed ->
+      | Boxed | Unboxed ->
+          let u = i64_ops num in
           let nonnegative = fst (range w.ranges a) >= 0 in
           let input =
             if nonnegative then p a
-            else Fmt.str "(U.logand %s #0x7fffffffffffffffL)" (p a)
+            else
+              Fmt.str "(%s.logand %s %s)" u (p a)
+                (lit64 num "0x7fffffffffffffff")
           in
           let v =
-            Fmt.str "(U.shift_right_logical %s (U.to_int %s))" input (p b)
+            Fmt.str "(%s.shift_right_logical %s %s)" u input (distance b)
           in
           let lo, hi = range w.ranges b in
-          if nonnegative || (lo > 0 && hi < 64) then v else normalise63 v)
+          if nonnegative || (lo > 0 && hi < 64) then v else normalise63 num v)
   | T.Eq (a, b) -> cmp "=" a b
   | T.Ne (a, b) -> cmp "<>" a b
   | T.Lt (a, b) -> cmp "<" a b
@@ -434,7 +478,7 @@ let addr num o k =
   if k = 0 then o
   else
     match num with
-    | Tagged -> Fmt.str "(%s + %d)" o k
+    | Tagged | Boxed -> Fmt.str "(%s + %d)" o k
     | Unboxed -> Fmt.str "(U.add %s #%dL)" o k
 
 (* A load at [o + k]. An [int64_u] position is the offset of the wider loads
@@ -455,10 +499,10 @@ let load m ~o ~k ~bytes ~endian =
       | 2 -> Fmt.str "(%s.u16%s_at buf %s)" m.src.u e at
       | 4 -> Fmt.str "(%s.i32%s_at buf %s)" m.src.u e at
       | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
-  | Tagged, _ | Unboxed, 1 -> (
+  | (Tagged | Boxed), _ | Unboxed, 1 -> (
       let at =
         match m.num with
-        | Tagged -> addr m.num o k
+        | Tagged | Boxed -> addr Tagged o k
         | Unboxed when k = 0 -> Fmt.str "(B.offset %s)" o
         | Unboxed -> Fmt.str "(B.offset %s + %d)" o k
       in
@@ -481,7 +525,7 @@ let load m ~o ~k ~bytes ~endian =
    not taken from a word. *)
 let in_word num f =
   match f.store with
-  | Int { width = 8; _ } | Bits { base = T.U8; _ } -> num = Tagged
+  | Int { width = 8; _ } | Bits { base = T.U8; _ } -> num <> Unboxed
   | Int { width = 16 | 32; endian = T.Big; _ } -> true
   | Bits { base = T.U16 T.Big | T.U32 T.Big; _ } -> true
   | _ -> false
@@ -526,7 +570,7 @@ let u16_in_word m ~size ~raw ~o ~k ~endian =
   let i32 = i32 m.src in
   let low, high =
     match m.num with
-    | Tagged ->
+    | Tagged | Boxed ->
         let mask v =
           if raw then Fmt.str "(%s)" v else Fmt.str "(%s land 0xffff)" v
         in
@@ -576,6 +620,20 @@ let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
       else
         Fmt.str "(U.logand %s #%LdL)" shifted
           (Int64.pred (Int64.shift_left 1L (8 * bytes)))
+  | Boxed, Some a when bytes = 1 || endian = T.Big ->
+      let shift = 8 * (a + 8 - k - bytes) in
+      let shifted =
+        if shift = 0 then Fmt.str "w%d" a
+        else Fmt.str "(Int64.shift_right_logical w%d %d)" a shift
+      in
+      if a = k || raw then shifted
+      else
+        Fmt.str "(Int64.logand %s %LdL)" shifted
+          (Int64.pred (Int64.shift_left 1L (8 * bytes)))
+  | Boxed, _ when bytes = 4 ->
+      let v = Fmt.str "(Int64.of_int32 %s)" (load m ~o ~k ~bytes ~endian) in
+      if raw then v else Fmt.str "(Int64.logand %s 0xffffffffL)" v
+  | Boxed, _ -> Fmt.str "(Int64.of_int %s)" (load m ~o ~k ~bytes ~endian)
   | Tagged, _ when bytes = 4 ->
       Fmt.kstr mask32 "%s.to_int %s" (i32 m.src) (load m ~o ~k ~bytes ~endian)
   | Tagged, _ when bytes = 2 -> (
@@ -616,8 +674,9 @@ let value m ?size ?bitword ~o ~words ~k f =
     | Tagged ->
         Fmt.str "((%s lsl (Sys.int_size - %d)) asr (Sys.int_size - %d))" v width
           width
-    | Unboxed ->
-        Fmt.str "(U.shift_right (U.shift_left %s %d) %d)" v (64 - width)
+    | Boxed | Unboxed ->
+        let u = i64_ops m.num in
+        Fmt.str "(%s.shift_right (%s.shift_left %s %d) %d)" u u v (64 - width)
           (64 - width)
   in
   match f.store with
@@ -636,22 +695,26 @@ let value m ?size ?bitword ~o ~words ~k f =
             if shift = 0 then word else Fmt.str "(%s lsr %d)" word shift
           in
           if whole then v else Fmt.str "(%s land %s)" v (mask width)
-      | Unboxed ->
+      | Boxed | Unboxed ->
+          let u = i64_ops m.num in
           let v =
             if shift = 0 then word
-            else Fmt.str "(U.shift_right_logical %s %d)" word shift
+            else Fmt.str "(%s.shift_right_logical %s %d)" u word shift
           in
           if whole then v
           else
-            Fmt.str "(U.logand %s #%LdL)" v
-              (Int64.pred (Int64.shift_left 1L width)))
+            Fmt.str "(%s.logand %s %s)" u v
+              (lit64 m.num
+                 (Int64.to_string (Int64.pred (Int64.shift_left 1L width)))))
   | Int { width = 32; signed = true; endian } when m.num = Tagged ->
       Fmt.str "(%s.to_int %s)" (i32 m.src)
         (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian)
   | Int { width; signed; endian } ->
+      (* The sign extension drops what an [int64] holds above the field. *)
+      let raw = signed && m.num = Boxed in
       let v =
-        unsigned m ?size ~o ~words ~k:(k + f.offset) ~bytes:(width / 8) ~endian
-          ()
+        unsigned m ?size ~raw ~o ~words ~k:(k + f.offset) ~bytes:(width / 8)
+          ~endian ()
       in
       if signed then sign v width else v
   | Bytes n ->
@@ -662,6 +725,7 @@ let value m ?size ?bitword ~o ~words ~k f =
 (* {2 Walking the plan} *)
 
 let pos_expr num p =
+  let num = pos_num num in
   match p.var with
   | None -> lit num p.at
   | Some v -> if p.at = 0 then v else binop num "+" v (lit num p.at)
@@ -691,7 +755,9 @@ let check w failure (cond : bool T.expr) =
    The variables bound so far in the function being written, each with the
    type a function cut out of it writes for it, when inference needs one. *)
 
-let num_type w = match w.m.num with Unboxed -> Some "int64_u" | Tagged -> None
+let num_type w =
+  match w.m.num with Unboxed -> Some "int64_u" | Tagged | Boxed -> None
+
 let bind ?ty w v = { w with scope = (v, ty) :: w.scope }
 let bind_num w v = bind ?ty:(num_type w) w v
 
@@ -711,7 +777,10 @@ let output_text w (o : output) =
    whose [x] no later line of its function reads is dropped, until none
    is. *)
 
-let is_function line = String.starts_with ~prefix:"let[@inline always]" line
+(* A top-level function the scanner writes, inlined or not. *)
+let is_function line =
+  String.starts_with ~prefix:"let[@inline always]" line
+  || String.starts_with ~prefix:"let[@inline never]" line
 
 let rec prune lines =
   let lines = Array.of_list lines in
@@ -834,15 +903,32 @@ let refine w conditions =
 
 let nonnegative w e = nonnegative_in w.ranges w.facts e
 
+(* The variable [x] as a value. With [Boxed], an [int] variable is widened. *)
+let widen w x =
+  if w.m.num = Boxed && Sset.mem x w.ints then Fmt.str "(Int64.of_int %s)" x
+  else x
+
+(* The bytes of the window after the variable part of [p], and how that
+   expression holds integers. With [Boxed], a window whose length is a span's
+   size is measured as an [int64]. *)
+let room w p =
+  let num =
+    if w.m.num = Boxed && not (Sset.mem w.limit w.ints) then Boxed
+    else pos_num w.m.num
+  in
+  let room =
+    match p.var with
+    | None -> w.limit
+    | Some v -> binop num "-" w.limit (if num = Boxed then widen w v else v)
+  in
+  (num, room)
+
 (* The window has [need] bytes from [p]. An end at [Planner.beyond] always
    fails the check, so the code after it is unreachable and checks nothing. *)
 let bound w p need =
   if w.known >= need then w
   else begin
-    let num = w.m.num in
-    let room =
-      match p.var with None -> w.limit | Some v -> binop num "-" w.limit v
-    in
+    let num, room = room w p in
     let ends = extent p.at need in
     pf w "if %s then %s else@\n"
       (relation num "<" room (lit num ends))
@@ -858,7 +944,7 @@ let address w p =
   | None -> (w, w.base, p.at)
   | Some v ->
       let o = w.fresh "o" in
-      pf w "let %s = %s in@\n" o (binop w.m.num "+" w.base v);
+      pf w "let %s = %s in@\n" o (binop (pos_num w.m.num) "+" w.base v);
       (bind_num w o, o, p.at)
 
 (* Bitfields read through their word, by the variable holding it: a test of
@@ -946,10 +1032,63 @@ let bind_bitword w ((_, base), v) =
     }
   else w
 
+(* The words a prefix loads with [Boxed], where a word costs one load and a
+   field a shift and a mask. A word is loaded when it holds two or more
+   fields that no word of [held] holds, counting the fields of the later
+   prefixes, [later]. It starts at the first such field, moved back to stay
+   between [lo] and [hi], the bytes known to be in the window. The fields are
+   sorted by offset and scanned once, so the cost is linear in their number. *)
+let shared_words ~held ~lo ~hi ~later live =
+  let worded = List.filter (in_word Boxed) in
+  let by_offset = List.sort (fun a b -> Int.compare a.offset b.offset) in
+  let live = by_offset (worded live) in
+  let candidates = Array.of_list (by_offset (live @ worded later)) in
+  let starts = Hashtbl.create 16 in
+  List.iter (fun a -> Hashtbl.replace starts a ()) held;
+  let unheld g =
+    let last = g.offset and first = g.offset + width_bytes g.store - 8 in
+    let rec free a =
+      a > last || ((not (Hashtbl.mem starts a)) && free (a + 1))
+    in
+    free (max 0 first)
+  in
+  let next = ref 0 in
+  List.fold_left
+    (fun chosen f ->
+      let a = max lo (min f.offset (hi - 8)) in
+      while !next < Array.length candidates && candidates.(!next).offset < a do
+        incr next
+      done;
+      let rec served i acc =
+        if i >= Array.length candidates || candidates.(i).offset >= a + 8 then
+          acc
+        else
+          let g = candidates.(i) in
+          served (i + 1)
+            (if covers a g && unheld g && not (List.mem g.offset acc) then
+               g.offset :: acc
+             else acc)
+      in
+      if
+        unheld f
+        && a + 8 <= hi
+        && covers a f
+        && List.compare_length_with (served !next []) 1 > 0
+      then begin
+        Hashtbl.replace starts a ();
+        a :: chosen
+      end
+      else chosen)
+    [] live
+  |> List.rev
+
 (* The words a prefix at [o + k] of [size] bytes loads once: the 64-bit ones
    two or more live fields share, then each word of a live bitfield, which
-   the bitfields' views read. *)
-let load_words w ~o ~k ~size live =
+   the bitfields' views read. With [Boxed], the words are [shared_words]
+   between [lo] and [hi]. A prefix at a constant offset of the window
+   ([constant]) reads the words loaded before it and keeps its own for the
+   prefixes after it. *)
+let load_words w ~o ~k ~size ~constant ~lo ~hi ~later live =
   let m = w.m in
   (* A 32-bit field bound as its [int32] is one load of its own. *)
   let worded =
@@ -958,17 +1097,25 @@ let load_words w ~o ~k ~size live =
         match f.store with Int { width = 32; _ } -> not m.raw32 | _ -> true)
       live
   in
-  let words = words m.num ~size worded in
+  let held = if constant then w.held else [] in
+  let fresh =
+    match m.num with
+    | Boxed ->
+        let at f = { f with offset = extent k f.offset } in
+        shared_words ~held ~lo ~hi ~later (List.map at worded)
+    | Tagged | Unboxed -> List.map (fun a -> k + a) (words m.num ~size worded)
+  in
   let w =
     List.fold_left
       (fun w a ->
-        let v = load m ~o ~k:(k + a) ~bytes:8 ~endian:T.Big in
-        let name = Fmt.str "w%d" (k + a) in
+        let v = load m ~o ~k:a ~bytes:8 ~endian:T.Big in
+        let name = Fmt.str "w%d" a in
         pf w "let %s = %s in@\n" name v;
         bind_num w name)
-      w words
+      w fresh
   in
-  let words = List.map (fun a -> k + a) words in
+  let words = held @ fresh in
+  let w = if constant && m.num = Boxed then { w with held = words } else w in
   let bitwords =
     List.filter_map
       (fun f ->
@@ -1074,14 +1221,50 @@ let word_range w bitwords f g =
     Option.bind (Planner.word_range f g) (fun (at, lo, hi) ->
         Option.map (fun word -> (word, lo, hi)) (List.assoc_opt at bitwords))
 
-(* A prefix, then [k] with the state and position after it. The fields after
-   one that would make the function too deep or too long go in a function of
-   their own. *)
-let prefix w fields size p ~need k =
+(* The live fields that start before [until] in the prefixes of [nodes], at
+   constant offsets from [at]. The prefix that starts each optional field of
+   a following run counts too. *)
+let rec following live ~until at nodes =
+  if at >= until then []
+  else
+    match nodes with
+    | Prefix (fields, n) :: rest ->
+        List.filter_map
+          (fun f ->
+            let offset = extent at f.offset in
+            if Sset.mem f.id live && offset < until then Some { f with offset }
+            else None)
+          fields
+        @ following live ~until (extent at n) rest
+    | Test _ :: rest -> following live ~until at rest
+    | Gate _ :: _ as gates -> starts live ~until at gates
+    | (Span _ | Region _) :: _ | [] -> []
+
+and starts live ~until at = function
+  | Gate (_, _, _, body) :: rest ->
+      following live ~until at body @ starts live ~until at rest
+  | _ -> []
+
+(* A prefix, then [k] with the state and position after it, [after] the
+   nodes that follow it. The fields after one that would make the function
+   too deep or too long go in a function of their own. *)
+let prefix w fields size p ~need ~after k =
   let w = bound w p need in
   let w, o, at = address w p in
   let live = List.filter (fun f -> Sset.mem f.id w.m.live) fields in
-  let w, words, bitwords = load_words w ~o ~k:at ~size live in
+  (* The bytes known to be in the window start at 0 for a prefix at a
+     constant offset, and at the prefix otherwise. *)
+  let constant = Option.is_none p.var in
+  let lo = if constant then 0 else at and hi = extent at w.known in
+  (* A word that holds a field of this prefix ends within 8 bytes of it. *)
+  let ends = extent at size in
+  let later =
+    if constant then following w.m.live ~until:(extent ends 8) ends after
+    else []
+  in
+  let w, words, bitwords =
+    load_words w ~o ~k:at ~size ~constant ~lo ~hi ~later live
+  in
   let field ?checked w f = field ?checked w ~o ~k:at ~size ~words ~bitwords f in
   let rec go w = function
     | [] ->
@@ -1168,9 +1351,12 @@ let cancelled w size p =
 (* The test that a span of [n] bytes at [p] ends past the window, or that [n]
    is negative unless [nonnegative]. *)
 let outside w ~ov ~nonnegative size p n =
-  let num = w.m.num in
-  let room =
-    match p.var with None -> w.limit | Some v -> binop num "-" w.limit v
+  let num, room = room w p in
+  (* An [int64] size is compared as one. *)
+  let num, room =
+    if w.m.num = Boxed && num <> Boxed then
+      (Boxed, Fmt.str "(Int64.of_int %s)" room)
+    else (num, room)
   in
   let room = if p.at = 0 then room else binop num "-" room (lit num p.at) in
   let upper =
@@ -1215,6 +1401,7 @@ let bind_span w ~ov ~implied ~n_range ~ends size p n e =
     w with
     ranges = Smap.add e e_range (Smap.add n n_range w.ranges);
     sums = (match sum with Some s -> (e, s) :: w.sums | None -> w.sums);
+    ints = Sset.add e w.ints;
   }
 
 (* A span of [size] bytes at [p]: its size, bound to a variable, and where it
@@ -1224,14 +1411,14 @@ let bind_span w ~ov ~implied ~n_range ~ends size p n e =
    plan; compilers do it on code, as Go's [prove] pass and ABCD (Bodik, Gupta
    and Sarkar, PLDI 2000). *)
 let span ?(implied = false) w size p =
-  let num = w.m.num in
+  let num = pos_num w.m.num in
   let ov = ref false in
   let s = expr w ov size in
   let ov = !ov in
   let n = w.fresh "n" in
   if ov then
     pf w "let %s = match %s with n -> n | exception %s.Overflow -> %s in@\n" n s
-      arith (lit num (-1))
+      arith (lit w.m.num (-1))
   else pf w "let %s = %s in@\n" n s;
   let nonnegative = (not ov) && nonnegative w size in
   let lo, hi = range w.ranges size in
@@ -1243,7 +1430,9 @@ let span ?(implied = false) w size p =
       (outside w ~ov ~nonnegative size p n)
       (w.m.fail Bounds);
   let e = w.fresh "e" in
-  pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n);
+  (* With [Boxed], the end is a position, so an [int]. *)
+  let n_int = if w.m.num = Boxed then Fmt.str "(Int64.to_int %s)" n else n in
+  pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n_int);
   let w = bind_span w ~ov ~implied ~n_range ~ends size p n e in
   ({ w with known = 0; depth = w.depth + 1 }, n, { var = Some e; at = 0 })
 
@@ -1351,7 +1540,7 @@ let jump w ~j ~exported gates ~fired p =
      a call that is not a tail call may apply: the compiler still makes the
      join a jump. *)
   pf w "%s %a %s%s@\n" j pp_list args (pos_expr num p)
-    (match num with Unboxed -> " [@nontail]" | Tagged -> "")
+    (match num with Unboxed -> " [@nontail]" | Tagged | Boxed -> "")
 
 (* The outputs of [gates] a copied continuation reads: those of the case
    [fired], or of none, are absent. A walk cut into functions writes them as
@@ -1571,7 +1760,8 @@ let define_join w ~j ~exported indexed gates k =
       { w with known = 0; depth = w.depth + 1 }
       outputs
   in
-  scoped w (fun () -> k (bind_num inner e) { var = Some e; at = 0 });
+  let inner = { (bind_num inner e) with ints = Sset.add e inner.ints } in
+  scoped w (fun () -> k inner { var = Some e; at = 0 });
   pf w "in@\n";
   fun ~fired w' p -> jump w' ~j ~exported indexed ~fired p
 
@@ -1636,7 +1826,8 @@ and step w nodes p k =
   match nodes with
   | [] -> k w p
   | Prefix (fields, size) :: rest ->
-      prefix w fields size p ~need:(ahead nodes) (fun w p -> walk w rest p k)
+      prefix w fields size p ~need:(ahead nodes) ~after:rest (fun w p ->
+          walk w rest p k)
   | Span size :: rest ->
       let w, _, p = span ~implied:(checks_next w rest) w size p in
       walk w rest p k
@@ -1647,7 +1838,7 @@ and step w nodes p k =
       let w', n, stop = span w size p in
       let b = w.fresh "b" in
       pf w' "let %s = %s in@\n" b
-        (binop w.m.num "+" w.base (pos_expr w.m.num p));
+        (binop (pos_num w.m.num) "+" w.base (pos_expr w.m.num p));
       let w' = bind_num w' b in
       walk
         {
@@ -1656,6 +1847,7 @@ and step w nodes p k =
           limit = n;
           known = 0;
           tail = w.tail && copyable rest;
+          held = [];
         }
         body { var = None; at = 0 }
         (fun w'' cp ->
@@ -1663,7 +1855,10 @@ and step w nodes p k =
             if at_most then w''
             else begin
               pf w'' "if %s then %s else@\n"
-                (relation w.m.num "<>" (pos_expr w.m.num cp) n)
+                (let at = pos_expr w.m.num cp in
+                 if w.m.num = Boxed then
+                   relation Boxed "<>" (Fmt.str "(Int64.of_int %s)" at) n
+                 else relation w.m.num "<>" at n)
                 (w.m.fail Bounds);
               { w'' with depth = w''.depth + 1 }
             end
@@ -1675,6 +1870,7 @@ and step w nodes p k =
               limit = w.limit;
               known = 0;
               tail = w.tail;
+              held = w.held;
             }
             rest stop k)
   | Gate _ :: _ ->
@@ -1767,6 +1963,7 @@ let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
       deferred = ref [];
       bounded = [];
       sums = [];
+      ints = Sset.singleton limit;
       base;
       limit;
       known;
@@ -1779,6 +1976,7 @@ let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
       settled = [];
       pinned = false;
       section = "";
+      held = [];
     }
   in
   let p = { var = None; at = 0 } in

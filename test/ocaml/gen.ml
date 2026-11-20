@@ -3,17 +3,23 @@ let write file s =
   output_string oc s;
   close_out oc
 
-(* A consumer the scanner of [c] calls by name, which adds up the outputs. *)
+(* [Step], the consumer the scanner of [c] calls by name, adds up the outputs,
+   which it takes as [int64]. The scanner's module defines it first, so the
+   compiler inlines it in every profile and no output is boxed. *)
 let summed c =
   let fields = Wire_ocaml.scanner_fields c in
   let args = List.map (fun (name, _) -> "~" ^ name) fields
   and terms =
     List.map
-      (fun (name, is_bool) -> if is_bool then "Bool.to_int " ^ name else name)
+      (fun (name, is_bool) ->
+        if is_bool then "Bool.to_int " ^ name else "Int64.to_int " ^ name)
       fields
   in
-  "type t = int\n\nlet invalid acc = acc - 1\nlet valid acc "
-  ^ String.concat " " args ^ " =\nacc + " ^ String.concat " + " terms ^ "\n"
+  "module Step = struct\n\
+   type t = int\n\n\
+   let invalid acc = acc - 1\n\
+   let[@inline] valid acc " ^ String.concat " " args ^ " =\nacc + "
+  ^ String.concat " + " terms ^ "\nend\n\n"
 
 (* [--oxcaml] generates for the OxCaml target, and [--simd] adds the SIMD
    lanes of the records that have them (OxCaml on arm64 or amd64). Each module
@@ -37,10 +43,21 @@ let () =
     write (base name ^ "_wire.ml") (Wire_ocaml.bridge ?maps ~codec ~core c);
     write (base name ^ "_wire.mli") (Wire_ocaml.bridge_mli ?maps ~codec ~core c)
   in
-  let s name ?step codec c =
+  let s name ?(step = false) codec c =
     let codec = "Schemas." ^ codec in
-    write name (Wire_ocaml.scanner ~target ?step ~codec c);
-    write (name ^ "i") (Wire_ocaml.scanner_mli ~target ?step ~codec c)
+    let ml = Wire_ocaml.scanner ~target ~codec c
+    and mli = Wire_ocaml.scanner_mli ~target ~codec c in
+    if not step then begin
+      write name ml;
+      write (name ^ "i") mli
+    end
+    else begin
+      let step = "Step" in
+      write name (summed c ^ Wire_ocaml.scanner ~target ~step ~codec c);
+      write (name ^ "i")
+        ("module Step : sig\n  type t = int\nend\n\n"
+        ^ Wire_ocaml.scanner_mli ~target ~step ~codec c)
+    end
   in
   g "g_ipv4.ml" "ipv4" Schemas.ipv4;
   g "g_ipv4_record.ml" ~make:false "ipv4" Schemas.ipv4;
@@ -57,12 +74,11 @@ let () =
   s "s_sized.ml" "sized" Schemas.sized;
   s "s_overflow.ml" "overflow" Schemas.overflow;
   s "s_skipped.ml" "skipped" Schemas.skipped;
-  s "s_deep.ml" "deep 32 (Sys.max_string_length - 1)"
+  s "s_deep.ml" ~step:true "deep 32 (Sys.max_string_length - 1)"
     (Schemas.deep 32 (Sys.max_string_length - 1));
-  s "s_huge.ml" "huge" Schemas.huge;
+  s "s_huge.ml" ~step:true "huge" Schemas.huge;
   s "s_bigspan.ml" "bigspan" Schemas.bigspan;
-  write "s_nested_step.ml" (summed (Schemas.nested 12));
-  s "s_nested.ml" ~step:"S_nested_step" "nested 12" (Schemas.nested 12);
+  s "s_nested.ml" ~step:true "nested 12" (Schemas.nested 12);
   g "g_mapped.ml" "mapped" Schemas.mapped
     ~maps:
       Wire_ocaml.

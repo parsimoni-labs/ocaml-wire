@@ -75,10 +75,27 @@
   s_bigspan.ml
   s_bigspan.mli
   s_nested.ml
-  s_nested.mli
-  s_nested_step.ml)
+  s_nested.mli)
  (action
   (run ./gen.exe)))
+
+; Whether a 64-bit load of wire.runtime returns a boxed int64 to the code
+; generated for OCaml: in the dev profile, which compiles wire.runtime with
+; -opaque, the call is not inlined.
+
+(rule
+ (target boxed_loads.ml)
+ (enabled_if
+  (= %{profile} dev))
+ (action
+  (write-file %{target} "let v = true\n")))
+
+(rule
+ (target boxed_loads.ml)
+ (enabled_if
+  (<> %{profile} dev))
+ (action
+  (write-file %{target} "let v = false\n")))
 
 (test
  (name test)
@@ -119,13 +136,14 @@
   s_huge
   s_bigspan
   s_nested
-  s_nested_step)
+  boxed_loads)
  (libraries
   schemas
   wire
   wire.runtime
   wire.ocaml
   diff_codecs
+  net
   diff_ocaml
   diff_driver
   ocaml_index

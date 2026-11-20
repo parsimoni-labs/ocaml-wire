@@ -74,13 +74,20 @@ the codec's error for a fixed record, and `fold`, `fold_frames` and `decode`
 shape in scope. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
-their consumer by name, with no closure call and no allocation per frame.
-Their loop over frames is unrolled four times, then walks the remaining
-frames one by one. OCaml polls for signals and other domains once per loop
-iteration, so the unrolled loop polls once per four frames. The loop over
-frames that hold the leading prefixes comes last in the function, where the
-compiler closes it with one branch. The invariants above hold for it as
-follows.
+their consumer by name, with no closure call. They allocate nothing per
+frame where the compiler inlines the consumer and the runtime's loads.
+
+On OxCaml their loop over frames is unrolled four times, then walks the
+remaining frames one by one. OCaml polls for signals and other domains once
+per loop iteration, so the unrolled loop polls once per four frames. On
+OCaml the loop walks one frame per iteration, because four inlined walks
+cost the stock compiler more in spilled registers than the polls they save.
+The loop over frames that hold the leading prefixes comes last in the
+function, where the compiler closes it with one branch. On OCaml the loop
+over frames too short for it is a function of its own, called once per
+batch, so that its variables take no register from the main loop.
+
+The invariants above hold for the generated code as follows.
 
 - **Unchecked reads stay in the frame.** A prefix is read only after one
   check that the bytes it spans, and those of the prefixes and where clauses
@@ -143,6 +150,36 @@ follows.
   the top bits of a word and a lower bound on the bits right below into one
   range test of the word: the IPv4 version and header length are one byte in
   `[0x45, 0x4f]`.
+
+On OCaml, `fold_step` and `fold_frames_step` hold each field value as an
+`int64` and each position as an `int`. The other functions hold both as
+`int`, and on OxCaml every function holds both as `int64_u`.
+
+The stock compiler tags an `int`, so each field taken out of a word and each
+operation on it costs an instruction or two for the tag. An `int64` that is
+bound with `let` and passed only to primitives and inlined functions stays
+in a register, neither boxed nor tagged. The consumer's `valid` takes its
+integer outputs as `int64` on both targets, so one consumer compiles for
+either. They are unboxed where the compiler inlines `valid`, and boxed, so
+allocated, where it calls `valid` out of line. A word the runtime loads is unboxed where the load is inlined.
+Dune's dev profile compiles `wire.runtime` with `-opaque`, which prevents
+that, so each word allocates there.
+
+A position stays an `int` because a load takes one. A size stays the `int64`
+it is computed as, and so does a window whose length is a size. Only the end
+of a span narrows it to an `int`. The `int64` holds the codec's 63-bit value
+sign-extended, with the arithmetic of the `int64_u` on OxCaml, so the step
+functions accept, reject and hand out what `fold` does.
+
+Where ints have 32 bits or fewer (js_of_ocaml, wasm_of_ocaml), an `int64` is
+a heap value. The step functions allocate at each operation there and run
+slower than `fold`, with the same answers, which the node tests check.
+
+The step functions on OCaml also share one word load between prefixes. A
+64-bit word loaded at a constant offset of the window serves every later
+prefix whose fields it holds, such as the Ethernet type and the start of the
+IPv4 header. A word is loaded only inside the bytes the last bound check
+covered, so the check that covers the fields covers the word too.
 
 `Wire_rust.scanner` writes the same plan out as Rust, from `Wire_ocaml.Plan`,
 which hands it the same decisions. A window is a slice of exactly its bytes:
