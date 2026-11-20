@@ -71,6 +71,7 @@ let record ~spec ~bound ctx =
       spec = Some spec;
       bound;
       misuse = false;
+      contracts = [];
     };
     {
       Check.name = "View.check";
@@ -81,6 +82,7 @@ let record ~spec ~bound ctx =
       spec = Some spec;
       bound;
       misuse = false;
+      contracts = [];
     };
   ]
   @ List.map
@@ -98,8 +100,15 @@ let record ~spec ~bound ctx =
           spec = None;
           bound;
           misuse = false;
+          contracts = [];
         })
       view_names
+
+(* What fold_frames must establish of each frame it hands frames_record,
+   which is proved as an entry of its own from it. *)
+let frame_pre min_stride =
+  Fmt.str "stop >= %d && base >= 0 && base <= Bytes.length buf - stop"
+    min_stride
 
 (* A scanner: [fold] over one frame; [frames_record], the body of the
    [fold_frames] loop for a stride the loop walks without frame checks,
@@ -124,6 +133,7 @@ let scanner ~ox ~spec ~bound ~min_stride _ctx =
           spec = None;
           bound;
           misuse = false;
+          contracts = [ ("frames_record", frame_pre min_stride) ];
         };
         {
           Check.name = "fold_frames, any arguments";
@@ -134,6 +144,7 @@ let scanner ~ox ~spec ~bound ~min_stride _ctx =
           spec = None;
           bound;
           misuse = true;
+          contracts = [ ("frames_record", frame_pre min_stride) ];
         };
       ]
   in
@@ -148,14 +159,13 @@ let scanner ~ox ~spec ~bound ~min_stride _ctx =
         spec = Some spec;
         bound;
         misuse = false;
+        contracts = [];
       };
       {
         Check.name = "frames_record";
         inputs =
           [ buf; Int_input "base"; Int_input "stop"; Int_input "current" ];
-        pre =
-          Fmt.str "stop >= %d && base >= 0 && base <= Bytes.length buf - stop"
-            min_stride;
+        pre = frame_pre min_stride;
         expr =
           Fmt.str "frames_record ~buf %s %s ~current ~invalid ~valid"
             (at "base") (at "stop");
@@ -163,6 +173,7 @@ let scanner ~ox ~spec ~bound ~min_stride _ctx =
         spec = Some spec;
         bound;
         misuse = false;
+        contracts = [];
       };
     ]
 
@@ -185,6 +196,7 @@ let step_scanner ~ox ~spec ~bound ~min_stride _ctx =
           spec = None;
           bound;
           misuse = false;
+          contracts = [ ("frames_step_record", frame_pre min_stride) ];
         };
         {
           Check.name = "fold_frames_step, any arguments";
@@ -195,6 +207,7 @@ let step_scanner ~ox ~spec ~bound ~min_stride _ctx =
           spec = None;
           bound;
           misuse = true;
+          contracts = [ ("frames_step_record", frame_pre min_stride) ];
         };
       ]
   in
@@ -209,14 +222,13 @@ let step_scanner ~ox ~spec ~bound ~min_stride _ctx =
         spec = Some spec;
         bound;
         misuse = false;
+        contracts = [];
       };
       {
         Check.name = "frames_step_record";
         inputs =
           [ buf; Int_input "base"; Int_input "stop"; Int_input "current" ];
-        pre =
-          Fmt.str "stop >= %d && base >= 0 && base <= Bytes.length buf - stop"
-            min_stride;
+        pre = frame_pre min_stride;
         expr =
           Fmt.str "frames_step_record ~buf %s %s ~current" (at "base")
             (at "stop");
@@ -224,6 +236,7 @@ let step_scanner ~ox ~spec ~bound ~min_stride _ctx =
         spec = Some spec;
         bound;
         misuse = false;
+        contracts = [];
       };
     ]
 

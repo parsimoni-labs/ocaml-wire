@@ -104,8 +104,43 @@ let logxor = binop "bvxor"
 let shl = binop "bvshl"
 let lshr = binop "bvlshr"
 let ashr = binop "bvashr"
-let sdiv = binop "bvsdiv"
-let srem = binop "bvsrem"
+
+(* [k] when [b] is the constant [2^k], [k > 0]. *)
+let log2 b =
+  match b with
+  | Const (w, v)
+    when Int64.compare v 1L > 0 && Int64.logand v (Int64.pred v) = 0L ->
+      let rec go k = if Int64.shift_left 1L k = v then k else go (k + 1) in
+      let k = go 1 in
+      if k < w - 1 then Some k else None
+  | _ -> None
+
+(* Division by a power of two is a shift, which Z3 reasons about far more
+   cheaply than a divider: rounding towards zero, a negative dividend is
+   negated, shifted as unsigned (so that the least integer works too), and
+   negated back. *)
+let sdiv a b =
+  match log2 b with
+  | Some k when not (match a with Const _ -> true | _ -> false) ->
+      let w = width a in
+      let k = bv w (Int64.of_int k) in
+      let zero = bv w 0L in
+      let neg x = binop "bvsub" zero x in
+      app "ite"
+        [
+          app "bvsge" [ a; zero ] Bool;
+          binop "bvashr" a k;
+          neg (binop "bvlshr" (neg a) k);
+        ]
+        (Bv w)
+  | _ -> binop "bvsdiv" a b
+
+let srem a b =
+  match log2 b with
+  | Some _ when not (match a with Const _ -> true | _ -> false) ->
+      binop "bvsub" a (binop "bvmul" (sdiv a b) b)
+  | _ -> binop "bvsrem" a b
+
 let neg a = sub (bv (width a) 0L) a
 
 let cmp op a b =

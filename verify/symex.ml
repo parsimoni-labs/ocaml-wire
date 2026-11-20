@@ -74,6 +74,9 @@ and ctx = {
   mutable loads : string list;
   mutable checks : check list; (* the checks the walk met, latest first *)
   mutable disabled : string option;
+  mutable contracts : (string * expression) list;
+      (* functions proved on their own under a precondition: a call checks
+         the precondition instead of walking the body *)
       (* the check the walk takes as never failing *)
 }
 
@@ -95,6 +98,7 @@ and kind =
   | Window of string * int
   | Shift of string
   | Invariant of string
+  | Contract of string
 
 and outcome = Returned of value | Raised of string
 
@@ -113,6 +117,7 @@ let describe_kind = function
         (if w = 1 then "" else "s")
   | Shift f -> Fmt.str "%s shifts by an amount in range" f
   | Invariant r -> Fmt.str "the loop keeps %s at or above its start" r
+  | Contract f -> Fmt.str "the call to %s meets its precondition" f
 
 let pp_loc ppf (loc : Location.t) = Fmt.pf ppf "line %d" loc.loc_start.pos_lnum
 
@@ -1026,9 +1031,16 @@ and apply ctx path loc f args k =
   | Closure c, args ->
       let rec bind params args locals =
         match params with
-        | [] ->
-            eval ctx { locals; scope = c.scope } path c.body (fun path v ->
-                apply ctx path loc v args k)
+        | [] -> (
+            match List.assoc_opt c.cname ctx.contracts with
+            | Some pre ->
+                (* The callee's answer is not tracked. *)
+                eval ctx { locals; scope = c.scope } path pre (fun path v ->
+                    oblige ctx path loc (Contract c.cname) (bool loc v));
+                apply ctx path loc Opaque args k
+            | None ->
+                eval ctx { locals; scope = c.scope } path c.body (fun path v ->
+                    apply ctx path loc v args k))
         | (label, pat) :: ps -> (
             let rec take acc = function
               | [] -> None
@@ -1377,6 +1389,7 @@ let v ?disabled ~file src =
       loads = [];
       checks = [];
       disabled;
+      contracts = [];
     }
   in
   load_structure ctx [] (parse_implementation ctx ~file src);
@@ -1432,5 +1445,9 @@ let defs ctx = List.rev ctx.defs
 let declared ctx = List.rev ctx.declared
 let checks ctx = List.rev ctx.checks
 let set_disabled ctx d = ctx.disabled <- d
+
+let add_contract ctx name pre =
+  ctx.contracts <- (name, parse_expression pre) :: ctx.contracts
+
 let loads ctx = ctx.loads
 let set_window ctx w = ctx.window <- w

@@ -9,6 +9,9 @@ type entry = {
   spec : string option;
   bound : int;
   misuse : bool;
+  contracts : (string * string) list;
+      (* functions proved as entries of their own, with their precondition:
+         a call checks the precondition instead of walking the body *)
       (* the entry takes any arguments: [Invalid_argument] for a misuse of
          the API is an answer, not a failure *)
 }
@@ -259,6 +262,7 @@ let equivalence q ~any_size ~encodings ~parser outcomes =
 (* The query of [entry]: its window and precondition, evaluated in [ctx],
    and its obligations and outcomes. *)
 let walk ctx (entry : entry) =
+  List.iter (fun (f, pre) -> Symex.add_contract ctx f pre) entry.contracts;
   let env = Symex.entry_env entry.inputs in
   let start, size = entry.window in
   let win_start = Smt.sign_extend 1 (Symex.term ctx env start)
