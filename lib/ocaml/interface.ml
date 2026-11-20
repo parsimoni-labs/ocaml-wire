@@ -915,12 +915,8 @@ let pp_scans ppf s =
   | None -> ()
   | Some m ->
       let t = m ^ ".t" in
-      (* On OCaml the step functions hand out their integers as [int64]. *)
-      let outputs =
-        match target with
-        | `OCaml -> ", each integer output an [int64]"
-        | `OxCaml -> ""
-      in
+      (* The step functions hand out their integers as [int64]. *)
+      let outputs = ", each integer output an [int64]" in
       pp_val ~portable:false target ppf "fold_step"
         (arrows [ b; "int"; "int"; "init:" ^ t; t ])
         (Fmt.str

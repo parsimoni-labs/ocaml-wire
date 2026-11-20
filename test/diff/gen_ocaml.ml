@@ -234,9 +234,9 @@ let pp_backend ppf ~m ~unboxed fields =
     () batch ()
 
 (* The module [fold_step] and [fold_frames_step] call by name: it conses each
-   frame's snapshot onto the accumulator. For the OCaml target it takes the
-   integer outputs as [int64]. *)
-let pp_step ppf (target, fields) =
+   frame's snapshot onto the accumulator. It takes the integer outputs as
+   [int64]. *)
+let pp_step ppf fields =
   Fmt.pf ppf
     "struct@\n\
      type t = (string * int) list option list@\n\
@@ -245,7 +245,7 @@ let pp_step ppf (target, fields) =
      end"
     (labels fields)
     (fun ppf () ->
-      snapshot ppf ~boxed:(target = `OCaml) ~unboxed:false
+      snapshot ppf ~boxed:true ~unboxed:false
         ~var:(fun n -> "field_" ^ n)
         fields)
     ()
@@ -280,9 +280,7 @@ let pp_scanners ppf ~label c modules =
          end = struct@\n\
          %s@\n\
          end in@\n"
-        pp_step
-        (t, selected_fields selected)
-        m
+        pp_step (selected_fields selected) m
         (Wire_ocaml.scanner_mli ~target:t ?fields:selected ~step:"Step"
            ~codec:label c)
         (Wire_ocaml.scanner ~target:t ?fields:selected ~step:"Step" ~codec:label

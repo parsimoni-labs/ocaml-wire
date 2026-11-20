@@ -70,16 +70,23 @@ let pp_args ~conv ppf outputs =
     pp_list ppf
       (List.map (fun (o : output) -> Fmt.str "~%s:%s" o.name (conv o)) outputs)
 
-let to_int (w : w) ~unboxed (o : output) =
+(* An integer output as [valid] takes it. A value held as [int64_u] is
+   converted for a [valid] that is not unboxed: to an [int64] with [step], to
+   an [int] otherwise. *)
+let to_int (w : w) ~unboxed ~step (o : output) =
   if w.m.num = Unboxed && (not unboxed) && not o.is_bool then
     match List.assoc_opt o.id w.settled with
-    | Some _ -> "0"
-    | None -> Fmt.str "(U.to_int %s)" (output_text w o)
+    | Some _ -> if step then "0L" else "0"
+    | None ->
+        Fmt.str
+          (if step then "(U.to_int64 %s)" else "(U.to_int %s)")
+          (output_text w o)
   else output_text w o
 
-(* The call of [valid] with the outputs, where the walk [w] ends. *)
-let call s ~unboxed valid (w : w) =
-  pf w "%s %a@\n" valid (pp_args ~conv:(to_int w ~unboxed)) s.selected
+(* The call of [valid] with the outputs, where the walk [w] ends. With
+   [step], [valid] is the consumer of the step functions and takes [int64]. *)
+let call ?(step = false) s ~unboxed valid (w : w) =
+  pf w "%s %a@\n" valid (pp_args ~conv:(to_int w ~unboxed ~step)) s.selected
 
 (* The functions cut out of [name] are named after it, without [fold_]. *)
 let cut_prefix name =
@@ -226,13 +233,14 @@ let unroll = 4
    the loop first walks [unroll] frames per iteration, then the rest one by
    one. The guard [stride <= len / unroll] keeps
    [off + len - unroll * stride] from overflowing or falling below [off]. *)
-let pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known ~unrolled =
+let pp_frames_loop ?cuts ?step s ~names ~unboxed ~invalid ~valid ~known
+    ~unrolled =
   let ppf = s.ppf and read, assign, stride = frames_vars s in
   let body = Buffer.create 4096 in
   let bppf = Format.formatter_of_buffer body in
   pp_scan ?cuts ~known ~scope:(scope s names) { s with ppf = bppf }
     ~reject:(invalid ^ " current")
-    ~accept:(call s ~unboxed (valid ^ " current"));
+    ~accept:(call ~step:(Option.is_some step) s ~unboxed (valid ^ " current"));
   Format.pp_print_flush bppf ();
   let body = Buffer.contents body in
   (* A position is an [int] where values are [int64]. *)
@@ -372,7 +380,8 @@ let pp_frames ?step s ~unboxed =
       let ppf = s.ppf in
       pp_frames_head s ~name ~unboxed ~callbacks;
       let loop ~unrolled known =
-        pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known ~unrolled
+        pp_frames_loop ?cuts ?step s ~names ~unboxed ~invalid ~valid ~known
+          ~unrolled
       in
       (* The loop over frames that hold the leading prefixes comes last,
          where the compiler closes it with one conditional branch. On the
@@ -412,7 +421,7 @@ let pp_fold_step s m =
       pp_entry ?cuts
         ~scope:(scope s [ ("init", None) ])
         s ~reject:(m ^ ".invalid init")
-        ~accept:(call s ~unboxed:false (m ^ ".valid init"));
+        ~accept:(call ~step:true s ~unboxed:false (m ^ ".valid init"));
       Fmt.pf s.ppf "@\n")
 
 let pp_result_type s name hash =

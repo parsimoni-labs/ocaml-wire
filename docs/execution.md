@@ -159,9 +159,9 @@ The stock compiler tags an `int`, so each field taken out of a word and each
 operation on it costs an instruction or two for the tag. An `int64` that is
 bound with `let` and passed only to primitives and inlined functions stays
 in a register, neither boxed nor tagged. The consumer's `valid` takes its
-integer outputs as `int64` for the same reason. They are unboxed where the
-compiler inlines `valid`, and boxed, so allocated, where it calls `valid` out
-of line. A word the runtime loads is unboxed where the load is inlined.
+integer outputs as `int64` on both targets, so one consumer compiles for
+either. They are unboxed where the compiler inlines `valid`, and boxed, so
+allocated, where it calls `valid` out of line. A word the runtime loads is unboxed where the load is inlined.
 Dune's dev profile compiles `wire.runtime` with `-opaque`, which prevents
 that, so each word allocates there.
 

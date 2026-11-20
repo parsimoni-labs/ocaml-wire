@@ -4,17 +4,15 @@ let write file s =
   close_out oc
 
 (* [Step], the consumer the scanner of [c] calls by name, adds up the outputs,
-   which it takes as [int64] on OCaml. The scanner's module defines it first,
-   so the compiler inlines it in every profile and no output is boxed. *)
-let summed target c =
+   which it takes as [int64]. The scanner's module defines it first, so the
+   compiler inlines it in every profile and no output is boxed. *)
+let summed c =
   let fields = Wire_ocaml.scanner_fields c in
   let args = List.map (fun (name, _) -> "~" ^ name) fields
   and terms =
     List.map
       (fun (name, is_bool) ->
-        if is_bool then "Bool.to_int " ^ name
-        else if target = `OCaml then "Int64.to_int " ^ name
-        else name)
+        if is_bool then "Bool.to_int " ^ name else "Int64.to_int " ^ name)
       fields
   in
   "module Step = struct\n\
@@ -55,7 +53,7 @@ let () =
     end
     else begin
       let step = "Step" in
-      write name (summed target c ^ Wire_ocaml.scanner ~target ~step ~codec c);
+      write name (summed c ^ Wire_ocaml.scanner ~target ~step ~codec c);
       write (name ^ "i")
         ("module Step : sig\n  type t = int\nend\n\n"
         ^ Wire_ocaml.scanner_mli ~target ~step ~codec c)

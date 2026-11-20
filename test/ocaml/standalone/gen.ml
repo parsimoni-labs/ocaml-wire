@@ -9,16 +9,14 @@ let write file s =
 
 (* The scanner of [Schemas.stacked] with its step functions, after [Step],
    the consumer they call. [Step] adds up the outputs, which it takes as
-   [int64] on OCaml. *)
+   [int64]. *)
 let stacked target =
   let fields = Wire_ocaml.scanner_fields Schemas.stacked in
   let args = List.map (fun (name, _) -> "~" ^ name) fields
   and terms =
     List.map
       (fun (name, is_bool) ->
-        if is_bool then "Bool.to_int " ^ name
-        else if target = `OCaml then "Int64.to_int " ^ name
-        else name)
+        if is_bool then "Bool.to_int " ^ name else "Int64.to_int " ^ name)
       fields
   and codec = "Schemas.stacked" in
   write "s_stacked.ml"

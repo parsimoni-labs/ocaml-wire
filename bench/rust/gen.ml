@@ -106,30 +106,25 @@ let reader_wrappers ~wide ~fold ~batch =
 
 (* The checksum consumer the scanner calls by name in [fold_step] and
    [fold_frames_step]: OCaml without flambda never inlines a function passed
-   as an argument. On OCaml it takes the outputs as [int64] and folds them as
-   such, as the unboxed rows of OxCaml fold [int64_u]. *)
-let step target ~fields =
+   as an argument. It takes the outputs as [int64] and folds them as such, as
+   the unboxed rows of OxCaml fold [int64_u]. *)
+let step ~fields =
   let args =
     List.map
       (fun (name, _) ->
         "~" ^ name ^ if List.mem name checksum_fields then "" else ":_")
       fields
   in
-  let typ, ops, zero =
-    match target with
-    | `OCaml ->
-        ( "int64",
-          "external ( + ) : int64 -> int64 -> int64 = \"%int64_add\"\n\
-           external ( lxor ) : int64 -> int64 -> int64 = \"%int64_xor\"\n\
-           external ( lor ) : int64 -> int64 -> int64 = \"%int64_or\"\n\
-           external ( lsl ) : int64 -> int -> int64 = \"%int64_lsl\"\n\n",
-          "0L" )
-    | `OxCaml -> ("int", "", "0")
-  in
-  "module Step = struct\ntype t = " ^ typ ^ "\n\n" ^ ops
-  ^ "let[@inline always] invalid base = base\nlet[@inline always] valid base "
-  ^ String.concat " " args ^ " =\nlet contribution = "
-  ^ checksum_contribution ~zero Fun.id
+  "module Step = struct\n\
+   type t = int64\n\n\
+   external ( + ) : int64 -> int64 -> int64 = \"%int64_add\"\n\
+   external ( lxor ) : int64 -> int64 -> int64 = \"%int64_xor\"\n\
+   external ( lor ) : int64 -> int64 -> int64 = \"%int64_or\"\n\
+   external ( lsl ) : int64 -> int -> int64 = \"%int64_lsl\"\n\n\
+   let[@inline always] invalid base = base\n\
+   let[@inline always] valid base " ^ String.concat " " args
+  ^ " =\nlet contribution = "
+  ^ checksum_contribution ~zero:"0L" Fun.id
   ^ " in\nbase + contribution\nend\n\n"
 
 let checksum_reader target ~core ~fields name decode access =
@@ -149,9 +144,7 @@ let checksum_reader target ~core ~fields name decode access =
       if batch then ".fold_frames_step buf off len ~stride"
       else ".fold_step buf off len"
     in
-    if target = `OCaml then
-      "Int64.to_int (" ^ call ^ " ~init:(Int64.of_int base))\n"
-    else call ^ " ~init:base\n"
+    "Int64.to_int (" ^ call ^ " ~init:(Int64.of_int base))\n"
   else
     first
     ^ reader_invocation ~core ~fields ~decode ~fold ~batch ~wide get
@@ -207,7 +200,7 @@ let () =
           Wire_ocaml.scanner_mli ~target ?fields:selected ~step:"Step" ~codec c
         in
         write file
-          (step target ~fields ^ "module " ^ core ^ " : sig\n" ^ mli
+          (step ~fields ^ "module " ^ core ^ " : sig\n" ^ mli
          ^ "\nend = struct\n" ^ ml ^ "\nend\n\n"
           ^ stack_reader target ~core ~fields)
       in
