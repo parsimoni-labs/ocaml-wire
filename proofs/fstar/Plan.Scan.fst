@@ -223,7 +223,7 @@ let cancelled (w:st) (lim:var) (s:expr) (p:pos) : option (expr & expr) =
     | _ -> None in
   let room (u:option sum) = match u with None -> None | Some u -> sum_sub (sum_atom (V lim)) u in
   let plain =
-    (match sum_of s with None -> max_int | Some x -> sum_size x) +
+    (match sum_of s with None -> 0 | Some x -> sum_size x) +
     (if None? p.pv then 0 else 1) + (if p.at = 0 then 0 else 1) in
   let best =
     match room (used false), room (used true) with

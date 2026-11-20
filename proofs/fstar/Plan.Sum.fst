@@ -1,11 +1,11 @@
 module Plan.Sum
 
-(* Planner.sum and its operations, as the O1 lane writes them
-   (lib/ocaml/planner.ml, section Sums): an integer expression as terms, each
-   an expression that is not a sum, a difference or a literal, times a
-   coefficient, plus a constant. Every operation that may overflow returns
-   [None], as the planner's handlers do; see defects/O1SumConst for the one
-   that does not in the planner. *)
+(* Planner.sum and its operations (lib/ocaml/planner.ml, section Sums): an
+   integer expression as terms, each an expression that is not a sum, a
+   difference or a literal, times a coefficient, plus a constant. Every
+   operation that may overflow returns [None], as the planner's handlers do
+   since b1f6f756; defects/Defect.SumConst.Buggy replays bf2c2866, whose
+   [sum_add] let the constant's overflow escape. *)
 
 open FStar.Mul
 open FStar.List.Tot
@@ -62,12 +62,11 @@ let rec add_terms (acc:terms) (bs:terms) : Tot (option terms) (decreases bs) =
   | [] -> Some acc
   | t :: r -> (match add_term acc t with None -> None | Some acc' -> add_terms acc' r)
 
-(* The constant is added inside the handler here; Planner.sum_add adds it
-   outside, where its overflow escapes. *)
+(* The constant first, then the terms, both inside the handler (b1f6f756). *)
 let sum_add (a b:sum) : option sum =
-  match add_terms a.terms b.terms with
+  match chk (a.const + b.const) with
   | None -> None
-  | Some ts -> (match chk (a.const + b.const) with None -> None | Some c -> Some { terms = ts; const = c })
+  | Some c -> (match add_terms a.terms b.terms with None -> None | Some ts -> Some { terms = ts; const = c })
 
 let rec neg_terms (ts:terms) : option terms =
   match ts with

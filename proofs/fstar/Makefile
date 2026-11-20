@@ -23,9 +23,10 @@ MODULES = $(MODEL) Plan.Word.fst Plan.Frames.fst Spec.Ipv4.fst
 # verifies.
 DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
 
-# defects/<name>.sed turns Plan.Scan into a buggy emitter, and Plan.Proof
-# then fails.
-MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked
+# defects/<name>.sed rewrites the module its "# mutates:" line names, and
+# the module its "# fails:" line names then fails to verify.
+MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
+  frames-quad-overlap frames-quad-guard
 
 .PHONY: verify defects clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 
@@ -50,11 +51,11 @@ $(DEFECTS:%=defect-%): defect-%:
 	  echo "caught $*: $$(echo "$$out" | grep -m1 -A1 '^\* Error' | tr -s ' \n' ' ')"
 
 $(MUTANTS:%=mutant-%): mutant-%:
-	@d=$(CACHE)/mutant-$*; rm -rf $$d; mkdir -p $$d; \
-	  cp $(MODEL) $$d/; sed -f defects/$*.sed Plan.Scan.fst > $$d/Plan.Scan.fst; \
-	  if cmp -s Plan.Scan.fst $$d/Plan.Scan.fst; then echo "FAIL $*: the mutation does not apply"; exit 1; fi; \
-	  out=$$($(FSTAR) $(FLAGS) --cache_checked_modules --cache_dir $$d --include $$d \
-	    $(MODEL:%=$$d/%) 2>&1); \
+	@d=$(CACHE)/mutant-$*; s=defects/$*.sed; \
+	  f=$$(sed -n 's/^# mutates: //p' $$s); c=$$(sed -n 's/^# fails: //p' $$s); \
+	  rm -rf $$d; mkdir -p $$d; cp $(MODULES) $$d/; sed -f $$s $$f > $$d/$$f; \
+	  if cmp -s $$f $$d/$$f; then echo "FAIL $*: the mutation does not apply"; exit 1; fi; \
+	  out=$$(cd $$d && $(FSTAR) $(FLAGS) $$c 2>&1); \
 	  if [ $$? -eq 0 ]; then echo "FAIL $*: the mutant verifies"; exit 1; fi; \
 	  echo "caught $*: $$(echo "$$out" | grep -m1 -A1 '^\* Error' | sed "s|$$d/||" | tr -s ' \n' ' ')"
 
