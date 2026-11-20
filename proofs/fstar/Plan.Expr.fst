@@ -13,11 +13,11 @@ let in_int (x:int) : bool = min_int <= x && x <= max_int
 
 type var = nat
 type env = var -> int
-let upd (en:env) (v:var) (x:int) : env = fun w -> if w = v then x else en w
+let upd (en:env) (v:var) (x:int) (w:var) : int = if w = v then x else en w
 
 (* The variables bound at a point of the plan. *)
 type scope = var -> bool
-let extend (sc:scope) (v:var) : scope = fun w -> w = v || sc w
+let extend (sc:scope) (v:var) (w:var) : bool = w = v || sc w
 
 type expr =
   | Lit : int -> expr

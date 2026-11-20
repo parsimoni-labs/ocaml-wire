@@ -152,6 +152,7 @@ let rec unique_replace (k:expr) (c:int) (ts:terms)
     | [] -> ()
     | (k', _) :: r -> assoc_replace k' k c r; assoc_replace k k c r; unique_replace k c r
 
+#push-options "--split_queries always"
 let add_term_ok (en:env) (ts:terms) (t:expr & int)
   : Lemma (requires unique ts)
           (ensures (match add_term ts t with
@@ -167,6 +168,8 @@ let add_term_ok (en:env) (ts:terms) (t:expr & int)
        | Some c'' ->
          if c'' = 0 then unique_remove k ts
          else (replace_is en k c'' ts; unique_replace k c'' ts))
+
+#pop-options
 
 let rec add_terms_ok (en:env) (acc bs:terms)
   : Lemma (requires unique acc)

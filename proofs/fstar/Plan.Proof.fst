@@ -354,7 +354,7 @@ let refine_ok (len:nat) (lim:var) (w:st) (en:env) (c:cond)
 
 (* {1 The theorem} *)
 
-let rec span_first (sc:scope) (b:list node) (r:list node) (s:expr)
+let span_first (sc:scope) (b:list node) (r:list node) (s:expr)
   : Lemma (requires wf sc (b @ (Join :: r)) /\ first_span b == Some s) (ensures closed sc s)
   = ()
 
