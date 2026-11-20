@@ -75,7 +75,12 @@ shape in scope. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
 their consumer by name, with no closure call and no allocation per frame.
-The invariants above hold for it as follows.
+Their loop over frames is unrolled four times, then walks the remaining
+frames one by one. OCaml polls for signals and other domains once per loop
+iteration, so the unrolled loop polls once per four frames. The loop over
+frames that hold the leading prefixes comes last in the function, where the
+compiler closes it with one branch. The invariants above hold for it as
+follows.
 
 - **Unchecked reads stay in the frame.** A prefix is read only after one
   check that the bytes it spans, and those of the prefixes and where clauses

@@ -99,8 +99,9 @@
   codecs, optional fields and variable sizes, and hands out the fields chosen
   with `~fields` without building a value. It skips a bound check that a
   later check already covers, and tests two adjacent bitfields with one
-  comparison. `Wire_ocaml.Plan` gives its plan to other backends (#447,
-  #473, #501, #504, @samoht)
+  comparison. `fold_frames` walks four frames per loop iteration.
+  `Wire_ocaml.Plan` gives its plan to other backends (#447, #473, #501,
+  #504, #509, @samoht)
 
 - On OxCaml, generated code takes buffers allocated on the stack, is
   `portable`, allocates nothing (`[@zero_alloc]` is checked) and keeps 32-bit
@@ -113,7 +114,7 @@
 - `wire.rust` (`Wire_rust.rs`): generate safe, `no_std` Rust from a
   fixed-size codec, and `Wire_rust.scanner`, the same scanners in Rust, with
   the same single comparison for two adjacent bitfields (#439, #448,
-  @samoht)
+  #509, @samoht)
 
 - `wire_hardcaml` (`Wire_hardcaml`), experimental and built only with
   `BUILD_HARDCAML=1`: generate a Hardcaml hardware decoder for a bounded

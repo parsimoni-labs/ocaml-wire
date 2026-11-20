@@ -560,18 +560,7 @@ let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
   let acc = ref init in
   let cursor = ref off in
   let last = off + len - stride in
-  if stride >= 34 then
-    while !cursor <= last do
-      let base = !cursor in
-      let current = !acc in
-      let next =
-        let stop = stride in
-        frames_record ~buf ~base ~stop ~current ~invalid ~valid
-      in
-      acc := next;
-      cursor := base + stride
-    done
-  else
+  if stride < 34 then
     while !cursor <= last do
       let base = !cursor in
       let current = !acc in
@@ -580,7 +569,54 @@ let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
           ~invalid:(fun () -> invalid current)
           ~valid:(valid current);
       cursor := base + stride
-    done;
+    done
+  else (
+    (if stride <= len / 4 then
+       let last_4 = off + len - (4 * stride) in
+       let stride_2 = 2 * stride in
+       let stride_3 = 3 * stride in
+       let stride_4 = 4 * stride in
+       while !cursor <= last_4 do
+         let base = !cursor in
+         let current = !acc in
+         let next =
+           let stop = stride in
+           frames_record ~buf ~base ~stop ~current ~invalid ~valid
+         in
+         acc := next;
+         let base = !cursor + stride in
+         let current = !acc in
+         let next =
+           let stop = stride in
+           frames_record ~buf ~base ~stop ~current ~invalid ~valid
+         in
+         acc := next;
+         let base = !cursor + stride_2 in
+         let current = !acc in
+         let next =
+           let stop = stride in
+           frames_record ~buf ~base ~stop ~current ~invalid ~valid
+         in
+         acc := next;
+         let base = !cursor + stride_3 in
+         let current = !acc in
+         let next =
+           let stop = stride in
+           frames_record ~buf ~base ~stop ~current ~invalid ~valid
+         in
+         acc := next;
+         cursor := !cursor + stride_4
+       done);
+    while !cursor <= last do
+      let base = !cursor in
+      let current = !acc in
+      let next =
+        let stop = stride in
+        frames_record ~buf ~base ~stop ~current ~invalid ~valid
+      in
+      acc := next;
+      cursor := !cursor + stride
+    done);
   !acc
 
 type t = {
