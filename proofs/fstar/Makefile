@@ -30,7 +30,7 @@ MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
   frames-quad-overlap frames-quad-guard word-lor-overlap word-mask-dropped \
   prefix-run-unbounded region-bounded-leak region-unchecked region-inexact
 
-.PHONY: verify defects clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
+.PHONY: verify defects plans clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 
 # One module at a time, in dependency order, so each one's checked file is
 # written before the next reads it.
@@ -64,6 +64,22 @@ $(MUTANTS:%=mutant-%): mutant-%:
 	    wout=$$(cd $$d && $(FSTAR) $(FLAGS) $$t 2>&1) || \
 	      { echo "$$wout"; echo "FAIL $*: the witness does not hold of the mutant"; exit 1; }; fi; \
 	  echo "caught $*: $$(echo "$$out" | grep -m1 -A1 '^\* Error' | sed "s|$$d/||" | tr -s ' \n' ' ')"
+
+# The planner's plans of the sampled codecs, the structured scan cases and
+# the packet stack satisfy what Plan.Proof assumes of a plan; the plan of
+# the PrefixWrap codec, the control, does not.
+ROOT = $(abspath ../..)
+PLANS = $(ROOT)/_build/default/proofs/fstar/plans/plans.exe
+
+plans:
+	@mkdir -p $(CACHE)/plans
+	dune build --root $(ROOT) ./proofs/fstar/plans/plans.exe
+	$(PLANS) Plans > $(CACHE)/plans/Plans.fst
+	$(PLANS) Controls controls > $(CACHE)/plans/Controls.fst
+	$(FSTAR) $(FSTAR_FLAGS) $(CACHE)/plans/Plans.fst
+	@if $(FSTAR) $(FSTAR_FLAGS) $(CACHE)/plans/Controls.fst > /dev/null 2>&1; then \
+	  echo "FAIL: the control plan is accepted"; exit 1; \
+	else echo "control refused: the PrefixWrap plan is not well formed"; fi
 
 clean:
 	rm -rf $(CACHE)

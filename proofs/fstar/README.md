@@ -10,7 +10,18 @@ EverParse and is outside the dune build.
 ```
 make -C proofs/fstar verify        # the model and its theorems
 make -C proofs/fstar -j4 defects   # past defects and mutants are refused
+make -C proofs/fstar plans         # the planner's real plans meet wf
 ```
+
+`make plans` builds `plans/plans.exe`, which prints the plans
+`Wire_ocaml.Plan` makes of the sampled codecs of the differential fuzzer,
+its structured scan cases and the packet stack as `Plan.Scan` nodes, and
+has F* evaluate `wf` on each: every variable bound once and read after it
+is bound, every run of prefixes no longer than `Sys.max_string_length`,
+the premises `scanner_correct` takes of the planner. An expression keeps
+its variables, not its value, which is all `wf` reads. The plan of the
+`Defect.PrefixWrap` codec is the control F* must refuse: the planner hands
+it out with its fused size already wrapped negative.
 
 `EVERPARSE` defaults to `~/.local/everparse`.
 
