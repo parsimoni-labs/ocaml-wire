@@ -97,8 +97,9 @@
 
 - `Wire_ocaml.scanner`: generate a scanner that checks a record with nested
   codecs, optional fields and variable sizes, and hands out the fields chosen
-  with `~fields` without building a value. `Wire_ocaml.Plan` gives its plan
-  to other backends (#447, #473, #501, #504, @samoht)
+  with `~fields` without building a value. It skips a bound check that a
+  later check already covers. `Wire_ocaml.Plan` gives its plan to other
+  backends (#447, #473, #501, #504, @samoht)
 
 - On OxCaml, generated code takes buffers allocated on the stack, is
   `portable`, allocates nothing (`[@zero_alloc]` is checked) and keeps 32-bit

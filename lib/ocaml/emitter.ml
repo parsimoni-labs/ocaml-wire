@@ -134,6 +134,9 @@ type w = {
          branch, and the branch where it holds binds the constant. *)
   bounded : (string * string * string * string) list;
       (* The spans already checked before a dispatch, as [span_bound] keys. *)
+  sums : (string * sum) list;
+      (* The end of each span, by its variable, as a sum over the plan's
+         variables. *)
   base : string; (* The offset in the buffer of the current window. *)
   limit : string; (* The length of the current window. *)
   known : int; (* Bytes known to be in the window after the position. *)
@@ -1086,31 +1089,130 @@ let prefix w fields size p ~need k =
    remembered bound is valid only in the window it was checked against. *)
 let span_bound w size p = (w.base, w.limit, key size, pos_expr w.m.num p)
 
-(* A span of [size] bytes at [p]: its size, bound to a variable, and where it
-   ends. *)
-let span w size p =
+(* The position [p] as a sum. With [expand], the position's variable is
+   replaced by its own sum when one is known. *)
+let pos_sum w ~expand p =
+  let var =
+    match p.var with
+    | None -> sum_int 0
+    | Some v -> (
+        match List.assoc_opt v w.sums with
+        | Some s when expand -> s
+        | _ -> sum_atom (T.Ref (T.I, v)))
+  in
+  sum_add var (sum_int p.at)
+
+(* The test that [size] bytes at [p] overflow the window, with the terms
+   shared by the position and the size cancelled. [None] when cancelling does
+   not shorten the test, or when the result needs checked arithmetic. *)
+let cancelled w size p =
   let num = w.m.num in
-  let ov = ref false in
-  let s = expr w ov size in
-  let n = w.fresh "n" in
-  if !ov then
-    pf w "let %s = match %s with n -> n | exception %s.Overflow -> %s in@\n" n s
-      arith (lit num (-1))
-  else pf w "let %s = %s in@\n" n s;
+  let used expand =
+    match (pos_sum w ~expand p, sum_of size) with
+    | Some pos, Some n -> sum_add pos n
+    | _ -> None
+  in
+  let plain =
+    Option.fold ~none:0 ~some:sum_size (sum_of size)
+    + (if p.var = None then 0 else 1)
+    + if p.at = 0 then 0 else 1
+  in
+  let room u = sum_sub (sum_atom (T.Ref (T.I, w.limit))) u in
+  match
+    List.filter_map
+      (fun expand -> Option.bind (used expand) room)
+      [ false; true ]
+    |> List.sort (fun a b -> compare (sum_size a) (sum_size b))
+  with
+  | d :: _ when sum_size d - 1 < plain -> (
+      match sum_fails d with
+      | None -> None
+      | Some (lhs, rhs) ->
+          let ov = ref false in
+          let l = expr w ov lhs and r = expr w ov rhs in
+          if !ov then None else Some (relation num ">" l r))
+  | _ -> None
+
+(* The test that a span of [n] bytes at [p] ends past the window, or that [n]
+   is negative unless [nonnegative]. *)
+let outside w ~ov ~nonnegative size p n =
+  let num = w.m.num in
   let room =
     match p.var with None -> w.limit | Some v -> binop num "-" w.limit v
   in
   let room = if p.at = 0 then room else binop num "-" room (lit num p.at) in
-  let upper = relation num ">" n room in
-  let outside =
-    if (not !ov) && nonnegative w size then upper
-    else Fmt.str "%s || %s" (relation num "<" n (lit num 0)) upper
+  let upper =
+    match if ov then None else cancelled w size p with
+    | Some test -> test
+    | None -> relation num ">" n room
   in
-  if not (List.mem (span_bound w size p) w.bounded) then
-    pf w "if %s then %s else@\n" outside (w.m.fail Bounds);
+  if nonnegative then upper
+  else Fmt.str "%s || %s" (relation num "<" n (lit num 0)) upper
+
+(* The range of the end of a span at [p] whose size is in [n_range], or
+   [None] when the end may overflow the native int. *)
+let end_range w n_range p =
+  let pos =
+    match p.var with
+    | None -> Some (p.at, p.at)
+    | Some v ->
+        corners T.checked_add
+          (Option.value ~default:(min_int, max_int) (Smap.find_opt v w.ranges))
+          (p.at, p.at)
+  in
+  Option.bind pos (fun r -> corners T.checked_add r n_range)
+
+(* [w] after binding the size [n] and the end [e] of a span at [p]. It records
+   their ranges and, unless the size may overflow, the end as a sum. An end
+   that was checked is not negative. *)
+let bind_span w ~ov ~implied ~n_range ~ends size p n e =
+  let w = bind_num (bind_num w n) e in
+  let e_range =
+    match ends with
+    | Some r when implied -> r
+    | Some (lo, hi) -> (max 0 lo, hi)
+    | None -> (0, max_int)
+  in
+  let sum =
+    if ov then None
+    else
+      Option.bind (pos_sum w ~expand:true p) (fun pos ->
+          Option.bind (sum_of size) (sum_add pos))
+  in
+  {
+    w with
+    ranges = Smap.add e e_range (Smap.add n n_range w.ranges);
+    sums = (match sum with Some s -> (e, s) :: w.sums | None -> w.sums);
+  }
+
+(* A span of [size] bytes at [p]: its size, bound to a variable, and where it
+   ends. With [implied], the next check covers this span too, so the span's
+   own check is dropped when ranges prove its size not negative and its end
+   inside the native int. This is bounds-check elimination decided on the
+   plan; compilers do it on code, as Go's [prove] pass and ABCD (Bodik, Gupta
+   and Sarkar, PLDI 2000). *)
+let span ?(implied = false) w size p =
+  let num = w.m.num in
+  let ov = ref false in
+  let s = expr w ov size in
+  let ov = !ov in
+  let n = w.fresh "n" in
+  if ov then
+    pf w "let %s = match %s with n -> n | exception %s.Overflow -> %s in@\n" n s
+      arith (lit num (-1))
+  else pf w "let %s = %s in@\n" n s;
+  let nonnegative = (not ov) && nonnegative w size in
+  let lo, hi = range w.ranges size in
+  let n_range = (max 0 lo, max 0 hi) in
+  let ends = end_range w n_range p in
+  let implied = implied && nonnegative && Option.is_some ends in
+  if not (implied || List.mem (span_bound w size p) w.bounded) then
+    pf w "if %s then %s else@\n"
+      (outside w ~ov ~nonnegative size p n)
+      (w.m.fail Bounds);
   let e = w.fresh "e" in
   pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n);
-  let w = bind_num (bind_num w n) e in
+  let w = bind_span w ~ov ~implied ~n_range ~ends size p n e in
   ({ w with known = 0; depth = w.depth + 1 }, n, { var = Some e; at = 0 })
 
 (* The bytes a run of prefixes and tests from here needs, checked at once. *)
@@ -1448,10 +1550,9 @@ let rec runs_none t =
   | Leaf (Some _) -> false
   | Branch (_, a, b) -> runs_none a || runs_none b
 
-(* The bound of the span every case of [gates] starts with, at [p], checked
-   once before the dispatch when a case always runs: the branch on the tag
-   then waits on no length, and the cases skip the check. *)
-let hoist_bound w gates tree p =
+(* The size of the span every case of [gates] starts with, when a case
+   always runs: its bound is then checked once before the dispatch. *)
+let hoisted gates tree =
   let first (_, _, _, body) =
     match body with
     | (Region (size, _, _) | Span size) :: _ -> Some size
@@ -1460,11 +1561,37 @@ let hoist_bound w gates tree p =
   match List.map first gates with
   | Some size :: rest
     when List.for_all (( = ) (Some (key size))) (List.map (Option.map key) rest)
-         && (not (runs_none tree))
-         && not (List.mem (span_bound w size p) w.bounded) ->
+         && not (runs_none tree) ->
+      Some size
+  | _ -> None
+
+(* The run of gates at the head of [nodes], the nodes after it, and its
+   decision tree. *)
+let dispatch_tree w nodes =
+  let gates, rest = gate_run ~lower:(lower w) w.facts nodes in
+  let tree = decide w.facts (List.mapi (fun i (c, _, _, _) -> (i, c)) gates) in
+  (gates, rest, tree)
+
+(* The bound of the span every case of [gates] starts with, at [p], checked
+   once before the dispatch when a case always runs: the branch on the tag
+   then waits on no length, and the cases skip the check. *)
+let hoist_bound w gates tree p =
+  match hoisted gates tree with
+  | Some size when not (List.mem (span_bound w size p) w.bounded) ->
       let w', _, _ = span w size p in
       { w with depth = w'.depth; bounded = span_bound w size p :: w.bounded }
   | _ -> w
+
+(* Whether the code after a span checks the bytes right after it before any
+   read. A prefix, a span, a region and a dispatch that hoists its cases'
+   bound do. Such a check covers the span too when its size is not negative. *)
+let checks_next w = function
+  | Prefix _ :: _ as nodes -> ahead nodes > 0
+  | (Span _ | Region _) :: _ -> true
+  | Gate _ :: _ as nodes ->
+      let gates, _, tree = dispatch_tree w nodes in
+      Option.is_some (hoisted gates tree)
+  | Test _ :: _ | [] -> false
 
 let rec walk w nodes p k =
   match nodes with
@@ -1479,7 +1606,7 @@ and step w nodes p k =
   | Prefix (fields, size) :: rest ->
       prefix w fields size p ~need:(ahead nodes) (fun w p -> walk w rest p k)
   | Span size :: rest ->
-      let w, _, p = span w size p in
+      let w, _, p = span ~implied:(checks_next w rest) w size p in
       walk w rest p k
   | Test cond :: rest ->
       let w = check w Where cond in
@@ -1519,8 +1646,8 @@ and step w nodes p k =
             }
             rest stop k)
   | Gate _ :: _ ->
-      let gates, rest = gate_run ~lower:(lower w) w.facts nodes in
-      dispatch w gates p
+      let gates, rest, tree = dispatch_tree w nodes in
+      dispatch w gates tree p
         ~copy:(w.tail && copyable rest)
         (fun w p -> walk w rest p k)
 
@@ -1531,19 +1658,16 @@ and step w nodes p k =
    presence when a slot, and the slots of the others keep their absent
    value. Each case a branch copies the code after the run into is a
    function of its own. *)
-and dispatch w gates p ~copy k =
+and dispatch w gates tree p ~copy k =
   let exported = immutable w.m in
   let indexed = List.mapi (fun i g -> (i, g)) gates in
-  let tree =
-    decide w.facts (List.map (fun (i, (c, _, _, _)) -> (i, c)) indexed)
-  in
   let w = hoist_bound w gates tree p in
   let shared, case_shared, leaves = reach tree in
   if over w (tree_depth shared tree) then
     let _, (present : output), _, _ = List.hd gates in
     cut w
       ~label:(case_label present ^ "_cases")
-      (fun w -> dispatch w gates p ~copy k)
+      (fun w -> dispatch w gates tree p ~copy k)
   else
     let copy = copy && w.copies * leaves <= max_copies in
     let j = w.fresh "j" in
@@ -1603,13 +1727,14 @@ let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
       m;
       ppf;
       fresh;
-      ranges;
+      ranges = Smap.add limit (0, max_int) ranges;
       facts = no_facts;
       views = [];
       words = [];
       raws = [];
       deferred = ref [];
       bounded = [];
+      sums = [];
       base;
       limit;
       known;

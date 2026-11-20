@@ -102,6 +102,7 @@ type w = {
   raws : (string * (string * int)) list;
   deferred : (string * (string * bool)) list ref;
   bounded : (string * string * string * string) list;
+  sums : (string * sum) list;
   base : string;
   limit : string;
   known : int;
@@ -116,12 +117,13 @@ type w = {
   section : string;
 }
 (** The state of a walk: its mode and output, the ranges and facts known at its
-    position, the bitfield words it holds, the window of the buffer it is in;
-    and, for a walk cut into functions, where they go, the function being
-    written and the conditions open around the position in it, the variables it
-    binds with the type a function cut out of it gives each, the outputs known
-    present or absent, whether the code here jumps to a join outside it, and the
-    case being written, which names its functions. *)
+    position, the bitfield words it holds, the spans whose bound is checked and
+    the end of each as a sum, the window of the buffer it is in; and, for a walk
+    cut into functions, where they go, the function being written and the
+    conditions open around the position in it, the variables it binds with the
+    type a function cut out of it gives each, the outputs known present or
+    absent, whether the code here jumps to a join outside it, and the case being
+    written, which names its functions. *)
 
 val pf : w -> ('a, Format.formatter, unit) format -> 'a
 (** [pf w fmt] writes to the output of [w]. *)

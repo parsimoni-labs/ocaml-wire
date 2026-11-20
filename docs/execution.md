@@ -86,6 +86,11 @@ The invariants above hold for it as follows.
   When every case of a dispatch starts with the same span, its size is
   checked once before the dispatch. The check is remembered with its window,
   so a region, which opens a new window, checks its own spans.
+  A span's check is dropped when the next check, which runs before any read,
+  covers the span's bytes too. This needs ranges to prove the span's size not
+  negative and its end inside the native int. A bound is compared with the
+  terms shared by its position and its size cancelled, so the IPv4 payload
+  check is `total_length <= stop - 14`.
   Positions are relative to the window, so adding the window's offset to
   reach a byte cannot overflow, and a short frame in `fold_frames` cannot
   borrow bytes from the next. The generator adds the codec's constant
