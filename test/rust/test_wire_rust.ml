@@ -148,14 +148,14 @@ let test_scanner () =
     "no unsafe code" false
     (contains src "unsafe {" || contains src "unsafe fn");
   Alcotest.(check bool) "no std" false (contains src "std::");
-  (* Selecting no output keeps every check and decision: the IPv4 version,
-     the header length, the TCP data offset and the UDP length. *)
+  (* Selecting no output keeps every check: the range of the IPv4 version and
+     header length byte, the TCP data offset and the UDP length. *)
   let v = Wire_rust.scanner ~fields:[] ~codec:"v" Packet_stack.codec in
   let validation = has "validation only" v in
   validation "pub struct Fields {\n}";
   validation "Some(Fields { })";
-  validation " == 4i64)) { return None; }";
-  validation " >= 5i64)) { return None; }";
+  validation " >= 69i64 && ";
+  validation " <= 79i64) { return None; }";
   validation " >= 8i64)) { return None; }";
   validation " == 2048i64) {";
   validation " == 6i64) {";

@@ -111,8 +111,9 @@
   @samoht)
 
 - `wire.rust` (`Wire_rust.rs`): generate safe, `no_std` Rust from a
-  fixed-size codec, and `Wire_rust.scanner`, the same scanners in Rust (#439,
-  #448, @samoht)
+  fixed-size codec, and `Wire_rust.scanner`, the same scanners in Rust, with
+  the same single comparison for two adjacent bitfields (#439, #448,
+  @samoht)
 
 - `wire_hardcaml` (`Wire_hardcaml`), experimental and built only with
   `BUILD_HARDCAML=1`: generate a Hardcaml hardware decoder for a bounded

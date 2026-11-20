@@ -143,7 +143,10 @@ The invariants above hold for it as follows.
 which hands it the same decisions. A window is a slice of exactly its bytes:
 a prefix is checked by `split_first_chunk`, whose array its loads index at
 constant offsets, and a size is compared as `u64` with the slice's length,
-which also rejects a negative one. An operation the plan checks returns
+which also rejects a negative one. The slice's length is the room left, so
+a bound needs no cancelling and every span keeps its check. Two bitfields of
+one word are one range test where `Plan.word_range` finds one. An operation
+the plan checks returns
 `None` where the 63-bit int overflows, which rejects the record. A run of
 optional fields binds the tail it leaves and its immutable outputs in one
 `let`, so the code after it is written once; an output under more than

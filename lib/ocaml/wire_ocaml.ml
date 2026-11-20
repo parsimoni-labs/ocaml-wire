@@ -123,6 +123,7 @@ module Plan = struct
   end
 
   let conditions f = List.map (fun c -> c.cond) f.checks
+  let word_range = word_range
   let range (t : t) e = range t.ranges e
 
   type nonrec tree = tree = { tid : int; node : tnode }

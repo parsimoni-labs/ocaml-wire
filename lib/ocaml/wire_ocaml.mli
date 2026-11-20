@@ -324,6 +324,16 @@ module Plan : sig
   val conditions : field -> bool Wire.Private.Types.expr list
   (** [conditions f] is the conditions of [f]'s checks. *)
 
+  val word_range :
+    field ->
+    field ->
+    ((int * Wire.Private.Types.bitfield_base) * int * int) option
+  (** [word_range f g] is [Some (word, lo, hi)] when [f] is the top bits of the
+      word at [word] (its offset in the prefix and its base), [g] the bits right
+      below, and their checks [f = c] and [g >= d] hold exactly when the word
+      lies in [lo, hi]. A backend that names no failed field can test the word
+      once. *)
+
   val range : t -> int Wire.Private.Types.expr -> int * int
   (** [range t e] bounds the values [e] takes, from the ranges of its variables;
       [(min_int, max_int)] when it cannot tell. *)
