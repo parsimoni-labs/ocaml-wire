@@ -2,6 +2,8 @@
 # with EverParse. Nothing in the dune build depends on this directory.
 #
 #   make verify    the model and its theorems
+#   make defects   each past defect's buggy replay fails, its fix verifies;
+#                  each mutant of the model fails (slow: use -j)
 
 EVERPARSE ?= $(HOME)/.local/everparse
 FSTAR ?= $(EVERPARSE)/bin/fstar.exe
@@ -17,7 +19,15 @@ FSTAR_FLAGS = $(FLAGS) --cache_checked_modules --cache_dir $(CACHE) --include .
 MODEL = Plan.Expr.fst Plan.Sum.fst Plan.Scan.fst Plan.Proof.fst
 MODULES = $(MODEL) Plan.Word.fst Plan.Frames.fst Spec.Ipv4.fst
 
-.PHONY: verify clean
+# defects/Defect.<name>.Buggy.fst fails, defects/Defect.<name>.Fixed.fst
+# verifies.
+DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
+
+# defects/<name>.sed turns Plan.Scan into a buggy emitter, and Plan.Proof
+# then fails.
+MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked
+
+.PHONY: verify defects clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 
 # One module at a time, in dependency order, so each one's checked file is
 # written before the next reads it.
@@ -26,6 +36,27 @@ verify:
 	@for m in $(MODULES); do \
 	  $(FSTAR) $(FSTAR_FLAGS) $$m || exit 1; \
 	done
+
+defects: $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
+
+$(DEFECTS:%=defect-%): defect-%:
+	@mkdir -p $(CACHE)
+	@out=$$($(FSTAR) $(FSTAR_FLAGS) defects/Defect.$*.Fixed.fst 2>&1) || \
+	  { echo "$$out"; echo "FAIL $*: the fixed replay does not verify"; exit 1; }
+	@out=$$($(FSTAR) $(FSTAR_FLAGS) defects/Defect.$*.Buggy.fst 2>&1); \
+	  if [ $$? -eq 0 ]; then echo "FAIL $*: the buggy replay verifies"; exit 1; fi; \
+	  echo "$$out" | grep -q '^1 error was reported' || \
+	    { echo "$$out"; echo "FAIL $*: not the one expected error"; exit 1; }; \
+	  echo "caught $*: $$(echo "$$out" | grep -m1 -A1 '^\* Error' | tr -s ' \n' ' ')"
+
+$(MUTANTS:%=mutant-%): mutant-%:
+	@d=$(CACHE)/mutant-$*; rm -rf $$d; mkdir -p $$d; \
+	  cp $(MODEL) $$d/; sed -f defects/$*.sed Plan.Scan.fst > $$d/Plan.Scan.fst; \
+	  if cmp -s Plan.Scan.fst $$d/Plan.Scan.fst; then echo "FAIL $*: the mutation does not apply"; exit 1; fi; \
+	  out=$$($(FSTAR) $(FLAGS) --cache_checked_modules --cache_dir $$d --include $$d \
+	    $(MODEL:%=$$d/%) 2>&1); \
+	  if [ $$? -eq 0 ]; then echo "FAIL $*: the mutant verifies"; exit 1; fi; \
+	  echo "caught $*: $$(echo "$$out" | grep -m1 -A1 '^\* Error' | sed "s|$$d/||" | tr -s ' \n' ' ')"
 
 clean:
 	rm -rf $(CACHE)
