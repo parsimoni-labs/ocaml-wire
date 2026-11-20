@@ -291,6 +291,61 @@ let pp_frames_short ?step s =
     (frames_while s) read read assign one assign
     (binop (pos_num s.m.num) "+" "base" stride)
 
+(* The loop of [name] over a batch too short for its frame loop. On the stock
+   compiler it is a function of its own, so the variables of the walk it
+   inlines do not take registers from the frame loop. *)
+let pp_frames_apart ?step s name =
+  let short = name ^ "_short" in
+  Hashtbl.replace s.taken short ();
+  Fmt.pf s.ppf
+    "let[@inline never] %s buf ~stride ~last ~off ~init%s =@\n\
+     let acc = ref init in@\n\
+     let cursor = ref off in@\n"
+    short
+    (if Option.is_some step then "" else " ~invalid ~valid");
+  pp_frames_short ?step s;
+  Fmt.pf s.ppf ";@\n!acc@\n@\n";
+  Fmt.str "acc := %s buf ~stride ~last ~off ~init:!acc%s" short
+    (if Option.is_some step then "" else " ~invalid ~valid")
+
+(* The variables a frame loop's walk starts with besides its own, each with
+   the type a function cut out of it gives it, and what goes before those
+   functions' parameters. *)
+let frames_scope ?step s ~unboxed =
+  match step with
+  | Some _ -> ([ ("current", None) ], "")
+  | None when unboxed ->
+      let i, v = callback_types s in
+      ( [ ("current", Some "a"); ("invalid", Some i); ("valid", Some v) ],
+        "(type a : bits64) " )
+  | None -> ([ ("current", None); ("invalid", None); ("valid", None) ], "")
+
+(* The start of the frame loop [name]: its parameters, the check of its
+   bounds and stride, and its accumulator, cursor and last offset. *)
+let pp_frames_head s ~name ~unboxed ~callbacks =
+  let ppf = s.ppf and native = s.m.num = Unboxed in
+  Fmt.pf ppf "let[@inline always] %s%s %s off len ~stride %s %s =@\n" name
+    (if unboxed then " (type a : bits64)" else "")
+    s.m.src.buf
+    (if unboxed then "~(init : a)" else "~init")
+    callbacks;
+  Fmt.pf ppf
+    "if stride <= 0 || off < 0 || len < 0 || off > Bytes.length buf || len > \
+     Bytes.length buf - off then@\n\
+     invalid_arg \"%s: invalid frame bounds or stride\";@\n"
+    name;
+  if native then
+    Fmt.pf ppf
+      "let mutable acc = init in@\n\
+       let mutable cursor = U.of_int off in@\n\
+       let stride_word = U.of_int stride in@\n\
+       let last = U.of_int (off + len - stride) in@\n"
+  else
+    Fmt.pf ppf
+      "let acc = ref init in@\n\
+       let cursor = ref off in@\n\
+       let last = off + len - stride in@\n"
+
 (* [fold_frames], or with [step] [fold_frames_step], which calls the module
    [step]'s functions by name. The frame guard and a positive stride keep
    [last = off + len - stride] from overflowing and every frame inside
@@ -298,9 +353,7 @@ let pp_frames_short ?step s =
    its checks, so a short frame cannot borrow bytes from the next. *)
 let pp_frames ?step s ~unboxed =
   let native = s.m.num = Unboxed in
-  let binding, reference, read =
-    if native then ("mutable ", "", "") else ("", "ref ", "!")
-  in
+  let read = if native then "" else "!" in
   let name, callbacks, invalid, valid =
     match step with
     | Some m -> ("fold_frames_step", "", m ^ ".invalid", m ^ ".valid")
@@ -310,50 +363,34 @@ let pp_frames ?step s ~unboxed =
           "invalid",
           "valid" )
   in
-  let names, poly =
-    match step with
-    | Some _ -> ([ ("current", None) ], "")
-    | None when unboxed ->
-        let i, v = callback_types s in
-        ( [ ("current", Some "a"); ("invalid", Some i); ("valid", Some v) ],
-          "(type a : bits64) " )
-    | None -> ([ ("current", None); ("invalid", None); ("valid", None) ], "")
+  let names, poly = frames_scope ?step s ~unboxed in
+  let need = fixed_need s.plan.nodes in
+  let apart =
+    if need > 0 && not native then Some (pp_frames_apart ?step s name) else None
   in
   with_cuts ~poly s name (fun s cuts ->
       let ppf = s.ppf in
-      Fmt.pf ppf "let[@inline always] %s%s %s off len ~stride %s %s =@\n" name
-        (if unboxed then " (type a : bits64)" else "")
-        s.m.src.buf
-        (if unboxed then "~(init : a)" else "~init")
-        callbacks;
-      Fmt.pf ppf
-        "if stride <= 0 || off < 0 || len < 0 || off > Bytes.length buf || len \
-         > Bytes.length buf - off then@\n\
-         invalid_arg \"%s: invalid frame bounds or stride\";@\n"
-        name;
-      Fmt.pf ppf "let %sacc = %sinit in@\nlet %scursor = %soff in@\n" binding
-        reference binding
-        (if native then "U.of_int " else "ref ");
-      if native then Fmt.pf ppf "let stride_word = U.of_int stride in@\n";
-      Fmt.pf ppf "let last = %s in@\n"
-        (if native then "U.of_int (off + len - stride)"
-         else "off + len - stride");
-      let need = fixed_need s.plan.nodes in
+      pp_frames_head s ~name ~unboxed ~callbacks;
       let loop ~unrolled known =
         pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known ~unrolled
       in
       (* The loop over frames that hold the leading prefixes comes last,
-         where the compiler closes it with one conditional branch. *)
+         where the compiler closes it with one conditional branch. On the
+         stock compiler it walks one frame per iteration: four inlined walks
+         cost more in spilled registers than the polls they save. *)
       if need > 0 then begin
         Fmt.pf ppf "if stride < %d then (@\n" need;
         (* [fold_unboxed] is not polymorphic in the layout of its answer, so
            the unboxed loop keeps a walk of its own. *)
-        if unboxed then loop ~unrolled:false 0 else pp_frames_short ?step s;
+        (match apart with
+        | Some call -> Fmt.pf ppf "%s" call
+        | None ->
+            if unboxed then loop ~unrolled:false 0 else pp_frames_short ?step s);
         Fmt.pf ppf ")@\nelse (@\n";
-        loop ~unrolled:true need;
+        loop ~unrolled:native need;
         Fmt.pf ppf ")"
       end
-      else loop ~unrolled:true 0;
+      else loop ~unrolled:native 0;
       Fmt.pf ppf ";@\n%sacc@\n@\n" read)
 
 (* [fold], or [fold_unboxed], whose consumer takes the outputs unboxed. *)

@@ -76,12 +76,18 @@ argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
 their consumer by name, with no closure call. They allocate nothing per
 frame where the compiler inlines the consumer and the runtime's loads.
-Their loop over frames is unrolled four times, then walks the remaining
-frames one by one. OCaml polls for signals and other domains once per loop
-iteration, so the unrolled loop polls once per four frames. The loop over
-frames that hold the leading prefixes comes last in the function, where the
-compiler closes it with one branch. The invariants above hold for it as
-follows.
+
+On OxCaml their loop over frames is unrolled four times, then walks the
+remaining frames one by one. OCaml polls for signals and other domains once
+per loop iteration, so the unrolled loop polls once per four frames. On
+OCaml the loop walks one frame per iteration, because four inlined walks
+cost the stock compiler more in spilled registers than the polls they save.
+The loop over frames that hold the leading prefixes comes last in the
+function, where the compiler closes it with one branch. On OCaml the loop
+over frames too short for it is a function of its own, called once per
+batch, so that its variables take no register from the main loop.
+
+The invariants above hold for the generated code as follows.
 
 - **Unchecked reads stay in the frame.** A prefix is read only after one
   check that the bytes it spans, and those of the prefixes and where clauses

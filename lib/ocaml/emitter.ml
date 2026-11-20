@@ -777,7 +777,10 @@ let output_text w (o : output) =
    whose [x] no later line of its function reads is dropped, until none
    is. *)
 
-let is_function line = String.starts_with ~prefix:"let[@inline always]" line
+(* A top-level function the scanner writes, inlined or not. *)
+let is_function line =
+  String.starts_with ~prefix:"let[@inline always]" line
+  || String.starts_with ~prefix:"let[@inline never]" line
 
 let rec prune lines =
   let lines = Array.of_list lines in
