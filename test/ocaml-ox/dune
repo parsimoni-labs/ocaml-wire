@@ -80,8 +80,6 @@
   s_overflow.mli
   s_skipped.ml
   s_skipped.mli
-  s_deep.ml
-  s_deep.mli
   s_huge.ml
   s_huge.mli
   s_bigspan.ml
@@ -157,8 +155,6 @@
   s_overflow.mli
   s_skipped.ml
   s_skipped.mli
-  s_deep.ml
-  s_deep.mli
   s_huge.ml
   s_huge.mli
   s_bigspan.ml
@@ -230,8 +226,6 @@
   s_overflow.mli
   s_skipped.ml
   s_skipped.mli
-  s_deep.ml
-  s_deep.mli
   s_huge.ml
   s_huge.mli
   s_bigspan.ml
@@ -298,7 +292,6 @@
   s_sized
   s_overflow
   s_skipped
-  s_deep
   s_huge
   s_bigspan
   s_nested

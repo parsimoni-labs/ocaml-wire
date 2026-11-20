@@ -257,6 +257,12 @@ type bf_info = {
 
 let no_runtime = Types.unbound_eval_ctx
 
+(* Saturating addition of an offset and a size. A saturated sum lies outside
+   any buffer, so the bounds checks reject it. *)
+let[@inline] offset_add a b =
+  let s = a + b in
+  if Arith.add_overflows a b s then if a >= 0 then max_int else min_int else s
+
 (* The context of the general passes a record without parameters falls back
    on when a layout walk has not accepted it: no parameter is read through it,
    and a sub-codec checked with it goes straight to its own general passes, as

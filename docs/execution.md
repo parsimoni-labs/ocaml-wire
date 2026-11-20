@@ -12,8 +12,11 @@ are checked and why the others cannot go wrong.
 a prefix of them.
 
 1. **Frame.** Check `0 <= off` and `off + min_size <= Bytes.length buf`,
-   where `min_size` is the sum of the fixed sizes of the record's fields. A
-   variable-size record then reads its length fields, with checked reads, and
+   where `min_size` is the sum of the bytes each field always holds. A
+   fixed-size field counts for its size and a sub-codec for its own
+   `min_size`; an optional field and a span sized by the input count for
+   nothing. A variable-size record then reads its length fields, with
+   checked reads, and
    checks that its end lies inside the input. After the frame, every byte at
    a fixed offset below `min_size` is in the buffer.
 2. **Check.** Evaluate the field constraints, the `where` clause, closed enum
@@ -44,11 +47,19 @@ codec is built, so no input can break it.
   the field is added (`Codec.field_read`).
 - **The frame only grows.** `min_size` never decreases as fields are added,
   and never exceeds `Sys.max_string_length`, so the frame check cannot
-  overflow (`Codec.add_min_size`). A negative or oversized literal size is
+  overflow (`Codec.add_min_size`). A codec whose fields, sub-codecs
+  included, always hold more bytes than a buffer can is refused when it is
+  compiled. A negative or oversized literal size is
   refused when its type is built (`Types.literal_size`).
 - **Bytes never choose an unchecked offset.** An offset that depends on the
   data (after a variable-size field, or set by a parameter) is always read
   with a check.
+- **Offsets do not wrap.** The start of a field after a variable-size one
+  and the end of the record are sums of sizes read from the input. They are
+  added with saturating arithmetic (`Codec_repr.offset_add`), so a sum past
+  `max_int` is `max_int`, past the end of any buffer, and the frame check
+  rejects it. A span is tested as `first > len - size`, which cannot
+  overflow.
 - **Input never raises `Invalid_argument`.** Bad bytes give a parse error;
   `Invalid_argument` is for misuse of the API (a negative offset, a missing
   `env`).

@@ -149,6 +149,16 @@
 
 ### Fixed
 
+- A record's minimum size includes the bytes its sub-codecs always hold. A
+  buffer shorter than that fails at the record's start, where the error
+  pointed at a later field before, and a codec too large for any buffer
+  raises `Invalid_argument` when it is built (#511, @samoht)
+
+- `decode` and `validate` of a record whose sizes add up to more than
+  `max_int` report the bytes missing, where they gave a wrong count
+  (`unexpected EOF: expected 1 bytes, got 2`), and `get` of a field after
+  such sizes fails where it read a byte inside the buffer (#511, @samoht)
+
 - A codec's own field shadows a sub-codec's field of the same name
   everywhere, as in 3D. OCaml and the generated C could read different bytes
   (#453, @samoht)

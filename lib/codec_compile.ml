@@ -115,7 +115,8 @@ let advance_next_off (no : next_off) (n : int) : next_off =
   | Static k -> Static (k + n)
   | Dynamic f ->
       Dynamic
-        (fun runtime input_end buf base -> f runtime input_end buf base + n)
+        (fun runtime input_end buf base ->
+          offset_add (f runtime input_end buf base) n)
 
 let null_int_reader : runtime -> Input_end.t -> bytes -> int -> int =
  fun _runtime _input_end _buf _base -> 0
@@ -282,11 +283,12 @@ let compile_codec_variable : type a r.
     codec_decode:(runtime -> Input_end.t -> bytes -> int -> a) ->
     codec_validate:(runtime -> Input_end.t -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
+    codec_min_size:int ->
     codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
     nested_readers:field_reader list ->
     (a, r) compiled_field =
- fun ctx ~get ~codec_decode ~codec_validate ~codec_encode ~codec_size_of
-     ~nested_readers ->
+ fun ctx ~get ~codec_decode ~codec_validate ~codec_encode ~codec_min_size
+     ~codec_size_of ~nested_readers ->
   let off_fn, (field_access : field_access), validator_off =
     match ctx.next_off with
     | Static n ->
@@ -322,13 +324,14 @@ let compile_codec_variable : type a r.
         codec_encode (get v) runtime buf write_off);
     extra_writers = [];
     field_access;
-    size_delta = 0;
+    (* The sub-codec always holds at least its own [min_size]. *)
+    size_delta = codec_min_size;
     next_off =
       Dynamic
         (fun runtime input_end buf base ->
-          base
-          + off_fn runtime input_end buf base
-          + size_fn runtime input_end buf base);
+          offset_add
+            (base + off_fn runtime input_end buf base)
+            (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers;
@@ -343,12 +346,13 @@ let compile_codec : type a r.
     codec_validate:(runtime -> Input_end.t -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
     codec_fixed_size:int option ->
+    codec_min_size:int ->
     codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
     codec_field_readers:
       (string * (runtime -> Input_end.t -> bytes -> int -> int)) list ->
     (a, r) compiled_field =
  fun ctx fld ~codec_decode ~codec_validate ~codec_encode ~codec_fixed_size
-     ~codec_size_of ~codec_field_readers ->
+     ~codec_min_size ~codec_size_of ~codec_field_readers ->
   let nested_readers =
     build_nested_readers ctx
       (List.map (fun (n, r) -> (Some n, r)) codec_field_readers)
@@ -375,7 +379,7 @@ let compile_codec : type a r.
       }
   | None ->
       compile_codec_variable ctx ~get ~codec_decode ~codec_validate
-        ~codec_encode ~codec_size_of ~nested_readers
+        ~codec_encode ~codec_min_size ~codec_size_of ~nested_readers
 
 (* Variable-size sub-codec: dispatch on whether we sit at a static or a
    dynamic running offset. Mirrors [compile_var_bytes] -- both flavours
@@ -392,7 +396,8 @@ let dynamic_optional_next_off ctx present_fn fsize =
         | Static n -> base + n
         | Dynamic f -> f runtime input_end buf base
       in
-      if present_fn runtime input_end buf base then off + fsize else off)
+      if present_fn runtime input_end buf base then offset_add off fsize
+      else off)
 
 (* Absolute byte position a [next_off] points at, given the record [base]. *)
 let next_off_pos : next_off -> runtime -> Input_end.t -> bytes -> int -> int =
@@ -763,9 +768,9 @@ let compile_repeat : type elt seq r.
     next_off =
       Dynamic
         (fun runtime input_end buf base ->
-          base
-          + off_fn runtime input_end buf base
-          + size_fn runtime input_end buf base);
+          offset_add
+            (base + off_fn runtime input_end buf base)
+            (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers = [];
@@ -798,7 +803,7 @@ let missing_before ~first ~sz ~len =
    as end-of-input instead. *)
 let[@inline] check_span_bounds buf ~first ~sz =
   let len = Bytes.length buf in
-  if sz < 0 || first < 0 || first + sz > len then
+  if sz < 0 || first < 0 || first > len - sz then
     raise_eof ~at:first
       ~expected:(missing_before ~first ~sz ~len)
       ~got:(bytes_from (Input_end.of_bytes buf) first)
@@ -1208,7 +1213,7 @@ let compile_var_bytes : type a r.
       Dynamic
         (fun runtime input_end buf base ->
           let fo = off_fn runtime input_end buf base in
-          base + fo + size_fn runtime input_end buf base);
+          offset_add (base + fo) (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader;
     nested_readers = [];
@@ -1409,7 +1414,7 @@ let compile_union : type a k r.
       Dynamic
         (fun runtime input_end buf base ->
           let fo = off_fn runtime input_end buf base in
-          base + fo + size_fn runtime input_end buf base);
+          offset_add (base + fo) (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers = [];
@@ -1568,12 +1573,13 @@ let rec compile_field : type a r.
         codec_validate;
         codec_encode;
         codec_fixed_size;
+        codec_min_size;
         codec_size_of;
         codec_field_readers;
         _;
       } ->
       compile_codec ctx fld ~codec_decode ~codec_validate ~codec_encode
-        ~codec_fixed_size ~codec_size_of ~codec_field_readers
+        ~codec_fixed_size ~codec_min_size ~codec_size_of ~codec_field_readers
   | Optional { present; inner } -> compile_optional ctx fld present inner
   | Optional_or { present; inner; default } ->
       compile_optional_or ctx fld present inner default

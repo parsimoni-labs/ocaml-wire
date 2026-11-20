@@ -1232,44 +1232,15 @@ let test_huge_prefix () =
       Diff_ocaml.check_scan huge_reference [ huge; step ] (Bytes.of_string s))
     [ ""; "\001"; "\001\002"; String.make 64 '\001' ]
 
-let deep_reference =
-  Diff_ocaml.Reference
-    {
-      label = "deep";
-      codec = Schemas.deep 32 (Sys.max_string_length - 1);
-      known = Some [ "tail" ];
-      project =
-        (fun _ (r : Schemas.deep_top) -> [ ("tail", UInt8.to_int r.tail) ]);
-      inputs = (fun b -> [ b ]);
-    }
-
-(* A constant offset that overflows the native int rejects every frame, as
-   the codec does, and reads nothing (the paranoid profile checks reads). *)
+(* A codec whose constant offsets overflow the native int holds more than any
+   buffer: it is refused when built, by the codec and so by the generator. *)
 let test_scan_deep () =
-  let beyond = string_of_int (Sys.max_string_length + 1) in
-  let src =
-    Wire_ocaml.scanner ~codec:"deep"
-      (Schemas.deep 3 (Sys.max_string_length / 2))
-  in
-  let lines = String.split_on_char '\n' src in
-  let rec twice = function
-    | a :: (b :: _ as rest) -> (a = b && contains a beyond) || twice rest
-    | _ -> false
-  in
-  Alcotest.(check bool) "one check past the largest buffer" false (twice lines);
-  let deep =
-    scan_ops "S_deep" [ "tail" ] (fun b o n ->
-        let v = S_deep.decode b o n in
-        if v.ok then Some [ ("tail", v.tail) ] else None)
-  and step =
-    scan_ops "S_deep step" [] (fun b o n ->
-        if Int.compare (S_deep.fold_step b o n ~init:0) 0 >= 0 then Some []
-        else None)
-  in
   List.iter
-    (fun s ->
-      Diff_ocaml.check_scan deep_reference [ deep; step ] (Bytes.of_string s))
-    [ ""; "\000"; "\000\042"; "\001\042\042"; String.make 64 '\000' ]
+    (fun (depth, big) ->
+      match Wire_ocaml.scanner ~codec:"deep" (Schemas.deep depth big) with
+      | _ -> Alcotest.failf "deep %d %d: scanner generated" depth big
+      | exception Invalid_argument _ -> ())
+    [ (32, Sys.max_string_length - 1); (3, Sys.max_string_length / 2) ]
 
 let bigspan_reference =
   Diff_ocaml.Reference
