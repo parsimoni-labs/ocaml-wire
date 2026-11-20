@@ -160,6 +160,14 @@ val plan_of : ?maps:maps -> T.struct_ -> plan
 (** [plan_of ?maps s] is the plan of the struct [s]. Raises {!Unsupported} on a
     shape the generator does not handle. *)
 
+val beyond : int
+(** [beyond] is [Sys.max_string_length + 1], the extent of any offset past the
+    longest [bytes]. *)
+
+val extent : int -> int -> int
+(** [extent a b] is [a + b] saturated at {!beyond}. Raises [Invalid_argument] on
+    a negative argument. *)
+
 val fields_of : node list -> field list
 (** [fields_of nodes] is every prefix field of [nodes], nested ones included. *)
 

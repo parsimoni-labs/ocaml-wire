@@ -1241,6 +1241,17 @@ let deep_reference =
 (* A constant offset that overflows the native int rejects every frame, as
    the codec does, and reads nothing (the paranoid profile checks reads). *)
 let test_scan_deep () =
+  let beyond = string_of_int (Sys.max_string_length + 1) in
+  let src =
+    Wire_ocaml.scanner ~codec:"deep"
+      (Schemas.deep 3 (Sys.max_string_length / 2))
+  in
+  let lines = String.split_on_char '\n' src in
+  let rec twice = function
+    | a :: (b :: _ as rest) -> (a = b && contains a beyond) || twice rest
+    | _ -> false
+  in
+  Alcotest.(check bool) "one check past the largest buffer" false (twice lines);
   let deep =
     scan_ops "S_deep" [ "tail" ] (fun b o n ->
         let v = S_deep.decode b o n in

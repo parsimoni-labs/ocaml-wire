@@ -167,7 +167,7 @@ let mentions x text =
    prefixes, then those of the first optional field. A batch whose stride is
    at least that tests none of their bounds per frame. *)
 let rec fixed_need = function
-  | Prefix (_, n) :: rest -> n + fixed_need rest
+  | Prefix (_, n) :: rest -> extent n (fixed_need rest)
   | Gate (_, _, _, inner) :: _ -> fixed_need inner
   | _ -> 0
 
