@@ -24,7 +24,9 @@
   s_signed.ml
   s_signed.mli
   s_refined.ml
-  s_refined.mli)
+  s_refined.mli
+  s_stacked.ml
+  s_stacked.mli)
  (enabled_if
   (<> %{ocaml-config:ox} true))
  (action
@@ -45,7 +47,9 @@
   s_signed.ml
   s_signed.mli
   s_refined.ml
-  s_refined.mli)
+  s_refined.mli
+  s_stacked.ml
+  s_stacked.mli)
  (enabled_if
   (= %{ocaml-config:ox} true))
  (action
@@ -57,7 +61,7 @@
 (library
  (name standalone_narrow)
  (wrapped false)
- (modules s_checked s_eth s_signed s_refined)
+ (modules s_checked s_eth s_signed s_refined s_stacked)
  (libraries wire.runtime))
 
 (library

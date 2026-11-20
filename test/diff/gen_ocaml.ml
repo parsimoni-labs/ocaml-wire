@@ -180,7 +180,7 @@ let pp_case ppf (label, c, (src, intf)) =
    of every output, one of every other output, one of none, and on OxCaml one
    for the default target too; a sampled shape the first two. *)
 
-let snapshot ppf ~unboxed ~var fields =
+let snapshot ppf ?(boxed = false) ~unboxed ~var fields =
   Fmt.pf ppf "[";
   List.iter
     (fun (n, is_bool) ->
@@ -188,6 +188,7 @@ let snapshot ppf ~unboxed ~var fields =
       Fmt.pf ppf "(%S, %s);" n
         (if is_bool then "(if " ^ v ^ " then 1 else 0)"
          else if unboxed then "(Wire_runtime.Target.Int64_u.to_int " ^ v ^ ")"
+         else if boxed then "(Int64.to_int " ^ v ^ ")"
          else v))
     fields;
   Fmt.pf ppf "]"
@@ -233,8 +234,9 @@ let pp_backend ppf ~m ~unboxed fields =
     () batch ()
 
 (* The module [fold_step] and [fold_frames_step] call by name: it conses each
-   frame's snapshot onto the accumulator. *)
-let pp_step ppf fields =
+   frame's snapshot onto the accumulator. For the OCaml target it takes the
+   integer outputs as [int64]. *)
+let pp_step ppf (target, fields) =
   Fmt.pf ppf
     "struct@\n\
      type t = (string * int) list option list@\n\
@@ -243,7 +245,9 @@ let pp_step ppf fields =
      end"
     (labels fields)
     (fun ppf () ->
-      snapshot ppf ~unboxed:false ~var:(fun n -> "field_" ^ n) fields)
+      snapshot ppf ~boxed:(target = `OCaml) ~unboxed:false
+        ~var:(fun n -> "field_" ^ n)
+        fields)
     ()
 
 (* [fold_step] and [fold_frames_step], as the [decode] and [fold_frames] of
@@ -276,7 +280,9 @@ let pp_scanners ppf ~label c modules =
          end = struct@\n\
          %s@\n\
          end in@\n"
-        pp_step (selected_fields selected) m
+        pp_step
+        (t, selected_fields selected)
+        m
         (Wire_ocaml.scanner_mli ~target:t ?fields:selected ~step:"Step"
            ~codec:label c)
         (Wire_ocaml.scanner ~target:t ?fields:selected ~step:"Step" ~codec:label

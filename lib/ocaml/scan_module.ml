@@ -51,7 +51,7 @@ let scan_mode (plan : plan) ~num selected =
          runtime's [Target.Local]. *)
       (match num with
       | Unboxed -> { local_bytes_src with u = "L"; checked = "L" }
-      | Tagged -> bytes_src);
+      | Tagged | Boxed -> bytes_src);
     ox = false;
     cold = false;
     raw32 = false;
@@ -125,7 +125,7 @@ let scope s names =
   let num, buf =
     match s.m.num with
     | Unboxed -> (Some "int64_u", Some "bytes @ local")
-    | Tagged -> (None, None)
+    | Tagged | Boxed -> (None, None)
   in
   List.rev ([ ("buf", buf); ("base", num); ("stop", num) ] @ names)
 
@@ -178,8 +178,8 @@ let pp_entry ?cuts ~scope s ~reject ~accept =
      - off then %s else@\n"
     reject;
   Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
-    (if s.m.num = Tagged then "off" else "U.of_int off")
-    (if s.m.num = Tagged then "len" else "U.of_int len");
+    (if s.m.num = Unboxed then "U.of_int off" else "off")
+    (if s.m.num = Unboxed then "U.of_int len" else "len");
   pp_scan ?cuts ~scope s ~reject ~accept
 
 (* The types of the callbacks [fold_frames_unboxed] takes, whose accumulator
@@ -235,7 +235,8 @@ let pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known ~unrolled =
     ~accept:(call s ~unboxed (valid ^ " current"));
   Format.pp_print_flush bppf ();
   let body = Buffer.contents body in
-  let num = s.m.num in
+  (* A position is an [int] where values are [int64]. *)
+  let num = pos_num s.m.num in
   let frame base =
     if mentions "base" body then Fmt.pf ppf "let base = %s in@\n" base;
     Fmt.pf ppf "let current = %sacc in@\nlet next = (@\n" read;
@@ -288,7 +289,7 @@ let pp_frames_short ?step s =
      cursor %s %s@\n\
      done"
     (frames_while s) read read assign one assign
-    (binop s.m.num "+" "base" stride)
+    (binop (pos_num s.m.num) "+" "base" stride)
 
 (* [fold_frames], or with [step] [fold_frames_step], which calls the module
    [step]'s functions by name. The frame guard and a positive stride keep
@@ -491,6 +492,11 @@ let pp_body ?step s =
   pp_frames s ~unboxed:false;
   Option.iter
     (fun m ->
+      (* On OCaml the step functions hold values as [int64]. *)
+      let s =
+        if unboxed then s
+        else { s with m = scan_mode s.plan ~num:Boxed s.selected }
+      in
       pp_fold_step s m;
       pp_frames ~step:m s ~unboxed:false)
     step;

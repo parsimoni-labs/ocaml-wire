@@ -199,14 +199,18 @@ val scanner :
     [Invalid_argument] for bad bounds or a [stride] that is not positive.
 
     [step], the path of a module with a type [t], the accumulator, and
-    [valid : t -> f1:int -> ... -> fn:int -> t] and [invalid : t -> t], adds
-    [fold_step buf off len ~init] and
+    [valid : t -> f1:int64 -> ... -> fn:int64 -> t] (a presence is a [bool]) and
+    [invalid : t -> t], adds [fold_step buf off len ~init] and
     [fold_frames_step buf off len ~stride ~init], which are [fold] and
     [fold_frames] with [init] as the accumulator, calling that module's
     functions by name. OCaml without flambda never inlines a function passed as
-    an argument, so only these call the consumer with neither a closure call nor
-    an allocation per frame. The module must be in scope where the generated
-    code is compiled.
+    an argument, so only these call the consumer with no closure call. They pass
+    each integer to [valid] as an [int64]. Nothing is boxed and no frame
+    allocates where the compiler inlines [valid] and the runtime's loads. Dune's
+    dev profile compiles [wire.runtime] with [-opaque], which prevents inlining
+    the loads. Where ints have 32 bits or fewer, an [int64] is a heap value and
+    they run slower than [fold]. The module must be in scope where the generated
+    code is compiled. On OxCaml [valid] takes each integer as an [int].
 
     On OxCaml the outputs are [int64_u] inside, and [fold_unboxed],
     [fold_frames_unboxed] (whose accumulator has layout [bits64]) and

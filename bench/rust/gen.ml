@@ -46,7 +46,7 @@ let checksum_fields =
     "ipv4_udp_length";
   ]
 
-let checksum_contribution ~wide get =
+let checksum_contribution ~zero get =
   let ports p =
     "((" ^ get (p ^ "_src_port") ^ " lsl 16) lor " ^ get (p ^ "_dst_port") ^ ")"
   in
@@ -60,8 +60,7 @@ let checksum_contribution ~wide get =
   ^ get "ipv4_tcp_flags" ^ " in\n" ^ "(a + b) + (c + "
   ^ get "ipv4_tcp_data_offset" ^ ")\n" ^ "else if " ^ get "ipv4_udp_present"
   ^ " then " ^ ports "ipv4_udp" ^ " + " ^ get "ipv4_udp_length" ^ " else "
-  ^ (if wide then "#0L" else "0")
-  ^ " in\n" ^ "(ip0 + ip1) + (ip2 + transport)"
+  ^ zero ^ " in\n" ^ "(ip0 + ip1) + (ip2 + transport)"
 
 let reader_modes name =
   ( List.mem name [ "batch"; "batch_unboxed" ],
@@ -107,20 +106,30 @@ let reader_wrappers ~wide ~fold ~batch =
 
 (* The checksum consumer the scanner calls by name in [fold_step] and
    [fold_frames_step]: OCaml without flambda never inlines a function passed
-   as an argument. *)
-let step ~fields =
+   as an argument. On OCaml it takes the outputs as [int64] and folds them as
+   such, as the unboxed rows of OxCaml fold [int64_u]. *)
+let step target ~fields =
   let args =
     List.map
       (fun (name, _) ->
         "~" ^ name ^ if List.mem name checksum_fields then "" else ":_")
       fields
   in
-  "module Step = struct\n\
-   type t = int\n\n\
-   let[@inline always] invalid base = base\n\
-   let[@inline always] valid base " ^ String.concat " " args
-  ^ " =\nlet contribution = "
-  ^ checksum_contribution ~wide:false Fun.id
+  let typ, ops, zero =
+    match target with
+    | `OCaml ->
+        ( "int64",
+          "external ( + ) : int64 -> int64 -> int64 = \"%int64_add\"\n\
+           external ( lxor ) : int64 -> int64 -> int64 = \"%int64_xor\"\n\
+           external ( lor ) : int64 -> int64 -> int64 = \"%int64_or\"\n\
+           external ( lsl ) : int64 -> int -> int64 = \"%int64_lsl\"\n\n",
+          "0L" )
+    | `OxCaml -> ("int", "", "0")
+  in
+  "module Step = struct\ntype t = " ^ typ ^ "\n\n" ^ ops
+  ^ "let[@inline always] invalid base = base\nlet[@inline always] valid base "
+  ^ String.concat " " args ^ " =\nlet contribution = "
+  ^ checksum_contribution ~zero Fun.id
   ^ " in\nbase + contribution\nend\n\n"
 
 let checksum_reader target ~core ~fields name decode access =
@@ -134,15 +143,20 @@ let checksum_reader target ~core ~fields name decode access =
   ^ " base buf off len =\n"
   ^
   if fold && not wide then
-    core
-    ^ (if batch then ".fold_frames_step buf off len ~stride"
-       else ".fold_step buf off len")
-    ^ " ~init:base\n"
+    let call =
+      core
+      ^
+      if batch then ".fold_frames_step buf off len ~stride"
+      else ".fold_step buf off len"
+    in
+    if target = `OCaml then
+      "Int64.to_int (" ^ call ^ " ~init:(Int64.of_int base))\n"
+    else call ^ " ~init:base\n"
   else
     first
     ^ reader_invocation ~core ~fields ~decode ~fold ~batch ~wide get
     ^ inside ^ "let contribution = "
-    ^ checksum_contribution ~wide get
+    ^ checksum_contribution ~zero:(if wide then "#0L" else "0") get
     ^ " in\n" ^ base ^ " + contribution\n" ^ last
 
 let stack_reader target ~core ~fields =
@@ -193,7 +207,7 @@ let () =
           Wire_ocaml.scanner_mli ~target ?fields:selected ~step:"Step" ~codec c
         in
         write file
-          (step ~fields ^ "module " ^ core ^ " : sig\n" ^ mli
+          (step target ~fields ^ "module " ^ core ^ " : sig\n" ^ mli
          ^ "\nend = struct\n" ^ ml ^ "\nend\n\n"
           ^ stack_reader target ~core ~fields)
       in

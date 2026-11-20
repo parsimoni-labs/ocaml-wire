@@ -119,4 +119,6 @@ added, on the `fixed64-random` corpus of that time, the stock batch through
 allocated a five-word closure per frame and took 31.30 (full outputs) and
 20.18 (selected) ns/packet, against 15.38 and 14.86 by name, with no
 allocation and no call per frame. The stock `decode` row still builds its
-record through `fold`'s closures.
+record through `fold`'s closures. On OCaml, `Step` takes the outputs as
+`int64` and folds them as `int64`, as the unboxed OxCaml rows fold `int64_u`
+and the Rust rows `u64`. On OxCaml it takes and folds `int`.

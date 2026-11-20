@@ -6,8 +6,14 @@
 
 open Planner
 
-(** How the code holds integers: as [int], or on OxCaml as [int64_u]. *)
-type num = Tagged | Unboxed
+(** How the code holds integers. [Tagged] is [int]. [Boxed] is [int64] for
+    values and [int] for positions; the stock compiler keeps such an [int64]
+    unboxed in a register. [Unboxed] is OxCaml's [int64_u]. *)
+type num = Tagged | Boxed | Unboxed
+
+val pos_num : num -> num
+(** [pos_num num] is how code that holds integers as [num] holds positions,
+    sizes and bounds: as [int] where it holds values as [int64]. *)
 
 type src = {
   typ : string;
@@ -106,6 +112,7 @@ type w = {
   deferred : (string * (string * bool)) list ref;
   bounded : (string * string * string * string) list;
   sums : (string * sum) list;
+  ints : Sset.t;
   base : string;
   limit : string;
   known : int;
@@ -121,12 +128,13 @@ type w = {
 }
 (** The state of a walk: its mode and output, the ranges and facts known at its
     position, the bitfield words it holds, the spans whose bound is checked and
-    the end of each as a sum, the window of the buffer it is in; and, for a walk
-    cut into functions, where they go, the function being written and the
-    conditions open around the position in it, the variables it binds with the
-    type a function cut out of it gives each, the outputs known present or
-    absent, whether the code here jumps to a join outside it, and the case being
-    written, which names its functions. *)
+    the end of each as a sum, the variables that hold an [int] in the [int64]
+    form, the window of the buffer it is in; and, for a walk cut into functions,
+    where they go, the function being written and the conditions open around the
+    position in it, the variables it binds with the type a function cut out of
+    it gives each, the outputs known present or absent, whether the code here
+    jumps to a join outside it, and the case being written, which names its
+    functions. *)
 
 val pf : w -> ('a, Format.formatter, unit) format -> 'a
 (** [pf w fmt] writes to the output of [w]. *)

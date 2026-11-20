@@ -458,3 +458,19 @@ let shared =
         (opt "y" Expr.(is a 2 && is b 1) $ fun r -> r.y);
         (opt "z" Expr.(is c 1 && is b 2) $ fun r -> r.z);
       ]
+
+type stacked = UInt16.t * UInt16.t * checked option
+
+let stacked =
+  let kind = Field.v "kind" uint16be in
+  Codec.v "Stacked"
+    (fun kind flags inner -> (kind, flags, inner))
+    Codec.
+      [
+        (kind $ fun (x, _, _) -> x);
+        (Field.v "flags" uint16be $ fun (_, x, _) -> x);
+        ( Field.optional "inner"
+            ~present:Expr.(Field.ref kind = int 0x0800)
+            (codec checked)
+        $ fun (_, _, x) -> x );
+      ]

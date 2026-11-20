@@ -55,8 +55,70 @@ let refined () =
     (Constraint_failed { which = Field; value = Some 0L })
     (fun () -> S_refined.validate_exn (bytes_of [ 0x10; 2; 20 ]) 0)
 
+(* Where ints are narrow and an [int64] is a heap value, the step functions
+   of [stacked] give the answers of [fold]. *)
+let stacked () =
+  let frame kind vihl len ttl proto =
+    bytes_of
+      [
+        kind lsr 8;
+        kind land 0xff;
+        0x12;
+        0x34;
+        vihl;
+        len lsr 8;
+        len land 0xff;
+        ttl;
+        proto;
+      ]
+  in
+  let frames =
+    [
+      frame 0x0800 0x45 20 64 6;
+      frame 0x86dd 0x45 20 64 6;
+      frame 0x0800 0x55 20 64 6;
+      frame 0x0800 0x45 16 64 6;
+      frame 0x0800 0x45 20 0 6;
+      frame 0x0800 0x45 20 64 7;
+    ]
+  in
+  let fold b o n =
+    S_stacked.fold b o n
+      ~invalid:(fun () -> -1)
+      ~valid:(fun
+          ~kind
+          ~flags
+          ~inner_present
+          ~inner_version
+          ~inner_ihl
+          ~inner_length
+          ~inner_ttl
+          ~inner_proto
+        ->
+        kind + flags + Bool.to_int inner_present + inner_version + inner_ihl
+        + inner_length + inner_ttl + inner_proto)
+  in
+  let step b o n = S_stacked.fold_step b o n ~init:0 in
+  let batch b n =
+    S_stacked.fold_frames_step b 0 (Bytes.length b) ~stride:n ~init:0
+  in
+  let want = [ 6808; 39185; -1; -1; -1; -1 ] in
+  check "stacked: fold" (List.map (fun b -> fold b 0 9) frames = want);
+  check "stacked: fold_step" (List.map (fun b -> step b 0 9) frames = want);
+  check "stacked: fold_frames_step"
+    (batch (Bytes.concat Bytes.empty frames) 9 = List.fold_left ( + ) 0 want);
+  List.iter
+    (fun n ->
+      let cut = List.map (fun b -> Bytes.sub b 0 n) frames in
+      check
+        (Fmt.str "stacked: frames of %d bytes" n)
+        (batch (Bytes.concat Bytes.empty cut) n
+        = List.fold_left (fun acc b -> acc + fold b 0 n) 0 cut))
+    [ 3; 4; 7; 8 ]
+
 let run () =
   checked ();
   eth ();
   signed ();
-  refined ()
+  refined ();
+  stacked ()

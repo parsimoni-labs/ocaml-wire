@@ -1373,7 +1373,9 @@ let test_size () =
 (* The scanner of nested optional fields that hands out every output
    allocates nothing where it calls its consumer by name, beyond the floats
    of the measure: a frame with no optional field gives zeros, one with all
-   twelve levels a one for each of its 35 outputs. *)
+   twelve levels a one for each of its 35 outputs. Dune's dev profile compiles
+   wire.runtime [-opaque], so its 64-bit load returns a boxed [int64]: the
+   batch then allocates and only the answers are checked. *)
 let test_nested_no_alloc () =
   let stride = 32 and frames = 4096 in
   let len = stride * frames in
@@ -1398,7 +1400,7 @@ let test_nested_no_alloc () =
     let before = Gc.minor_words () in
     let v = Sys.opaque_identity (f ()) in
     let words = Gc.minor_words () -. before in
-    if words >= 64. then
+    if words >= 64. && not Boxed_loads.v then
       Alcotest.failf "%s: %.0f words allocated over %d frames" what words frames;
     v
   in

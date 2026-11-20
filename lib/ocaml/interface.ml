@@ -915,20 +915,26 @@ let pp_scans ppf s =
   | None -> ()
   | Some m ->
       let t = m ^ ".t" in
+      (* On OCaml the step functions hand out their integers as [int64]. *)
+      let outputs =
+        match target with
+        | `OCaml -> ", each integer output an [int64]"
+        | `OxCaml -> ""
+      in
       pp_val ~portable:false target ppf "fold_step"
         (arrows [ b; "int"; "int"; "init:" ^ t; t ])
         (Fmt.str
            "[fold_step buf off len ~init] is [fold buf off len] with \
             [~invalid:(fun () -> %s.invalid init)] and [~valid:(%s.valid \
-            init)], with no closure built."
-           m m);
+            init)]%s, with no closure built."
+           m m outputs);
       pp_val ~portable:false target ppf "fold_frames_step"
         (arrows [ b; "int"; "int"; "stride:int"; "init:" ^ t; t ])
         (Fmt.str
            "[fold_frames_step buf off len ~stride ~init] is [fold_frames buf \
-            off len ~stride ~init ~invalid:%s.invalid ~valid:%s.valid], with \
+            off len ~stride ~init ~invalid:%s.invalid ~valid:%s.valid]%s, with \
             no closure built."
-           m m)
+           m m outputs)
 
 let pp_unboxed_scans ppf s =
   let target = s.target in
