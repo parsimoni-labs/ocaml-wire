@@ -17,20 +17,20 @@ FLAGS = --z3version 4.13.3 --smt $(Z3) --already_cached 'Prims FStar LowParse' \
 FSTAR_FLAGS = $(FLAGS) --cache_checked_modules --cache_dir $(CACHE) --include .
 
 MODEL = Plan.Expr.fst Plan.Sum.fst Plan.Scan.fst Plan.Proof.fst
-MODULES = $(MODEL) Plan.Word.fst Plan.Frames.fst Spec.Ipv4.fst
+MODULES = $(MODEL) Plan.Word.fst Plan.Frames.fst Spec.Ipv4.fst Plan.Decide.fst
 
 # defects/Defect.<name>.Buggy.fst fails, defects/Defect.<name>.Fixed.fst
 # verifies.
-DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst \
-  PrefixWrap
+DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
+
 
 # defects/<name>.sed rewrites the module its "# mutates:" line names, and
 # the module its "# fails:" line names then fails to verify.
 MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
   frames-quad-overlap frames-quad-guard word-lor-overlap word-mask-dropped \
-  prefix-run-unbounded region-bounded-leak region-unchecked region-inexact
+  prefix-wrap region-bounded-leak region-unchecked region-inexact
 
-.PHONY: verify defects plans clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
+.PHONY: verify defects plans extract check-extract clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 
 # One module at a time, in dependency order, so each one's checked file is
 # written before the next reads it.
@@ -65,21 +65,45 @@ $(MUTANTS:%=mutant-%): mutant-%:
 	      { echo "$$wout"; echo "FAIL $*: the witness does not hold of the mutant"; exit 1; }; fi; \
 	  echo "caught $*: $$(echo "$$out" | grep -m1 -A1 '^\* Error' | sed "s|$$d/||" | tr -s ' \n' ' ')"
 
-# The planner's plans of the sampled codecs, the structured scan cases and
-# the packet stack satisfy what Plan.Proof assumes of a plan; the plan of
-# the PrefixWrap codec, the control, does not.
+# The planner's plans of the sampled codecs, the structured scan cases, the
+# packet stack and the PrefixWrap codec meet what Plan.Proof assumes of a
+# plan (F* checks wf), and every bound decision Wire_ocaml.Plan.spans
+# reports the emitter took is one the model's walk takes (Plan.Decide as F*
+# extracts it). The control claims every bound is left to the next check,
+# and must be refused.
 ROOT = $(abspath ../..)
 PLANS = $(ROOT)/_build/default/proofs/fstar/plans/plans.exe
 
 plans:
 	@mkdir -p $(CACHE)/plans
 	dune build --root $(ROOT) ./proofs/fstar/plans/plans.exe
-	$(PLANS) Plans > $(CACHE)/plans/Plans.fst
-	$(PLANS) Controls controls > $(CACHE)/plans/Controls.fst
+	@$(PLANS) Plans > $(CACHE)/plans/Plans.fst 2> $(CACHE)/plans/decisions.txt; \
+	  cat $(CACHE)/plans/decisions.txt; \
+	  grep -q ' 0 plans with one the model does not justify' $(CACHE)/plans/decisions.txt || \
+	    { echo "FAIL: an emitter decision the model does not justify"; exit 1; }
 	$(FSTAR) $(FSTAR_FLAGS) $(CACHE)/plans/Plans.fst
-	@if $(FSTAR) $(FSTAR_FLAGS) $(CACHE)/plans/Controls.fst > /dev/null 2>&1; then \
-	  echo "FAIL: the control plan is accepted"; exit 1; \
-	else echo "control refused: the PrefixWrap plan is not well formed"; fi
+	@$(PLANS) Control control > /dev/null 2> $(CACHE)/plans/control.txt; \
+	  if grep -q ' 0 plans with one the model does not justify' $(CACHE)/plans/control.txt; then \
+	    echo "FAIL: the control's fabricated decisions are justified"; exit 1; \
+	  else echo "control refused: $$(tail -1 $(CACHE)/plans/control.txt)"; fi
+
+# The model as F* extracts it, which plans/plans.exe runs: extract writes it
+# again, check-extract fails when the checked-in copy differs.
+EXTRACTED = Plan.Expr Plan.Sum Plan.Scan Plan.Decide
+
+extract:
+	@mkdir -p $(CACHE)/extract
+	$(FSTAR) $(FSTAR_FLAGS) --codegen OCaml --extract '$(EXTRACTED)' \
+	  --odir $(CACHE)/extract Plan.Decide.fst
+	cp $(CACHE)/extract/Plan_*.ml plans/extracted/
+
+check-extract:
+	@mkdir -p $(CACHE)/extract
+	@$(FSTAR) $(FSTAR_FLAGS) --codegen OCaml --extract '$(EXTRACTED)' \
+	  --odir $(CACHE)/extract Plan.Decide.fst > /dev/null
+	@for f in $(CACHE)/extract/Plan_*.ml; do \
+	  diff -q $$f plans/extracted/$$(basename $$f) || exit 1; done
+	@echo "plans/extracted matches the model"
 
 clean:
 	rm -rf $(CACHE)

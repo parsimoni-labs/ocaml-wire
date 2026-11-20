@@ -25,6 +25,11 @@ let max_string_length : int = pow2 57 - 9
 let max_string_length_small () : Lemma (0 < max_string_length /\ 2 * max_string_length <= max_int) =
   assert_norm (0 < max_string_length /\ 2 * max_string_length <= max_int)
 
+(* Planner.extent: the sum of two generation-time extents, which stops at
+   [Sys.max_string_length + 1], past any bytes. *)
+let extent (a b:nat) : nat =
+  if a + b > max_string_length then max_string_length + 1 else a + b
+
 type var = nat
 type env = var -> int
 let upd (en:env) (v:var) (x:int) (w:var) : int = if w = v then x else en w

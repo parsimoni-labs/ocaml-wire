@@ -1,0 +1,10 @@
+; Plan_*.ml are the model as F* extracts it (make -C proofs/fstar extract
+; writes them again, make -C proofs/fstar check-extract diffs them); the
+; other modules are the part of F*'s runtime that code needs, over exact
+; integers. Building them needs no F*.
+
+(library
+ (name wire_fstar_model)
+ (wrapped false)
+ (flags
+  (:standard -w -a)))

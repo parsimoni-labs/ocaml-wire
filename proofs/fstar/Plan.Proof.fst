@@ -453,12 +453,12 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
     | Prefix fs size :: r ->
       let need = ahead l in
       (match w.p.pv with Some v -> assert (0 <= en v /\ en v <= max_int) | None -> ());
-      (* The constant the emitter adds does not wrap: the position's offset
-         lies in the window, the run's bytes in a record. *)
+      (* The constant the emitter adds stops past any window: where the
+         run's bytes take it there, the check rejects, as the codec does. *)
       max_string_length_small ();
       pos_bound len lim w en pending;
-      assert (w.p.at <= len /\ need <= max_string_length);
-      wrap_id (w.p.at + need);
+      assert (w.known < need ==>
+              (en lim - (match w.p.pv with Some v -> en v | None -> 0) < extent w.p.at need <==> pv + need > len));
       if w.known < need && pv + need > len then begin
         if pv <= len then ahead_reject rd x.wb len fr en pv l
       end

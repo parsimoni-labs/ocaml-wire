@@ -101,13 +101,10 @@ let rec ahead (l:list node) : nat =
   | Test _ :: r -> ahead r
   | _ -> 0
 
-(* A run of prefixes and tests holds fixed fields of one record, which
-   Codec_seal.add_min_size keeps below Sys.max_string_length. *)
 let rec wf (sc:scope) (l:list node) : Tot bool (decreases %[lsize l; 0; 0]) =
   match l with
   | [] -> true
-  | Prefix fs size :: r ->
-    ahead l <= max_string_length && fields_ok sc fs size && wf (fields_scope sc fs) r
+  | Prefix fs size :: r -> fields_ok sc fs size && wf (fields_scope sc fs) r
   | Span n e s :: r -> closed sc s && not (sc n) && not (sc e) && n <> e && wf (extend (extend sc n) e) r
   | Test c :: r -> cond_closed sc c && wf sc r
   | Gate sel cs d :: r ->
@@ -371,9 +368,9 @@ let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
         let room = match w.p.pv with None -> V lim | Some v -> Sub (V lim) (V v) in
         match ev en room with
         | None -> None
-        (* [lit (p.at + need)]: the emitter adds the two at generation time,
-           with OCaml's wrapping [+]. *)
-        | Some x -> if x < wrap (w.p.at + need) then Some None else Some (Some need) in
+        (* [lit (extent p.at need)]: the emitter adds the two at generation
+           time with Planner.extent, which stops past any buffer. *)
+        | Some x -> if x < extent w.p.at need then Some None else Some (Some need) in
     (match guard with
      | None -> Fault
      | Some None -> Reject

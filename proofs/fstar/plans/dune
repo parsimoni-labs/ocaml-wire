@@ -3,4 +3,11 @@
 
 (executable
  (name plans)
- (libraries fmt bytesrw wire wire.ocaml diff_codecs fuzz_gen))
+ (libraries
+  fmt
+  bytesrw
+  wire
+  wire.ocaml
+  diff_codecs
+  fuzz_gen
+  wire_fstar_model))

@@ -10,18 +10,27 @@ EverParse and is outside the dune build.
 ```
 make -C proofs/fstar verify        # the model and its theorems
 make -C proofs/fstar -j4 defects   # past defects and mutants are refused
-make -C proofs/fstar plans         # the planner's real plans meet wf
+make -C proofs/fstar plans         # the emitter decides as the model does
+make -C proofs/fstar check-extract # plans/extracted is the model
 ```
 
-`make plans` builds `plans/plans.exe`, which prints the plans
+`make plans` builds `plans/plans.exe`, which takes the plans
 `Wire_ocaml.Plan` makes of the sampled codecs of the differential fuzzer,
-its structured scan cases and the packet stack as `Plan.Scan` nodes, and
-has F* evaluate `wf` on each: every variable bound once and read after it
-is bound, every run of prefixes no longer than `Sys.max_string_length`,
-the premises `scanner_correct` takes of the planner. An expression keeps
-its variables, not its value, which is all `wf` reads. The plan of the
-`Defect.PrefixWrap` codec is the control F* must refuse: the planner hands
-it out with its fused size already wrapped negative.
+its structured scan cases, the packet stack and the `Defect.PrefixWrap`
+codec, and checks two things of each.
+
+- F* evaluates `wf` on the plan: every variable bound once and read after
+  it is bound, the premise `scanner_correct` takes of the planner.
+- Every bound decision `Wire_ocaml.Plan.decisions` reports (`Span_bound`)
+  (left to the next check, hoisted, checked with or without the negative
+  test, cancelled) is one the model's walk takes for the same size, region
+  depth and constant position (`Plan.Decide.justified`). The walk is
+  `Plan.Decide.walk`, run as F* extracts it (`plans/extracted`, over exact
+  integers instead of zarith), on two readings of each run of optional
+  fields: one that may run no case, one where a case always runs.
+
+The control claims every bound is left to the next check, which the model
+must refuse for some plan.
 
 `EVERPARSE` defaults to `~/.local/everparse`.
 
@@ -88,10 +97,10 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   as `FStar.UInt` operations (`ocaml_*`) and proves the word extraction and
   `Planner.word_range`'s `lor` on them.
 - A window is no longer than `Sys.max_string_length` (it lies in a
-  `Bytes`), and a run of prefixes and tests is no longer either (`wf`).
-  Then the constant the emitter adds at generation time, `p.at + need`,
-  which the model computes with OCaml's wrapping `+`, does not wrap. The
-  planner breaks the second premise at b1f6f756 (`Defect.PrefixWrap`).
+  `Bytes`). The constant the emitter adds at generation time, `p.at +
+  need`, goes through `Planner.extent` (1883d145), which stops at
+  `Sys.max_string_length + 1`: where a run of prefixes needs more, the
+  check rejects every frame, as the codec does, so a run needs no bound.
 - The top window lies in the buffer, so adding a window's base cannot
   overflow (`Plan.Frames` proves it for `fold_frames`; a region's window
   lies in the one around it).
@@ -112,11 +121,14 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   ranges (the planner bounds them by their corners, the model does not).
 - Cuts into functions, the `bounded` key's textual form, OxCaml's unboxed
   integers, bitfield views other than `word_range`, the Rust backend.
-- A differential run of the model against the planner. F* extracts
-  `Plan.Expr`, `Plan.Sum` and `Plan.Scan` to OCaml (`--codegen OCaml`), but
-  the result needs F*'s OCaml runtime and zarith (`Prims.int` is `Z.t`),
-  which the repository's switch does not have, and the emitter's decisions
-  (which bound it cancels or leaves out) exist only as generated text.
+- In `make plans`, expressions the model cannot write (division, masks,
+  shifts right, casts) become variables it knows nothing of, and signed
+  fields keep the model's unsigned range; whether a run of optional fields
+  always runs a case is not decided, both readings are walked.
+- The int64 form of the step scanner (`Boxed`): the model's integers are
+  mathematical and its ranges those of the 63-bit int, which is the
+  narrower; the words a step scanner shares between prefixes (`held`,
+  `Emitter.shared_words`) are not modelled.
 
 ## Past defects
 
@@ -131,17 +143,19 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 | 57535e21 | a region's size walk read past the region's end | `Defect.RegionWalk` | yes |
 | 787089f1 | validate accepted a repeat's partial element | `Defect.RepeatBudget` | yes, outside the plan model |
 | bf2c2866 (O1 lane) | `Planner.sum_add` raises out of its handler | `Defect.SumConst` | yes |
-| b1f6f756 (open) | 33 nested variable-size codecs fuse into a prefix whose size wraps: no bound, a load far outside the buffer | `Defect.PrefixWrap`, `prefix-run-unbounded.sed` | yes |
-| b1f6f756 (open) | a dispatch's hoisted bound, keyed by size and position, skips the check of a region of the same size at the same offset inside a case's region: a load past the buffer | `region-bounded-leak.sed` with `Defect.RegionBound.Witness` | yes |
+| b1f6f756, fixed by 1883d145 | 33 nested variable-size codecs fuse into a prefix whose size wraps: no bound, a load far outside the buffer | `prefix-wrap.sed` with `Defect.PrefixWrap.Witness` | yes |
+| b1f6f756, fixed by 8902234a (#504) | a dispatch's hoisted bound, keyed by size and position, skips the check of a region of the same size at the same offset inside a case's region: a load past the buffer | `region-bounded-leak.sed` with `Defect.RegionBound.Witness`; `make plans` on the codec | yes |
 
 The last three were found while writing the model. For `Defect.PrefixWrap`
-the scanner Wire_ocaml writes for the codec accepts two bytes the codec
-rejects and loads its last field at `o3 + -4467570830351532362`; the
-replay checks the model's walk faults on the same plan, and the fix side
-shows `wf` refuses the plan. For the region defect the scanner accepts six
-bytes the codec rejects and reads a 32-bit word whose last two bytes lie
-past the buffer; the witness checks the mutant's walk accepts the same
-plan where the codec's rejects.
+the scanner Wire_ocaml wrote for the codec accepted two bytes the codec
+rejects and loaded its last field at `o3 + -4467570830351532362`; the
+witness checks the walk that adds with OCaml's wrapping `+` reads outside
+the window on the same plan, where the model's, with `extent`, rejects. For
+the region defect the scanner accepts six bytes the codec rejects and reads
+a 32-bit word whose last two bytes lie past the buffer; the witness checks
+the mutant's walk accepts the same plan where the codec's rejects, and
+`plans.exe Leak leak` reports the emitter's hoisted decision the model does
+not take, until #504 lands.
 
 The plan model expresses the bound and arithmetic defects directly
 (4da4e8ad as a mutant of the emitter model itself). 6a0fce0b, 57535e21,
