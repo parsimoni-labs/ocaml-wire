@@ -713,15 +713,47 @@ let deep_top big depth =
     (fun body tail -> (body, tail))
     Codec.[ (body $ fun (b, _) -> b); (tail $ fun (_, t) -> t) ]
 
-let test_nested_sizes_past_max_int () =
-  let buf = Bytes.of_string "\000\042" in
+(* A codec that no buffer can hold is refused when it is built. *)
+let test_nested_codecs_past_largest_buffer () =
   List.iter
     (fun depth ->
-      let c = deep_top (Sys.max_string_length - 1) depth in
-      let name = Fmt.str "%d levels" (depth + 1) in
-      check_eof_past_buffer (name ^ " decode") (Codec.decode c buf 0);
-      check_eof_past_buffer (name ^ " validate") (Codec.validate c buf 0))
-    [ 32; 33; 63 ]
+      match deep_top (Sys.max_string_length - 1) depth with
+      | _ -> Alcotest.failf "%d levels: built a codec no buffer can hold" depth
+      | exception Invalid_argument msg ->
+          if not (Re.execp (Re.compile (Re.str "past the largest buffer")) msg)
+          then
+            Alcotest.failf "%d levels: refused for another reason: %s" depth msg)
+    [ 1; 32 ]
+
+let sub_min_inner =
+  let len = Field.v "len" uint8 in
+  Codec.v "SubMinInner"
+    (fun l d t -> (l, d, t))
+    Codec.
+      [
+        (len $ fun (l, _, _) -> l);
+        (Field.v "data" (byte_slice ~size:(Field.ref len)) $ fun (_, d, _) -> d);
+        (Field.v "tag" uint16be $ fun (_, _, t) -> t);
+      ]
+
+let sub_min_outer =
+  Codec.v "SubMinOuter"
+    (fun i x -> (i, x))
+    Codec.
+      [
+        (Field.v "inner" (codec sub_min_inner) $ fun (i, _) -> i);
+        (Field.v "x" uint8 $ fun (_, x) -> x);
+      ]
+
+(* A sub-codec's [min_size] counts in its parent's: the inner record holds at
+   least 3 bytes, so the outer one holds at least 4. *)
+let test_sub_codec_min_size () =
+  Alcotest.(check int) "min_wire_size" 4 (Codec.min_wire_size sub_min_outer);
+  let buf = Bytes.of_string "\000\001" in
+  check_located_eof "decode" ~at:0 ~expected:4 ~got:2
+    (Result.map ignore (Codec.decode sub_min_outer buf 0));
+  check_located_eof "validate" ~at:0 ~expected:4 ~got:2
+    (Codec.validate sub_min_outer buf 0)
 
 type spans = {
   a : Bytesrw.Bytes.Slice.t;
@@ -824,7 +856,9 @@ let suite =
         test_validate_repeat_partial_element;
       Alcotest.test_case "diag: eof counts do not move with the base" `Quick
         test_eof_counts_are_base_invariant;
-      Alcotest.test_case "nested sizes past max_int" `Quick
-        test_nested_sizes_past_max_int;
+      Alcotest.test_case "nested codecs past the largest buffer" `Quick
+        test_nested_codecs_past_largest_buffer;
+      Alcotest.test_case "a sub-codec's fixed bytes count in min_size" `Quick
+        test_sub_codec_min_size;
       Alcotest.test_case "spans past max_int" `Quick test_spans_past_max_int;
     ] )
