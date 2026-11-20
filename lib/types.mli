@@ -34,6 +34,25 @@ val eval_set_param : eval_ctx -> string -> int -> unit
 (** Update a bound output parameter, if the context accepts writes. Internal
     use. *)
 
+type cursor = {
+  wbuf : bytes;
+  mutable wbase : int;  (** Where the record being walked starts. *)
+  mutable wpos : int;
+      (** Where the next variable-size field starts; once a record is walked,
+          where it ends. *)
+  mutable wend : Input_end.t;  (** Where the bytes handed to the walk stop. *)
+  mutable wgates : int;
+      (** The answers of the gates the record being walked has evaluated, one
+          bit each. *)
+}
+(** The state of a walk, the one-pass decode of a record without parameters:
+    each field is checked and read once, in order, and a sub-codec hands back
+    its value and its end together. Internal use. *)
+
+exception Unwalked
+(** Raised by a walk that does not accept the record, which then goes to the
+    general decode for its answer and its error. Internal use. *)
+
 (* The parse-error types are declared here, before {!typ}, so that {!typ}'s own
    [Where] / [Field] constructors win type-directed disambiguation throughout;
    the {!predicate} constructors are reached only through a [predicate]-typed
@@ -378,6 +397,17 @@ and _ typ =
           (** [codec_validate] of a record whose end, the last argument, the
               caller has just measured with [codec_size_of] over the same bytes:
               the frame checks that end instead of measuring again. *)
+      codec_check_end : Input_end.t -> bytes -> int -> int;
+          (** Where the record at the offset ends when its fast checks accept
+              it, else [-1], or [-2] when it has no fast checks: an end it gives
+              is the one [codec_size_of] measures, and [codec_validate_sized]
+              accepts the record with it. A use site with a negative answer runs
+              those two, and after [-1] does not try the fast checks of the
+              records under it again. *)
+      codec_walk : (cursor -> 'r) option;
+          (** The walk of the record at the cursor's {!field-wpos}, within its
+              {!field-wend}: its value, with the cursor moved to its end. [None]
+              when the codec has none. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_min_size : int;

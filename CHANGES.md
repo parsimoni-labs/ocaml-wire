@@ -66,8 +66,23 @@
 - `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)
 
-- `Wire.Codec.valid` and `Wire.Codec.read`: validate a buffer once, then read
-  its fields with no further bounds check (#435, @samoht)
+- `Wire.Codec.read_word`, `word_reader`, `word_part` and `of_word`: read a
+  record of at most 7 bytes once, as an `int` of its bytes, then take each
+  field from it with two shifts and a mask. The read is one bounds check and,
+  where the buffer has 8 bytes from the record on, one load, inlined into the
+  caller's loop (#496, @samoht)
+
+- `Wire.Codec.writer`: a staged writer of a fixed-size record from a template
+  and the values of the fields that vary, one call per record. A record of at
+  most 7 bytes is put together in an `int` and written after every check
+  (#496, @samoht)
+
+- `Wire.Codec.check`, `ok` and `read`: check a record once, without raising
+  on bytes it refuses, then read its fields with no further bounds check
+  (#435, #496, @samoht)
+
+- `Wire.Codec.decoder` and `Wire.Codec.encoder`: a codec's decode and encode,
+  staged, for a loop over many records (#496, @samoht)
 
 - `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
   field names against the FFI pipeline before writing anything (#434, @samoht)
@@ -109,8 +124,31 @@
 ### Changed
 
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
-  fixed-size codecs, and `decode` no longer slows with nesting depth (#435,
-  #445, @samoht)
+  fixed-size codecs and faster on nested variable-size ones, `encode` into a
+  buffer allocates nothing, and `decode` no longer slows with nesting depth
+  (#435, #445, #496, @samoht)
+
+- `Wire.Codec.decode` of a variable-size record without parameters walks it
+  once: each field is checked and read in order, each size and presence
+  condition evaluated once, and a sub-codec returns its value and its end
+  together. Decoding Ethernet, IPv4 and TCP or UDP takes less than half the
+  instructions it took (#496, @samoht)
+
+- `Wire.Codec.decode` can now call the constructor of a sub-codec, the
+  function given to `Wire.Codec.v`, on a sub-record whose enclosing record
+  then fails a check, and return `Error`. A constructor with side effects
+  (counting, logging, registering the record) sees such sub-records and has
+  to stop doing so: build values only, and act on a record after `decode`
+  returns `Ok` (#496, @samoht)
+
+- A staged `Wire.Codec.read` and `Wire.Codec.check` keep their error paths out
+  of line, so a compiler that inlines more makes them faster, not slower
+  (#496, @samoht)
+
+- `Wire.Codec.get` and `Wire.Codec.set` of an integer or bitfield field run as
+  one closure that checks its bounds and calls nothing else: `set` writes a
+  space packet header field in a third of the instructions it took (#496,
+  @samoht)
 
 - The code `Wire_ocaml` writes for OxCaml has its `[@zero_alloc]` checked in
   every dune profile, the dev one included, where the runtime's interfaces
@@ -129,9 +167,9 @@
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
   used to give lines of up to 64 KiB (#455, @samoht)
 
-- **Breaking:** `Wire.Codec` gains `valid` and `read`, which shadow local
-  values of those names under `Wire.Codec.( ... )` or `open Wire.Codec`.
-  Rename the local or qualify it (#435, @samoht)
+- **Breaking:** `Wire.Codec` gains `check`, `ok` and `read`, which shadow
+  local values of those names under `Wire.Codec.( ... )` or `open Wire.Codec`.
+  Rename the local or qualify it (#435, #496, @samoht)
 
 - **Breaking:** `Wire.Codec.v` no longer compiles the codec. A malformed codec
   raises `Invalid_argument` at its first `decode`, `encode` or `validate`, not

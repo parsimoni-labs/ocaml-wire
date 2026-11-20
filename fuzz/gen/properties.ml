@@ -1130,7 +1130,7 @@ let decode_answer ?env c bs =
 let validate_answer ?env c bs =
   answer (fun () -> Wire.Codec.validate_exn ?env c bs 0)
 
-let valid_answer ?env c bs = answer (fun () -> Wire.Codec.valid ?env c bs 0)
+let check_answer_of ?env c bs = answer (fun () -> Wire.Codec.check ?env c bs 0)
 let unit_equal () () = true
 
 let check_core label ?env ~equal ~names:((nf, fast), (ng, general)) bs =
@@ -1154,13 +1154,22 @@ let check_fast_general_core label kind ?env g general bs =
 let field_get ?env c f bs =
   answer (fun () -> Wire.Staged.unstage (Wire.Codec.get ?env c f) bs 0)
 
-(* [valid] then [read] of each field, against [validate] then [get] of the
+(* [check] then [read] of each field, against [validate] then [get] of the
    general codec, and [get] of each field on both. *)
 let check_accessors label ?env ~fast ~general checks bs =
-  let fast_valid = valid_answer ?env fast bs in
-  check_answer label "Codec.valid" ~equal:unit_equal
-    ("the fast path", map_answer ignore fast_valid)
-    ("the general path", map_answer ignore (valid_answer ?env general bs));
+  let fast_valid = check_answer_of ?env fast bs in
+  check_answer label "Codec.check" ~equal:Bool.equal
+    ("the fast path", map_answer Wire.Codec.ok fast_valid)
+    ( "the general path",
+      map_answer Wire.Codec.ok (check_answer_of ?env general bs) );
+  let accepted = function
+    | Value () -> Value true
+    | Parse _ -> Value false
+    | Invalid _ as a -> a
+  in
+  check_answer label "Codec.check against validate_exn" ~equal:Bool.equal
+    ("Codec.check", map_answer Wire.Codec.ok fast_valid)
+    ("Codec.validate_exn", accepted (validate_answer ?env general bs));
   List.iter
     (fun (Field_check f) ->
       let reference = field_get ?env general f.field bs in
@@ -1170,7 +1179,7 @@ let check_accessors label ?env ~fast ~general checks bs =
         ("the fast path", field_get ?env fast f.field bs)
         ("the general path", reference);
       match fast_valid with
-      | Value v ->
+      | Value v when Wire.Codec.ok v ->
           check_answer label
             ("Codec.read of field " ^ f.name)
             ~equal:f.equal
@@ -1178,7 +1187,7 @@ let check_accessors label ?env ~fast ~general checks bs =
               answer (fun () ->
                   Wire.Staged.unstage (Wire.Codec.read ?env fast f.field) v) )
             ("Codec.get on the general path", reference)
-      | Parse _ | Invalid _ -> ())
+      | Value _ | Parse _ | Invalid _ -> ())
     checks
 
 let check_fast_general label kind ?env a g bs =
@@ -1203,10 +1212,11 @@ let check_cold_warm label kind ?env a g bs =
   cold_vs_warm "Codec.decode" ~equal:g.equal (fun c -> decode_answer ?env c bs);
   cold_vs_warm "Codec.validate_exn" ~equal:unit_equal (fun c ->
       validate_answer ?env c bs);
-  check_answer label "Codec.valid" ~equal:unit_equal
+  check_answer label "Codec.check" ~equal:Bool.equal
     ( fst names,
-      map_answer ignore (valid_answer ?env (Testing.fresh a.acodec) bs) )
-    (snd names, map_answer ignore (valid_answer ?env a.acodec bs));
+      map_answer Wire.Codec.ok
+        (check_answer_of ?env (Testing.fresh a.acodec) bs) )
+    (snd names, map_answer Wire.Codec.ok (check_answer_of ?env a.acodec bs));
   match a.achecks with
   | Field_check f :: _ ->
       check_answer label

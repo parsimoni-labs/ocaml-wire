@@ -50,19 +50,26 @@ let build_bf_reader base byte_off shift width =
    truncate it. *)
 let mask32 = Int64.to_int 0xFFFF_FFFFL
 
-(* A bitfield read for [Codec.get]: one load whose own bounds check raises
-   what [Bytes.get_uint8] raises, then a shift and a mask. *)
+(* A bitfield read for [Codec.get]: a bounds check that raises what
+   [Bytes.get_uint8] raises, then one load, a shift and a mask. *)
 let build_bf_accessor_reader base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   match base with
   | U8 ->
-      fun buf off -> (Bytes.get_uint8 buf (off + byte_off) lsr shift) land mask
+      fun buf off ->
+        let p = off + byte_off in
+        if outside buf p 1 then out_of_bounds ()
+        else (Unchecked.u8 buf p lsr shift) land mask
   | U16 Little ->
       fun buf off ->
-        (Bytes.get_uint16_le buf (off + byte_off) lsr shift) land mask
+        let p = off + byte_off in
+        if outside buf p 2 then out_of_bounds ()
+        else (Unchecked.u16le buf p lsr shift) land mask
   | U16 Big ->
       fun buf off ->
-        (Bytes.get_uint16_be buf (off + byte_off) lsr shift) land mask
+        let p = off + byte_off in
+        if outside buf p 2 then out_of_bounds ()
+        else (Unchecked.u16be buf p lsr shift) land mask
   | U32 Little when Bitfield.int_holds_u32 ->
       fun buf off ->
         (Int32.to_int (Bytes.get_int32_le buf (off + byte_off)) land mask32)
@@ -121,63 +128,79 @@ let build_bf_writer base byte_off shift width =
         Bitfield.set_u32_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
 
-(* The [Codec.set] writer. It range-checks like {!build_bf_writer}: masking here
-   is the one silent truncation no later check can catch, because the masked
-   result is a legal field value that [Codec.get] and [validate] both accept.
-   [set] promises the buffer is untouched when it raises, so the word's span is
-   checked before any of it is written: a u32 goes down as two halves, and a
-   short buffer used to take the first before the second raised. *)
-let build_bf_accessor_writer_raw base byte_off shift width =
+(* The [Codec.set] writer, one closure per base. It range-checks like
+   {!build_bf_writer}: masking here is the one silent truncation no later check
+   can catch, because the masked result is a legal field value that
+   [Codec.get] and [validate] both accept. [set] promises the buffer is
+   untouched when it raises, so the word's span is checked before any of it is
+   written: a u32 goes down as two halves, and a short buffer used to take the
+   first before the second raised. The span check comes first and the range
+   check second, then the word is rewritten with no further check. A value is
+   in range when it has no bit in [wide]: the bits above the field, or the
+   sign bit of a field as wide as the [int]. *)
+(* The checks of {!build_bf_accessor_writer}, in order, once one has failed:
+   the word's span, then the value's range. *)
+let[@inline never] bf_set_failed buf p n ~width value =
+  if outside buf p n then out_of_bounds ()
+  else Types.check_unsigned_encode ~bits:width value
+
+let build_bf_accessor_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   let clear_mask = lnot (mask lsl shift) in
+  let wide = if width >= Sys.int_size then min_int else lnot mask in
   match base with
   | U8 ->
       fun buf off value ->
-        Types.check_unsigned_encode ~bits:width value;
-        let cur = Bytes.get_uint8 buf (off + byte_off) in
-        Bytes.set_uint8 buf (off + byte_off)
-          (cur land clear_mask lor ((value land mask) lsl shift))
+        let p = off + byte_off in
+        if outside buf p 1 || value land wide <> 0 then
+          bf_set_failed buf p 1 ~width value
+        else
+          Unchecked.set_u8 buf p
+            (Unchecked.u8 buf p land clear_mask lor (value lsl shift))
   | U16 Little ->
       fun buf off value ->
-        Types.check_unsigned_encode ~bits:width value;
-        let cur = Bytes.get_uint16_le buf (off + byte_off) in
-        Bytes.set_uint16_le buf (off + byte_off)
-          (cur land clear_mask lor ((value land mask) lsl shift))
+        let p = off + byte_off in
+        if outside buf p 2 || value land wide <> 0 then
+          bf_set_failed buf p 2 ~width value
+        else
+          Unchecked.set_u16le buf p
+            (Unchecked.u16le buf p land clear_mask lor (value lsl shift))
   | U16 Big ->
       fun buf off value ->
-        Types.check_unsigned_encode ~bits:width value;
-        let cur = Bytes.get_uint16_be buf (off + byte_off) in
-        Bytes.set_uint16_be buf (off + byte_off)
-          (cur land clear_mask lor ((value land mask) lsl shift))
+        let p = off + byte_off in
+        if outside buf p 2 || value land wide <> 0 then
+          bf_set_failed buf p 2 ~width value
+        else
+          Unchecked.set_u16be buf p
+            (Unchecked.u16be buf p land clear_mask lor (value lsl shift))
   | U32 Little when not Bitfield.int_holds_u32 ->
       fun buf off value ->
-        Types.check_unsigned_encode ~bits:width value;
-        Bitfield.u32_field_set_le buf (off + byte_off) shift mask
-          (value land mask)
+        let p = off + byte_off in
+        if outside buf p 4 || value land wide <> 0 then
+          bf_set_failed buf p 4 ~width value
+        else Bitfield.u32_field_set_le buf p shift mask value
   | U32 Big when not Bitfield.int_holds_u32 ->
       fun buf off value ->
-        Types.check_unsigned_encode ~bits:width value;
-        Bitfield.u32_field_set_be buf (off + byte_off) shift mask
-          (value land mask)
+        let p = off + byte_off in
+        if outside buf p 4 || value land wide <> 0 then
+          bf_set_failed buf p 4 ~width value
+        else Bitfield.u32_field_set_be buf p shift mask value
   | U32 Little ->
       fun buf off value ->
-        Types.check_unsigned_encode ~bits:width value;
-        let cur = Bitfield.u32_le buf (off + byte_off) in
-        Bitfield.set_u32_le buf (off + byte_off)
-          (cur land clear_mask lor ((value land mask) lsl shift))
+        let p = off + byte_off in
+        if outside buf p 4 || value land wide <> 0 then
+          bf_set_failed buf p 4 ~width value
+        else
+          Bitfield.set_u32_le buf p
+            (Bitfield.u32_le buf p land clear_mask lor (value lsl shift))
   | U32 Big ->
       fun buf off value ->
-        Types.check_unsigned_encode ~bits:width value;
-        let cur = Bitfield.u32_be buf (off + byte_off) in
-        Bitfield.set_u32_be buf (off + byte_off)
-          (cur land clear_mask lor ((value land mask) lsl shift))
-
-let build_bf_accessor_writer base byte_off shift width =
-  let write = build_bf_accessor_writer_raw base byte_off shift width in
-  let word = bf_base_byte_size base in
-  fun buf off value ->
-    Bitfield.check_word buf (off + byte_off) word;
-    write buf off value
+        let p = off + byte_off in
+        if outside buf p 4 || value land wide <> 0 then
+          bf_set_failed buf p 4 ~width value
+        else
+          Bitfield.set_u32_be buf p
+            (Bitfield.u32_be buf p land clear_mask lor (value lsl shift))
 
 let build_bf_clear base byte_off =
  fun buf off -> bf_write_base base buf (off + byte_off) 0

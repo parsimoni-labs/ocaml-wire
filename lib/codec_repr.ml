@@ -257,6 +257,19 @@ type bf_info = {
 
 let no_runtime = Types.unbound_eval_ctx
 
+(* The context of the general passes a record without parameters falls back
+   on when a layout walk has not accepted it: no parameter is read through it,
+   and a sub-codec checked with it goes straight to its own general passes, as
+   the walk that did not accept has already tried its walk. *)
+let fallback_runtime = Types.eval_ctx (fun _ -> 0)
+let is_fallback runtime = runtime == fallback_runtime
+
+(* The context of the general extent a record without parameters falls back on
+   when its extent walk has failed: a sub-codec measured with it goes straight
+   to its own general extent. *)
+let extent_fallback_runtime = Types.eval_ctx (fun _ -> 0)
+let is_extent_fallback runtime = runtime == extent_fallback_runtime
+
 (* The context of a read after the check pass: a sub-codec read through it
    builds its record and leaves the checks to the pass that ran them. *)
 let checked_runtime = Types.checked_eval_ctx no_runtime
@@ -839,11 +852,56 @@ type step =
   | Covered of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
       (** A plain byte span's bounds check: the general validator, which a
           layout pass that checks every span's bounds makes redundant. *)
+  | Laid of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+      (** A gated field or a sub-codec, which a layout pass measures and checks
+          whole: the general validator, run unless that pass has accepted. *)
 
 type packed_scalar = Ps : 'a scalar -> packed_scalar
 
 (* How a field adds to the record's extent, for the layout pass. *)
-type layout = Lfix of int | Lspan of int expr | Lrest
+type layout =
+  | Lfix of int
+  | Lspan of int expr
+  | Lrest
+  | Lopt of bool expr * layout
+  | Lregion of { size : int expr; at_most : bool; sub : sub }
+  | Lsub of sub
+
+and sub = {
+  size_of : runtime -> Input_end.t -> bytes -> int -> int;
+  validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
+  check_end : Input_end.t -> bytes -> int -> int;
+}
+
+(* How the walk reads a field: in place at a fixed offset of the record,
+   inside the frame the walk has checked, or as the cursor moves over it. *)
+type _ walk_read =
+  | Scalar : 'a scalar -> 'a walk_read
+  | String : int * int -> string walk_read
+  | Slice : int * int -> Bytesrw.Bytes.Slice.t walk_read
+  | Walk : (Types.cursor -> 'a) -> 'a walk_read
+
+(* The walk's readers in field order, as [readers]. *)
+type (_, _) walk_readers =
+  | WNil : ('f, 'f) walk_readers
+  | WSnoc :
+      ('full, 'a -> 'rest) walk_readers * 'a walk_read
+      -> ('full, 'rest) walk_readers
+
+(* A check the walk makes before it reads: a field at a fixed offset within a
+   set, or a condition on such fields. *)
+type walk_check =
+  | Within of packed_scalar * (int * int) array
+  | Holds of (Types.cursor -> bool)
+
+type ('full, 'f) walk = {
+  wreaders : ('full, 'f) walk_readers;
+  wchecks_rev : walk_check list;
+  wstart : int option;
+      (* Where the first field the cursor moves over starts in the record. *)
+  wgates : (bool expr * int) list;
+      (* The gates so far, each with its bit of the cursor's [wgates]. *)
+}
 
 type ('f, 'r) record =
   | Record : {
@@ -859,6 +917,8 @@ type ('f, 'r) record =
       layout_rev : layout list option;
           (* Each field's extent, while every field is fixed or a plain byte
              span. *)
+      walk : ('full, 'f) walk option;
+          (* The walk's reads and checks, while every field has them. *)
       prefix : (string * packed_scalar) list;
       (* The fixed-offset fields a span's size can read, by name. *)
       (* The fields' descriptor writes, while every field has one. *)
@@ -927,6 +987,7 @@ type pass =
       flat : int array;
       tables : string array;
       intervals : interval array;
+      words : (bytes -> int -> bool) option;
     }
       (** Interval tests only, on slots nothing else reads: no scratch. [flat]
           holds six ints per test, read by {!scan_intervals}; [intervals] names
@@ -954,6 +1015,9 @@ type 'r compiled = {
   plain_decode : (bytes -> int -> 'r) option;
       (* [decode] for a codec with no parameters and nothing to check after the
          reads: [Codec.decode] has only the bounds to check. *)
+  walk : (Types.cursor -> 'r) option;
+      (* The decode that checks and reads each field once, for a codec without
+         parameters whose fields all have a walk. *)
   encode : 'r -> runtime -> bytes -> int -> int;
       (* Public encode entry. [encode v runtime buf base] writes the record at
          [base], threads each per-field writer's return as the next
@@ -978,6 +1042,9 @@ type 'r compiled = {
       (* [validate_ctx] of a record whose end, the last argument, the caller
          has just measured over the same bytes: the frame checks that end
          rather than measuring it again. *)
+  check_end : Input_end.t -> bytes -> int -> int;
+      (* Where the record ends when its layout walk and the checks it leaves
+         accept it, else [-1], or [-2] when it has no walk. *)
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   clear_scratch : slots -> unit;
       (* Zeroes the scratch before [validate_arr], when a slot can be read
@@ -1032,6 +1099,8 @@ let record_start ?where ?doc name make =
       writers_rev = [];
       puts_rev = Some [];
       layout_rev = Some [];
+      walk =
+        Some { wreaders = WNil; wchecks_rev = []; wstart = None; wgates = [] };
       prefix = [];
       size_of_value_rev = [];
       min_wire_size = 0;

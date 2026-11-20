@@ -946,6 +946,13 @@ let container_populate : type a.
           check runtime input_end buf first)
   | Single_elem { elem; at_most; _ } ->
       let check = sized_check elem in
+      (* A sub-codec that measures and checks itself in one walk answers first;
+         when it cannot tell, the measure and the check below answer. *)
+      let check_end =
+        match elem with
+        | Codec { codec_check_end; _ } -> codec_check_end
+        | _ -> fun _ _ _ -> -2
+      in
       Some
         (fun _slots runtime input_end buf base ->
           let first = base + off_fn runtime input_end buf base in
@@ -956,10 +963,18 @@ let container_populate : type a.
              accept and reject on different grounds than the decode it stands
              in for. *)
           let region_end = Input_end.narrow input_end (first + sz) in
-          let consumed = elem_size_of elem runtime region_end buf first in
-          if consumed > sz || ((not at_most) && consumed <> sz) then
-            raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-          check runtime input_end buf first (first + consumed))
+          let e =
+            if is_fallback runtime then -2 else check_end region_end buf first
+          in
+          if e < 0 || e - first > sz || ((not at_most) && e - first <> sz) then begin
+            (* A walk that did not accept ([-1]) has been tried: the general
+               passes do not try it again. *)
+            let runtime = if e = -1 then fallback_runtime else runtime in
+            let consumed = elem_size_of elem runtime region_end buf first in
+            if consumed > sz || ((not at_most) && consumed <> sz) then
+              raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
+            check runtime input_end buf first (first + consumed)
+          end)
   | _ -> None
 
 (* What a field's validate runs in place of its reader: a span's scan, or a

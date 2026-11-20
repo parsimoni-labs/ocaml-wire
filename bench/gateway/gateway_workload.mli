@@ -1,6 +1,7 @@
 (** TM frame reassembly: a downlink processor walking the space packets each TM
-    transfer frame carries, every field read by Wire's staged {!Wire.Codec.get}.
-    The OCaml rows of [bench/gateway] and [bench/apps] run it. *)
+    transfer frame carries, each header read by Wire's {!Wire.Codec.read_word}
+    and its fields taken with {!Wire.Codec.of_word}. The OCaml rows of
+    [bench/gateway] and [bench/apps] run it. *)
 
 val cadu_size : int
 (** [cadu_size] is the size of a frame, 1115 bytes. *)
@@ -53,4 +54,4 @@ val frame : out:bytes -> int -> unit
     of each packet starting in its data field, packet [p] a telemetry packet
     with a secondary header, unsegmented, with APID [p mod 2048], sequence count
     [p mod 16384] and 64 bytes of data. Every header is written by Wire's staged
-    {!Wire.Codec.set} over its encoded default. *)
+    {!Wire.Codec.writer} of its default and the fields that vary. *)

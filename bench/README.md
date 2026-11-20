@@ -52,7 +52,8 @@ make bench-demo           # requires EverParse (3d.exe in PATH)
 
 Throughput on realistic workloads. The C loop calls the EverParse validator for
 field extraction, then runs application logic. The OCaml loop does the same
-work with `Codec.get`/`Codec.set`.
+work with `Codec.read_word` and `Codec.of_word` (CLCW: `Codec.load_word`
+and `Codec.extract`), and writes with `Codec.writer`.
 
 | Target | Scenario | Protocols |
 |---|---|---|
@@ -82,7 +83,7 @@ relay does to produce it:
 
 | Row | Implementation | API |
 |---|---|---|
-| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.get` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: the encoded default header copied, then `Codec.set` per field that varies |
+| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.read_word` per header, then `Codec.of_word` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
 | `wire.ocaml` | generated OCaml, `Wire_ocaml.ml` of `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `Get.<field>` per field; for CLCW `Get.lockout_word` once, then `<field>_of_word` per field. Writing: `write_int` per header |
 | `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
@@ -181,11 +182,14 @@ Writing is where the generated OCaml is furthest from Rust. A
 where LLVM proves from the loop that `(p % 2048) as u16 >> 11` is 0 and drops
 the check; the OCaml assembles a 32-bit word on tagged integers, with an
 `int32` sign normalisation and a `sxtw` on each side of the `rev` that do
-nothing; and each packet polls for a safepoint. On gateway that is about 48
-instructions per packet on OxCaml against 14 in Rust. LLVM also vectorises
-the CLCW writer, 3.4 instructions per word. `Wire.Codec` writes a header by
-copying its encoded default and calling a staged `Codec.set` per field that
-varies, about 150 instructions per field. These headers are at most 6 bytes,
+nothing, where OxCaml builds it untagged; and each packet polls for a
+safepoint. On gateway that is 557 instructions per frame on OxCaml against
+354 in Rust. LLVM also vectorises the CLCW writer, 4.9 instructions per
+word. `Wire.Codec` writes a header with one call to a staged
+`Codec.writer`, which puts the default header and the fields that vary
+together in an `int` and stores it; the table above predates it, when the
+row copied the encoded default and called a staged `Codec.set` per field,
+about 150 instructions per field. These headers are at most 6 bytes,
 so no row stores a 64-bit word: the generated writes are `str w` and `strh`,
 and the only `dmb ishld` OxCaml puts in a write loop is the one before the
 per-route sequence count's `int array` store of `routing_write`. The OxCaml rows
@@ -222,7 +226,7 @@ pick for exactly this work:
 | Row | Implementation | API |
 |---|---|---|
 | `Wire.Codec stack decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of one bounded stack codec |
-| `Wire.Codec valid/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | `Codec.valid` per header, then a staged `Codec.read` per field; the harness links the layers |
+| `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | `Codec.check` and `Codec.ok` per header, then a staged `Codec.read` per field; the harness links the layers |
 | `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the scanner of the stack: `decode`, `fold` and `fold_frames` (batch), on OxCaml also their unboxed forms; `selected outputs` hands out only the checksum's fields |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `View.check`/`View.ok` per header, then a `view_<field>` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
 | `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.scanner` of the stack | `scan` per frame; `selected outputs` hands out only the checksum's fields |
@@ -397,12 +401,8 @@ A row's count is the median instructions per item of its three counts. A
 candidate is adopted over the flags already adopted when every row gives the
 same result, the geometric mean over the rows falls, and no row rises by more
 than 1%; `-O3` on stock OCaml, which ignores it, moves no row by more than
-0.4%. One row is exempt: `Wire.Codec valid/read, linked headers` rises by 4
-to 10% under every flag that makes a compiler inline more (`-inline` on
-OCaml, `-O2`, `-O3` and `-Oclassic` on flambda, `-O3` and `-O4` on OxCaml),
-and counting it would keep every compiler at its defaults. The mean is
-against the build without flags; the verdict names the rows that rise by more
-than 1%, besides that one, against the flags adopted before:
+0.4%. The mean is against the build without flags; the verdict names the
+rows that rise by more than 1% against the flags adopted before:
 
 | Compiler | Candidate | Mean | Verdict |
 | --- | --- | ---: | --- |

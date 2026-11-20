@@ -1,5 +1,6 @@
 (* TM frame reassembly: the frame stream and the walk over the packets each
-   frame carries, with every field read by Wire's staged [Codec.get]. *)
+   frame carries, each header read by Wire's [Codec.read_word] and its
+   fields taken with [Codec.of_word]. *)
 
 module C = Wire.Codec
 
@@ -69,18 +70,22 @@ let generate_frames n =
   done;
   (buf, !total_pkts)
 
-let read_vcid = Wire.Staged.unstage (C.get Space.tm_frame_codec cf_tf_vcid)
-let read_fhp = Wire.Staged.unstage (C.get Space.tm_frame_codec cf_tf_first_hdr)
-let read_apid = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_apid)
-let read_seq = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_seq_count)
+(* Each header is read once, then the fields the walk needs taken from it. *)
+let frame_header = C.word_reader Space.tm_frame_codec
+let p_vcid = C.word_part Space.tm_frame_codec cf_tf_vcid
+let p_fhp = C.word_part Space.tm_frame_codec cf_tf_first_hdr
+let packet_header = C.word_reader Space.packet_codec
+let p_apid = C.word_part Space.packet_codec cf_sp_apid
+let p_seq = C.word_part Space.packet_codec cf_sp_seq_count
 
 (* The packets of the frame at [base], whose first header pointer is [fhp]. *)
 let walk_packets buf base ~fhp on_packet =
   let data_start = base + hdr in
   let off = ref (data_start + fhp) in
   while !off + pkt_size <= data_start + data_field_size do
-    let apid = read_apid buf !off in
-    let seq = read_seq buf !off in
+    let w = C.read_word packet_header buf !off in
+    let apid = C.of_word p_apid w in
+    let seq = C.of_word p_seq w in
     on_packet apid seq;
     off := !off + pkt_size
   done
@@ -95,8 +100,9 @@ type state = {
 let state buf =
   let n_frames = Bytes.length buf / cadu_size in
   let scan_frame buf base =
-    let vcid = read_vcid buf base in
-    let fhp = read_fhp buf base in
+    let w = C.read_word frame_header buf base in
+    let vcid = C.of_word p_vcid w in
+    let fhp = C.of_word p_fhp w in
     ignore (Sys.opaque_identity vcid);
     walk_packets buf base ~fhp (fun _apid _seq -> ())
   in
@@ -115,64 +121,48 @@ let checksum state =
   let checksum = ref checksum_init in
   for frame = 0 to state.n_frames - 1 do
     let base = frame * cadu_size in
-    let fhp = read_fhp buf base in
-    checksum := hash_int (hash_int !checksum (read_vcid buf base)) fhp;
+    let w = C.read_word frame_header buf base in
+    let fhp = C.of_word p_fhp w in
+    checksum := hash_int (hash_int !checksum (C.of_word p_vcid w)) fhp;
     let data_end = base + hdr + data_field_size in
     let off = ref (base + hdr + fhp) in
     while !off + pkt_size <= data_end do
       let o = !off in
-      let apid = read_apid buf o in
-      let seq = read_seq buf o in
+      let w = C.read_word packet_header buf o in
+      let apid = C.of_word p_apid w in
+      let seq = C.of_word p_seq w in
       checksum := hash_int (hash_int !checksum apid) seq;
       off := o + pkt_size
     done
   done;
   !checksum
 
-let set_vcid = Wire.Staged.unstage (C.set Space.tm_frame_codec cf_tf_vcid)
-let set_fhp = Wire.Staged.unstage (C.set Space.tm_frame_codec cf_tf_first_hdr)
+(* The header {!Space.tm_frame_default} encodes, spacecraft 0x1FF, OCF flag
+   set, segment length identifier 3, with the four fields a frame varies. *)
+let write_frame_header =
+  Wire.Staged.unstage
+    (C.writer Space.tm_frame_codec Space.tm_frame_default
+       [
+         cf_tf_vcid; Space.bf_tf_mc_count; Space.bf_tf_vc_count; cf_tf_first_hdr;
+       ])
 
-let set_mc =
-  Wire.Staged.unstage (C.set Space.tm_frame_codec Space.bf_tf_mc_count)
-
-let set_vc =
-  Wire.Staged.unstage (C.set Space.tm_frame_codec Space.bf_tf_vc_count)
-
-(* The header {!Space.tm_frame_default} encodes: spacecraft 0x1FF, OCF flag
-   set, segment length identifier 3. *)
-let frame_template =
-  let b = Bytes.create hdr in
-  C.encode Space.tm_frame_codec Space.tm_frame_default b 0;
-  b
-
-let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid)
-let set_seq = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
-let set_dlen = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
-
-(* The header {!Space.packet_default} encodes: a telemetry packet with a
-   secondary header, unsegmented. *)
-let packet_template =
-  let b = Bytes.create sp_hdr in
-  C.encode Space.packet_codec Space.packet_default b 0;
-  b
+(* The header {!Space.packet_default} encodes, a telemetry packet with a
+   secondary header, unsegmented, with the three fields a packet varies. *)
+let write_packet_header =
+  Wire.Staged.unstage
+    (C.writer Space.packet_codec Space.packet_default
+       [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ])
 
 let pkt_dlen = Wire.UInt16.v (pkt_payload - 1)
-
-let stamp out o ~apid ~seq =
-  Bytes.blit packet_template 0 out o sp_hdr;
-  set_apid out o apid;
-  set_seq out o seq;
-  set_dlen out o pkt_dlen
+let stamp out o ~apid ~seq = write_packet_header out o apid seq pkt_dlen
 
 let frame ~out n =
   let carry = ref 0 and p = ref 0 in
   for f = 0 to n - 1 do
     let base = f * cadu_size in
-    Bytes.blit frame_template 0 out base hdr;
-    set_vcid out base (f land 7);
-    set_mc out base (f land 0xFF);
-    set_vc out base ((f lsr 3) land 0xFF);
-    set_fhp out base !carry;
+    write_frame_header out base (f land 7) (f land 0xFF)
+      ((f lsr 3) land 0xFF)
+      !carry;
     let off = ref (base + hdr + !carry) in
     while !off + pkt_size <= base + cadu_size do
       stamp out !off ~apid:(!p land 0x7FF) ~seq:(!p land 0x3FFF);

@@ -1,5 +1,6 @@
-(* APID demux: the packet stream and the routing loop, with every field read
-   by Wire's staged [Codec.get]. *)
+(* APID demux: the packet stream and the routing loop, each header read by
+   Wire's [Codec.read_word] and its fields taken with
+   [Codec.of_word]. *)
 
 module C = Wire.Codec
 
@@ -79,16 +80,20 @@ let pp_counts ppf (hk, sci, diag, idle) =
 
 let route_of_apid apid = routing_table.(apid)
 let hdr = Wire.Codec.wire_size Space.packet_codec
-let apid = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_apid)
-let dlen = Wire.Staged.unstage (C.get Space.packet_codec cf_sp_data_len)
+
+(* A header is read once, then its APID and data length taken from it. *)
+let header = C.word_reader Space.packet_codec
+let p_apid = C.word_part Space.packet_codec cf_sp_apid
+let p_dlen = C.word_part Space.packet_codec cf_sp_data_len
 
 type state = { off : int ref; handler_counts : int array }
 
 let step ~buf ~total_bytes state () =
   if !(state.off) + hdr > total_bytes then state.off := 0;
   let o = !(state.off) in
-  let apid = apid buf o in
-  let dlen = dlen buf o in
+  let w = C.read_word header buf o in
+  let apid = C.of_word p_apid w in
+  let dlen = C.of_word p_dlen w in
   let route = route_of_apid apid in
   state.handler_counts.(route) <- state.handler_counts.(route) + 1;
   state.off := o + hdr + Wire.UInt16.to_int dlen + 1
@@ -112,22 +117,14 @@ let run_packets ~buf ~total_bytes state n_pkts =
   done;
   counts state
 
-let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid)
-let set_seq = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
-let set_dlen = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
+(* The header {!Space.packet_default} encodes, a telemetry packet with a
+   secondary header, unsegmented, with the three fields a router writes. *)
+let write_header =
+  Wire.Staged.unstage
+    (C.writer Space.packet_codec Space.packet_default
+       [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ])
 
-(* The header {!Space.packet_default} encodes: a telemetry packet with a
-   secondary header, unsegmented. *)
-let template =
-  let b = Bytes.create hdr in
-  C.encode Space.packet_codec Space.packet_default b 0;
-  b
-
-let stamp out o ~apid ~seq ~dlen =
-  Bytes.blit template 0 out o hdr;
-  set_apid out o apid;
-  set_seq out o seq;
-  set_dlen out o dlen
+let stamp out o ~apid ~seq ~dlen = write_header out o apid seq dlen
 
 let restamp ~buf ~total_bytes ~out n =
   let seqs = Array.make n_routes 0 in
@@ -135,8 +132,9 @@ let restamp ~buf ~total_bytes ~out n =
   for _ = 1 to n do
     if !off + hdr > total_bytes then off := 0;
     let o = !off in
-    let apid = apid buf o in
-    let dlen = dlen buf o in
+    let w = C.read_word header buf o in
+    let apid = C.of_word p_apid w in
+    let dlen = C.of_word p_dlen w in
     let route = route_of_apid apid in
     let seq = seqs.(route) in
     seqs.(route) <- (seq + 1) land 0x3FFF;

@@ -298,7 +298,10 @@ let packet_fields acc (packet : Packet_stack.t) =
 
 module H = Headers
 
-(* {2 Wire.Codec: valid, then a proof-carrying read per field} *)
+(* {2 Wire.Codec: check, then a proof-carrying read per field}
+
+   [Codec.check] answers a header that fails its checks with a proof [Codec.ok]
+   refuses, so a bad header costs no exception. *)
 
 let eth_type = Staged.unstage (Codec.read H.eth H.eth_type)
 let ip_ihl = Staged.unstage (Codec.read H.ipv4 H.ipv4_ihl)
@@ -321,62 +324,62 @@ let udp_dp = Staged.unstage (Codec.read H.udp H.udp_dst_port)
 let udp_len = Staged.unstage (Codec.read H.udp H.udp_length)
 
 let codec_tcp base acc buf o ~payload =
-  match Codec.valid H.tcp buf o with
-  | exception Parse_error _ -> base
-  | t ->
-      let off = tcp_off t in
-      if off * 4 > payload then base
-      else
-        tcp_fields acc
-          ~sp:(UInt16.to_int (tcp_sp t))
-          ~dp:(UInt16.to_int (tcp_dp t))
-          ~seq:(UInt32.to_int (tcp_seq t))
-          ~ack:(UInt32.to_int (tcp_ack t))
-          ~win:(UInt16.to_int (tcp_win t))
-          ~flags:(tcp_flags t) ~off
+  let t = Codec.check H.tcp buf o in
+  if not (Codec.ok t) then base
+  else
+    let off = tcp_off t in
+    if off * 4 > payload then base
+    else
+      tcp_fields acc
+        ~sp:(UInt16.to_int (tcp_sp t))
+        ~dp:(UInt16.to_int (tcp_dp t))
+        ~seq:(UInt32.to_int (tcp_seq t))
+        ~ack:(UInt32.to_int (tcp_ack t))
+        ~win:(UInt16.to_int (tcp_win t))
+        ~flags:(tcp_flags t) ~off
 
 let codec_udp base acc buf o ~payload =
-  match Codec.valid H.udp buf o with
-  | exception Parse_error _ -> base
-  | u ->
-      let len = UInt16.to_int (udp_len u) in
-      if len > payload then base
-      else
-        udp_fields acc
-          ~sp:(UInt16.to_int (udp_sp u))
-          ~dp:(UInt16.to_int (udp_dp u))
-          ~len
+  let u = Codec.check H.udp buf o in
+  if not (Codec.ok u) then base
+  else
+    let len = UInt16.to_int (udp_len u) in
+    if len > payload then base
+    else
+      udp_fields acc
+        ~sp:(UInt16.to_int (udp_sp u))
+        ~dp:(UInt16.to_int (udp_dp u))
+        ~len
 
 let codec_ipv4 base acc buf o ~avail =
-  match Codec.valid H.ipv4 buf o with
-  | exception Parse_error _ -> base
-  | ip -> (
-      let hlen = ip_ihl ip * 4 and len = UInt16.to_int (ip_len ip) in
-      if len < hlen || len > avail then base
+  let ip = Codec.check H.ipv4 buf o in
+  if not (Codec.ok ip) then base
+  else
+    let hlen = ip_ihl ip * 4 and len = UInt16.to_int (ip_len ip) in
+    if len < hlen || len > avail then base
+    else
+      let proto = UInt8.to_int (ip_proto ip) in
+      let acc =
+        ip_fields acc
+          ~src:(UInt32.to_int (ip_src ip))
+          ~dst:(UInt32.to_int (ip_dst ip))
+          ~ttl:(UInt8.to_int (ip_ttl ip))
+          ~proto ~len
+      in
+      if ip_flags ip land 1 <> 0 || ip_frag ip <> 0 then acc
       else
-        let proto = UInt8.to_int (ip_proto ip) in
-        let acc =
-          ip_fields acc
-            ~src:(UInt32.to_int (ip_src ip))
-            ~dst:(UInt32.to_int (ip_dst ip))
-            ~ttl:(UInt8.to_int (ip_ttl ip))
-            ~proto ~len
-        in
-        if ip_flags ip land 1 <> 0 || ip_frag ip <> 0 then acc
-        else
-          let payload = len - hlen in
-          match proto with
-          | 6 -> codec_tcp base acc buf (o + hlen) ~payload
-          | 17 -> codec_udp base acc buf (o + hlen) ~payload
-          | _ -> acc)
+        let payload = len - hlen in
+        match proto with
+        | 6 -> codec_tcp base acc buf (o + hlen) ~payload
+        | 17 -> codec_udp base acc buf (o + hlen) ~payload
+        | _ -> acc
 
 let codec_packet ~avail acc buf o =
-  match Codec.valid H.eth buf o with
-  | exception Parse_error _ -> acc
-  | e ->
-      let ty = UInt16.to_int (eth_type e) in
-      if ty = ipv4 then codec_ipv4 acc (acc + ty) buf (o + 14) ~avail
-      else acc + ty
+  let e = Codec.check H.eth buf o in
+  if not (Codec.ok e) then acc
+  else
+    let ty = UInt16.to_int (eth_type e) in
+    if ty = ipv4 then codec_ipv4 acc (acc + ty) buf (o + 14) ~avail
+    else acc + ty
 
 (* {2 wire.ocaml: the generated view, then a read per field}
 
@@ -533,7 +536,7 @@ let rows stride =
   let frame_codec = frame_codec stride in
   [
     ("Wire.Codec stack decode", fun buf -> codec ~stride frame_codec buf);
-    ("Wire.Codec valid/read, linked headers", codec_linked ~stride);
+    ("Wire.Codec check/read, linked headers", codec_linked ~stride);
     ("wire.ocaml View.check/view, linked headers" ^ target, view_linked ~stride);
     ("wire.ocaml fused stack" ^ target, generated ~stride);
     ("wire.ocaml fused stack, fold" ^ target, generated_fold ~stride);

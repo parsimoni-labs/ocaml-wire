@@ -298,7 +298,8 @@ let test_valid_read () =
   let make () = Codec.v "Valid" (fun a b s -> (a, b, s)) [ a; b; s ] in
   let c = make () and other = make () in
   let buf = Bytes.of_string "\x07\xa0\x00xyz" in
-  let v = Codec.valid c buf 0 in
+  let v = Codec.check c buf 0 in
+  Alcotest.(check bool) "accepted" true (Codec.ok v);
   let read f = Staged.unstage (Codec.read c f) v in
   let get f = Staged.unstage (Codec.get c f) buf 0 in
   Alcotest.(check bool) "uint8" true (read a = get a);
@@ -310,12 +311,15 @@ let test_valid_read () =
   Alcotest.(check bool)
     "another codec's value" true
     (raises (fun () ->
-         Staged.unstage (Codec.read c a) (Codec.valid other buf 0)));
+         Staged.unstage (Codec.read c a) (Codec.check other buf 0)));
+  let short = Codec.check c (Bytes.make 3 '\x00') 0 in
+  Alcotest.(check bool) "short buffer" false (Codec.ok short);
   Alcotest.(check bool)
-    "short buffer" true
-    (match Codec.valid c (Bytes.make 3 '\x00') 0 with
-    | _ -> false
-    | exception Wire.Parse_error _ -> true)
+    "a read of a failed check" true
+    (raises (fun () -> Staged.unstage (Codec.read c a) short));
+  Alcotest.(check bool)
+    "negative offset" false
+    (Codec.ok (Codec.check c buf (-1)))
 
 (* Constraints on fields that share a byte are checked together, and a failure
    still names the first field, in declaration order, whose constraint fails. *)
@@ -619,10 +623,8 @@ let test_layout_size_overflow () =
   Alcotest.(check bool) "decode refuses" false decoded;
   Alcotest.(check bool) "validate agrees with decode" decoded validated;
   Alcotest.(check bool)
-    "no token for a record decode refuses" false
-    (match Codec.valid c buf 0 with
-    | _ -> true
-    | exception Wire.Parse_error _ -> false)
+    "no proof for a record decode refuses" false
+    (Codec.ok (Codec.check c buf 0))
 
 (* A negative offset is refused by name on every encode path, the general one
    included: a codec with a [where] clause does not take the plain one. *)
@@ -872,6 +874,79 @@ let test_v_rejects_bad_description_eagerly () =
               ] );
     ]
 
+(* A fixed-size record's frame check bounds its byte spans, so a bitfield
+   compared with a literal between two spans still takes the interval scan,
+   and agrees with the general path on every comparison, at and around the
+   bound, and on a buffer too short for the frame. *)
+let test_fixed_spans_keep_intervals () =
+  let outcome c buf =
+    match Codec.validate_exn c buf 0 with
+    | () -> "ok"
+    | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let comparisons =
+    Expr.
+      [
+        (">=", fun v -> v >= int 5);
+        (">", fun v -> v > int 5);
+        ("<=", fun v -> v <= int 5);
+        ("<", fun v -> v < int 5);
+        ("=", fun v -> v = int 5);
+        ("<>", fun v -> v <> int 5);
+      ]
+  in
+  (* Each nibble at either end of either byte runs through values at and
+     around the bound, whichever end the bitfield sits at. *)
+  let bytes =
+    [ 0x00; 0x04; 0x05; 0x06; 0x0f; 0x40; 0x50; 0x60; 0xf0; 0x45; 0x54; 0xff ]
+  in
+  List.iter
+    (fun (base_name, base) ->
+      List.iter
+        (fun (op, cmp) ->
+          let c =
+            Codec.v "Spans"
+              (fun head v rest tail -> (head, v, rest, tail))
+              Codec.
+                [
+                  ( Field.v "head" (byte_array ~size:(int 12))
+                  $ fun (h, _, _, _) -> h );
+                  ( Field.v "v" ~self_constraint:cmp (bits ~width:4 base)
+                  $ fun (_, v, _, _) -> v );
+                  ( Field.v "rest"
+                      (bits ~width:(if base = U8 then 4 else 12) base)
+                  $ fun (_, _, r, _) -> r );
+                  ( Field.v "tail" (byte_array ~size:(int 6))
+                  $ fun (_, _, _, t) -> t );
+                ]
+          in
+          let name = Fmt.str "%s %s 5" base_name op in
+          let paths = Private.Testing.paths c in
+          Alcotest.(check bool)
+            (name ^ ": interval tests")
+            true
+            (List.mem "pass.interval" paths || List.mem "pass.words" paths);
+          let general = Private.Testing.general c in
+          let size = if base = U8 then 19 else 20 in
+          List.iter
+            (fun hi ->
+              List.iter
+                (fun lo ->
+                  let buf = Bytes.make size '\000' in
+                  Bytes.set_uint8 buf 12 hi;
+                  if size = 20 then Bytes.set_uint8 buf 13 lo;
+                  let at = Fmt.str "%s: bytes %02x %02x" name hi lo in
+                  Alcotest.(check string)
+                    at (outcome general buf) (outcome c buf);
+                  let short = Bytes.sub buf 0 (size - 1) in
+                  Alcotest.(check string)
+                    (at ^ ", short buffer") (outcome general short)
+                    (outcome c short))
+                bytes)
+            bytes)
+        comparisons)
+    [ ("U8", U8); ("U16be", U16be); ("U16", U16) ]
+
 let suite =
   ( "codec_pass",
     [
@@ -885,6 +960,8 @@ let suite =
         test_decode_scalars_agree_with_get;
       Alcotest.test_case "decode: offset out of range" `Quick
         test_decode_offset_out_of_range;
+      Alcotest.test_case "check: fixed spans keep the interval scan" `Quick
+        test_fixed_spans_keep_intervals;
       Alcotest.test_case "check: constraint intervals" `Quick
         test_constraint_intervals;
       Alcotest.test_case "check: a failure reports this frame's value" `Quick

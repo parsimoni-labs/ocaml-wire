@@ -609,7 +609,7 @@ let test_encode_impure_byte_array_getter () =
     | exception Invalid_argument _ -> ()
   done
 
-(* What [decode], [validate] and [valid] make of the same bytes: each one
+(* What [decode], [validate] and [check] make of the same bytes: each one
    accepts them or each one refuses. *)
 let check_entry_points_agree what c bytes =
   let buf = Bytes.of_string bytes in
@@ -623,8 +623,8 @@ let check_entry_points_agree what c bytes =
     (what ^ ": validate") decoded
     (verdict (fun () -> Codec.validate_exn c buf 0));
   Alcotest.(check string)
-    (what ^ ": valid") decoded
-    (verdict (fun () -> ignore (Codec.valid c buf 0)))
+    (what ^ ": check") decoded
+    (if Codec.ok (Codec.check c buf 0) then "ok" else "refused")
 
 (* A fixed-size field after the last span must fit in the buffer too. *)
 let test_fixed_after_span_fits () =

@@ -432,7 +432,8 @@ let param_action_gens =
   ]
 
 (* Flat records shaped for a fast path each: a fixed span after the last
-   data-sized one, a range check before an enum check, a byte table, the widest
+   data-sized one, a range check before a span sized by the data, a range
+   check before an enum check, a byte table, the widest
    staged encode, and getters that answer differently on each call. *)
 let flat_gens =
   let gen mks = Pack (snd (flat_of "Flat" mks)) in
@@ -440,6 +441,13 @@ let flat_gens =
   [
     ( "flat_span_tail",
       gen [ span_group len_u8; fixed_bytes_group ~slice:false 4 ] );
+    ( "flat_range_span",
+      gen
+        [
+          range8_group ~lo:0 ~hi:10;
+          fixed_bytes_group ~slice:false 8;
+          span_group len_u8;
+        ] );
     ( "flat_check_order",
       gen [ range8_group ~lo:0 ~hi:10; enum8_group [ ("x", 0) ] ] );
     ( "flat_table",
