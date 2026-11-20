@@ -8,11 +8,14 @@ FSTAR ?= $(EVERPARSE)/bin/fstar.exe
 Z3 ?= $(EVERPARSE)/lib/fstar/z3-4.13.3/bin/z3
 CACHE ?= $(or $(TMPDIR),/tmp)/wire-fstar-cache
 
-FLAGS = --z3version 4.13.3 --smt $(Z3) --already_cached 'Prims FStar'
+LOWPARSE ?= $(EVERPARSE)/src/lowparse
+
+FLAGS = --z3version 4.13.3 --smt $(Z3) --already_cached 'Prims FStar LowParse' \
+  --include $(LOWPARSE)
 FSTAR_FLAGS = $(FLAGS) --cache_checked_modules --cache_dir $(CACHE) --include .
 
 MODEL = Plan.Expr.fst Plan.Sum.fst Plan.Scan.fst Plan.Proof.fst
-MODULES = $(MODEL) Plan.Word.fst Plan.Frames.fst
+MODULES = $(MODEL) Plan.Word.fst Plan.Frames.fst Spec.Ipv4.fst
 
 .PHONY: verify clean
 
