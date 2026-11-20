@@ -482,10 +482,22 @@ let in_word num f =
 
 let covers a f = a <= f.offset && f.offset + width_bytes f.store <= a + 8
 
+(* One 64-bit load serves every field it holds, as the load combining of Go's
+   [memcombine] pass turns adjacent narrow loads into a wide one. A word
+   starts at a multiple of 8, or ends with the prefix. Candidates are computed
+   from the fields, so the cost does not grow with [size]. *)
 let words num ~size fields =
   if size < 8 then []
   else
-    List.init ((size + 7) / 8) (fun i -> min (8 * i) (size - 8))
+    let last = size - 8 in
+    List.concat_map
+      (fun f ->
+        if not (in_word num f) then []
+        else
+          List.filter
+            (fun a -> covers a f)
+            [ min (f.offset / 8 * 8) last; last ])
+      fields
     |> List.sort_uniq Int.compare
     |> List.filter (fun a ->
         let held =
