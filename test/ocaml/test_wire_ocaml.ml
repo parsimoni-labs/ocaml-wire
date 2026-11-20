@@ -989,16 +989,39 @@ let test_scan_skipped () =
 
 (* Optional fields are written once each: the code after one is joined, or
    copied into its branches only while it is short, holds no optional field
-   and the copies on a path stay few, so the checks grow linearly with the
-   number of optional fields, in a run or nested. The test codecs nest a
-   record per field and their output names lengthen: lines, not bytes,
-   measure the code. *)
+   and the copies on a path stay few, and an output under more than
+   [Plan.slot_depth] of them is bound once, so the code grows linearly with
+   the number of optional fields, in a run or nested, whatever it hands out.
+   The test codecs nest a record per field and their output names lengthen:
+   lines and words, not bytes, measure the code, a word being a run of
+   letters, digits and underscores, which a long line cannot hide. *)
 let lines s = List.length (String.split_on_char '\n' s)
 
-(* A join passes on the outputs under it, so [n] optional fields nested inside
-   each other that hand out every output give code quadratic in [n], within
-   one budget on both targets. *)
-let nested_budget n = (7 * n * n) + (100 * n)
+let words s =
+  let word = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+    | _ -> false
+  in
+  let n = ref 0 and inside = ref false in
+  String.iter
+    (fun c ->
+      if word c && not !inside then incr n;
+      inside := word c)
+    s;
+  !n
+
+(* [n] optional fields nested inside each other that hand out every output.
+   The OCaml target writes two walks ([fold] and [fold_frames]; [decode]
+   calls [fold]) and the OxCaml target five. Past the first four levels,
+   whose outputs are immutable, a level costs a walk about 21 lines: its
+   three slots, the bound checks and reads of its two prefixes, its
+   presence, its join and the jumps to it, or the short code after it copied
+   into its branches; and about 150 words on OCaml, 215 on OxCaml, whose
+   arithmetic is spelled as calls. *)
+let nested_budget target n =
+  match target with
+  | `OCaml -> ((44 * n) + 60, (320 * n) + 200)
+  | `OxCaml -> ((110 * n) + 60, (1150 * n) + 200)
 
 let test_size () =
   List.iter
@@ -1020,20 +1043,58 @@ let test_size () =
       ("in a run", Schemas.gated, None);
       ("in a run, checks only", Schemas.gated, Some []);
       ("nested, checks only", Schemas.nested, Some []);
+      ("nested", Schemas.nested, None);
     ];
   List.iter
     (fun (target, name) ->
       List.iter
         (fun n ->
-          let size =
-            lines (Wire_ocaml.scanner ~target ~codec:"g" (Schemas.nested n))
-          in
-          if size > nested_budget n then
+          let src = Wire_ocaml.scanner ~target ~codec:"g" (Schemas.nested n) in
+          let max_lines, max_words = nested_budget target n in
+          if lines src > max_lines || words src > max_words then
             Alcotest.failf
-              "%s: %d nested optional fields, every output: %d lines, over %d"
-              name n size (nested_budget n))
+              "%s: %d nested optional fields, every output: %d lines and %d \
+               words, over %d and %d"
+              name n (lines src) (words src) max_lines max_words)
         [ 8; 16; 32; 64 ])
     [ (`OCaml, "OCaml"); (`OxCaml, "OxCaml") ]
+
+(* The scanner of nested optional fields that hands out every output
+   allocates nothing where it calls its consumer by name, beyond the floats
+   of the measure: a frame with no optional field gives zeros, one with all
+   twelve levels a one for each of its 35 outputs. *)
+let test_nested_no_alloc () =
+  let stride = 32 and frames = 4096 in
+  let len = stride * frames in
+  let buf =
+    Bytes.init len (fun i ->
+        if i < stride then '\000'
+        else if i < 2 * stride then '\001'
+        else Char.chr (Random.State.int rand 2))
+  in
+  let one off = S_nested.fold_step buf off stride ~init:0 in
+  Alcotest.(check int) "no optional field" 0 (one 0);
+  Alcotest.(check int) "every optional field" 35 (one stride);
+  let each () =
+    let acc = ref 0 in
+    for i = 0 to frames - 1 do
+      acc := S_nested.fold_step buf (i * stride) stride ~init:!acc
+    done;
+    !acc
+  in
+  let batch () = S_nested.fold_frames_step buf 0 len ~stride ~init:0 in
+  let measured what f =
+    let before = Gc.minor_words () in
+    let v = Sys.opaque_identity (f ()) in
+    let words = Gc.minor_words () -. before in
+    if words >= 64. then
+      Alcotest.failf "%s: %.0f words allocated over %d frames" what words frames;
+    v
+  in
+  Alcotest.(check int)
+    "fold_step and fold_frames_step"
+    (measured "fold_step" each)
+    (measured "fold_frames_step" batch)
 
 let refused what generate =
   match generate () with
@@ -1155,6 +1216,8 @@ let suite =
       Alcotest.test_case "overflow in a condition the facts decide" `Quick
         test_scan_skipped;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
+      Alcotest.test_case "nested optional fields allocate nothing" `Quick
+        test_nested_no_alloc;
       Alcotest.test_case "scanner refusals" `Quick test_scanner_refusals;
       Alcotest.test_case "scanner outputs are label paths" `Quick
         test_scanner_outputs;

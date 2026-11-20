@@ -30,22 +30,30 @@ let scanner_fields c =
 type scan = {
   plan : plan;
   selected : output list;
-  num : num;
+  m : mode;
   ppf : Format.formatter;
 }
 
-let scan_mode s ~fail =
-  let ids = List.map (fun (o : output) -> o.id) s.selected in
+(* The outputs among [selected] that are slots. *)
+let slots (plan : plan) selected =
+  let deep =
+    Sset.of_list (List.map (fun (o : output) -> o.id) (slots plan.nodes))
+  in
+  List.filter (fun (o : output) -> Sset.mem o.id deep) selected
+
+let scan_mode (plan : plan) ~num selected =
+  let ids = List.map (fun (o : output) -> o.id) in
   {
-    num = s.num;
+    num;
     src = bytes_src;
     ox = false;
     cold = false;
     raw32 = false;
-    live = live s.plan ~outputs:ids;
-    exported = Sset.of_list ids;
-    fail = (fun _ -> fail);
-    overflowed = (fun _ _ -> fail);
+    live = live plan ~outputs:(ids selected);
+    exported = Sset.of_list (ids selected);
+    slots = Sset.of_list (ids (slots plan selected));
+    fail = (fun _ -> "");
+    overflowed = (fun _ _ -> "");
   }
 
 (* The labelled arguments [valid] receives. *)
@@ -56,20 +64,26 @@ let pp_args ~conv ppf outputs =
       (List.map (fun (o : output) -> Fmt.str "~%s:%s" o.name (conv o)) outputs)
 
 let to_int s ~unboxed (o : output) =
-  if s.num = Unboxed && (not unboxed) && not o.is_bool then
-    Fmt.str "(U.to_int %s)" o.id
-  else o.id
+  let v = output_value s.m o in
+  if s.m.num = Unboxed && (not unboxed) && not o.is_bool then
+    Fmt.str "(U.to_int %s)" v
+  else v
 
 (* The call of [valid] with the outputs. *)
 let call s ~unboxed valid () =
   Fmt.pf s.ppf "%s %a@\n" valid (pp_args ~conv:(to_int s ~unboxed)) s.selected
 
-(* The walk over the [stop] bytes at [base]: each rejection is the text
-   [reject] and each acceptance what [accept] writes, in place, so a
-   continuation the generator knows is never a closure. *)
+(* The walk over the [stop] bytes at [base], which starts by binding its
+   slots: each rejection is the text [reject] and each acceptance what
+   [accept] writes, in place, so a continuation the generator knows is never
+   a closure. *)
 let pp_scan s ~reject ~accept =
-  start ~m:(scan_mode s ~fail:reject) ~ppf:s.ppf ~ranges:s.plan.ranges
-    ~base:"base" ~limit:"stop" ~known:0 s.plan.nodes (fun _ _ -> accept ())
+  pp_slots s.m s.ppf s.selected;
+  let m =
+    { s.m with fail = (fun _ -> reject); overflowed = (fun _ _ -> reject) }
+  in
+  start ~m ~ppf:s.ppf ~ranges:s.plan.ranges ~base:"base" ~limit:"stop" ~known:0
+    s.plan.nodes (fun _ _ -> accept ())
 
 let pp_entry s ~reject ~accept =
   Fmt.pf s.ppf
@@ -77,8 +91,8 @@ let pp_entry s ~reject ~accept =
      - off then %s else@\n"
     reject;
   Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
-    (if s.num = Tagged then "off" else "U.of_int off")
-    (if s.num = Tagged then "len" else "U.of_int len");
+    (if s.m.num = Tagged then "off" else "U.of_int off")
+    (if s.m.num = Tagged then "len" else "U.of_int len");
   pp_scan s ~reject ~accept
 
 (* The callbacks [fold_frames] takes: on OxCaml, unboxed ones have their
@@ -105,7 +119,7 @@ let frames_callbacks s ~unboxed =
    next. *)
 let pp_frames ?step s ~unboxed =
   let ppf = s.ppf in
-  let native = s.num = Unboxed in
+  let native = s.m.num = Unboxed in
   let binding, reference, read, assign =
     if native then ("mutable ", "", "", "<-") else ("", "ref ", "!", ":=")
   in
@@ -143,7 +157,7 @@ let pp_frames ?step s ~unboxed =
     ~accept:(call s ~unboxed (valid ^ " current"));
   Fmt.pf ppf ") in@\nacc %s next;@\ncursor %s %s@\ndone;@\n%sacc@\n@\n" assign
     assign
-    (binop s.num "+" "base" (if native then "stride_word" else "stride"))
+    (binop s.m.num "+" "base" (if native then "stride_word" else "stride"))
     read
 
 (* [fold_step], which calls the module [m]'s functions by name. *)
@@ -159,7 +173,7 @@ let pp_result_type s name hash =
     (fun (o : output) ->
       Fmt.pf s.ppf "%s : %s;@\n" o.name
         (if o.is_bool then "bool"
-         else if hash = "#" && s.num = Unboxed then "int64_u"
+         else if hash = "#" && s.m.num = Unboxed then "int64_u"
          else "int"))
     s.selected;
   Fmt.pf s.ppf "}@\n"
@@ -169,7 +183,7 @@ let pp_decoder s name typ hash attr =
   Fmt.pf ppf "let[@inline always]%s %s buf off len : %s =@\n" attr name typ;
   let direct = hash = "#" in
   let zero (o : output) =
-    if o.is_bool then "false" else if direct then lit s.num 0 else "0"
+    if o.is_bool then "false" else if direct then lit s.m.num 0 else "0"
   in
   let fields ppf conv =
     List.iter
@@ -194,7 +208,7 @@ let pp_box s =
   List.iter
     (fun (o : output) ->
       Fmt.pf s.ppf "%s = %s;" o.name
-        (if s.num = Unboxed && not o.is_bool then "U.to_int v.#" ^ o.name
+        (if s.m.num = Unboxed && not o.is_bool then "U.to_int v.#" ^ o.name
          else "v.#" ^ o.name))
     s.selected;
   Fmt.pf s.ppf "}@\n"
@@ -215,7 +229,8 @@ let scanner ?(target = `OCaml) ?fields ?step ~codec c =
     let num = if target = `OxCaml then Unboxed else Tagged in
     let b = Buffer.create 4096 in
     let ppf = Format.formatter_of_buffer b in
-    let s = { plan; selected = selected plan fields; num; ppf } in
+    let selected = selected plan fields in
+    let s = { plan; selected; m = scan_mode plan ~num selected; ppf } in
     pp_header ppf ~codec ~name:plan.record ~digest:(Gen.digest c);
     pp_wide ppf ~codec ~wide:plan.wide;
     if num = Unboxed then

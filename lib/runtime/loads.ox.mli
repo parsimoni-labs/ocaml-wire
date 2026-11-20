@@ -7,6 +7,10 @@
 
 module Int64_u = Stdlib_upstream_compatible.Int64_u
 
+type cell = { mutable cell : int64_u }
+(** A mutable [int64_u], which no [ref] holds. The compiler unboxes one that is
+    local and that only reads and assignments of [cell] use. *)
+
 val u8 : bytes -> int64_u -> int
 (** [u8 buf off] is the byte at [off]. *)
 

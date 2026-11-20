@@ -145,9 +145,8 @@ val scanner :
     them, and every check still runs. [decode buf off len] returns the outputs
     in a record with an [ok] flag.
 
-    [n] optional fields give code linear in [n] when they follow each other, or
-    when they nest and [fields] selects no output. Nested inside each other with
-    every output handed out, they give code quadratic in [n].
+    [n] optional fields give code linear in [n], whether they follow each other
+    or nest, and whatever outputs are handed out.
     [fold_frames buf off len ~stride ~init ~invalid ~valid] folds over the
     [len / stride] frames of [stride] bytes, each checked on its own; it raises
     [Invalid_argument] for bad bounds or a [stride] that is not positive.
@@ -242,6 +241,21 @@ module Plan : sig
   (** [select t names] is the outputs of [t] that [names] names, as {!scanner}'s
       [fields] does, in declaration order; all of them for [None]. Raises
       [Invalid_argument] naming a name that no output has. *)
+
+  val slot_depth : int
+  (** [slot_depth] is 4: realistic codecs nest optional fields at most that
+      deep, and up to it immutable bindings are faster on OCaml without flambda.
+  *)
+
+  val slots : t -> output list -> output list
+  (** [slots t outputs] is the outputs among [outputs] under more than
+      {!slot_depth} optional fields nested inside each other, the presence of
+      the innermost included. A walk binds each once, where it starts, to its
+      absent value ([false], zero) in a mutable variable that it assigns where
+      its field is present, so an absent field and the code after one write
+      nothing for them. Any other output is immutable: bound where its field is
+      read, to its absent value where the field is absent, and handed to the
+      code after the field. *)
 
   val live : t -> output list -> string -> bool
   (** [live t outputs v] is [true] when a walk handing out [outputs] binds the

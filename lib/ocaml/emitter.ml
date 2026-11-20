@@ -8,8 +8,10 @@ open Planner
    One walk over the plan writes every function that checks a record: the
    boolean ones, the decoders, the folds and the one that finds the codec's
    error. It writes each node once: after optional fields the code joins in a
-   local function the compiler turns into a jump, so the code for [n]
-   optional fields grows with [n]. *)
+   local function the compiler turns into a jump, and the outputs under more
+   than [slot_depth] of them are mutable locals that only the fields present
+   assign, so the code for [n] optional fields grows with [n], nested or
+   not. *)
 
 (* How the code holds integers: as [int], or on OxCaml as [int64_u]. *)
 type num = Tagged | Unboxed
@@ -61,7 +63,8 @@ type mode = {
          overflow. *)
   raw32 : bool; (* A 32-bit field is bound as its [int32] too. *)
   live : Sset.t; (* The variables the walk binds. *)
-  exported : Sset.t; (* The outputs that cross a join. *)
+  exported : Sset.t; (* The outputs the walk hands out. *)
+  slots : Sset.t; (* Those of them that are slots. *)
   fail : failure -> string;
   overflowed : failure -> string -> string;
       (* What a cold walk raises for an overflow, given the exception. *)
@@ -88,6 +91,49 @@ type w = {
 }
 
 let pf w fmt = Fmt.pf w.ppf fmt
+
+(* {2 Slots}
+
+   An output under more than [slot_depth] optional fields is a slot: a
+   mutable local bound once to its absent value where the walk starts,
+   assigned where its field is present and read after the joins. Any other
+   output is an immutable binding, which a join takes as a parameter and an
+   absent field binds to its absent value. The generated code only reads and
+   assigns a slot in place, in the walk or in a join, and only applies a join
+   in tail position: the compiler then makes the slot a mutable variable and
+   the join a jump. A slot captured by any other function would be a heap
+   block, and a join applied elsewhere a closure. *)
+
+let is_slot m id = Sset.mem id m.slots
+
+(* An output the walk hands out as an immutable binding. *)
+let immutable m (o : output) = Sset.mem o.id m.exported && not (is_slot m o.id)
+
+(* On OxCaml an [int64_u] has no [ref]: its slot is a [Target.cell]. *)
+let cell num ~is_bool = num = Unboxed && not is_bool
+
+let slot_read num ~is_bool id =
+  if cell num ~is_bool then id ^ ".B.cell" else "!" ^ id
+
+(* The assignment of [v] to the slot [id], where a binding goes. *)
+let slot_assign num ~is_bool id v =
+  if cell num ~is_bool then Fmt.str "let () = %s.B.cell <- %s in" id v
+  else Fmt.str "let () = %s := %s in" id v
+
+(* The slots of [outputs], each bound to its absent value. *)
+let pp_slots m ppf outputs =
+  List.iter
+    (fun (o : output) ->
+      if is_slot m o.id then
+        Fmt.pf ppf "let %s = %s in@\n" o.id
+          (if o.is_bool then "ref false"
+           else if cell m.num ~is_bool:false then "{ B.cell = #0L }"
+           else "ref 0"))
+    outputs
+
+(* An output's value where the walk ends. *)
+let output_value m (o : output) =
+  if is_slot m o.id then slot_read m.num ~is_bool:o.is_bool o.id else o.id
 
 (* {2 Numbers} *)
 
@@ -154,7 +200,8 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
   match e with
   | T.Int n -> lit num n
   | T.Bool b -> string_of_bool b
-  | T.Ref (T.I, v) -> v
+  | T.Ref (T.I, v) ->
+      if is_slot w.m v then slot_read num ~is_bool:false v else v
   | T.Add (a, b) -> arith_op T.checked_add "add" "+" a b
   | T.Sub (a, b) -> arith_op T.checked_sub "sub" "-" a b
   | T.Mul (a, b) -> arith_op T.checked_mul "mul" "*" a b
@@ -523,6 +570,11 @@ let field w ~o ~k ~size ~words ~bitwords f =
   let m = w.m in
   let is_live = Sset.mem f.id m.live in
   let shifted = { f with offset = k + f.offset } in
+  let bind v =
+    if is_slot m f.id then
+      pf w "%s@\n" (slot_assign m.num ~is_bool:false f.id v)
+    else pf w "let %s = %s in@\n" f.id v
+  in
   (if is_live then
      match f.store with
      | Int { width = 32; signed; endian } when m.raw32 ->
@@ -532,10 +584,8 @@ let field w ~o ~k ~size ~words ~bitwords f =
            (if signed then "" else " land mask32")
      | Bits { base; _ } ->
          let bitword = List.assoc (f.offset, base) bitwords in
-         pf w "let %s = %s in@\n" f.id (value m ~bitword ~o ~words ~k:0 shifted)
-     | _ ->
-         pf w "let %s = %s in@\n" f.id
-           (value m ~size:(k + size) ~o ~words ~k:0 shifted));
+         bind (value m ~bitword ~o ~words ~k:0 shifted)
+     | _ -> bind (value m ~size:(k + size) ~o ~words ~k:0 shifted));
   List.iter (fun c -> check w (Check (f, c)) c.cond) f.checks;
   let w = refine w (List.map (fun c -> c.cond) f.checks) in
   match f.store with
@@ -701,6 +751,15 @@ let bind_absent w ~exported gates ~fired =
         (present :: children))
     gates
 
+(* The parameters of the join after [gates]: their outputs. *)
+let params ~exported gates =
+  List.concat_map
+    (fun (_, (present : output), children, _) ->
+      List.filter_map
+        (fun (o : output) -> if exported o then Some o.id else None)
+        (present :: children))
+    gates
+
 (* The nodes a continuation may be copied over: a few, none optional. *)
 let rec copyable budget = function
   | [] -> budget >= 0
@@ -842,9 +901,12 @@ let rec walk w nodes p k =
 
 (* A run of gates, and the code after it: written once in a join, or, when
    it is short and holds no optional field, copied into each branch, which
-   keeps what the branch established. *)
+   keeps what the branch established. The outputs that are not slots reach
+   it as bindings or as the join's parameters; a case that runs assigns its
+   presence when a slot, and the slots of the others keep their absent
+   value. *)
 and dispatch w gates p ~copy k =
-  let exported (o : output) = Sset.mem o.id w.m.exported in
+  let exported = immutable w.m in
   let indexed = List.mapi (fun i g -> (i, g)) gates in
   let tree =
     decide w.facts (List.map (fun (i, (c, _, _, _)) -> (i, c)) indexed)
@@ -857,28 +919,23 @@ and dispatch w gates p ~copy k =
       bind_absent w' ~exported indexed ~fired;
       k { w' with known = 0; tail = w.tail; copies = w.copies } p)
     else begin
-      let params =
-        List.concat_map
-          (fun (_, (present : output), children, _) ->
-            List.filter exported (present :: children))
-          gates
-      in
       let e = w.fresh "e" in
-      pf w "let[@local] %s %a %s =@\n" j pp_list
-        (List.map (fun (o : output) -> o.id) params)
-        e;
+      pf w "let[@local] %s %a %s =@\n" j pp_list (params ~exported gates) e;
       k { w with known = 0 } { var = Some e; at = 0 };
       pf w "in@\n";
       fun ~fired w' p -> jump w' ~j ~exported indexed ~fired p
     end
   in
   let case i =
-    let cond, _, _, body = List.nth gates i in
+    let cond, (present : output), _, body = List.nth gates i in
     let copies = if copy then w.copies * leaves else 1 in
     walk
       { (refine w [ cond ]) with tail = true; copies }
       body p
-      (fun w' p -> finish ~fired:(Some i) w' p)
+      (fun w' p ->
+        if is_slot w.m present.id then
+          pf w' "%s@\n" (slot_assign w.m.num ~is_bool:true present.id "true");
+        finish ~fired:(Some i) w' p)
   in
   List.iter
     (fun (i, _) ->

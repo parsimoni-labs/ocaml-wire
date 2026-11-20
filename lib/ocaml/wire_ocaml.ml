@@ -77,6 +77,9 @@ module Plan = struct
     | outputs -> outputs
     | exception Unsupported why -> invalid_arg why
 
+  let slot_depth = slot_depth
+  let slots t outputs = slots t outputs
+
   let live t outputs =
     let live = live t ~outputs:(List.map (fun (o : output) -> o.id) outputs) in
     fun v -> Sset.mem v live

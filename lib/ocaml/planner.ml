@@ -528,6 +528,25 @@ let rec fields_of nodes =
       | Span _ | Test _ -> [])
     nodes
 
+(* Realistic codecs nest optional fields at most this deep, and up to it
+   immutable bindings are faster on OCaml without flambda. *)
+let slot_depth = 4
+
+(* The outputs under more than [slot_depth] optional fields, the presence of
+   the innermost included. *)
+let slots nodes =
+  let rec go depth nodes =
+    List.concat_map
+      (function
+        | Gate (_, present, under, body) ->
+            if depth >= slot_depth then present :: under
+            else go (depth + 1) body
+        | Region (_, _, body) -> go depth body
+        | Prefix _ | Span _ | Test _ -> [])
+      nodes
+  in
+  go 0 nodes
+
 (* The variables the checks, sizes and conditions read. *)
 let rec references nodes =
   List.concat_map

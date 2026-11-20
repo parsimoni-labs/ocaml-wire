@@ -43,13 +43,14 @@ type mode = {
   raw32 : bool;
   live : Sset.t;
   exported : Sset.t;
+  slots : Sset.t;
   fail : failure -> string;
   overflowed : failure -> string -> string;
 }
 (** What a walk writes: how it holds integers, the buffer it reads, whether the
     target is OxCaml, whether it is the cold walk that raises the codec's
-    errors, the variables it binds and hands out, and what it writes on a
-    failure. *)
+    errors, the variables it binds, the outputs it hands out, those of them that
+    are slots, and what it writes on a failure. *)
 
 type pos = { var : string option; at : int }
 (** A position in the record: a variable when the data decides it, plus a
@@ -75,6 +76,13 @@ type w = {
 
 val pf : w -> ('a, Format.formatter, unit) format -> 'a
 (** [pf w fmt] writes to the output of [w]. *)
+
+val pp_slots : mode -> output list Fmt.t
+(** [pp_slots m] binds each of the outputs that is a slot of [m] to its absent
+    value: a mutable local the walk assigns where its field is present. *)
+
+val output_value : mode -> output -> string
+(** [output_value m o] is the text of the value of [o] where a walk ends. *)
 
 val lit : num -> int -> string
 (** [lit num n] is the literal [n] in the integers of [num]. *)

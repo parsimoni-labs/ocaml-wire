@@ -34,7 +34,8 @@
   g_overflow_wire.ml
   s_sized.ml
   s_overflow.ml
-  s_skipped.ml)
+  s_skipped.ml
+  s_nested.ml)
  (action
   (run ./gen.exe)))
 
@@ -67,7 +68,8 @@
   g_overflow_wire
   s_sized
   s_overflow
-  s_skipped)
+  s_skipped
+  s_nested)
  (libraries
   schemas
   wire
