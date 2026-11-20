@@ -16,7 +16,6 @@ module Defect.SumConst.Buggy
    Wire_runtime.Errors.Parse_error at bf2c2866, where 1e318ce8 generates the
    scanner: the second span's cancelled bound adds the two constants. *)
 
-open FStar.Mul
 open FStar.List.Tot
 open Plan.Expr
 open Plan.Sum

@@ -45,7 +45,9 @@ word one byte on, which the model must refuse for some plan. Run against
 emitters mutated to keep `held` into a region, and to keep a word past the
 checked bytes, the check reports each.
 
-`EVERPARSE` defaults to `~/.local/everparse`.
+`EVERPARSE` defaults to `~/.local/everparse`, an EverParse from v2026.10.27
+(F* 2026.10.25~dev, Z3 5.3.0); the sources use its F*'s syntax and
+built-in integer `*`, so an older one no longer checks them.
 
 ## What is proved
 
@@ -221,6 +223,6 @@ native int (`p + n` wraps), and the next node checks bytes (a span before a
 where clause or the end of the plan is never bounded). Each makes
 `exec_spec` fail, so each premise is needed. They are not past defects.
 
-Verification takes about two minutes (`make verify`, one core); `make
-defects` under three minutes with `-j4`, most of it the mutants, whose
-failing proofs run until Z3 gives up.
+`make verify` takes a little over a minute of CPU on one core; `make
+defects` about ten, most of it the mutants, whose failing proofs run
+until Z3 gives up (`-j` runs them side by side).

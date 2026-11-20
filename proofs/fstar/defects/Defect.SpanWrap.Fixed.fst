@@ -3,7 +3,6 @@ module Defect.SpanWrap.Fixed
 (* e4be2c6f after the fix: a size expression is evaluated with checked
    arithmetic and an overflow rejects the record, as Plan.Scan.spec does. *)
 
-open FStar.Mul
 open Plan.Expr
 
 let span_accepts (len p:int) (en:env) (s:expr) : bool =

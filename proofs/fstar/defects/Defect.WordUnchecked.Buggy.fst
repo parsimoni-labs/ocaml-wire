@@ -5,7 +5,6 @@ module Defect.WordUnchecked.Buggy
    word from unchecked byte reads at the caller's offset [off + byte_off], so
    a frame shorter than the word read the bytes after it. *)
 
-open FStar.Mul
 
 noeq type outcome =
   | Value

@@ -6,7 +6,6 @@ module Plan.Word
    Planner.word_range (two stacked bitfields tested as one range of their
    word). *)
 
-open FStar.Mul
 open FStar.Math.Lemmas
 
 (* The bytes of the buffer. *)
@@ -49,7 +48,10 @@ let rec le_split (b:bytes) (k m1 m2:nat)
     else begin
       le_split b (k + 1) (m1 - 1) m2;
       pow2_plus 8 (8 * (m1 - 1));
-      assert_norm (pow2 8 == 256)
+      assert_norm (pow2 8 == 256);
+      let r = le b (k + m1) m2 in
+      distributivity_add_right 256 (le b (k + 1) (m1 - 1)) (pow2 (8 * (m1 - 1)) * r);
+      paren_mul_right 256 (pow2 (8 * (m1 - 1))) r
     end
 
 (* [(hi * 2^r + lo) / 2^r = hi] and [(x * 2^m + y) mod 2^m = y] for small

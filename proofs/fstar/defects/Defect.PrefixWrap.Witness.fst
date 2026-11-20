@@ -15,7 +15,6 @@ module Defect.PrefixWrap.Witness
    against that emitter; the model's own, which adds with [extent], rejects
    as the codec does. *)
 
-open FStar.Mul
 open Plan.Expr
 open Plan.Scan
 open Plan.Proof

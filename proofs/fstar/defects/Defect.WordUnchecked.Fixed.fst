@@ -4,7 +4,6 @@ module Defect.WordUnchecked.Fixed
    [off < 0 || off > Bytes.length buf - n]. The test subtracts, so it does
    not overflow for any offset and length in the native int. *)
 
-open FStar.Mul
 open Plan.Expr
 
 noeq type outcome =

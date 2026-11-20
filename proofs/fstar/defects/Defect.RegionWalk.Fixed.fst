@@ -3,7 +3,6 @@ module Defect.RegionWalk.Fixed
 (* 57535e21 after the fix: every buffer walk carries where its input stops
    (Input_end), narrowed to a region's end and never past the buffer's. *)
 
-open FStar.Mul
 open Plan.Expr
 
 type region = { buflen : nat; start : nat; n : nat }

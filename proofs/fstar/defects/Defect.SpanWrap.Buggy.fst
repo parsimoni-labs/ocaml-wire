@@ -6,7 +6,6 @@ module Defect.SpanWrap.Buggy
    [max_int]: the product wraps to 1, so a 9-byte buffer held the 8-byte
    length and "the" span. *)
 
-open FStar.Mul
 open Plan.Expr
 
 (* OCaml's 63-bit wrap-around. *)

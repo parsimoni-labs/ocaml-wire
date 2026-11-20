@@ -7,7 +7,6 @@ module Plan.Sum
    since b1f6f756; defects/Defect.SumConst.Buggy replays bf2c2866, whose
    [sum_add] let the constant's overflow escape. *)
 
-open FStar.Mul
 open FStar.List.Tot
 open Plan.Expr
 
@@ -151,7 +150,7 @@ let rec unique_replace (k:expr) (c:int) (ts:terms)
     | [] -> ()
     | (k', _) :: r -> assoc_replace k' k c r; assoc_replace k k c r; unique_replace k c r
 
-#push-options "--split_queries always"
+#push-options "--z3rlimit 100"
 let add_term_ok (en:env) (ts:terms) (t:expr & int)
   : Lemma (requires unique ts)
           (ensures (match add_term ts t with

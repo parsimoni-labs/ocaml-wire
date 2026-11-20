@@ -5,7 +5,6 @@ module Plan.Bytes
    holds it is the field read on its own, the premise
    Plan.Proof.scanner_correct takes of the reader when [words] is on. *)
 
-open FStar.Mul
 open Plan.Expr
 open Plan.Scan
 open Plan.Proof
@@ -38,4 +37,4 @@ let consistent_at (b:mem) (a k:int) (m:nat{1 <= m /\ m <= 7})
 let be_consistent (b:mem) : Lemma (consistent (reader_of b)) =
   introduce forall (a k:int) (m:nat{1 <= m /\ m <= 7}).
     (a <= k /\ k + m <= a + 8) ==> word_field (reader_of b a 8) (k - a) m == reader_of b k m
-  with introduce _ ==> _ with _. consistent_at b a k m
+  with introduce _ ==> _ with consistent_at b a k m

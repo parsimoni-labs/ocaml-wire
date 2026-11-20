@@ -3,7 +3,6 @@ module Defect.RepeatBudget.Fixed
 (* 787089f1 after the fix: the repeat's populate runs its reader, whose
    budget check is [budget mod k = 0]. *)
 
-open FStar.Mul
 
 let rec consumes (budget:nat) (k:pos) : Tot bool (decreases budget) =
   if budget = 0 then true else if budget < k then false else consumes (budget - k) k

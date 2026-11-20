@@ -5,7 +5,6 @@ module Defect.RepeatBudget.Buggy
    was [no_populate], so a byte budget that does not split into whole
    elements was accepted where decode and EverParse reject it. *)
 
-open FStar.Mul
 
 (* Decode and EverParse: elements of [k] bytes consume the budget exactly. *)
 let rec consumes (budget:nat) (k:pos) : Tot bool (decreases budget) =

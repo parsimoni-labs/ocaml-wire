@@ -184,27 +184,16 @@ module Z = struct
 end
 
 type int = Z.t
-type nat = int
-type pos = int
-type nonrec bool = bool
-type nonrec 'a list = 'a list
 
 let of_int = Z.of_int
 let int_zero = Z.zero
 let int_one = Z.one
-let parse_int = Z.of_string
 let to_string = Z.to_string
-let op_Negation x = not x
-let ( + ) = Z.add
-let ( - ) = Z.sub
-let ( * ) = Z.mul
-let ( / ) = Z.ediv
-let ( <= ) = Z.leq
-let ( >= ) = Z.geq
-let ( < ) = Z.lt
-let ( > ) = Z.gt
-let ( mod ) = Z.erem
-let ( ~- ) = Z.neg
-let pow2 x = Z.shift_left Z.one (Z.to_int x)
-let uu___is_Cons = function [] -> false | _ :: _ -> true
-let uu___is_Nil = function [] -> true | _ :: _ -> false
+let op_Plus = Z.add
+let op_Minus = Z.sub
+let op_Star = Z.mul
+let op_Tilde_Minus = Z.neg
+let op_Less_Equals = Z.leq
+let op_Greater_Equals = Z.geq
+let op_Less = Z.lt
+let op_Greater = Z.gt

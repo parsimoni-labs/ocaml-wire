@@ -7,7 +7,6 @@ module Defect.ConstraintWrap.Buggy
    for [A = 6] the sum wraps to [min_int], the generated validate accepts and
    the codec rejects. *)
 
-open FStar.Mul
 open Plan.Expr
 
 let wrap (x:int) : int = ((x + pow2 62) % pow2 63) - pow2 62

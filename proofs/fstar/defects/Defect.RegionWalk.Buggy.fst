@@ -6,7 +6,6 @@ module Defect.RegionWalk.Buggy
    it read bytes past the region's end, which the parse was never handed.
    Nothing was accepted on them, but the size reported came from them. *)
 
-open FStar.Mul
 open Plan.Expr
 
 (* A region of [n] bytes at [start] in a buffer of [buflen] bytes. *)

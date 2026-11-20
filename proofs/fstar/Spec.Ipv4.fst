@@ -11,7 +11,6 @@ module Spec.Ipv4
      UINT8 vihl { 0x45 <= vihl && vihl <= 0x4f }; UINT8 tos;
      UINT16BE total_length { total_length >= (vihl - 0x40) * 4 } *)
 
-open FStar.Mul
 open LowParse.Spec.Combinators
 open LowParse.Spec.Int
 open Plan.Expr

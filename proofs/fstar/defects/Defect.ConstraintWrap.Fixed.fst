@@ -4,7 +4,6 @@ module Defect.ConstraintWrap.Fixed
    which raises [Overflow] where the sum leaves the native int, and the
    overflow rejects the record. *)
 
-open FStar.Mul
 open Plan.Expr
 
 let near_max : int = max_int - 5

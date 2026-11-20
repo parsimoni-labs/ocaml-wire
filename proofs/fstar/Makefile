@@ -7,19 +7,30 @@
 
 EVERPARSE ?= $(HOME)/.local/everparse
 FSTAR ?= $(EVERPARSE)/bin/fstar.exe
-Z3 ?= $(EVERPARSE)/lib/fstar/z3-4.13.3/bin/z3
-CACHE ?= $(or $(TMPDIR),/tmp)/wire-fstar-cache
 
-LOWPARSE ?= $(EVERPARSE)/src/lowparse
+# EverParse from v2026.10.27 (F* 2026.10.25~dev): the Z3 its F* ships
+# with, and LowParse.
+Z3DIR := $(lastword $(wildcard $(EVERPARSE)/lib/fstar/z3-*))
+Z3VERSION ?= $(patsubst z3-%,%,$(notdir $(Z3DIR)))
+Z3 ?= $(Z3DIR)/bin/z3
+LOWPARSE ?= $(EVERPARSE)/lib/everparse/lowparse
 
-FLAGS = --z3version 4.13.3 --smt $(Z3) --already_cached 'Prims FStar LowParse' \
+# Checked files are F*'s own: one cache per F*.
+FSTAR_VERSION := $(shell $(FSTAR) --version 2>/dev/null | sed -n 's/^F\* //p')
+CACHE ?= $(or $(TMPDIR),/tmp)/wire-fstar-cache/$(FSTAR_VERSION)
+
+FLAGS = --z3version $(Z3VERSION) --smt $(Z3) --already_cached 'Prims FStar LowParse' \
   --include $(LOWPARSE)
-FSTAR_FLAGS = $(FLAGS) --cache_checked_modules --cache_dir $(CACHE) --include .
+# F* takes a module's name from its file's path, so each runs from the
+# directory that holds it.
+CACHED = --cache_checked_modules --cache_dir $(CACHE)
+FSTAR_FLAGS = $(FLAGS) $(CACHED) --include .
 
 MODEL = Plan.Expr.fst Plan.Sum.fst Plan.Scan.fst Plan.Proof.fst
 MODULES = $(MODEL) Plan.Word.fst Plan.Bytes.fst Plan.Frames.fst Spec.Ipv4.fst Plan.Decide.fst
 
-# defects/Defect.<name>.Buggy.fst fails, defects/Defect.<name>.Fixed.fst
+# defects/Defect.<name>.Buggy.fst fails on one line (F* may report a
+# conjunction there as several errors), defects/Defect.<name>.Fixed.fst
 # verifies.
 DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
 
@@ -45,11 +56,12 @@ defects: $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 
 $(DEFECTS:%=defect-%): defect-%:
 	@mkdir -p $(CACHE)
-	@out=$$($(FSTAR) $(FSTAR_FLAGS) defects/Defect.$*.Fixed.fst 2>&1) || \
+	@out=$$(cd defects && $(FSTAR) $(FLAGS) $(CACHED) --include .. Defect.$*.Fixed.fst 2>&1) || \
 	  { echo "$$out"; echo "FAIL $*: the fixed replay does not verify"; exit 1; }
-	@out=$$($(FSTAR) $(FSTAR_FLAGS) defects/Defect.$*.Buggy.fst 2>&1); \
+	@out=$$(cd defects && $(FSTAR) $(FLAGS) $(CACHED) --include .. Defect.$*.Buggy.fst 2>&1); \
 	  if [ $$? -eq 0 ]; then echo "FAIL $*: the buggy replay verifies"; exit 1; fi; \
-	  echo "$$out" | grep -q '^1 error was reported' || \
+	  n=$$(echo "$$out" | sed -n 's/^\* Error [0-9]* at \([^(]*([0-9]*\),.*/\1/p' | sort -u | wc -l); \
+	  [ $$n -eq 1 ] || \
 	    { echo "$$out"; echo "FAIL $*: not the one expected error"; exit 1; }; \
 	  echo "caught $*: $$(echo "$$out" | grep -m1 -A1 '^\* Error' | tr -s ' \n' ' ')"
 
@@ -86,7 +98,7 @@ plans:
 	    { echo "FAIL: a word held across windows"; exit 1; }; \
 	  grep -q ' 0 not well formed' $(CACHE)/plans/decisions.txt || \
 	    { echo "FAIL: a plan is not what Plan.Proof assumes"; exit 1; }
-	$(FSTAR) $(FSTAR_FLAGS) $(CACHE)/plans/Plans.fst
+	cd $(CACHE)/plans && $(FSTAR) $(FLAGS) $(CACHED) --include $(CURDIR) Plans.fst
 	@$(PLANS) Control control > /dev/null 2> $(CACHE)/plans/control.txt; \
 	  if grep -q ' 0 plans with one the model does not justify' $(CACHE)/plans/control.txt; then \
 	    echo "FAIL: the control's fabricated decisions are justified"; exit 1; \
@@ -94,19 +106,20 @@ plans:
 
 # The model as F* extracts it, which plans/plans.exe runs: extract writes it
 # again, check-extract fails when the checked-in copy differs.
-EXTRACTED = Plan.Expr Plan.Sum Plan.Scan Plan.Decide
+# What plans.exe runs: Plan.Decide, Plan.Scan.wf and what they reach, one
+# OCaml file per module.
+EXTRACT = --codegen OCaml --custard_entry_module Plan.Decide --custard_entry Plan.Scan.wf \
+  --custard_split
 
 extract:
 	@mkdir -p $(CACHE)/extract
-	$(FSTAR) $(FSTAR_FLAGS) --codegen OCaml --extract '$(EXTRACTED)' \
-	  --odir $(CACHE)/extract Plan.Decide.fst
-	cp $(CACHE)/extract/Plan_*.ml plans/extracted/
+	$(FSTAR) $(FSTAR_FLAGS) $(EXTRACT) --odir $(CACHE)/extract Plan.Decide.fst
+	cp $(CACHE)/extract/*.ml plans/extracted/
 
 check-extract:
 	@mkdir -p $(CACHE)/extract
-	@$(FSTAR) $(FSTAR_FLAGS) --codegen OCaml --extract '$(EXTRACTED)' \
-	  --odir $(CACHE)/extract Plan.Decide.fst > /dev/null
-	@for f in $(CACHE)/extract/Plan_*.ml; do \
+	@$(FSTAR) $(FSTAR_FLAGS) $(EXTRACT) --odir $(CACHE)/extract Plan.Decide.fst > /dev/null
+	@for f in $(CACHE)/extract/*.ml; do \
 	  diff -q $$f plans/extracted/$$(basename $$f) || exit 1; done
 	@echo "plans/extracted matches the model"
 

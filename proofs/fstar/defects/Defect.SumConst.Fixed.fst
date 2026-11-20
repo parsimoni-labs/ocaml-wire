@@ -10,7 +10,6 @@ module Defect.SumConst.Fixed
      | s -> Some s
      | exception Wire.Parse_error _ -> None *)
 
-open FStar.Mul
 open FStar.List.Tot
 open Plan.Expr
 open Plan.Sum

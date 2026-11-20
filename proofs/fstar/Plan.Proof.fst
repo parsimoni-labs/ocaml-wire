@@ -3,7 +3,6 @@ module Plan.Proof
 (* The code the emitter writes runs as the codec does, with or without the O1
    rewrites, and never reads outside its window nor wraps an operation. *)
 
-open FStar.Mul
 open FStar.List.Tot
 open Plan.Expr
 open Plan.Sum
@@ -541,7 +540,7 @@ let pos_bound (len:nat) (lim:var) (w:st) (en:env) (pending:bool)
   : Lemma (requires inv len lim w en pending) (ensures 0 <= w.p.at /\ (not pending ==> w.p.at <= len))
   = match w.p.pv with Some v -> assert (0 <= en v) | None -> ()
 
-#push-options "--z3rlimit 200 --fuel 2 --ifuel 2 --split_queries always"
+#push-options "--z3rlimit 200 --fuel 2 --ifuel 2"
 let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l:list node)
   : Lemma (requires 0 <= x.len /\ inv x.len x.lim w en pending /\ frames_ok w.sc en x.wb x.len x.frames /\
                     held_ok o rd x w /\ wf w.sc l /\ (pending ==> checks_next l))

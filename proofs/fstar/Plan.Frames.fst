@@ -10,7 +10,6 @@ module Plan.Frames
    Each frame is checked as a window of [stride] bytes at its base, so
    Plan.Proof applies to it with [len = stride]. *)
 
-open FStar.Mul
 open Plan.Expr
 
 let guard (buflen off len stride:int) : bool =

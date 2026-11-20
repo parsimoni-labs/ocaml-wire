@@ -6,7 +6,6 @@ module Plan.Scan
    parameterised by the O1 rewrites: [cancel] (Emitter.cancelled) and [drop]
    (Emitter.span ~implied with Emitter.checks_next). *)
 
-open FStar.Mul
 open FStar.List.Tot
 open Plan.Expr
 open Plan.Sum

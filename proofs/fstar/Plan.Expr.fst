@@ -4,7 +4,6 @@ module Plan.Expr
    interval analysis the planner decides plain arithmetic with
    (Planner.range, Planner.corners). *)
 
-open FStar.Mul
 
 (* OCaml's native int on a 64-bit host. *)
 let max_int : int = pow2 62 - 1
