@@ -94,6 +94,9 @@ type mode = {
       (* The walk raises the codec's errors, and its arithmetic the codec's
          overflow. *)
   raw32 : bool; (* A 32-bit field is bound as its [int32] too. *)
+  ranged : bool;
+      (* Whether two bitfields of a word may be tested as one range of the
+         word. Only a walk that names no failed field may. *)
   live : Sset.t; (* The variables the walk binds. *)
   exported : Sset.t; (* The outputs the walk hands out. *)
   slots : Sset.t; (* Those of them that are slots. *)
@@ -983,8 +986,15 @@ let load_words w ~o ~k ~size live =
   in
   (List.fold_left bind_bitword w bitwords, words, bitwords)
 
+(* The checks of the field [f], and what they establish after them. *)
+let checks w f =
+  let w =
+    List.fold_left (fun w c -> check w (Check (f, c)) c.cond) w f.checks
+  in
+  refine w (List.map (fun c -> c.cond) f.checks)
+
 (* A field of a prefix at [o + k]: bound when live, then checked. *)
-let field w ~o ~k ~size ~words ~bitwords f =
+let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
   let m = w.m in
   let is_live = Sset.mem f.id m.live in
   let shifted = { f with offset = k + f.offset } in
@@ -1039,10 +1049,7 @@ let field w ~o ~k ~size ~words ~bitwords f =
         { (bind_num w raw) with raws = (f.id, (raw, width)) :: w.raws }
     | _ -> bind_field w (value m ~size:(k + size) ~o ~words ~k:0 shifted)
   in
-  let w =
-    List.fold_left (fun w c -> check w (Check (f, c)) c.cond) w f.checks
-  in
-  let w = refine w (List.map (fun c -> c.cond) f.checks) in
+  let w = if checked then checks w f else w in
   match f.store with
   | Bits { base; shift; width }
     when is_live && 8 * Bitfield.byte_size base < Sys.int_size ->
@@ -1059,6 +1066,14 @@ let field_label w f =
   let own = if f.name = "" then f.label else label f.name in
   if w.section = "" then own else w.section ^ "_" ^ own
 
+(* [Planner.word_range f g] over the variable that holds the shared word,
+   when the walk is [ranged]. *)
+let word_range w bitwords f g =
+  if not w.m.ranged then None
+  else
+    Option.bind (Planner.word_range f g) (fun (at, lo, hi) ->
+        Option.map (fun word -> (word, lo, hi)) (List.assoc_opt at bitwords))
+
 (* A prefix, then [k] with the state and position after it. The fields after
    one that would make the function too deep or too long go in a function of
    their own. *)
@@ -1067,6 +1082,7 @@ let prefix w fields size p ~need k =
   let w, o, at = address w p in
   let live = List.filter (fun f -> Sset.mem f.id w.m.live) fields in
   let w, words, bitwords = load_words w ~o ~k:at ~size live in
+  let field ?checked w f = field ?checked w ~o ~k:at ~size ~words ~bitwords f in
   let rec go w = function
     | [] ->
         k
@@ -1077,10 +1093,26 @@ let prefix w fields size p ~need k =
           }
           { p with at = extent p.at size }
     | f :: rest as fields ->
-        let next w = go (field w ~o ~k:at ~size ~words ~bitwords f) rest in
+        let range =
+          match rest with g :: _ -> word_range w bitwords f g | [] -> None
+        in
         if over w (List.length f.checks) then
           cut w ~label:(field_label w f) (fun w -> go w fields)
-        else next w
+        else
+          begin match (range, rest) with
+          | Some (word, lo, hi), g :: rest ->
+              let w = field ~checked:false (field ~checked:false w f) g in
+              let num = w.m.num in
+              pf w "if %s || %s then %s else@\n"
+                (relation num "<" word (lit num lo))
+                (relation num ">" word (lit num hi))
+                (w.m.fail Bounds);
+              let conditions =
+                List.map (fun c -> c.cond) (f.checks @ g.checks)
+              in
+              go (refine { w with depth = w.depth + 1 } conditions) rest
+          | _ -> go (field w f) rest
+          end
   in
   go w fields
 

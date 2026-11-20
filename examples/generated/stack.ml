@@ -252,13 +252,11 @@ let[@inline always] fold_ipv4 ~buf ~base ~stop ~invalid ~valid ~f3_ether_type =
     let bw3 = Int64.to_int (Int64.shift_right_logical w14 48) land 0xff in
     let bw4 = Int64.to_int (Int64.shift_right_logical w14 0) land 0xffff in
     let f5_ipv4_version = bw2 lsr 4 in
-    if not ((f5_ipv4_version : int) = 4) then invalid ()
+    let f6_ipv4_ihl = bw2 land 0xf in
+    if (bw2 : int) < 69 || (bw2 : int) > 79 then invalid ()
     else
-      let f6_ipv4_ihl = bw2 land 0xf in
-      if not ((f6_ipv4_ihl : int) >= 5) then invalid ()
-      else
-        fold_ipv4_dscp ~buf ~base ~stop ~invalid ~valid ~f3_ether_type ~w14 ~w22
-          ~w26 ~bw3 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl
+      fold_ipv4_dscp ~buf ~base ~stop ~invalid ~valid ~f3_ether_type ~w14 ~w22
+        ~w26 ~bw3 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl
 
 let[@inline always] fold_record ~buf ~base ~stop ~invalid ~valid =
   if (stop : int) < 14 then invalid ()
@@ -531,13 +529,11 @@ let[@inline always] frames_ipv4 ~buf ~base ~stop ~current ~invalid ~valid
   let bw3 = Int64.to_int (Int64.shift_right_logical w14 48) land 0xff in
   let bw4 = Int64.to_int (Int64.shift_right_logical w14 0) land 0xffff in
   let f5_ipv4_version = bw2 lsr 4 in
-  if not ((f5_ipv4_version : int) = 4) then invalid current
+  let f6_ipv4_ihl = bw2 land 0xf in
+  if (bw2 : int) < 69 || (bw2 : int) > 79 then invalid current
   else
-    let f6_ipv4_ihl = bw2 land 0xf in
-    if not ((f6_ipv4_ihl : int) >= 5) then invalid current
-    else
-      frames_ipv4_dscp ~buf ~base ~stop ~current ~invalid ~valid ~f3_ether_type
-        ~w14 ~w22 ~w26 ~bw3 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl
+    frames_ipv4_dscp ~buf ~base ~stop ~current ~invalid ~valid ~f3_ether_type
+      ~w14 ~w22 ~w26 ~bw3 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl
 
 let[@inline always] frames_record ~buf ~base ~stop ~current ~invalid ~valid =
   let f3_ether_type = Wire_runtime.Unchecked.u16be buf (base + 12) in

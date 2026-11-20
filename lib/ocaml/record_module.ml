@@ -28,6 +28,7 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     ox;
     cold = false;
     raw32;
+    ranged = false;
     live;
     exported = Sset.empty;
     slots = Sset.empty;
@@ -42,6 +43,7 @@ let cold ~src ~live =
     ox = false;
     cold = true;
     raw32 = false;
+    ranged = false;
     live;
     exported = Sset.empty;
     slots = Sset.empty;

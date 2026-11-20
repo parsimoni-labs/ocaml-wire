@@ -221,6 +221,17 @@ val nonnegative_in : (int * int) Smap.t -> facts -> int T.expr -> bool
 (** [nonnegative_in ranges facts e] is [true] when [e] is known not to be
     negative. *)
 
+(** {1 Bitfields tested together} *)
+
+val word_range :
+  field ->
+  field ->
+  ((int * Wire.Private.Types.bitfield_base) * int * int) option
+(** [word_range f g] is [Some (word, lo, hi)] when [f] is the top bits of the
+    word at [word] (its offset and base), [g] the bits right below, and their
+    only checks are [f = c] and [g >= d]. Both checks hold exactly when the word
+    lies in [lo, hi], so one range test replaces two field tests. *)
+
 (** {1 Sums} *)
 
 type sum

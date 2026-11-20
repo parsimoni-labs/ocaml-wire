@@ -134,7 +134,10 @@ The invariants above hold for it as follows.
   checks it.
 - **Selecting outputs keeps every check.** A field is read when an output
   needs it or a check, a size or a condition reads it; every check runs
-  either way.
+  either way. A scanner names no failed field, so it merges an equality on
+  the top bits of a word and a lower bound on the bits right below into one
+  range test of the word: the IPv4 version and header length are one byte in
+  `[0x45, 0x4f]`.
 
 `Wire_rust.scanner` writes the same plan out as Rust, from `Wire_ocaml.Plan`,
 which hands it the same decisions. A window is a slice of exactly its bytes:

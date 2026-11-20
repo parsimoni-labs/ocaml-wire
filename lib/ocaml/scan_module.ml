@@ -55,6 +55,7 @@ let scan_mode (plan : plan) ~num selected =
     ox = false;
     cold = false;
     raw32 = false;
+    ranged = true;
     live = live plan ~outputs:(ids selected);
     exported = Sset.of_list (ids selected);
     slots = Sset.of_list (ids (slots plan selected));

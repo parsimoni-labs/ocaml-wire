@@ -59,6 +59,7 @@ type mode = {
   ox : bool;
   cold : bool;
   raw32 : bool;
+  ranged : bool;
   live : Sset.t;
   exported : Sset.t;
   slots : Sset.t;
@@ -67,8 +68,10 @@ type mode = {
 }
 (** What a walk writes: how it holds integers, the buffer it reads, whether the
     target is OxCaml, whether it is the cold walk that raises the codec's
-    errors, the variables it binds, the outputs it hands out, those of them that
-    are slots, and what it writes on a failure. *)
+    errors, whether it may test two bitfields of a word as one range of the word
+    (a scan, which names no failed field), the variables it binds, the outputs
+    it hands out, those of them that are slots, and what it writes on a failure.
+*)
 
 type pos = { var : string option; at : int }
 (** A position in the record: a variable when the data decides it, plus a
@@ -207,6 +210,7 @@ val bound : w -> pos -> int -> w
     [p]. *)
 
 val field :
+  ?checked:bool ->
   w ->
   o:string ->
   k:int ->
@@ -215,8 +219,9 @@ val field :
   bitwords:((int * T.bitfield_base) * string) list ->
   field ->
   w
-(** [field w ~o ~k ~size ~words ~bitwords f] writes a field of a prefix at [k]
-    from [o]: bound when live, then checked. *)
+(** [field ?checked w ~o ~k ~size ~words ~bitwords f] writes a field of a prefix
+    at [k] from [o]: bound when live, then checked. [checked] defaults to
+    [true]; with [false] the caller writes the checks. *)
 
 type tree = { tid : int; node : tnode }
 (** The dispatch over a run of optional fields whose conditions exclude each

@@ -723,6 +723,33 @@ let nonnegative_in ranges facts (e : int T.expr) =
       || known (T.Lt (b, a))
   | _ -> false
 
+(* {2 Bitfields tested together} *)
+
+(* The word [f] and [g] share, when [f] is its top bits and [g] the bits
+   right below, with the shift of each from the low bit and its width. *)
+let stacked f g =
+  match (f.store, g.store) with
+  | ( Bits { base; shift; width },
+      Bits { base = base'; shift = shift'; width = width' } )
+    when base = base' && f.offset = g.offset && shift' + width' = shift ->
+      let bits = 8 * Bitfield.byte_size base in
+      if shift + width = bits && bits < Sys.int_size - 1 then
+        Some ((f.offset, base), shift, width, shift', width')
+      else None
+  | _ -> None
+
+let word_range f g =
+  match (stacked f g, f.checks, g.checks) with
+  | ( Some (at, shift, width, shift', width'),
+      [ { cond = T.Eq (T.Ref (T.I, x), T.Int c); _ } ],
+      [ { cond = T.Ge (T.Ref (T.I, y), T.Int d); _ } ] )
+    when x = f.id && y = g.id && 0 <= c
+         && c < 1 lsl width
+         && 0 <= d
+         && d < 1 lsl width' ->
+      Some (at, (c lsl shift) lor (d lsl shift'), ((c + 1) lsl shift) - 1)
+  | _ -> None
+
 (* {2 Sums}
 
    An integer expression in linear form: a constant plus terms, each a
