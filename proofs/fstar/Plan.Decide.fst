@@ -47,11 +47,17 @@ let decide (s:expr) (k:kind) (fr:list around) (p:pos) : decision =
    deep, whether its position is a constant of the window, that position's
    constant part, and the bytes [wlo] to [whi] from its address the words
    must lie in. *)
-type wdecision = { wdepth : nat; wconst : bool; wat : int; wlo : int; whi : int }
+type wdecision = { wdepth : nat; wconst : bool; wat : int; wlo : int; whi : int;
+                   wneed : int; wtested : bool }
+
+(* A dispatch: where it is, and the size of the span every case starts with
+   when its bound is checked once before it. *)
+type gdecision = { gdepth : nat; gat : option nat; ghoisted : option expr }
 
 type event =
   | ESpan of decision
   | EWords of wdecision
+  | EGate of gdecision
 
 (* The walk takes fuel rather than a measure, so evaluating it calls no
    lemma about the sizes of the lists it builds. *)
@@ -67,7 +73,8 @@ let rec walk (fuel:nat) (w:st) (lim:var) (fr:list around) (l:list node)
     let w' = bind_fields w fs in
     let constant = None? w.p.pv in
     EWords ({ wdepth = length fr; wconst = constant; wat = w.p.at;
-              wlo = (if constant then 0 else w.p.at); whi = extent w.p.at (if k < 0 then 0 else k) }) ::
+              wlo = (if constant then 0 else w.p.at); whi = extent w.p.at (if k < 0 then 0 else k);
+              wneed = need; wtested = w.known < need }) ::
     walk fuel ({ w' with known = k - size; p = { w.p with at = w.p.at + size } }) lim fr r
   | Span n e s :: r ->
     let (d, implied, ends) = span_decision w lim s r true in
@@ -82,11 +89,12 @@ let rec walk (fuel:nat) (w:st) (lim:var) (fr:list around) (l:list node)
               ([ ESpan (decide s k fr w.p) ], { w with bounded = (s, w.p) :: w.bounded }))
       | None -> ([], w) in
     let (ds, w1) = hoist in
+    let gate = EGate ({ gdepth = length fr; gat = at_const w.p; ghoisted = hoisted cs d }) in
     let rest : list event =
       match d with
       | Some b -> walk fuel w1 lim fr (b @ (Join :: r))
       | None -> walk fuel w1 lim fr (Join :: r) in
-    ds @ walk_cases fuel w1 lim fr cs r @ rest
+    ds @ gate :: walk_cases fuel w1 lim fr cs r @ rest
   | Join :: r -> walk fuel w lim fr r
   | Region n e s am b :: r ->
     let (d, _, ends) = span_decision w lim s [] false in
@@ -130,6 +138,12 @@ let rec words_of (es:list event) : list wdecision =
   | [] -> []
   | EWords d :: r -> d :: words_of r
   | _ :: r -> words_of r
+
+let rec gates_of (es:list event) : list gdecision =
+  match es with
+  | [] -> []
+  | EGate d :: r -> d :: gates_of r
+  | _ :: r -> gates_of r
 
 let decisions (lim:var) (l:list node) : list decision = spans_of (events lim 0 l)
 
@@ -183,3 +197,55 @@ let rec words_unjustified (ms:list wdecision) (es:list wrecord) : list wrecord =
   match es with
   | [] -> []
   | e :: r -> if words_justified ms e then words_unjustified ms r else e :: words_unjustified ms r
+
+(* {1 The bytes a run of fields needs, dispatches and the frame loop} *)
+
+(* An emitter's check of the bytes a run of fields at [eat] needs: [ebytes]
+   bytes, [etested] when it writes a test of the window's length. *)
+type precord = { pdepth : nat; pconst : bool; pat : int; pbytes : int; ptested : bool }
+
+(* [m] justifies [e]: the same prefix needing the same bytes, the length
+   left untested only where the model leaves it untested. *)
+(* A size or a position as the emitter adds it with Planner.extent, which
+   stops past any buffer; the model's walk adds plainly, and its checks go
+   through [extent] alike. *)
+let saturate (n:int) : int = if n > max_string_length then max_string_length + 1 else n
+
+let prefix_justified (ms:list wdecision) (e:precord) : bool =
+  existsb (fun (m:wdecision) ->
+    m.wdepth = e.pdepth && saturate m.wneed = e.pbytes &&
+    ((m.wconst = e.pconst && saturate m.wat = e.pat && (e.ptested || not m.wtested)) ||
+     (* After a join the emitter's position is a variable where the model,
+        which copies the code after a dispatch into each case, keeps the
+        case's: a tested run of the bytes the model's needs is justified. *)
+     (not e.pconst && e.ptested))) ms
+
+let rec prefixes_unjustified (ms:list wdecision) (es:list precord) : list precord =
+  match es with
+  | [] -> []
+  | e :: r -> if prefix_justified ms e then prefixes_unjustified ms r else e :: prefixes_unjustified ms r
+
+(* A dispatch the emitter hoists a bound before is justified by the model's
+   dispatch at the same place hoisting the same size; one that hoists none
+   needs no justification. *)
+let gate_justified (ms:list gdecision) (e:gdecision) : bool =
+  None? e.ghoisted ||
+  existsb (fun (m:gdecision) ->
+    m.gdepth = e.gdepth && m.gat = e.gat && m.ghoisted = e.ghoisted) ms
+
+let rec gates_unjustified (ms:list gdecision) (es:list gdecision) : list gdecision =
+  match es with
+  | [] -> []
+  | e :: r -> if gate_justified ms e then gates_unjustified ms r else e :: gates_unjustified ms r
+
+(* Scan_module.fixed_need: the bytes of the leading runs of fields and of
+   the first optional field's, which a frame loop knows a frame holds once
+   its stride is at least that. The tests between them, a field's checks,
+   read no byte. *)
+let rec fixed_need (l:list node) : nat =
+  match l with
+  | Prefix _ size :: r -> extent size (fixed_need r)
+  | Test _ :: r -> fixed_need r
+  | Gate _ ((_, b) :: _) _ :: _ -> fixed_need b
+  | Gate _ [] (Some b) :: _ -> fixed_need b
+  | _ -> 0

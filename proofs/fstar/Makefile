@@ -92,7 +92,7 @@ plans:
 	dune build --root $(ROOT) ./proofs/fstar/plans/plans.exe
 	@$(PLANS) Plans > $(CACHE)/plans/Plans.fst 2> $(CACHE)/plans/decisions.txt; \
 	  cat $(CACHE)/plans/decisions.txt; \
-	  [ $$(grep -c ' 0 plans with one the model does not justify' $(CACHE)/plans/decisions.txt) -eq 2 ] || \
+	  [ $$(grep -c ' 0 plans with one the model does not justify' $(CACHE)/plans/decisions.txt) -eq 3 ] || \
 	    { echo "FAIL: an emitter decision the model does not justify"; exit 1; }; \
 	  grep -q ' 0 held across windows' $(CACHE)/plans/decisions.txt || \
 	    { echo "FAIL: a word held across windows"; exit 1; }; \
@@ -102,7 +102,7 @@ plans:
 	@$(PLANS) Control control > /dev/null 2> $(CACHE)/plans/control.txt; \
 	  if grep -q ' 0 plans with one the model does not justify' $(CACHE)/plans/control.txt; then \
 	    echo "FAIL: the control's fabricated decisions are justified"; exit 1; \
-	  else echo "control refused: $$(tail -2 $(CACHE)/plans/control.txt | tr '\n' ' ')"; fi
+	  else echo "control refused: $$(grep -E '^(decisions|checks|words):' $(CACHE)/plans/control.txt | tr '\n' ' ')"; fi
 
 # The model as F* extracts it, which plans/plans.exe runs: extract writes it
 # again, check-extract fails when the checked-in copy differs.
@@ -111,13 +111,16 @@ plans:
 EXTRACT = --codegen OCaml --custard_entry_module Plan.Decide --custard_entry Plan.Scan.wf \
   --custard_split
 
+# Custard extracts from checked files only.
 extract:
 	@mkdir -p $(CACHE)/extract
+	$(FSTAR) $(FSTAR_FLAGS) Plan.Decide.fst
 	$(FSTAR) $(FSTAR_FLAGS) $(EXTRACT) --odir $(CACHE)/extract Plan.Decide.fst
 	cp $(CACHE)/extract/*.ml plans/extracted/
 
 check-extract:
 	@mkdir -p $(CACHE)/extract
+	@$(FSTAR) $(FSTAR_FLAGS) Plan.Decide.fst > /dev/null
 	@$(FSTAR) $(FSTAR_FLAGS) $(EXTRACT) --odir $(CACHE)/extract Plan.Decide.fst > /dev/null
 	@for f in $(CACHE)/extract/*.ml; do \
 	  diff -q $$f plans/extracted/$$(basename $$f) || exit 1; done

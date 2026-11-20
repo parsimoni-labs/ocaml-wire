@@ -51,11 +51,20 @@ type wdecision = {
   wat : Prims.int;
   wlo : Prims.int;
   whi : Prims.int;
+  wneed : Prims.int;
+  wtested : bool;
+}
+
+type gdecision = {
+  gdepth : Prims.int;
+  gat : (Prims.int) option;
+  ghoisted : (Plan_Expr.expr) option;
 }
 
 type event =
   | ESpan of decision
   | EWords of wdecision
+  | EGate of gdecision
 
 
 let rec walk_cases (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) list) (cs : ((Prims.int * (Plan_Scan.node) list)) list) (r : (Plan_Scan.node) list) : (event) list =
@@ -79,7 +88,9 @@ and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) 
         wconst = constant;
         wat = ((w).Plan_Scan.p).Plan_Scan.at;
         wlo = (if constant then Prims.int_zero else ((w).Plan_Scan.p).Plan_Scan.at);
-        whi = (Plan_Expr.extent ((w).Plan_Scan.p).Plan_Scan.at (if (Prims.op_Less k Prims.int_zero) then Prims.int_zero else k)) })) :: (walk fuel1 { Plan_Scan.sc = (w').Plan_Scan.sc;
+        whi = (Plan_Expr.extent ((w).Plan_Scan.p).Plan_Scan.at (if (Prims.op_Less k Prims.int_zero) then Prims.int_zero else k));
+        wneed = need;
+        wtested = (Prims.op_Less (w).Plan_Scan.known need) })) :: (walk fuel1 { Plan_Scan.sc = (w').Plan_Scan.sc;
         rg = (w').Plan_Scan.rg;
         facts = (w').Plan_Scan.facts;
         sums = (w').Plan_Scan.sums;
@@ -109,11 +120,14 @@ and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) 
           | None -> ([], w)
         ) in
       (match hoist with
-        | (ds, w1) -> (let rest = (match d with
+        | (ds, w1) -> (let gate = (EGate ({ gdepth = (FStar_List_Tot_Base.length fr);
+              gat = (at_const (w).Plan_Scan.p);
+              ghoisted = (Plan_Scan.hoisted cs d) })) in
+          let rest = (match d with
               | (Some (b)) -> (walk fuel1 w1 lim fr (FStar_List_Tot_Base.op_At b (Plan_Scan.Join :: r)))
               | None -> (walk fuel1 w1 lim fr (Plan_Scan.Join :: r))
             ) in
-          (FStar_List_Tot_Base.op_At ds (FStar_List_Tot_Base.op_At (walk_cases fuel1 w1 lim fr cs r) rest)))
+          (FStar_List_Tot_Base.op_At ds (FStar_List_Tot_Base.op_At (gate :: (walk_cases fuel1 w1 lim fr cs r)) rest)))
       ))
     | (Plan_Scan.Join :: r) -> (walk fuel1 w lim fr r)
     | ((Plan_Scan.Region (n, e, s, am, b)) :: r) -> (let tmp = (span_decision w lim s [] false) in
@@ -169,6 +183,13 @@ let rec words_of (es : (event) list) : (wdecision) list =
     | (tmp :: r) -> (words_of r)
   )
 
+let rec gates_of (es : (event) list) : (gdecision) list =
+  (match es with
+    | [] -> []
+    | ((EGate (d)) :: r) -> (d :: (gates_of r))
+    | (tmp :: r) -> (gates_of r)
+  )
+
 let decisions (lim : Prims.int) (l : (Plan_Scan.node) list) : (decision) list =
   (spans_of (events lim Prims.int_zero l))
 
@@ -216,5 +237,46 @@ let rec words_unjustified (ms : (wdecision) list) (es : (wrecord) list) : (wreco
   (match es with
     | [] -> []
     | (e :: r) -> (if (words_justified ms e) then (words_unjustified ms r) else (e :: (words_unjustified ms r)))
+  )
+
+let saturate (n : Prims.int) : Prims.int =
+  (if (Prims.op_Greater n Plan_Expr.max_string_length) then (Prims.op_Plus Plan_Expr.max_string_length Prims.int_one) else n)
+
+type precord = {
+  pdepth : Prims.int;
+  pconst : bool;
+  pat : Prims.int;
+  pbytes : Prims.int;
+  ptested : bool;
+}
+
+let prefix_justified (ms : (wdecision) list) (e : precord) : bool =
+  (FStar_List_Tot_Base.existsb (fun m -> ((((=) (m).wdepth (e).pdepth) && ((=) (saturate (m).wneed) (e).pbytes)) && (((((=) (m).wconst (e).pconst) && ((=) (saturate (m).wat) (e).pat)) && ((e).ptested || (not (m).wtested))) || ((not (e).pconst) && (e).ptested)))) ms)
+
+let rec prefixes_unjustified (ms : (wdecision) list) (es : (precord) list) : (precord) list =
+  (match es with
+    | [] -> []
+    | (e :: r) -> (if (prefix_justified ms e) then (prefixes_unjustified ms r) else (e :: (prefixes_unjustified ms r)))
+  )
+
+let gate_justified (ms : (gdecision) list) (e : gdecision) : bool =
+  ((match (e).ghoisted with
+    | None -> true
+    | tmp -> false
+  ) || (FStar_List_Tot_Base.existsb (fun m -> ((((=) (m).gdepth (e).gdepth) && ((=) (m).gat (e).gat)) && ((=) (m).ghoisted (e).ghoisted))) ms))
+
+let rec gates_unjustified (ms : (gdecision) list) (es : (gdecision) list) : (gdecision) list =
+  (match es with
+    | [] -> []
+    | (e :: r) -> (if (gate_justified ms e) then (gates_unjustified ms r) else (e :: (gates_unjustified ms r)))
+  )
+
+let rec fixed_need (l : (Plan_Scan.node) list) : Prims.int =
+  (match l with
+    | ((Plan_Scan.Prefix (tmp, size)) :: r) -> (Plan_Expr.extent size (fixed_need r))
+    | ((Plan_Scan.Test (tmp)) :: r) -> (fixed_need r)
+    | ((Plan_Scan.Gate (tmp, ((tmp1, b) :: tmp2), tmp3)) :: tmp4) -> (fixed_need b)
+    | ((Plan_Scan.Gate (tmp, [], (Some (b)))) :: tmp1) -> (fixed_need b)
+    | tmp -> Prims.int_zero
   )
 

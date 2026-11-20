@@ -38,10 +38,24 @@ of `examples/net` and the `huge`, `deep` and `nested` schemas of
   (`Plan.Decide.words_justified`), from a window start of no known bytes or
   of the bytes the frame loop's `stride` test ensures (`fixed_need`). And a
   prefix at a constant offset reads only words the prefixes before it in
-  the same window loaded: none crosses into a region or out of it.
+  the same window, in the same walk, loaded: none crosses into a region or
+  out of it.
+- Every check of the bytes a run of fields needs (`Prefix_bound`) needs
+  what the model's guard needs at the same prefix, the sizes saturated as
+  `Planner.extent` saturates them, and leaves the window's length untested
+  only where the model does (`Plan.Decide.prefix_justified`); after a join,
+  where the emitter's position is a variable, a tested check is justified
+  by the bytes alone. Every dispatch that checks a bound once before its
+  cases (`Dispatch`) hoists the size the model's `hoisted` does at the same
+  place. Every walk
+  starts with no byte known, or with the bytes its frame loop's `stride`
+  test ensures (`Frame_loop`), which are no more than the model's
+  `fixed_need`, and walks one frame or four an iteration, the loops
+  `Plan.Frames` proves.
 
-The control claims every bound is left to the next check and moves every
-word one byte on, which the model must refuse for some plan. Run against
+The control claims every bound is left to the next check, moves every word
+one byte on and every tested run untested, which the model must refuse for
+some plan. Run against
 emitters mutated to keep `held` into a region, and to keep a word past the
 checked bytes, the check reports each.
 
@@ -160,6 +174,32 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   narrower. Of its shared words, the fields read unsigned are modelled;
   signed fields and bitfields take the unmasked word (`raw`) and mask or
   sign-extend it after, which `Plan.Word` covers only for `word_range`.
+
+## Next proof targets
+
+`Wire_ocaml.Plan.decisions` hands out decisions the model has no notion of
+yet; each is the next thing to model and check against the plans.
+
+- The tree of a dispatch (`Dispatch.choice`): that each atom is tested at
+  most once on a path, that a case runs exactly where its condition and
+  none before it holds, and that `Run None` is reachable exactly where the
+  model reads a run as running no case.
+- The join (`Joined` or `Copied`): the model copies the code after a
+  dispatch into each case; a join's state forgets the case's facts and
+  makes the position a variable, which the prefix check above only accepts
+  where it tests.
+- Cuts (`Cut`): a function cut out of a walk keeps its window and the
+  bytes known there; the model has no functions.
+- Ranges of bitfields (`Word_range`): `Plan.Word.word_range` proves the
+  test of one range equals the two checks; the bounds the plans use are
+  not checked against it.
+- How values are held (`Walk.values`): the model's integers are
+  mathematical and its ranges the 63-bit int's; `int64` and `int64_u`
+  arithmetic, and the masking of signed fields and bitfields read raw from
+  a shared word, are not modelled.
+- Short frames (`Frame_loop.short`): the frames shorter than the bytes the
+  loop knows go through `fold` or a walk of their own, which knows no byte;
+  the model checks those walks but not that the loop picks the right one.
 
 ## Past defects
 

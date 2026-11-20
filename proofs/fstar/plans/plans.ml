@@ -278,33 +278,6 @@ let pp_kind ppf = function
         (if neg then "" else ", no negative test")
         (if c then ", cancelled" else "")
 
-(* Scan_module.fixed_need: the bytes the step scanner's frame loop knows a
-   frame holds, the frames shorter than that walked apart. *)
-let extent a b =
-  let s = a + b in
-  if s < a || s > Sys.max_string_length then Sys.max_string_length + 1 else s
-
-let rec fixed_need = function
-  | P.Prefix (_, n) :: rest -> extent n (fixed_need rest)
-  | P.Gate (_, _, _, inner) :: _ -> fixed_need inner
-  | _ -> 0
-
-(* The shared words of a prefix, out of their decision. *)
-type words = {
-  window : string;
-  constant : bool;
-  at : int;
-  fields : (int * int) list;
-  held : int list;
-  loads : int list;
-}
-
-let words_of =
-  List.filter_map (function
-    | P.Shared_words { window; constant; at; fields; held; loads; _ } ->
-        Some { window; constant; at; fields; held; loads }
-    | _ -> None)
-
 let plans = ref []
 let refused = ref []
 
@@ -315,6 +288,12 @@ let not_wf = ref []
 let leaks = ref []
 let words = ref 0
 let held = ref 0
+
+(* The other decisions the model does not justify: checks of the bytes a
+   run of fields needs, dispatches, and walks or frame loops that know bytes
+   no frame loop's test ensures. *)
+let check_findings = ref []
+let checks = Array.make 5 0
 
 (* The emitter's decisions for a codec the model does not justify. *)
 let findings = ref []
@@ -338,8 +317,10 @@ let add : type a. string -> a Wire.Codec.t -> unit =
       (* What Plan.Proof assumes of a plan, as F* extracts it. *)
       let sc v = v = z 0 in
       if not (S.wf sc d && S.wf sc d') then not_wf := name :: !not_wf;
-      (* The decisions of the scanner and of its step form. *)
-      let all = P.decisions c @ P.decisions ~step:"Step" c in
+      (* The decisions of the scanner, and of its step form, each with the
+         decisions of its own walks. *)
+      let runs = [ P.decisions c; P.decisions ~step:"Step" c ] in
+      let all = List.concat runs in
       (* A window's length is the size variable of the region that opened
          it, or the record's own: so many regions deep. *)
       let rec depth window =
@@ -353,6 +334,8 @@ let add : type a. string -> a Wire.Codec.t -> unit =
         | Some outer -> 1 + depth outer
         | None -> 0
       in
+      let const (at : P.pos) = Option.is_none at.var in
+      let dat (at : P.pos) = if const at then Some (z at.at) else None in
       let spans =
         List.filter_map
           (function
@@ -362,10 +345,7 @@ let add : type a. string -> a Wire.Codec.t -> unit =
                     D.dsize = value s.size;
                     dkind = (if !fabricate then D.KNext else kind s.bound);
                     depth = z (depth s.window);
-                    dat =
-                      (match s.at.var with
-                      | None -> Some (z s.at.at)
-                      | Some _ -> None);
+                    dat = dat s.at;
                   }
             | _ -> None)
           all
@@ -373,52 +353,163 @@ let add : type a. string -> a Wire.Codec.t -> unit =
       let model = D.decisions (z 0) d @ D.decisions (z 0) d' in
       let bad = D.unjustified model spans in
       if bad <> [] then findings := (name, bad, model) :: !findings;
-      let ws = words_of all in
-      let records =
-        List.map
-          (fun (r : words) ->
-            {
-              D.edepth = z (depth r.window);
-              econst = r.constant;
-              eat = z r.at;
-              efields = List.map (fun (o, w) -> (z o, z w)) r.fields;
-              ewords =
-                List.map (fun a -> z (if !fabricate then a + 1 else a)) r.loads;
-            })
-          ws
+      (* The model walks from each start the walks take: no byte known, or
+         those a frame loop's test of the stride ensures. *)
+      let need = D.fixed_need d in
+      let knowns =
+        List.sort_uniq compare
+          (0
+          :: List.filter_map
+               (function P.Walk w -> Some w.known | _ -> None)
+               all)
       in
-      words :=
-        !words
-        + List.fold_left (fun n (r : words) -> n + List.length r.loads) 0 ws;
-      held :=
-        !held
-        + List.fold_left (fun n (r : words) -> n + List.length r.held) 0 ws;
-      let model =
+      let events =
         List.concat_map
           (fun known ->
-            D.prefixes (z 0) (z known) d @ D.prefixes (z 0) (z known) d')
-          [ 0; fixed_need (P.nodes p) ]
+            D.events (z 0) (z known) d @ D.events (z 0) (z known) d')
+          knowns
       in
+      let model = D.words_of events in
+      let records =
+        List.filter_map
+          (function
+            | P.Shared_words r ->
+                Some
+                  {
+                    D.edepth = z (depth r.window);
+                    econst = r.constant;
+                    eat = z r.at;
+                    efields = List.map (fun (o, w) -> (z o, z w)) r.fields;
+                    ewords =
+                      List.map
+                        (fun a -> z (if !fabricate then a + 1 else a))
+                        r.loads;
+                  }
+            | _ -> None)
+          all
+      in
+      List.iter
+        (function
+          | P.Shared_words r ->
+              words := !words + List.length r.loads;
+              held := !held + List.length r.held
+          | _ -> ())
+        all;
       (match D.words_unjustified model records with
       | [] -> ()
       | bad -> word_findings := (name, bad, model) :: !word_findings);
       (* A prefix at a constant offset of a window reads only the words the
-         prefixes before it in that window loaded. *)
-      let loaded = Hashtbl.create 8 in
+         prefixes before it in that window, in the same walk, loaded. *)
       List.iter
-        (fun (r : words) ->
-          if r.constant then begin
-            let seen =
-              Option.value ~default:[] (Hashtbl.find_opt loaded r.window)
-            in
-            List.iter
-              (fun a ->
-                if not (List.mem a seen) then
-                  leaks := (name, r.window, a) :: !leaks)
-              r.held;
-            Hashtbl.replace loaded r.window (seen @ r.loads)
-          end)
-        ws;
+        (fun run ->
+          let loaded = Hashtbl.create 8 in
+          List.iter
+            (function
+              | P.Walk _ -> Hashtbl.reset loaded
+              | P.Shared_words r when r.constant ->
+                  let seen =
+                    Option.value ~default:[] (Hashtbl.find_opt loaded r.window)
+                  in
+                  List.iter
+                    (fun a ->
+                      if not (List.mem a seen) then
+                        leaks := (name, r.window, a) :: !leaks)
+                    r.held;
+                  Hashtbl.replace loaded r.window (seen @ r.loads)
+              | _ -> ())
+            run)
+        runs;
+      (* The checks of the bytes a run of fields needs and the dispatches,
+         against the model's walk; the walks' known
+         bytes against the frame loop's, and the frame loop's against the
+         model's [fixed_need]. *)
+      let bad = ref [] in
+      let found what = bad := what :: !bad in
+      let prefixes =
+        List.filter_map
+          (function
+            | P.Prefix_bound b ->
+                Some
+                  {
+                    D.pdepth = z (depth b.window);
+                    pconst = const b.at;
+                    pat = z b.at.at;
+                    pbytes = z b.bytes;
+                    ptested = b.tested && not !fabricate;
+                  }
+            | _ -> None)
+          all
+      in
+      List.iter
+        (fun (e : D.precord) ->
+          found
+            (Fmt.str "%s bytes at %s%s, %s regions deep"
+               (Prims.to_string e.pbytes) (Prims.to_string e.pat)
+               (if e.pconst then "" else " from a variable")
+               (Prims.to_string e.pdepth)
+            ^ if e.ptested then ", tested" else ", untested"))
+        (D.prefixes_unjustified model prefixes);
+      let gates =
+        List.filter_map
+          (function
+            | P.Dispatch g ->
+                Some
+                  {
+                    D.gdepth = z (depth g.window);
+                    gat = dat g.at;
+                    ghoisted = Option.map value g.hoisted;
+                  }
+            | _ -> None)
+          all
+      in
+      List.iter
+        (fun (g : D.gdecision) ->
+          found
+            (Fmt.str "a dispatch %s regions deep hoisting %a"
+               (Prims.to_string g.gdepth)
+               Fmt.(option ~none:(any "nothing") pp_value)
+               g.ghoisted))
+        (D.gates_unjustified (D.gates_of events) gates);
+      List.iter
+        (fun run ->
+          let loops =
+            List.filter_map
+              (function P.Frame_loop l -> Some l.need | _ -> None)
+              run
+          in
+          List.iter
+            (function
+              | P.Frame_loop l ->
+                  if Prims.op_Greater (z l.need) need then
+                    found
+                      (Fmt.str
+                         "frame loop %s knows %d bytes, past the %s its \
+                          leading fields need"
+                         l.name l.need (Prims.to_string need));
+                  if l.frames <> 1 && l.frames <> 4 then
+                    found
+                      (Fmt.str "frame loop %s walks %d frames an iteration"
+                         l.name l.frames)
+              | P.Walk w ->
+                  if w.known <> 0 && not (List.mem w.known loops) then
+                    found
+                      (Fmt.str "walk %s knows %d bytes no frame loop tests"
+                         w.name w.known)
+              | _ -> ())
+            run)
+        runs;
+      let count i l = checks.(i) <- checks.(i) + List.length l in
+      count 0 prefixes;
+      count 1 (List.filter (fun (e : D.precord) -> not e.ptested) prefixes);
+      count 2 gates;
+      count 3
+        (List.filter (fun (g : D.gdecision) -> Option.is_some g.ghoisted) gates);
+      count 4
+        (List.filter
+           (function P.Walk _ | P.Frame_loop _ -> true | _ -> false)
+           all);
+      if !bad <> [] then
+        check_findings := (name, List.rev !bad) :: !check_findings;
       plans := (name, wf, List.length spans) :: !plans
   | exception Invalid_argument why -> refused := (name, why) :: !refused
 
@@ -614,6 +705,19 @@ let () =
     "decisions: %d plans, %d not well formed, %d emitter decisions, %d plans \
      with one the model does not justify@."
     (List.length !plans) (List.length !not_wf) decisions (List.length !findings);
+  List.iter
+    (fun (name, bad) ->
+      Fmt.epr "@[<v2>%s: the emitter decides what the model does not:@,%a@]@."
+        name
+        Fmt.(list ~sep:cut string)
+        bad)
+    (List.rev !check_findings);
+  Fmt.epr
+    "checks: %d prefix bounds (%d untested), %d dispatches (%d hoisting a \
+     bound), %d walks and frame loops, %d plans with one the model does not \
+     justify@."
+    checks.(0) checks.(1) checks.(2) checks.(3) checks.(4)
+    (List.length !check_findings);
   Fmt.epr
     "words: %d shared words, %d held over from a prefix before, %d plans with \
      one the model does not justify, %d held across windows@."
