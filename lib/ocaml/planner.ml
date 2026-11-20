@@ -494,7 +494,8 @@ let extent a b =
   else a + b
 
 (* Adjacent prefixes are one, so one bound check covers both. They stay
-   separate when their sum would reach [beyond]. *)
+   separate when their sum would reach [beyond], which no codec Wire accepts
+   does: its fixed bytes fit in a buffer. *)
 let rec fuse = function
   | Prefix (a, n) :: Prefix (b, m) :: rest when extent n m < beyond ->
       let b = List.map (fun f -> { f with offset = f.offset + n }) b in

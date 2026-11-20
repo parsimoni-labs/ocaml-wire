@@ -1563,6 +1563,70 @@ let test_shared_words () =
         (Bytes.concat Bytes.empty [ cut ip; cut other; cut ip ]))
     [ 13; 14; 19; 20; 21; 33; 34; 35 ]
 
+(* The decisions the scanner of [Packet_stack.codec] takes, on each target and
+   with the step functions: the IPv4 header's two bitfields tested as one range
+   of their byte, the IPv4 options' bound left to the check of the bytes after
+   them, the payload's bound checked once before the dispatch on the protocol
+   and hoisted in each case, the frame loop's shape and, in the step functions,
+   the words the Ethernet and IPv4 headers share. Collecting them writes the
+   scanner it describes, which examples/generated/stack.ml pins, and leaves the
+   next one written unchanged. *)
+let test_decisions () =
+  let open Wire_ocaml.Plan in
+  let c = Packet_stack.codec in
+  let src = Wire_ocaml.scanner ~codec:"c" c in
+  let ocaml = decisions c in
+  Alcotest.(check string)
+    "the scanner is unchanged" src
+    (Wire_ocaml.scanner ~codec:"c" c);
+  let has ds what p = Alcotest.(check bool) what true (List.exists p ds) in
+  let start = { var = None; at = 0 } in
+  has ocaml "fold holds ints" (function
+    | Walk { name = "fold"; values = `Int; known = 0 } -> true
+    | _ -> false);
+  has ocaml "Ethernet tested" (function
+    | Prefix_bound { at; window = "stop"; bytes = 14; tested = true } ->
+        at = start
+    | _ -> false);
+  has ocaml "Ethernet known in the frame loop" (function
+    | Prefix_bound { at; window = "stop"; bytes = 14; tested = false } ->
+        at = start
+    | _ -> false);
+  has ocaml "version and IHL as one range" (function
+    | Word_range { lo = 0x45; hi = 0x4f; _ } -> true
+    | _ -> false);
+  has ocaml "IPv4 options left to the next check" (function
+    | Span_bound { at = { var = None; at = 34 }; bound = Next; _ } -> true
+    | _ -> false);
+  has ocaml "the payload checked once, before the dispatch" (function
+    | Dispatch { cases = 3; hoisted = Some _; join = Copied; _ } -> true
+    | _ -> false);
+  has ocaml "the payload's bound hoisted in a case" (function
+    | Span_bound { bound = Hoisted; window = "stop"; _ } -> true
+    | _ -> false);
+  has ocaml "the frame loop" (function
+    | Frame_loop
+        { name = "fold_frames"; need = 34; frames = 1; short = Some Apart } ->
+        true
+    | _ -> false);
+  has (decisions ~target:`OxCaml c) "four frames an iteration on OxCaml"
+    (function
+    | Frame_loop
+        { name = "fold_frames"; need = 34; frames = 4; short = Some Inline } ->
+        true
+    | _ -> false);
+  has (decisions ~step:"Step" c)
+    "the IPv4 header reads the word the Ethernet type is in" (function
+    | Shared_words { at = 14; window = "stop"; held = [ 12 ]; _ } -> true
+    | _ -> false);
+  has ocaml "the IPv4 header cut into a function of its own" (function
+    | Cut { name = "fold_ipv4"; window = "stop"; known = 0 } -> true
+    | _ -> false);
+  (* A codec the scanner refuses has no decisions either. *)
+  match decisions (Schemas.deep 32 (Sys.max_string_length - 1)) with
+  | _ -> Alcotest.fail "decisions of a refused codec"
+  | exception Invalid_argument _ -> ()
+
 (* The structured cases' corpora, and the EverParse C validator when built. *)
 let test_scanners () =
   List.iter
@@ -1694,6 +1758,7 @@ let suite =
       Alcotest.test_case "packet versions" `Quick test_packet_versions;
       Alcotest.test_case "a word shared across prefixes" `Quick
         test_shared_words;
+      Alcotest.test_case "the scanner's decisions" `Quick test_decisions;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;

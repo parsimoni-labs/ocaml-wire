@@ -83,6 +83,12 @@
   js_of_ocaml, wasm_of_ocaml and OxCaml (#436, #459, #492, #501, #503, #504,
   @samoht)
 
+- `Wire_ocaml.Plan.decisions`: the decisions a scanner takes beyond its
+  plan, as data: which bounds it tests and which it leaves to a later
+  check, the words it loads once, how it dispatches on optional fields and
+  how its frame loop runs, for a tool that audits or proves the checks a
+  generated scanner performs (#513, @samoht)
+
 - A generated module has a `View`: check a record once, then read its fields
   with no bounds check and no allocation. A bitfield or byte array is checked
   when it is built, as a `Value.<field>` (#442, #492, #493, @samoht)

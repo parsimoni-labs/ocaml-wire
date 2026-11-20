@@ -1,5 +1,12 @@
 (library
  (name wire_ocaml)
  (public_name wire.ocaml)
- (private_modules planner emitter record_module scan_module interface)
+ (private_modules
+  planner
+  decision
+  dispatch_tree
+  emitter
+  record_module
+  scan_module
+  interface)
  (libraries wire fmt))

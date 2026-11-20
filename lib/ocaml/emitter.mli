@@ -59,6 +59,13 @@ val local_bigstring_src : src
 (** Where a walk failed: a bound, a field's check, or a where clause. *)
 type failure = Bounds | Check of field * check | Where
 
+type pos = Decision.pos = { var : string option; at : int }
+(** A position in the record: a variable when the data decides it, plus a
+    constant. *)
+
+val values : num -> Decision.values
+(** [values num] is how a walk of [num] holds integer values. *)
+
 type mode = {
   num : num;
   src : src;
@@ -71,17 +78,14 @@ type mode = {
   slots : Sset.t;
   fail : failure -> string;
   overflowed : failure -> string -> string;
+  decide : Decision.t -> unit;
 }
 (** What a walk writes: how it holds integers, the buffer it reads, whether the
     target is OxCaml, whether it is the cold walk that raises the codec's
     errors, whether it may test two bitfields of a word as one range of the word
     (a scan, which names no failed field), the variables it binds, the outputs
-    it hands out, those of them that are slots, and what it writes on a failure.
-*)
-
-type pos = { var : string option; at : int }
-(** A position in the record: a variable when the data decides it, plus a
-    constant. *)
+    it hands out, those of them that are slots, what it writes on a failure, and
+    what it does with each decision it takes. *)
 
 type cuts = {
   prefix : string;
@@ -233,13 +237,6 @@ val field :
     at [k] from [o]: bound when live, then checked. [checked] defaults to
     [true]; with [false] the caller writes the checks. *)
 
-type tree = { tid : int; node : tnode }
-(** The dispatch over a run of optional fields whose conditions exclude each
-    other: a decision tree over the atoms of their conditions, whose leaves run
-    one case or none. *)
-
-and tnode = Leaf of int option | Branch of bool T.expr * tree * tree
-
 val walk : w -> node list -> pos -> (w -> pos -> unit) -> unit
 (** [walk w nodes p k] writes the checks of [nodes] from the position [p], then
     calls [k] with the state and position after them. *)
@@ -248,6 +245,7 @@ val start :
   ?cuts:cuts ->
   ?scope:(string * string option) list ->
   ?first:string ->
+  ?name:string ->
   m:mode ->
   ppf:Format.formatter ->
   ranges:(int * int) Smap.t ->
@@ -257,31 +255,15 @@ val start :
   node list ->
   (w -> pos -> unit) ->
   unit
-(** [start ?cuts ?scope ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k] is
-    {!walk} over [nodes] from the start of a record at [base], in a window that
-    ends at [limit] and is known to hold [known] bytes. With [cuts] the walk is
-    written as small functions, which take the variables of [scope] they read;
-    with [first], the whole walk is one of them, named [first]. *)
+(** [start ?cuts ?scope ?first ?name ~m ~ppf ~ranges ~base ~limit ~known nodes
+     k] is {!walk} over [nodes] from the start of a record at [base], in a
+    window that ends at [limit] and is known to hold [known] bytes. With [cuts]
+    the walk is written as small functions, which take the variables of [scope]
+    they read; with [first], the whole walk is one of them, named [first]. With
+    [name], the function the walk is written in, it starts with a
+    {!Decision.constructor-Walk} decision. *)
 
 val live : ?cold:bool -> plan -> outputs:Sset.elt list -> Sset.t
 (** [live ?cold plan ~outputs] is the variables a walk binds: those it reads,
     those it hands out and, for a cold walk, each checked field, whose value its
     error carries. *)
-
-val gate_run :
-  lower:(bool T.expr -> bool T.expr) ->
-  facts ->
-  node list ->
-  (bool T.expr * output * output list * node list) list * node list
-(** [gate_run ~lower facts nodes] is the optional fields at the head of [nodes]
-    whose conditions, as [lower] writes them, exclude each other, and the nodes
-    after them. *)
-
-val decide : facts -> (int * bool T.expr) list -> tree
-(** [decide facts cases] is the decision tree that picks the first of [cases]
-    whose condition holds, or none. A subtree reached from two paths is one
-    value. *)
-
-val reach : tree -> (tree -> bool) * (int -> bool) * int
-(** [reach tree] tells which subtrees of [tree] are reached more than once,
-    which cases are, and how many leaves are written, a shared case once. *)

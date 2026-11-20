@@ -297,6 +297,132 @@ module Plan : sig
   val nodes : t -> node list
   (** [nodes t] is the nodes of [t], in the order the codec checks them. *)
 
+  (** {2:decisions Decisions}
+
+      What {!scanner} decides, beyond the plan, that changes which checks the
+      generated code runs or which bytes it reads. The scanner writes its code
+      from these decisions, so they are what that code does. *)
+
+  type pos = { var : string option; at : int }
+  (** A position in a window: a variable when the data decides it, plus a
+      constant. *)
+
+  type values = [ `Int | `Int64 | `Int64_u ]
+  (** How a walk holds integer values: as [int], as [int64] in the OCaml step
+      functions, or as [int64_u] on OxCaml. Positions and sizes are [int]. *)
+
+  (** How a span's bound is written. *)
+  type bound =
+    | Next  (** Left to the check of the bytes right after the span. *)
+    | Hoisted
+        (** Checked once before the dispatch whose cases start with it. *)
+    | Checked of {
+        negative : bool;  (** With a test that its size is negative. *)
+        cancelled :
+          (int Wire.Private.Types.expr * int Wire.Private.Types.expr) option;
+            (** As [lhs > rhs], the terms its position and size share cancelled.
+            *)
+      }  (** Checked where it is. *)
+
+  (** Which case of a dispatch runs. *)
+  type choice =
+    | Run of int option  (** The case of that index, or none. *)
+    | If of bool Wire.Private.Types.expr * choice * choice
+        (** A test, and where it leads when it holds and when it does not. *)
+
+  (** Where the code after a dispatch is written. *)
+  type join =
+    | Joined  (** Once, in a local function every case jumps to. *)
+    | Copied  (** Into each case, which keeps what the case established. *)
+
+  (** How a frame loop walks frames shorter than the bytes it leaves unchecked.
+  *)
+  type short_frames =
+    | Apart  (** Through [fold], in a function of their own. *)
+    | Inline  (** Through [fold], in the frame loop's function. *)
+    | Walked  (** Through a walk of their own that knows no byte. *)
+
+  type decision =
+    | Walk of { name : string; values : values; known : int }
+        (** A walk of a record starts in the function [name], with [known] bytes
+            of its window known to be there. *)
+    | Prefix_bound of { at : pos; window : string; bytes : int; tested : bool }
+        (** The run of fields from [at] needs [bytes] bytes of the window
+            [window]; [tested] when a test of its length is written, otherwise
+            the bytes are already known to be there. *)
+    | Span_bound of {
+        size : int Wire.Private.Types.expr;
+        at : pos;
+        window : string;
+        size_var : string;  (** The variable its size is bound to. *)
+        overflows : bool;  (** Its size is computed with checked arithmetic. *)
+        bound : bound;
+      }  (** A span or a region of [size] bytes at [at]. *)
+    | Shared_words of {
+        at : int;
+        constant : bool;  (** The position is a constant of the window. *)
+        lo : int;
+        hi : int;
+        window : string;
+        fields : (int * int) list;
+            (** The offset and the width in bytes of each field a word may hold.
+            *)
+        held : int list;  (** The words loaded before that it reads. *)
+        loads : int list;  (** The words it loads. *)
+      }
+        (** In the [int64] form, the 64-bit words a run of fields at [at] loads
+            once and reads several fields from. Offsets are from the run's
+            address; every word lies in [[lo, hi]]. *)
+    | Word_range of {
+        at : pos;
+        window : string;
+        first : string;
+        second : string;
+        lo : int;
+        hi : int;
+      }
+        (** The checks of the bitfields [first] and [second] of the run at [at]
+            are one test that their word is in [[lo, hi]]. *)
+    | Dispatch of {
+        at : pos;
+        window : string;
+        cases : int;
+        choice : choice;
+        join : join;
+        hoisted : int Wire.Private.Types.expr option;
+      }
+        (** A run of [cases] optional fields at [at], each tested condition
+            evaluated at most once on a path; with [hoisted], the size of the
+            span every case starts with, whose bound is checked once before. *)
+    | Cut of { name : string; window : string; known : int }
+        (** The rest of a walk is written as the function [name], in the window
+            [window] with [known] bytes known to be there. *)
+    | Frame_loop of {
+        name : string;
+        need : int;
+        frames : int;
+        short : short_frames option;
+      }
+        (** The loop [name] over frames walks [frames] frames an iteration, each
+            with the [need] bytes of its leading fields known once its stride
+            is; [short] walks the frames shorter than that. *)
+
+  val pp_decision : Format.formatter -> decision -> unit
+  (** [pp_decision ppf d] prints [d] on one line, its tests as
+      {!Wire.Private.Types.pp_expr} does. *)
+
+  val decisions :
+    ?target:target ->
+    ?fields:string list ->
+    ?step:string ->
+    'r Wire.Codec.t ->
+    decision list
+  (** [decisions ?target ?fields ?step c] is the decisions
+      [scanner ?target ?fields ?step ~codec c] takes, in the order it writes
+      them, each case of an optional field included. A [window] is the variable
+      holding the window's length: the frame's, or a region's size. Raises
+      [Invalid_argument] as {!scanner} does. *)
+
   val outputs : t -> output list
   (** [outputs t] is the outputs of [t], in declaration order. *)
 
