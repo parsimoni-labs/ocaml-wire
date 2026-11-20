@@ -34,29 +34,35 @@ let reserved_3d =
         field_ptr_after is_range_okay pointer probe refining specialize string \
         UINT8BE typeof")
 
-(* Append a trailing underscore to names that 3D or F* reserves so the
-   projection always produces a parseable identifier even when the user
-   picks something like [total]. The same escaping is applied wherever a
-   user-chosen name reaches 3D output: param decls, [Param_ref], [Ref],
-   field names. The OCaml-side name is unchanged. *)
-(* KaRaMeL, which writes EverParse's C, drops an identifier's trailing
-   underscores and renames a C keyword it knows ([int] becomes [int0]), but not
-   GNU C's [typeof]: a field spelt [typeof_] in 3D was a C local named
-   [typeof], which the C compiler refused. A name that would reach C so is
-   spelt [typeof_3d], which reaches it as [typeof3d]. *)
-let rec strip_underscores s =
-  let n = String.length s in
-  if n > 0 && s.[n - 1] = '_' then strip_underscores (String.sub s 0 (n - 1))
-  else s
+(* A name 3D or F* reserves takes a trailing underscore, and so does every
+   reserved name followed by underscores, so the escape is injective: [end],
+   [end_] and [end__] are [end_], [end__] and [end___]. The same escape is
+   applied wherever a user-chosen name reaches 3D output: param decls,
+   [Param_ref], [Ref], field names, enum constants. The OCaml-side name is
+   unchanged.
 
+   KaRaMeL, which writes EverParse's C, drops an identifier's trailing
+   underscores, tells apart the locals that then coincide ([end], [end0]) and
+   renames a C keyword it knows ([int] becomes [int0]), but not GNU C's
+   [typeof]: a field spelt [typeof_] in 3D was a C local named [typeof], which
+   the C compiler refused. So [typeof], followed by any underscores and [3d]s,
+   takes [3d] instead, which no stripping removes: [typeof] is [typeof3d] and
+   [typeof3d] is [typeof3d3d]. *)
 let c_unsafe = [ "typeof" ]
 
 let escape_3d name =
-  let base = strip_underscores name in
-  if List.mem base c_unsafe then base ^ "_3d"
-  else if Reserved_3d.mem name reserved_3d then name ^ "_"
-  else name
+  if Names.escapes ~suffix:"3d" c_unsafe name then name ^ "3d"
+  else
+    let rec reserved n =
+      Reserved_3d.mem (String.sub name 0 n) reserved_3d
+      || (n > 0 && name.[n - 1] = '_' && reserved (n - 1))
+    in
+    if reserved (String.length name) then name ^ "_" else name
 
+(* 3D declares the constants of every enum of a module in one namespace, so
+   each takes its enum's name: [A] of [E] is [E_A], and two enums naming the
+   same case stay apart. *)
+let enum_constant enum case = escape_3d (enum ^ "_" ^ case)
 let struct_tag_name (s : struct_) = "Wire" ^ escape_3d s.name
 let pp_endian ppf = function Little -> () | Big -> Fmt.string ppf "BE"
 
@@ -901,11 +907,10 @@ let reorder_bit_groups_for_3d fields =
   in
   go [] fields
 
-(* A struct's parameters and fields share one 3D scope, and the escape of a
-   keyword can spell another name in it: [end] and [end_] would both be
-   [end_], and a field [ctx] would shadow the FFI projection's [ctx]
-   parameter, which 3D rejects. Refuse naming both rather than hand 3d.exe a
-   declaration it fails on, or one it reads as another. A name that is not an
+(* A struct's parameters and fields share one 3D scope. The escape keeps
+   distinct names apart, but a field [ctx] would shadow the FFI projection's
+   [ctx] parameter, which 3D rejects. Refuse naming both rather than hand
+   3d.exe a declaration it fails on, or one it reads as another. A name that is not an
    identifier, [a-b], has no 3D spelling at all. *)
 let check_3d_names (s : struct_) =
   let params =
@@ -1027,43 +1032,45 @@ let rec pp_enum_base : type a. Format.formatter -> a typ -> unit =
   | Where { inner; _ } -> pp_enum_base ppf inner
   | t -> pp_typ ppf t
 
-let pp_enum_cases ppf cases =
+let pp_enum_cases ppf ~enum cases =
   List.iteri
     (fun i (cname, value) ->
       if not (Int.equal i 0) then Fmt.string ppf ",";
-      Fmt.pf ppf "@,%s = %d" (escape_3d cname) value)
+      Fmt.pf ppf "@,%s = %d" (enum_constant enum cname) value)
     cases
+
+(* The enum a casetype's tag names, seen through the transparent wrappers,
+   since it can sit behind a [lookup]'s map or a [where]. *)
+let rec named_cases : type k. k typ -> (string * (string * int) list) option =
+  function
+  | Enum { name; cases; _ } -> Some (name, cases)
+  | Map { inner; _ } -> named_cases inner
+  | Where { inner; _ } -> named_cases inner
+  | Apply { typ; _ } -> named_cases typ
+  | _ -> None
+
+(* When the switch tag is an enum, EverParse requires each case label to be the
+   enum constant name, not the raw integer it stands for. Only where the module
+   declares enum types: the codegen projection renders the tag as its base
+   scalar, so a constant name there would refer to a type the module never
+   declares. [enum_type_name] is the same test that decides whether the tag
+   renders as the enum: an enum over a bitfield base has no 3D enum type and so
+   no declaration, and naming its constant referred to nothing. *)
+let enum_label : type k. k typ -> int -> string option =
+ fun tag k ->
+  if (not !render_enum_as_type) || Option.is_none (enum_type_name tag) then None
+  else
+    match named_cases tag with
+    | Some (enum, ecases) ->
+        List.find_map
+          (fun (n, v) ->
+            if Int.equal v k then Some (enum_constant enum n) else None)
+          ecases
+    | None -> None
 
 let pp_casetype_cases : type k.
     Format.formatter -> k typ -> decl_case list -> unit =
  fun ppf tag cases ->
-  (* When the switch tag is an enum, EverParse requires each case label to be the
-     enum constant name, not the raw integer it stands for. *)
-  (* Only where the module declares enum types: the codegen projection renders
-     the tag as its base scalar, so a constant name there would refer to a type
-     the module never declares. Seen through the transparent wrappers, since the
-     tag's enum can sit behind a [lookup]'s map or a [where]. *)
-  let rec named_cases : type k. k typ -> (string * int) list option = function
-    | Enum { cases; _ } -> Some cases
-    | Map { inner; _ } -> named_cases inner
-    | Where { inner; _ } -> named_cases inner
-    | Apply { typ; _ } -> named_cases typ
-    | _ -> None
-  in
-  let enum_label k =
-    (* [enum_type_name] is the same test that decides whether the tag renders as
-       the enum: an enum over a bitfield base has no 3D enum type and so no
-       declaration, and naming its constant referred to nothing. *)
-    if (not !render_enum_as_type) || Option.is_none (enum_type_name tag) then
-      None
-    else
-      match named_cases tag with
-      | Some ecases ->
-          List.find_map
-            (fun (n, v) -> if Int.equal v k then Some n else None)
-            ecases
-      | None -> None
-  in
   List.iteri
     (fun i (tag_opt, Pack_typ typ) ->
       let field_name = Fmt.str "v%d" i in
@@ -1078,10 +1085,10 @@ let pp_casetype_cases : type k.
       | None -> Fmt.pf ppf "@,default: %a;" pp_body ()
       | Some e -> (
           let label =
-            match e with Pack_expr (Int k) -> enum_label k | _ -> None
+            match e with Pack_expr (Int k) -> enum_label tag k | _ -> None
           in
           match label with
-          | Some name -> Fmt.pf ppf "@,case %s: %a;" (escape_3d name) pp_body ()
+          | Some name -> Fmt.pf ppf "@,case %s: %a;" name pp_body ()
           | None -> Fmt.pf ppf "@,case %a: %a;" pp_packed_expr e pp_body ()))
     cases
 
@@ -1116,7 +1123,7 @@ let pp_decl ppf = function
       else Fmt.pf ppf "extern probe %s@,@," name
   | Enum_decl { name; cases; base = Pack_typ base } ->
       Fmt.pf ppf "%a enum %s {@[<v 2>" pp_enum_base base (escape_3d name);
-      pp_enum_cases ppf cases;
+      pp_enum_cases ppf ~enum:name cases;
       Fmt.pf ppf "@]@,}@,@,"
   | Casetype_decl { name; params; tag = Pack_typ tag; cases } ->
       (* First param is the switch discriminant *)
@@ -1169,9 +1176,10 @@ let check_unique_decl_names decls =
     decls
 
 (* Every top-level declaration of a module names a 3D identifier, and so does
-   every enum case: 3D declares them all in one namespace, beside the types.
-   Escaping a keyword, or two enums of one codec naming the same case, can spell
-   two declarations alike, which EverParse rejects as a clash. A declaration
+   every enum constant: 3D declares them all in one namespace, beside the
+   types. The escape is injective and each constant carries its enum's name,
+   but a struct and an enum constant can still be spelt alike ([E_A] beside
+   case [A] of [E]), which EverParse rejects as a clash. A declaration
    repeated verbatim is one source and no clash. *)
 let module_idents decls =
   List.concat_map
@@ -1186,7 +1194,7 @@ let module_idents decls =
           (Fmt.str "enum %S" name, escape_3d name)
           :: List.map
                (fun (c, _) ->
-                 (Fmt.str "case %S of enum %S" c name, escape_3d c))
+                 (Fmt.str "case %S of enum %S" c name, enum_constant name c))
                cases
       | Casetype_decl { name; _ } ->
           let src = Fmt.str "casetype %S" name in

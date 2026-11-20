@@ -387,8 +387,8 @@ let plug_prefix s =
 let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
 
 (* The plug names each field twice in C: the [_IDX_] macro upper-cases the
-   name, so [X] and [x] would define one macro twice, and the struct member
-   escapes C's keywords, so [restrict] and [restrict_] would be one member.
+   name, so [X] and [x] would define one macro twice. The struct member's
+   escape is injective, so only the macro can clash, but both are checked.
    Refuse naming both fields before writing either file. *)
 let check_plug_names s =
   let fields = Wire.Everparse.plug_fields s in
