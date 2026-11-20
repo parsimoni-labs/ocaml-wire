@@ -99,6 +99,9 @@ type w = {
   facts : facts;
   views : (string * int T.expr) list;
   words : (string * int) list;
+  raws : (string * (string * int)) list;
+  deferred : (string * (string * bool)) list ref;
+  bounded : (string * string * string * string) list;
   base : string;
   limit : string;
   known : int;
@@ -157,13 +160,15 @@ val load : mode -> o:string -> k:int -> bytes:int -> endian:T.endian -> string
 val covers : int -> field -> bool
 (** [covers a f] is [true] when the 8-byte word at [a] holds the field [f]. *)
 
-val words : size:int -> field list -> int list
-(** [words ~size fields] is the offsets of the 8-byte words worth loading once
-    to read [fields] from a prefix of [size] bytes. *)
+val words : num -> size:int -> field list -> int list
+(** [words num ~size fields] is the offsets of the 8-byte words worth loading
+    once to read [fields] from a prefix of [size] bytes, with integers held as
+    [num]. *)
 
 val unsigned :
   mode ->
   ?size:int ->
+  ?raw:bool ->
   o:string ->
   words:int list ->
   k:int ->
@@ -171,9 +176,11 @@ val unsigned :
   endian:T.endian ->
   unit ->
   string
-(** [unsigned m ?size ~o ~words ~k ~bytes ~endian ()] is the text of an unsigned
-    value of [bytes] bytes at [k] from [o], from a word when one holds it;
-    [size] bounds the bytes a wider load may read. *)
+(** [unsigned m ?size ?raw ~o ~words ~k ~bytes ~endian ()] is the text of an
+    unsigned value of [bytes] bytes at [k] from [o], from a word when one holds
+    it; [size] bounds the bytes a wider load may read. With [raw] (default
+    [false]), the value may hold any bits above its [bytes], for a caller that
+    masks it below them. *)
 
 val value :
   mode ->

@@ -125,6 +125,15 @@ type w = {
   views : (string * int T.expr) list;
       (* A bitfield as an expression over its word. *)
   words : (string * int) list; (* A bitfield word and its mask. *)
+  raws : (string * (string * int)) list;
+      (* A big-endian field as the variable holding its bytes read
+         little-endian, and its width in bits. *)
+  deferred : (string * (string * bool)) list ref;
+      (* A field bound where code first reads it, its value and whether that
+         loads from the buffer: a test of its raw bytes reads it in neither
+         branch, and the branch where it holds binds the constant. *)
+  bounded : (string * string * string * string) list;
+      (* The spans already checked before a dispatch, as [span_bound] keys. *)
   base : string; (* The offset in the buffer of the current window. *)
   limit : string; (* The length of the current window. *)
   known : int; (* Bytes known to be in the window after the position. *)
@@ -167,13 +176,90 @@ let decisions s =
   in
   go 0 0
 
-let pf w fmt =
-  Fmt.kstr
-    (fun s ->
-      w.fn.chars <- w.fn.chars + String.length s;
-      w.fn.decisions <- w.fn.decisions + decisions s;
-      Format.pp_print_string w.ppf s)
-    fmt
+let is_variable x =
+  x <> ""
+  && (match x.[0] with 'a' .. 'z' | '_' -> true | _ -> false)
+  && String.for_all is_ident_char x
+
+(* The variable a line [let x = e in] binds. *)
+let binding line =
+  let is_let =
+    String.starts_with ~prefix:"let " line
+    && String.ends_with ~suffix:" in" line
+  in
+  match if is_let then String.index_from_opt line 4 ' ' else None with
+  | Some i when String.length line >= i + 3 ->
+      let x = String.sub line 4 (i - 4) in
+      if is_variable x && String.sub line i 3 = " = " then Some x else None
+  | _ -> None
+
+let local_prefix = "let[@local] "
+
+(* The occurrences of [x] in [line] as a word: none qualified by a module,
+   none as the name of a label. *)
+let occurrences x line =
+  let n = String.length line and k = String.length x in
+  let rec from i acc =
+    if i + k > n then List.rev acc
+    else
+      let word =
+        String.sub line i k = x
+        && (i = 0 || not (is_ident_char line.[i - 1] || line.[i - 1] = '.'))
+        && (i + k = n || not (is_ident_char line.[i + k]))
+      in
+      let label =
+        word && i > 0 && line.[i - 1] = '~' && i + k < n && line.[i + k] = ':'
+      in
+      from (i + 1) (if word && not label then i :: acc else acc)
+  in
+  from 0 []
+
+(* Whether [line] binds [x]: as a [let], or as a parameter of a local
+   function. *)
+let binds x line =
+  binding line = Some x
+  || (String.starts_with ~prefix:local_prefix line && occurrences x line <> [])
+
+(* Whether [line] reads [x], other than by binding it. *)
+let reads x line =
+  if String.starts_with ~prefix:local_prefix line then false
+  else
+    List.exists
+      (fun i -> not (i = 4 && binding line = Some x))
+      (occurrences x line)
+
+(* [s] written in the current function, after the binding of each deferred
+   field it reads. *)
+let rec write w s =
+  let lines = String.split_on_char '\n' s in
+  let read, kept =
+    List.partition (fun (x, _) -> List.exists (reads x) lines) !(w.deferred)
+  in
+  w.deferred := kept;
+  List.iter (fun (x, (v, _)) -> write w (Fmt.str "let %s = %s in\n" x v)) read;
+  w.fn.chars <- w.fn.chars + String.length s;
+  w.fn.decisions <- w.fn.decisions + decisions s;
+  Format.pp_print_string w.ppf s
+
+let pf w fmt = Fmt.kstr (write w) fmt
+
+(* The deferred loads written here, before a local function that may read
+   them: one that loaded them itself would close over the buffer, which may be
+   [local], and could not be called in tail position. *)
+let flush w =
+  let loads, kept = List.partition (fun (_, (_, l)) -> l) !(w.deferred) in
+  w.deferred := kept;
+  List.iter
+    (fun (x, (v, _)) -> write w (Fmt.str "let %s = %s in\n" x v))
+    (List.rev loads)
+
+(* [f ()] with the deferred bindings as they are now, which the code it writes
+   binds in a scope of its own; they are deferred again after it. *)
+let scoped w f =
+  let saved = !(w.deferred) in
+  let r = f () in
+  w.deferred := saved;
+  r
 
 (* {2 Slots}
 
@@ -345,31 +431,58 @@ let addr num o k =
     | Tagged -> Fmt.str "(%s + %d)" o k
     | Unboxed -> Fmt.str "(U.add %s #%dL)" o k
 
-(* An [int64_u] position is narrowed to the [int] offset the loads take. *)
+(* A load at [o + k]. An [int64_u] position is the offset of the wider loads
+   as it is: the address is the buffer plus the position, with the distance
+   [k] in the load itself, so a block's loads share one addition. A byte is
+   read at the position narrowed to an [int]. *)
 let load m ~o ~k ~bytes ~endian =
-  let at =
-    match m.num with
-    | Tagged -> addr m.num o k
-    | Unboxed -> Fmt.str "(B.offset %s)" (addr m.num o k)
-  in
   let e = endian_suffix endian in
-  match bytes with
-  | 1 -> Fmt.str "(%s.u8 buf %s)" m.src.u at
-  | 2 -> Fmt.str "(%s.u16%s buf %s)" m.src.u e at
-  | 4 -> Fmt.str "(%s.i32%s buf %s)" m.src.u e at
-  | _ -> Fmt.str "(%s.i64be buf %s)" m.src.u at
+  match (m.num, bytes) with
+  | Tagged, (2 | 4 | 8) when m.src.unboxed && m.src.typ = "bytes" -> (
+      (* An OxCaml record read untags its offset once and puts the field's
+         distance in the load, as the scanner's reads do. *)
+      let at =
+        if k = 0 then Fmt.str "(Int64_u.of_int %s)" o
+        else Fmt.str "(Int64_u.add (Int64_u.of_int %s) #%dL)" o k
+      in
+      match bytes with
+      | 2 -> Fmt.str "(%s.u16%s_at buf %s)" m.src.u e at
+      | 4 -> Fmt.str "(%s.i32%s_at buf %s)" m.src.u e at
+      | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
+  | Tagged, _ | Unboxed, 1 -> (
+      let at =
+        match m.num with
+        | Tagged -> addr m.num o k
+        | Unboxed when k = 0 -> Fmt.str "(B.offset %s)" o
+        | Unboxed -> Fmt.str "(B.offset %s + %d)" o k
+      in
+      match bytes with
+      | 1 -> Fmt.str "(%s.u8 buf %s)" m.src.u at
+      | 2 -> Fmt.str "(%s.u16%s buf %s)" m.src.u e at
+      | 4 -> Fmt.str "(%s.i32%s buf %s)" m.src.u e at
+      | _ -> Fmt.str "(%s.i64be buf %s)" m.src.u at)
+  | Unboxed, _ -> (
+      let at = addr m.num o k in
+      match bytes with
+      | 2 -> Fmt.str "(%s.u16%s_at buf %s)" m.src.u e at
+      | 4 -> Fmt.str "(%s.i32%s_at buf %s)" m.src.u e at
+      | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
 
 (* The 64-bit words of a prefix of [size] bytes worth loading once: those
-   holding two or more of [fields] a shift takes out. *)
-let in_word f =
+   holding two or more of [fields] a shift takes out. An [int64_u] position
+   reads a byte by a 16-bit load that needs no swap, which a test or an
+   offset of the byte has sooner than a shift of a swapped word, so a byte is
+   not taken from a word. *)
+let in_word num f =
   match f.store with
-  | Int { width = 8; _ } | Int { width = 16 | 32; endian = T.Big; _ } -> true
-  | Bits { base = T.U8 | T.U16 T.Big | T.U32 T.Big; _ } -> true
+  | Int { width = 8; _ } | Bits { base = T.U8; _ } -> num = Tagged
+  | Int { width = 16 | 32; endian = T.Big; _ } -> true
+  | Bits { base = T.U16 T.Big | T.U32 T.Big; _ } -> true
   | _ -> false
 
 let covers a f = a <= f.offset && f.offset + width_bytes f.store <= a + 8
 
-let words ~size fields =
+let words num ~size fields =
   if size < 8 then []
   else
     List.init ((size + 7) / 8) (fun i -> min (8 * i) (size - 8))
@@ -377,45 +490,67 @@ let words ~size fields =
     |> List.filter (fun a ->
         let held =
           List.filter_map
-            (fun f -> if in_word f && covers a f then Some f.offset else None)
+            (fun f ->
+              if in_word num f && covers a f then Some f.offset else None)
             fields
         in
         List.length (List.sort_uniq Int.compare held) > 1)
 
 (* A 16-bit field read through the 32-bit load that ends or starts on it, when
    that load stays in a prefix of [size] bytes: one load and one byte swap,
-   with none of the 16-bit sign and zero extensions a 16-bit swap costs. The
-   shift happens on the [int32], so a 31-bit [int] loses no bit. *)
-let u16_in_word m ~size ~o ~k ~endian =
+   with none of the 16-bit sign and zero extensions a 16-bit swap costs. Only
+   OxCaml reads so, into an [int] of 63 bits or an [int64_u]. The high half of
+   a [raw] [int] read is shifted on the [int], where the caller's mask makes
+   the [int32]'s sign irrelevant, so the word needs no zero extension first;
+   otherwise the shift is on the [int32], which zero-extends and needs no
+   mask. *)
+let u16_in_word m ~size ~raw ~o ~k ~endian =
   let i32 = i32 m.src in
-  let low i = Fmt.str "(%s.to_int %s land 0xffff)" i32 i
-  and high i =
-    Fmt.str "(%s.to_int (%s.shift_right_logical %s 16) land 0xffff)" i32 i32 i
+  let low, high =
+    match m.num with
+    | Tagged ->
+        let mask v =
+          if raw then Fmt.str "(%s)" v else Fmt.str "(%s land 0xffff)" v
+        in
+        ( (fun i -> Fmt.kstr mask "%s.to_int %s" i32 i),
+          fun i ->
+            if raw then Fmt.str "(%s.to_int %s lsr 16)" i32 i
+            else
+              Fmt.str "(%s.to_int (%s.shift_right_logical %s 16) land 0xffff)"
+                i32 i32 i )
+    | Unboxed ->
+        let mask v = if raw then v else Fmt.str "(U.logand %s #0xffffL)" v in
+        ( (fun i -> Fmt.kstr mask "(U.of_int32_u %s)" i),
+          fun i ->
+            Fmt.kstr mask "(U.shift_right_logical (U.of_int32_u %s) 16)" i )
   in
   let at k = load m ~o ~k ~bytes:4 ~endian in
-  match (m.ox, m.num, size, endian) with
-  | false, _, _, _ | _, Unboxed, _, _ | _, _, None, _ -> None
-  | _, _, Some _, T.Big when k >= 2 -> Some (low (at (k - 2)))
-  | _, _, Some size, T.Big when k + 4 <= size -> Some (high (at k))
-  | _, _, Some size, T.Little when k + 4 <= size -> Some (low (at k))
-  | _, _, Some _, T.Little when k >= 2 -> Some (high (at (k - 2)))
+  match (m.ox || m.num = Unboxed, size, endian) with
+  | false, _, _ | _, None, _ -> None
+  | _, Some _, T.Big when k >= 2 -> Some (low (at (k - 2)))
+  | _, Some size, T.Big when k + 4 <= size -> Some (high (at k))
+  | _, Some size, T.Little when k + 4 <= size -> Some (low (at k))
+  | _, Some _, T.Little when k >= 2 -> Some (high (at (k - 2)))
   | _ -> None
 
 (* An unsigned value of [bytes] bytes at [k] from [o], from a word when one
-   holds it; [size] bounds the bytes a wider load may read. *)
-let unsigned m ?size ~o ~words ~k ~bytes ~endian () =
+   holds it; [size] bounds the bytes a wider load may read. With [raw], the
+   value may keep whatever its [int] holds above its [bytes], for a caller that
+   masks below them: that mask would cost an instruction the compiler does not
+   remove. *)
+let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
+  let mask32 v = if raw then v else Fmt.str "(%s land mask32)" v in
   let word = List.find_opt (fun a -> a <= k && k + bytes <= a + 8) words in
   match (m.num, word) with
   | Tagged, Some a when bytes = 1 || endian = T.Big ->
       let i64 = i64 m.src and shift = 8 * (a + 8 - k - bytes) in
-      if a = k then
-        Fmt.str "(%s.to_int (%s.shift_right_logical w%d %d))" i64 i64 a shift
-      else
-        Fmt.str "(%s.to_int (%s.shift_right_logical w%d %d) land %s)" i64 i64 a
-          shift
-          (if bytes = 4 then "mask32"
-           else Fmt.str "0x%x" ((1 lsl (8 * bytes)) - 1))
-  | Unboxed, Some a when bytes = 1 || endian = T.Big ->
+      let v =
+        Fmt.str "%s.to_int (%s.shift_right_logical w%d %d)" i64 i64 a shift
+      in
+      if a = k || raw then Fmt.str "(%s)" v
+      else if bytes = 4 then mask32 v
+      else Fmt.str "(%s land 0x%x)" v ((1 lsl (8 * bytes)) - 1)
+  | Unboxed, Some a when bytes > 1 && endian = T.Big ->
       let shifted =
         Fmt.str "(U.shift_right_logical w%d %d)" a (8 * (a + 8 - k - bytes))
       in
@@ -424,16 +559,35 @@ let unsigned m ?size ~o ~words ~k ~bytes ~endian () =
         Fmt.str "(U.logand %s #%LdL)" shifted
           (Int64.pred (Int64.shift_left 1L (8 * bytes)))
   | Tagged, _ when bytes = 4 ->
-      Fmt.str "(%s.to_int %s land mask32)" (i32 m.src)
-        (load m ~o ~k ~bytes ~endian)
+      Fmt.kstr mask32 "%s.to_int %s" (i32 m.src) (load m ~o ~k ~bytes ~endian)
   | Tagged, _ when bytes = 2 -> (
-      match u16_in_word m ~size ~o ~k ~endian with
+      match u16_in_word m ~size ~raw ~o ~k ~endian with
       | Some v -> v
       | None -> load m ~o ~k ~bytes ~endian)
   | Tagged, _ -> load m ~o ~k ~bytes ~endian
+  | Unboxed, _ when bytes = 1 ->
+      (* A byte from the 16-bit load that ends on it, or else the one that
+         starts on it, inside the prefix: no swap, and not at the address of
+         a word, which the compiler would share instead of putting the
+         distance in the load. *)
+      let le16 k =
+        Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes:2 ~endian:T.Little)
+      in
+      let starts = match size with Some s -> k + 2 <= s | None -> false in
+      let ends = Option.is_some size && k >= 1 in
+      if ends && not (starts && List.mem (k - 1) words) then
+        Fmt.str "(U.shift_right_logical %s 8)" (le16 (k - 1))
+      else if starts then Fmt.str "(U.logand %s #255L)" (le16 k)
+      else Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian)
+  | Unboxed, _ when bytes = 4 && raw ->
+      Fmt.str "(U.of_int32_u %s)" (load m ~o ~k ~bytes ~endian)
   | Unboxed, _ when bytes = 4 ->
       Fmt.str "(U.logand (U.of_int32_u %s) #0xffffffffL)"
         (load m ~o ~k ~bytes ~endian)
+  | Unboxed, _ when bytes = 2 -> (
+      match u16_in_word m ~size ~raw ~o ~k ~endian with
+      | Some v -> v
+      | None -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian))
   | Unboxed, _ -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian)
 
 (* A field's plain value, at [k] from [o]: from the variable [bitword] of a
@@ -450,14 +604,14 @@ let value m ?size ?bitword ~o ~words ~k f =
   in
   match f.store with
   | Bits { base; shift; width } -> (
+      let whole = shift + width = 8 * Bitfield.byte_size base in
       let word =
         match bitword with
         | Some v -> v
         | None ->
-            unsigned m ?size ~o ~words ~k:(k + f.offset)
+            unsigned m ?size ~raw:(not whole) ~o ~words ~k:(k + f.offset)
               ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ()
       in
-      let whole = shift + width = 8 * Bitfield.byte_size base in
       match m.num with
       | Tagged ->
           let v =
@@ -538,58 +692,6 @@ let output_text w (o : output) =
    is one line [let x = e in] whose [e] only loads or computes, so a line
    whose [x] no later line of its function reads is dropped, until none
    is. *)
-
-let is_variable x =
-  x <> ""
-  && (match x.[0] with 'a' .. 'z' | '_' -> true | _ -> false)
-  && String.for_all is_ident_char x
-
-(* The variable a line [let x = e in] binds. *)
-let binding line =
-  let is_let =
-    String.starts_with ~prefix:"let " line
-    && String.ends_with ~suffix:" in" line
-  in
-  match if is_let then String.index_from_opt line 4 ' ' else None with
-  | Some i when String.length line >= i + 3 ->
-      let x = String.sub line 4 (i - 4) in
-      if is_variable x && String.sub line i 3 = " = " then Some x else None
-  | _ -> None
-
-let local_prefix = "let[@local] "
-
-(* The occurrences of [x] in [line] as a word: none qualified by a module,
-   none as the name of a label. *)
-let occurrences x line =
-  let n = String.length line and k = String.length x in
-  let rec from i acc =
-    if i + k > n then List.rev acc
-    else
-      let word =
-        String.sub line i k = x
-        && (i = 0 || not (is_ident_char line.[i - 1] || line.[i - 1] = '.'))
-        && (i + k = n || not (is_ident_char line.[i + k]))
-      in
-      let label =
-        word && i > 0 && line.[i - 1] = '~' && i + k < n && line.[i + k] = ':'
-      in
-      from (i + 1) (if word && not label then i :: acc else acc)
-  in
-  from 0 []
-
-(* Whether [line] binds [x]: as a [let], or as a parameter of a local
-   function. *)
-let binds x line =
-  binding line = Some x
-  || (String.starts_with ~prefix:local_prefix line && occurrences x line <> [])
-
-(* Whether [line] reads [x], other than by binding it. *)
-let reads x line =
-  if String.starts_with ~prefix:local_prefix line then false
-  else
-    List.exists
-      (fun i -> not (i = 4 && binding line = Some x))
-      (occurrences x line)
 
 let is_function line = String.starts_with ~prefix:"let[@inline always]" line
 
@@ -676,7 +778,8 @@ let cut w ~label body =
   | Some c when can_cut w ->
       let b = Buffer.create 4096 in
       let ppf = Format.formatter_of_buffer b in
-      body { w with ppf; fn = { chars = 0; decisions = 0 }; depth = 0 };
+      scoped w (fun () ->
+          body { w with ppf; fn = { chars = 0; decisions = 0 }; depth = 0 });
       Format.pp_print_flush ppf ();
       let lines = prune (String.split_on_char '\n' (Buffer.contents b)) in
       let seen = Hashtbl.create 16 in
@@ -834,7 +937,7 @@ let load_words w ~o ~k ~size live =
         match f.store with Int { width = 32; _ } -> not m.raw32 | _ -> true)
       live
   in
-  let words = words ~size worded in
+  let words = words m.num ~size worded in
   let w =
     List.fold_left
       (fun w a ->
@@ -894,6 +997,28 @@ let field w ~o ~k ~size ~words ~bitwords f =
     | Bits { base; _ } ->
         let bitword = List.assoc (f.offset, base) bitwords in
         bind_field w (value m ~bitword ~o ~words ~k:0 shifted)
+    | Int { width = (16 | 32) as width; signed = false; endian = T.Big }
+      when m.num = Unboxed ->
+        let v = value m ~size:(k + size) ~o ~words ~k:0 shifted in
+        let w =
+          if is_slot m f.id then bind_field w v
+          else begin
+            w.deferred := (f.id, (v, true)) :: !(w.deferred);
+            bind ?ty:typed w f.id
+          end
+        in
+        let raw = f.id ^ "_le" in
+        let v =
+          match width with
+          | 16 ->
+              Fmt.str "(U.of_int %s)"
+                (load m ~o ~k:shifted.offset ~bytes:2 ~endian:T.Little)
+          | _ ->
+              Fmt.str "(U.of_int32_u %s)"
+                (load m ~o ~k:shifted.offset ~bytes:4 ~endian:T.Little)
+        in
+        pf w "let %s = %s in@\n" raw v;
+        { (bind_num w raw) with raws = (f.id, (raw, width)) :: w.raws }
     | _ -> bind_field w (value m ~size:(k + size) ~o ~words ~k:0 shifted)
   in
   let w =
@@ -934,6 +1059,11 @@ let prefix w fields size p ~need k =
   in
   go w fields
 
+(* The key a checked span is remembered under. It names the window as well as
+   the size and position, because positions restart at 0 in a region: a
+   remembered bound is valid only in the window it was checked against. *)
+let span_bound w size p = (w.base, w.limit, key size, pos_expr w.m.num p)
+
 (* A span of [size] bytes at [p]: its size, bound to a variable, and where it
    ends. *)
 let span w size p =
@@ -954,7 +1084,8 @@ let span w size p =
     if (not !ov) && nonnegative w size then upper
     else Fmt.str "%s || %s" (relation num "<" n (lit num 0)) upper
   in
-  pf w "if %s then %s else@\n" outside (w.m.fail Bounds);
+  if not (List.mem (span_bound w size p) w.bounded) then
+    pf w "if %s then %s else@\n" outside (w.m.fail Bounds);
   let e = w.fresh "e" in
   pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n);
   let w = bind_num (bind_num w n) e in
@@ -1146,8 +1277,67 @@ let reach tree =
     (fun i -> Option.value ~default:0 (Hashtbl.find_opt cases i) > 1),
     leaves tree + Hashtbl.length cases )
 
+(* The atom [id = c] on an [int64_u] variable [id], which is [c] where it
+   holds; on a field held by its little-endian bytes too, the atom as a test of
+   those bytes against [c] swapped, which needs no swap of the load. *)
+let literal_test w atom =
+  let raw id c =
+    match List.assoc_opt id w.raws with
+    | Some (raw, width) when c >= 0 && c < 1 lsl width ->
+        let swapped =
+          List.fold_left
+            (fun acc i ->
+              acc lor (((c lsr (8 * i)) land 0xff) lsl (width - 8 - (8 * i))))
+            0
+            (List.init (width / 8) Fun.id)
+        in
+        (* A 32-bit load is sign-extended. *)
+        let swapped =
+          if width = 32 && swapped land 0x8000_0000 <> 0 then
+            swapped - (1 lsl 32)
+          else swapped
+        in
+        Some (relation w.m.num "=" raw (lit w.m.num swapped))
+    | _ -> None
+  in
+  match atom with
+  | (T.Eq (T.Ref (T.I, id), T.Int c) | T.Eq (T.Int c, T.Ref (T.I, id)))
+    when w.m.num = Unboxed && List.mem_assoc id w.scope
+         && (not (is_slot w.m id))
+         && not (List.mem_assoc id w.settled) ->
+      Some (id, c, raw id c)
+  | _ -> None
+
+(* The test [atom], then [yes] where it holds and [no] where it does not. An
+   atom that may overflow rejects. An atom on a variable that it fixes makes
+   the variable that constant under [yes]. *)
+let pp_branch w atom ~yes ~no =
+  let ov = ref false in
+  let literal = literal_test w atom in
+  let s = match literal with Some (_, _, Some s) -> s | _ -> expr w ov atom in
+  if !ov then begin
+    pf w "match %s with@\n| true -> (@\n" s;
+    yes ();
+    pf w ")@\n| false -> (@\n";
+    no ();
+    pf w ")@\n| exception %s.Overflow -> %s@\n" arith (w.m.fail Bounds)
+  end
+  else begin
+    pf w "if %s then (@\n" s;
+    (match literal with
+    | Some (id, c, _) ->
+        scoped w (fun () ->
+            w.deferred :=
+              (id, (lit w.m.num c, false)) :: List.remove_assoc id !(w.deferred);
+            yes ())
+    | _ -> yes ());
+    pf w ") else (@\n";
+    no ();
+    pf w ")@\n"
+  end
+
 (* [tree], each shared subtree written once in a local function after the
-   ones it reaches; [leaf] writes a leaf. An atom that may overflow rejects. *)
+   ones it reaches; [leaf] writes a leaf. *)
 let pp_tree w ~j ~shared ~leaf tree =
   let rec emit w t =
     match t.node with
@@ -1155,24 +1345,10 @@ let pp_tree w ~j ~shared ~leaf tree =
     | Branch (atom, yes, no) ->
         let inner = { w with depth = w.depth + 1 } in
         let branch t =
-          if shared t then pf w "d%d_%s ()@\n" t.tid j else emit inner t
+          scoped w (fun () ->
+              if shared t then pf w "d%d_%s ()@\n" t.tid j else emit inner t)
         in
-        let ov = ref false in
-        let s = expr w ov atom in
-        if !ov then begin
-          pf w "match %s with@\n| true -> (@\n" s;
-          branch yes;
-          pf w ")@\n| false -> (@\n";
-          branch no;
-          pf w ")@\n| exception %s.Overflow -> %s@\n" arith (w.m.fail Bounds)
-        end
-        else begin
-          pf w "if %s then (@\n" s;
-          branch yes;
-          pf w ") else (@\n";
-          branch no;
-          pf w ")@\n"
-        end
+        pp_branch w atom ~yes:(fun () -> branch yes) ~no:(fun () -> branch no)
   in
   let defined = Hashtbl.create 16 in
   let rec define t =
@@ -1184,8 +1360,9 @@ let pp_tree w ~j ~shared ~leaf tree =
           define a;
           define b;
           if shared t then begin
+            flush w;
             pf w "let[@local] d%d_%s () =@\n" t.tid j;
-            emit { w with depth = w.depth + 1 } t;
+            scoped w (fun () -> emit { w with depth = w.depth + 1 } t);
             pf w "in@\n"
           end
     end
@@ -1227,6 +1404,7 @@ let opens = function Prefix _ | Span _ | Test _ | Region _ -> 1 | Gate _ -> 0
 let define_join w ~j ~exported indexed gates k =
   let e = w.fresh "e" in
   let outputs = joined ~exported gates in
+  flush w;
   pf w "let[@local] %s %a %s =@\n" j pp_list
     (List.map (fun (o : output) -> o.id) outputs)
     e;
@@ -1237,9 +1415,34 @@ let define_join w ~j ~exported indexed gates k =
       { w with known = 0; depth = w.depth + 1 }
       outputs
   in
-  k (bind_num inner e) { var = Some e; at = 0 };
+  scoped w (fun () -> k (bind_num inner e) { var = Some e; at = 0 });
   pf w "in@\n";
   fun ~fired w' p -> jump w' ~j ~exported indexed ~fired p
+
+(* Whether some path through [tree] runs no case. *)
+let rec runs_none t =
+  match t.node with
+  | Leaf None -> true
+  | Leaf (Some _) -> false
+  | Branch (_, a, b) -> runs_none a || runs_none b
+
+(* The bound of the span every case of [gates] starts with, at [p], checked
+   once before the dispatch when a case always runs: the branch on the tag
+   then waits on no length, and the cases skip the check. *)
+let hoist_bound w gates tree p =
+  let first (_, _, _, body) =
+    match body with
+    | (Region (size, _, _) | Span size) :: _ -> Some size
+    | _ -> None
+  in
+  match List.map first gates with
+  | Some size :: rest
+    when List.for_all (( = ) (Some (key size))) (List.map (Option.map key) rest)
+         && (not (runs_none tree))
+         && not (List.mem (span_bound w size p) w.bounded) ->
+      let w', _, _ = span w size p in
+      { w with depth = w'.depth; bounded = span_bound w size p :: w.bounded }
+  | _ -> w
 
 let rec walk w nodes p k =
   match nodes with
@@ -1312,6 +1515,7 @@ and dispatch w gates p ~copy k =
   let tree =
     decide w.facts (List.map (fun (i, (c, _, _, _)) -> (i, c)) indexed)
   in
+  let w = hoist_bound w gates tree p in
   let shared, case_shared, leaves = reach tree in
   if over w (tree_depth shared tree) then
     let _, (present : output), _, _ = List.hd gates in
@@ -1335,8 +1539,9 @@ and dispatch w gates p ~copy k =
     List.iter
       (fun (i, _) ->
         if case_shared i then begin
+          flush w;
           pf w "let[@local] c%d_%s () =@\n" i j;
-          case { w with depth = w.depth + 1 } i;
+          scoped w (fun () -> case { w with depth = w.depth + 1 } i);
           pf w "in@\n"
         end)
       indexed;
@@ -1380,6 +1585,9 @@ let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
       facts = no_facts;
       views = [];
       words = [];
+      raws = [];
+      deferred = ref [];
+      bounded = [];
       base;
       limit;
       known;

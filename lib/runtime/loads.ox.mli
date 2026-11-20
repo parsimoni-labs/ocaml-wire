@@ -28,11 +28,27 @@ module Local : sig
   val[@zero_alloc] i32le : bytes @ local -> int -> int32_u @@ portable
   val[@zero_alloc] i64be : bytes @ local -> int -> int64_u @@ portable
   val[@zero_alloc] i64le : bytes @ local -> int -> int64_u @@ portable
+  val[@zero_alloc] u16be_at : bytes @ local -> int64_u -> int @@ portable
+  (** [u16be_at] and the [_at] reads below read at an [int64_u] offset: the
+      compiler adds a constant part of it in the load itself. *)
+
+  val[@zero_alloc] u16le_at : bytes @ local -> int64_u -> int @@ portable
+  val[@zero_alloc] i32be_at : bytes @ local -> int64_u -> int32_u @@ portable
+  val[@zero_alloc] i32le_at : bytes @ local -> int64_u -> int32_u @@ portable
+  val[@zero_alloc] i64be_at : bytes @ local -> int64_u -> int64_u @@ portable
+  val[@zero_alloc] i64le_at : bytes @ local -> int64_u -> int64_u @@ portable
   val[@zero_alloc] set_u8 : bytes @ local -> int -> int -> unit @@ portable
   val[@zero_alloc] set_u16be : bytes @ local -> int -> int -> unit @@ portable
   val[@zero_alloc] set_u16le : bytes @ local -> int -> int -> unit @@ portable
   val[@zero_alloc] set_i32be : bytes @ local -> int -> int32_u -> unit @@ portable
   val[@zero_alloc] set_i32le : bytes @ local -> int -> int32_u -> unit @@ portable
+
+  val[@zero_alloc] set_u32be : bytes @ local -> int -> int64_u -> unit @@ portable
+  (** [set_u32be b off v] writes the low 32 bits of [v] big-endian. *)
+
+  val[@zero_alloc] set_u32le : bytes @ local -> int -> int64_u -> unit @@ portable
+  (** [set_u32le b off v] writes the low 32 bits of [v] little-endian. *)
+
   val[@zero_alloc] set_i64be : bytes @ local -> int -> int64_u -> unit @@ portable
   val[@zero_alloc] set_i64le : bytes @ local -> int -> int64_u -> unit @@ portable
 
@@ -73,6 +89,8 @@ module Local : sig
     val[@zero_alloc] set_u16le : t @ local -> int -> int -> unit @@ portable
     val[@zero_alloc] set_i32be : t @ local -> int -> int32_u -> unit @@ portable
     val[@zero_alloc] set_i32le : t @ local -> int -> int32_u -> unit @@ portable
+    val[@zero_alloc] set_u32be : t @ local -> int -> int64_u -> unit @@ portable
+    val[@zero_alloc] set_u32le : t @ local -> int -> int64_u -> unit @@ portable
     val[@zero_alloc] set_i64be : t @ local -> int -> int64_u -> unit @@ portable
     val[@zero_alloc] set_i64le : t @ local -> int -> int64_u -> unit @@ portable
     val[@zero_alloc] get_uint8 : t @ local -> int -> int @@ portable

@@ -761,6 +761,140 @@ let refined_size_scan =
       corpus = refined_size_corpus;
     }
 
+(* A bound checked once before a dispatch holds only in the window it was
+   checked against. The two scans below repeat the checked span inside a
+   smaller region, in a case and after the dispatch. [region_word] holds a
+   scalar because EverParse cannot extract a standalone validator for a
+   constant-size region that holds a record. *)
+let region_word = Wire.(nested_at_most ~size:(int 4) uint32be)
+
+let region_inner =
+  let open Wire in
+  Codec.v "ScanRegionInner"
+    (fun x y w -> (x, y, w))
+    Codec.
+      [
+        (Field.v "x" uint8 $ fun (x, _, _) -> x);
+        (Field.v "y" uint8 $ fun (_, y, _) -> y);
+        (Field.v "w" region_word $ fun (_, _, w) -> w);
+      ]
+
+let region_inner_values name (x, y, w) =
+  let u8 = Wire.UInt8.to_int in
+  [
+    (name ^ "_x", u8 x); (name ^ "_y", u8 y); (name ^ "_w", Wire.UInt32.to_int w);
+  ]
+
+let region_cases body =
+  let open Wire in
+  let tag = Field.v "tag" uint8 in
+  let zero = Expr.(Field.ref tag = int 0) in
+  ( tag,
+    Field.optional "a" ~present:zero body,
+    Field.optional "b" ~present:Expr.(not zero) body )
+
+let region_present name project = function
+  | None -> [ (name ^ "_present", 0) ]
+  | Some v -> (name ^ "_present", 1) :: project v
+
+(* Both tags, with the inner region shorter and longer than the 6 bytes
+   [region_inner] needs, each frame cut at every length. *)
+let region_corpus () =
+  List.concat_map
+    (fun tag ->
+      List.concat_map
+        (fun len ->
+          let b =
+            Bytes.init 20 (fun i ->
+                Char.chr (if i = 0 then tag else if i = 6 then len else i))
+          in
+          List.init 21 (fun n -> Bytes.sub b 0 n))
+        [ 0; 4; 5; 6; 7; 255 ])
+    [ 0; 1 ]
+
+let region_in_case_scan =
+  let open Wire in
+  let len = Field.v "len" uint8 in
+  let case =
+    Codec.v "ScanRegionCase"
+      (fun h len r -> (h, len, r))
+      Codec.
+        [
+          (Field.v "h" region_word $ fun (x, _, _) -> x);
+          (len $ fun (_, x, _) -> x);
+          ( Field.v "r"
+              (nested_at_most ~size:(Field.ref len) (codec region_inner))
+          $ fun (_, _, x) -> x );
+        ]
+  in
+  let tag, a, b = region_cases (codec case) in
+  let codec =
+    Codec.v "ScanRegionInCase"
+      (fun tag pad a b -> (tag, pad, a, b))
+      Codec.
+        [
+          (tag $ fun (x, _, _, _) -> x);
+          (Field.v "pad" uint8 $ fun (_, x, _, _) -> x);
+          (a $ fun (_, _, x, _) -> x);
+          (b $ fun (_, _, _, x) -> x);
+        ]
+  in
+  let case_values name (h, len, r) =
+    [ (name ^ "_h", UInt32.to_int h); (name ^ "_len", UInt8.to_int len) ]
+    @ region_inner_values (name ^ "_r") r
+  in
+  let project (tag, pad, a, b) =
+    [ ("tag", UInt8.to_int tag); ("pad", UInt8.to_int pad) ]
+    @ region_present "a" (case_values "a") a
+    @ region_present "b" (case_values "b") b
+  in
+  Scan
+    {
+      label = "scan_region_in_case";
+      codec;
+      project;
+      inputs = (fun b -> [ b ]);
+      corpus = region_corpus;
+    }
+
+let region_after_cases_scan =
+  let open Wire in
+  let tag, a, b = region_cases region_word in
+  let len = Field.v "len" uint8 in
+  let codec =
+    Codec.v "ScanRegionAfterCases"
+      (fun tag pad a b len r tail -> (tag, pad, a, b, len, r, tail))
+      Codec.
+        [
+          (tag $ fun (x, _, _, _, _, _, _) -> x);
+          (Field.v "pad" uint8 $ fun (_, x, _, _, _, _, _) -> x);
+          (a $ fun (_, _, x, _, _, _, _) -> x);
+          (b $ fun (_, _, _, x, _, _, _) -> x);
+          (len $ fun (_, _, _, _, x, _, _) -> x);
+          ( Field.v "r"
+              (nested_at_most ~size:(Field.ref len) (codec region_inner))
+          $ fun (_, _, _, _, _, x, _) -> x );
+          (Field.v "tail" uint8 $ fun (_, _, _, _, _, _, x) -> x);
+        ]
+  in
+  let word name w = [ (name, UInt32.to_int w) ] in
+  let project (tag, pad, a, b, len, r, tail) =
+    [ ("tag", UInt8.to_int tag); ("pad", UInt8.to_int pad) ]
+    @ region_present "a" (word "a") a
+    @ region_present "b" (word "b") b
+    @ [ ("len", UInt8.to_int len) ]
+    @ region_inner_values "r" r
+    @ [ ("tail", UInt8.to_int tail) ]
+  in
+  Scan
+    {
+      label = "scan_region_after_cases";
+      codec;
+      project;
+      inputs = (fun b -> [ b ]);
+      corpus = region_corpus;
+    }
+
 let scan_cases =
   (refined_size_scan :: signed_shift_scan :: bit_guard_scans)
   @ [
@@ -771,6 +905,8 @@ let scan_cases =
       optional_scan ~region:false;
       optional_scan ~region:true;
       nested_optional_scan;
+      region_in_case_scan;
+      region_after_cases_scan;
       Scan
         {
           label = "scan_packet";
