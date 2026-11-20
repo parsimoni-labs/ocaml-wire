@@ -998,6 +998,17 @@ type pass =
       (** Interval tests only, on slots nothing else reads: no scratch. [flat]
           holds six ints per test, read by {!scan_intervals}; [intervals] names
           the field of a failed one. *)
+  | Word of {
+      q : int;
+      l : int;
+      r : int;
+      m : int;
+      lo : int;
+      hi : int;
+      intervals : interval array;
+    }
+    (* A single interval test on a big-endian field or bitfield, read from
+         the record's 8-byte word at [q] and run inline. *)
   | Steps of {
       steps : step array;
       where : (slots -> bool) option;

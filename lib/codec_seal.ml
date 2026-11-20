@@ -1186,6 +1186,9 @@ let first_failed intervals input_end buf off =
 let run_plain_pass ?(runtime = no_runtime) pass input_end buf off =
   match pass with
   | No_checks -> ()
+  | Word { q; l; r; m; lo; hi; intervals } ->
+      if not (Codec_intervals.within buf off q l r m lo hi) then
+        first_failed intervals input_end buf off
   | Intervals { words = Some f; intervals; _ } ->
       if not (f buf off) then first_failed intervals input_end buf off
   | Intervals { flat; tables; intervals; words = None } ->
@@ -1232,9 +1235,17 @@ let plain_pass ~size ~has_checks ~needs_arr ~scratch ~clear steps where =
         (fun (Interval { scalar; set; _ }) -> (Ps scalar, set))
         intervals
     in
-    let flat, tables = flatten_intervals tests in
-    Intervals
-      { flat; tables; intervals; words = Codec_intervals.staged ~size tests }
+    match Codec_intervals.single ~size tests with
+    | Some (q, l, r, m, lo, hi) -> Word { q; l; r; m; lo; hi; intervals }
+    | None ->
+        let flat, tables = flatten_intervals tests in
+        Intervals
+          {
+            flat;
+            tables;
+            intervals;
+            words = Codec_intervals.staged ~size tests;
+          }
   else
     Steps
       {
@@ -1824,7 +1835,7 @@ let pass_paths prefix = function
   | No_checks -> [ prefix ^ ".none" ]
   | Steps _ -> [ prefix ^ ".steps" ]
   | Intervals { flat = [||]; _ } -> [ prefix ^ ".none" ]
-  | Intervals { words = Some _; _ } -> [ prefix ^ ".words" ]
+  | Word _ | Intervals { words = Some _; _ } -> [ prefix ^ ".words" ]
   | Intervals { flat; tables; _ } ->
       let rec plain i =
         i < Array.length flat

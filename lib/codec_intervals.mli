@@ -19,6 +19,19 @@ val flatten_intervals :
 (** [flatten_intervals tests] is the flat array and the byte tables of the tests
     [tests], each a field and the intervals its value must lie in. *)
 
+val within : bytes -> int -> int -> int -> int -> int -> int -> int -> bool
+(** [within buf off q l r m lo hi] is [true] when the field that the 8-byte
+    big-endian word at [off + q] holds as {!Codec_words.bits} [l r m] lies
+    between [lo] and [hi]. The read is unchecked, so the caller checks the
+    record's frame first. *)
+
+val single :
+  size:int ->
+  (Codec_repr.packed_scalar * (int * int) array) array ->
+  (int * int * int * int * int * int) option
+(** [single ~size tests] is [Some (q, l, r, m, lo, hi)] when [tests] is one test
+    that a record of [size] bytes runs as {!within}. *)
+
 val staged :
   size:int ->
   (Codec_repr.packed_scalar * (int * int) array) array ->

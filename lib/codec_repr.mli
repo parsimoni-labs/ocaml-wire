@@ -386,6 +386,18 @@ type pass =
       words : (bytes -> int -> bool) option;
           (** The tests as reads of the record's words, when they can be. *)
     }
+  | Word of {
+      q : int;
+      l : int;
+      r : int;
+      m : int;
+      lo : int;
+      hi : int;
+      intervals : interval array;
+    }
+      (** A single interval test on a big-endian field or bitfield, read from
+          the record's 8-byte word at [q] and run inline
+          ({!Codec_intervals.within}). *)
   | Steps of {
       steps : step array;
       where : (slots -> bool) option;
