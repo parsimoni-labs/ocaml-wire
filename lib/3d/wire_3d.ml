@@ -584,8 +584,81 @@ let run_3d_spawned ?output ~outdir exe flags file =
   in
   spawn ?output exe (flags @ [ "--odir"; outdir; Filename.concat outdir file ])
 
+(* Workaround for an EverParse regression, <<TODO: everparse issue>>. Since
+   v2026.10, F* extracts the validators through Custard, which gives up on a
+   flat record of 16 fields (Error 365, "Custard exceeded
+   --custard_norm_budget") that earlier releases compiled. 3d.exe passes no
+   flag of ours to F*, so it runs F* through a script that adds a larger
+   budget. *)
+let custard_norm_budget = 50_000_000
+
+(* Whether [version], as [3d.exe --version] prints it ("EverParse/3d
+   v2026.10.27"), names a release that extracts through Custard. *)
+let has_custard version =
+  let release word =
+    match String.split_on_char '.' word with
+    | year :: month :: _ when String.length year > 1 && year.[0] = 'v' -> (
+        let year = String.sub year 1 (String.length year - 1) in
+        match (int_of_string_opt year, int_of_string_opt month) with
+        | Some y, Some m -> Some (y, m)
+        | _ -> None)
+    | _ -> None
+  in
+  match List.find_map release (String.split_on_char ' ' version) with
+  | Some r -> r >= (2026, 10)
+  | None -> false
+
+(* The script that runs [fstar] with the larger budget. It lives in the
+   temporary directory under a name derived from its contents, so every run
+   and every forked job shares one copy, written once by rename. *)
+let fstar_wrapper fstar =
+  let script =
+    Fmt.str "#!/bin/sh\nexec %s \"$@\" --custard_norm_budget %d\n"
+      (Filename.quote fstar) custard_norm_budget
+  in
+  let path =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      ("wire-fstar-" ^ Digest.to_hex (Digest.string script) ^ ".sh")
+  in
+  if not (Sys.file_exists path) then begin
+    let tmp =
+      Filename.temp_file ~temp_dir:(Filename.dirname path) "wire-fstar" ".sh"
+    in
+    Out_channel.with_open_bin tmp (fun oc -> output_string oc script);
+    Unix.chmod tmp 0o755;
+    Sys.rename tmp path
+  end;
+  path
+
+(* The flags that make [exe] run F* with the larger budget: none on Windows,
+   where the script cannot run, and none for a release without Custard or a
+   3d.exe whose version does not read. *)
+let fstar_flags =
+  let known = Hashtbl.create 1 in
+  fun exe ->
+    match Hashtbl.find_opt known exe with
+    | Some flags -> flags
+    | None ->
+        let flags =
+          if Sys.win32 then []
+          else
+            match everparse_version exe with
+            | version when has_custard version ->
+                let fstar =
+                  Filename.concat (Filename.dirname exe) "fstar.exe"
+                in
+                let fstar = if executable fstar then fstar else "fstar.exe" in
+                [ "--fstar"; fstar_wrapper fstar ]
+            | _ -> []
+            | exception (Failure _ | Unix.Unix_error _) -> []
+        in
+        Hashtbl.replace known exe flags;
+        flags
+
 (* Run 3d.exe with [flags] on [file], a name in [outdir], writing there. *)
 let run_3d ?output ~outdir exe flags file =
+  let flags = fstar_flags exe @ flags in
   if Sys.win32 then run_3d_spawned ?output ~outdir exe flags file
   else run_process ?output ~cwd:outdir exe (flags @ [ file ])
 
@@ -1881,4 +1954,5 @@ module Private = struct
 
   let pool_in_process = pool_in_process
   let locate_3d_exe = Proc.locate_3d_exe
+  let has_custard = has_custard
 end

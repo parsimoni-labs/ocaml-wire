@@ -390,5 +390,11 @@ module Private : sig
       runs, found with the given environment: the first that [executable]
       accepts in a directory of [PATH] (split on [';'] when [win32], on [':']
       otherwise), then in [.local/everparse/bin] under [HOME] and under
-      [USERPROFILE], [everparse-3d.exe] before [everparse-3d.exe] in each. *)
+      [USERPROFILE], [everparse-3d.exe] before [3d.exe] in each. *)
+
+  val has_custard : string -> bool
+  (** [has_custard version] is [true] when [version], as [3d.exe --version]
+      prints it, names EverParse v2026.10 or later. Wire then runs F* from
+      3d.exe with a larger [--custard_norm_budget], working around a regression
+      that stops a flat record of 16 fields. *)
 end
