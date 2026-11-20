@@ -70,7 +70,7 @@ the target (Solo5, bare-metal flight software), so it builds in every
 dune context through that context's toolchain:
 `%{ocaml-config:c_compiler}`, the `ocaml-config` pack linker, and
 `objcopy`/`ar` resolved with `cc -print-prog-name`. Only host-side steps
-(regenerating C with `3d.exe`, the `agree` differential) are gated on
+(regenerating C with `everparse-3d.exe`, the `agree` differential) are gated on
 `(= %{context_name} default)`.
 
 EverParse emits embedded sub-validators `static inline` and the

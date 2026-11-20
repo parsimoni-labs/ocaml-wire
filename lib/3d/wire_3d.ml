@@ -254,7 +254,7 @@ let check_provenance ~outdir three_d_files =
 let everparse_dir () =
   match locate_3d_exe () with
   | Some exe -> Filename.dirname exe |> Filename.dirname
-  | None -> failwith "3d.exe not found"
+  | None -> failwith not_found_3d_exe
 
 (* A freestanding endianness branch for EverParseEndianness.h. The shipped
    header keys byte order off an OS (<endian.h> on Linux, OSSwap on macOS, ...)
@@ -579,7 +579,7 @@ let run_everparse_files ?(quiet = true) ~outdir files =
   let exe =
     match locate_3d_exe () with
     | Some e -> e
-    | None -> failwith "3d.exe not found in PATH or ~/.local/everparse/bin/"
+    | None -> failwith not_found_3d_exe
   in
   let version = everparse_version exe in
   List.iter
@@ -602,7 +602,7 @@ let parse_3d ?(batch = false) ~outdir file =
   let exe =
     match locate_3d_exe () with
     | Some e -> e
-    | None -> failwith "3d.exe not found in PATH or ~/.local/everparse/bin/"
+    | None -> failwith not_found_3d_exe
   in
   let log_path = Filename.temp_file "wire_parse_3d" ".log" in
   (* 3d.exe emits diagnostics to stdout, so capture both streams. *)
@@ -812,7 +812,7 @@ let fork_pool = fork_pool
 let batch_check ?max_jobs ~outdir schemas =
   check_name_collisions schemas;
   match (locate_3d_exe (), schemas) with
-  | None, _ -> Error "3d.exe not found in PATH or ~/.local/everparse/bin/"
+  | None, _ -> Error not_found_3d_exe
   | Some _, [] -> Ok ()
   | Some exe, _ -> (
       ensure_dir outdir;
@@ -862,9 +862,7 @@ let generate_c ?(quiet = true) ~outdir schemas =
     write_fields ~outdir schemas;
     generate_test ~outdir schemas
   end
-  else
-    failwith
-      "3d.exe not found in PATH. Install EverParse to regenerate C files."
+  else failwith (not_found_3d_exe ^ ". Install EverParse to regenerate C files.")
 
 let run ?(quiet = true) ~outdir schemas =
   generate_3d ~outdir schemas;
@@ -1590,9 +1588,7 @@ let generate_c_standalone ?(quiet = true) ?name ~outdir ~package () =
   if has_3d_exe () then
     run_everparse_files ~quiet ~outdir
       [ standalone_base ?name ~package () ^ ".3d" ]
-  else
-    failwith
-      "3d.exe not found in PATH. Install EverParse to regenerate C files."
+  else failwith (not_found_3d_exe ^ ". Install EverParse to regenerate C files.")
 
 let generate_standalone ?(quiet = true) ?name ~outdir ~package codecs =
   generate_3d_standalone ?name ~outdir ~package codecs;
