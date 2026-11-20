@@ -23,35 +23,66 @@
     (= %{architecture} amd64))))
  (targets
   g_ipv4.ml
+  g_ipv4.mli
   g_ipv4_wire.ml
+  g_ipv4_wire.mli
   g_ipv4_record.ml
+  g_ipv4_record.mli
   g_ipv4_record_wire.ml
+  g_ipv4_record_wire.mli
   g_checked.ml
+  g_checked.mli
   g_checked_wire.ml
+  g_checked_wire.mli
   g_mixed.ml
+  g_mixed.mli
   g_mixed_wire.ml
+  g_mixed_wire.mli
   g_small.ml
+  g_small.mli
   g_small_wire.ml
+  g_small_wire.mli
   g_eth.ml
+  g_eth.mli
   g_eth_wire.ml
+  g_eth_wire.mli
   g_wide.ml
+  g_wide.mli
   g_wide_wire.ml
+  g_wide_wire.mli
   g_mapped.ml
+  g_mapped.mli
   g_mapped_wire.ml
+  g_mapped_wire.mli
   g_signed.ml
+  g_signed.mli
   g_signed_wire.ml
+  g_signed_wire.mli
   g_packed.ml
+  g_packed.mli
   g_packed_wire.ml
+  g_packed_wire.mli
   g_refined.ml
+  g_refined.mli
   g_refined_wire.ml
+  g_refined_wire.mli
   g_overflow.ml
+  g_overflow.mli
   g_overflow_wire.ml
+  g_overflow_wire.mli
   g_lanes.ml
+  g_lanes.mli
   g_lanes_wire.ml
+  g_lanes_wire.mli
   s_sized.ml
+  s_sized.mli
   s_overflow.ml
+  s_overflow.mli
   s_skipped.ml
-  s_nested.ml)
+  s_skipped.mli
+  s_nested.ml
+  s_nested.mli
+  s_nested_step.ml)
  (action
   (run ../ocaml/gen.exe --oxcaml --simd)))
 
@@ -64,35 +95,66 @@
     (<> %{architecture} amd64))))
  (targets
   g_ipv4.ml
+  g_ipv4.mli
   g_ipv4_wire.ml
+  g_ipv4_wire.mli
   g_ipv4_record.ml
+  g_ipv4_record.mli
   g_ipv4_record_wire.ml
+  g_ipv4_record_wire.mli
   g_checked.ml
+  g_checked.mli
   g_checked_wire.ml
+  g_checked_wire.mli
   g_mixed.ml
+  g_mixed.mli
   g_mixed_wire.ml
+  g_mixed_wire.mli
   g_small.ml
+  g_small.mli
   g_small_wire.ml
+  g_small_wire.mli
   g_eth.ml
+  g_eth.mli
   g_eth_wire.ml
+  g_eth_wire.mli
   g_wide.ml
+  g_wide.mli
   g_wide_wire.ml
+  g_wide_wire.mli
   g_mapped.ml
+  g_mapped.mli
   g_mapped_wire.ml
+  g_mapped_wire.mli
   g_signed.ml
+  g_signed.mli
   g_signed_wire.ml
+  g_signed_wire.mli
   g_packed.ml
+  g_packed.mli
   g_packed_wire.ml
+  g_packed_wire.mli
   g_refined.ml
+  g_refined.mli
   g_refined_wire.ml
+  g_refined_wire.mli
   g_overflow.ml
+  g_overflow.mli
   g_overflow_wire.ml
+  g_overflow_wire.mli
   g_lanes.ml
+  g_lanes.mli
   g_lanes_wire.ml
+  g_lanes_wire.mli
   s_sized.ml
+  s_sized.mli
   s_overflow.ml
+  s_overflow.mli
   s_skipped.ml
-  s_nested.ml)
+  s_skipped.mli
+  s_nested.ml
+  s_nested.mli
+  s_nested_step.ml)
  (action
   (run ../ocaml/gen.exe --oxcaml)))
 
@@ -101,35 +163,66 @@
   (<> %{ocaml-config:ox} true))
  (targets
   g_ipv4.ml
+  g_ipv4.mli
   g_ipv4_wire.ml
+  g_ipv4_wire.mli
   g_ipv4_record.ml
+  g_ipv4_record.mli
   g_ipv4_record_wire.ml
+  g_ipv4_record_wire.mli
   g_checked.ml
+  g_checked.mli
   g_checked_wire.ml
+  g_checked_wire.mli
   g_mixed.ml
+  g_mixed.mli
   g_mixed_wire.ml
+  g_mixed_wire.mli
   g_small.ml
+  g_small.mli
   g_small_wire.ml
+  g_small_wire.mli
   g_eth.ml
+  g_eth.mli
   g_eth_wire.ml
+  g_eth_wire.mli
   g_wide.ml
+  g_wide.mli
   g_wide_wire.ml
+  g_wide_wire.mli
   g_mapped.ml
+  g_mapped.mli
   g_mapped_wire.ml
+  g_mapped_wire.mli
   g_signed.ml
+  g_signed.mli
   g_signed_wire.ml
+  g_signed_wire.mli
   g_packed.ml
+  g_packed.mli
   g_packed_wire.ml
+  g_packed_wire.mli
   g_refined.ml
+  g_refined.mli
   g_refined_wire.ml
+  g_refined_wire.mli
   g_overflow.ml
+  g_overflow.mli
   g_overflow_wire.ml
+  g_overflow_wire.mli
   g_lanes.ml
+  g_lanes.mli
   g_lanes_wire.ml
+  g_lanes_wire.mli
   s_sized.ml
+  s_sized.mli
   s_overflow.ml
+  s_overflow.mli
   s_skipped.ml
-  s_nested.ml)
+  s_skipped.mli
+  s_nested.ml
+  s_nested.mli
+  s_nested_step.ml)
  (action
   (run ../ocaml/gen.exe)))
 
@@ -168,7 +261,8 @@
   s_sized
   s_overflow
   s_skipped
-  s_nested)
+  s_nested
+  s_nested_step)
  (libraries
   schemas
   wire

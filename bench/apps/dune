@@ -14,7 +14,13 @@
 (rule
  (enabled_if
   (<> %{ocaml-config:ox} true))
- (targets g_space_packet.ml g_tm_frame.ml g_clcw.ml)
+ (targets
+  g_space_packet.ml
+  g_space_packet.mli
+  g_tm_frame.ml
+  g_tm_frame.mli
+  g_clcw.ml
+  g_clcw.mli)
  (action
   (run ./gen.exe --ocaml)))
 
@@ -25,7 +31,13 @@
    (and
     (<> %{architecture} arm64)
     (<> %{architecture} amd64))))
- (targets g_space_packet.ml g_tm_frame.ml g_clcw.ml)
+ (targets
+  g_space_packet.ml
+  g_space_packet.mli
+  g_tm_frame.ml
+  g_tm_frame.mli
+  g_clcw.ml
+  g_clcw.mli)
  (action
   (run ./gen.exe --oxcaml)))
 
@@ -39,7 +51,13 @@
    (or
     (= %{architecture} arm64)
     (= %{architecture} amd64))))
- (targets g_space_packet.ml g_tm_frame.ml g_clcw.ml)
+ (targets
+  g_space_packet.ml
+  g_space_packet.mli
+  g_tm_frame.ml
+  g_tm_frame.mli
+  g_clcw.ml
+  g_clcw.mli)
  (action
   (run ./gen.exe --oxcaml --simd)))
 

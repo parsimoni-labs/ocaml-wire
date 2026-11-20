@@ -4,8 +4,9 @@
    With [--ocaml] (or [--oxcaml], for the OxCaml target, and [--oxcaml
    --simd] for it on arm64 or amd64, with the SIMD lanes of the records that have
    them), in the current directory: the modules Wire_ocaml writes,
-   g_space_packet.ml, g_tm_frame.ml and g_clcw.ml. With [--rust DIR], in [DIR]: the modules Wire_rust writes,
-   space_packet.rs, tm_frame.rs and clcw.rs. *)
+   g_space_packet.ml, g_tm_frame.ml and g_clcw.ml, each with its interface.
+   With [--rust DIR], in [DIR]: the modules Wire_rust writes, space_packet.rs,
+   tm_frame.rs and clcw.rs. *)
 
 let write file s =
   let oc = open_out_bin file in
@@ -30,7 +31,10 @@ let () =
         {
           g =
             (fun name codec c ->
-              write ("g_" ^ name ^ ".ml") (Wire_ocaml.ml ~target ~simd ~codec c));
+              write ("g_" ^ name ^ ".ml") (Wire_ocaml.ml ~target ~simd ~codec c);
+              write
+                ("g_" ^ name ^ ".mli")
+                (Wire_ocaml.mli ~target ~simd ~codec c));
         }
   | [| _; "--rust"; dir |] ->
       codecs

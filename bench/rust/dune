@@ -22,9 +22,13 @@
   stack_read.ml
   selected_read.ml
   g_eth.ml
+  g_eth.mli
   g_ipv4.ml
+  g_ipv4.mli
   g_tcp.ml
-  g_udp.ml)
+  g_tcp.mli
+  g_udp.ml
+  g_udp.mli)
  (action
   (run ./gen.exe --ocaml)))
 
@@ -35,9 +39,13 @@
   stack_read.ml
   selected_read.ml
   g_eth.ml
+  g_eth.mli
   g_ipv4.ml
+  g_ipv4.mli
   g_tcp.ml
-  g_udp.ml)
+  g_tcp.mli
+  g_udp.ml
+  g_udp.mli)
  (action
   (run ./gen.exe --oxcaml)))
 

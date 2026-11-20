@@ -372,6 +372,30 @@ let pp_decoder s =
      @\n"
     s.m.src.buf
 
+(* [pp ppf v] prints the outputs [v] as an OCaml record, with [Format]'s
+   primitives only. *)
+let pp_printer s =
+  Hashtbl.replace s.taken "pp" ();
+  Fmt.pf s.ppf
+    "let pp ppf (v : t) =@\n\
+     let field name pp_v x =@\n\
+     Format.pp_print_space ppf ();@\n\
+     Format.pp_print_string ppf (name ^ \" = \");@\n\
+     pp_v ppf x;@\n\
+     Format.pp_print_char ppf ';'@\n\
+     in@\n\
+     Format.pp_open_hvbox ppf 2;@\n\
+     Format.pp_print_char ppf '{';@\n\
+     field \"ok\" Format.pp_print_bool v.ok;@\n";
+  List.iter
+    (fun (o : output) ->
+      Fmt.pf s.ppf "field %S Format.pp_print_%s v.%s;@\n" o.name
+        (if o.is_bool then "bool" else "int")
+        o.name)
+    s.selected;
+  Fmt.pf s.ppf
+    "Format.pp_print_string ppf \" }\";@\nFormat.pp_close_box ppf ()@\n@\n"
+
 (* [decode_unboxed], which returns an unboxed record. Its walk stays one
    function and builds the record with local functions: built in a function
    the walk is cut into, or by a top-level function, the record costs
@@ -412,6 +436,35 @@ let selected (plan : plan) = function
 let without_dead_bindings text =
   String.concat "\n" (prune (String.split_on_char '\n' text))
 
+(* The scanner after its header: the walks, the outputs and their printer. *)
+let pp_body ?step s =
+  let unboxed = s.m.num = Unboxed in
+  if unboxed then
+    Fmt.pf s.ppf
+      "module U = Wire_runtime.Target.Int64_u@\n\
+       module B = Wire_runtime.Target@\n\
+       module L = Wire_runtime.Target.Local@\n\
+       @\n";
+  pp_fold s ~unboxed:false;
+  pp_frames s ~unboxed:false;
+  Option.iter
+    (fun m ->
+      pp_fold_step s m;
+      pp_frames ~step:m s ~unboxed:false)
+    step;
+  if unboxed then begin
+    pp_fold s ~unboxed:true;
+    pp_frames s ~unboxed:true
+  end;
+  pp_result_type s "t" "";
+  pp_decoder s;
+  pp_printer s;
+  if unboxed then begin
+    pp_result_type s "unboxed" "#";
+    pp_unboxed_decoder s;
+    pp_box s
+  end
+
 let scanner ?(target = `OCaml) ?fields ?step ~codec c =
   try
     let plan = scan_plan c in
@@ -428,32 +481,14 @@ let scanner ?(target = `OCaml) ?fields ?step ~codec c =
         taken = Hashtbl.create 16;
       }
     in
-    pp_header ppf ~codec ~name:plan.record ~digest:(Gen.digest c);
-    pp_wide ppf ~codec ~wide:plan.wide;
-    if num = Unboxed then
-      Fmt.pf ppf
-        "module U = Wire_runtime.Target.Int64_u@\n\
-         module B = Wire_runtime.Target@\n\
-         module L = Wire_runtime.Target.Local@\n\
-         @\n";
-    pp_fold s ~unboxed:false;
-    pp_frames s ~unboxed:false;
-    Option.iter
-      (fun m ->
-        pp_fold_step s m;
-        pp_frames ~step:m s ~unboxed:false)
-      step;
-    if num = Unboxed then begin
-      pp_fold s ~unboxed:true;
-      pp_frames s ~unboxed:true
-    end;
-    pp_result_type s "t" "";
-    pp_decoder s;
-    if target = `OxCaml then begin
-      pp_result_type s "unboxed" "#";
-      pp_unboxed_decoder s;
-      pp_box s
-    end;
+    pp_body ?step s;
     Format.pp_print_flush ppf ();
-    without_dead_bindings (Buffer.contents b)
+    let body = without_dead_bindings (Buffer.contents b) in
+    let uses = uses body in
+    Fmt.str "%a%a%s"
+      (fun ppf () ->
+        pp_header ppf ~codec ~name:plan.record ~digest:(Gen.digest c) ~uses)
+      ()
+      (fun ppf () -> pp_wide ppf ~codec ~wide:plan.wide ~uses)
+      () body
   with Unsupported why -> refuse ~codec why

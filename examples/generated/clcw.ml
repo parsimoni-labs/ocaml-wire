@@ -252,6 +252,33 @@ let v f1_controlwordtype f2_clcwversion f3_statusfield f4_copineffect f5_vcid
     reportvalue = f14_reportvalue;
   }
 
+let pp ppf (r : t) =
+  let field name pp_v v =
+    Format.pp_print_space ppf ();
+    Format.pp_print_string ppf (name ^ " = ");
+    pp_v ppf v;
+    Format.pp_print_char ppf ';'
+  in
+  let int = Format.pp_print_int in
+  Format.pp_open_hvbox ppf 2;
+  Format.pp_print_char ppf '{';
+  field "controlwordtype" int (r.controlwordtype :> int);
+  field "clcwversion" int (r.clcwversion :> int);
+  field "statusfield" int (r.statusfield :> int);
+  field "copineffect" int (r.copineffect :> int);
+  field "vcid" int (r.vcid :> int);
+  field "spare" int (r.spare :> int);
+  field "norf" int (r.norf :> int);
+  field "nobitlock" int (r.nobitlock :> int);
+  field "lockout" int (r.lockout :> int);
+  field "wait" int (r.wait :> int);
+  field "retransmit" int (r.retransmit :> int);
+  field "farmbcounter" int (r.farmbcounter :> int);
+  field "spare2" int (r.spare2 :> int);
+  field "reportvalue" int (r.reportvalue :> int);
+  Format.pp_print_string ppf " }";
+  Format.pp_close_box ppf ()
+
 let[@inline never] fail buf off =
   if off < 0 || off > Bytes.length buf - size then
     Wire_runtime.Errors.frame ~size ~len:(Bytes.length buf) off;
@@ -270,12 +297,6 @@ let validate buf off =
   match validate_exn buf off with
   | () -> Ok ()
   | exception Wire_runtime.Errors.Parse_error e -> Error e
-
-let[@inline never] validate_written buf off =
-  match validate_exn buf off with
-  | () -> ()
-  | exception Wire_runtime.Errors.Parse_error e ->
-      Wire_runtime.Errors.encode_rejected ~name:codec_name e
 
 let decode_exn buf off =
   if off < 0 || off > Bytes.length buf - size then fail buf off
@@ -470,9 +491,6 @@ let[@inline] write_at (b : 'b Wire_runtime.Buf.t)
          lor (f14_reportvalue lsl 0)));
     ()
   end
-
-let[@inline never] enum_failed at value valid =
-  Wire_runtime.Errors.invalid_enum ~at ~field:[] ~value ~valid
 
 module Get = struct
   let[@inline] controlwordtype buf off =
@@ -1041,12 +1059,6 @@ module Bigstring = struct
     | () -> Ok ()
     | exception Wire_runtime.Errors.Parse_error e -> Error e
 
-  let[@inline never] validate_written buf off =
-    match validate_exn buf off with
-    | () -> ()
-    | exception Wire_runtime.Errors.Parse_error e ->
-        Wire_runtime.Errors.encode_rejected ~name:codec_name e
-
   let decode_exn buf off =
     if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
       fail buf off
@@ -1250,9 +1262,6 @@ module Bigstring = struct
            lor (f13_spare2 lsl 8) lor (f14_reportvalue lsl 0)));
       ()
     end
-
-  let[@inline never] enum_failed at value valid =
-    Wire_runtime.Errors.invalid_enum ~at ~field:[] ~value ~valid
 
   module Get = struct
     let[@inline] controlwordtype buf off =
