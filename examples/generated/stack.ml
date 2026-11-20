@@ -563,8 +563,9 @@ let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
   then invalid_arg "fold_frames: invalid frame bounds or stride";
   let acc = ref init in
   let cursor = ref off in
+  let last = off + len - stride in
   if stride >= 34 then
-    for _ = 1 to len / stride do
+    while !cursor <= last do
       let base = !cursor in
       let current = !acc in
       let next =
@@ -575,7 +576,7 @@ let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
       cursor := base + stride
     done
   else
-    for _ = 1 to len / stride do
+    while !cursor <= last do
       let base = !cursor in
       let current = !acc in
       acc :=

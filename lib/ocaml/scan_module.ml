@@ -207,6 +207,11 @@ let frames_callbacks s ~unboxed =
 let frames_vars s =
   if s.m.num = Unboxed then ("", "<-", "stride_word") else ("!", ":=", "stride")
 
+(* The condition of a frame loop: [cursor] has not passed [last], the offset
+   of the last whole frame. The cursor is the loop's only counter. *)
+let frames_while s =
+  if s.m.num = Unboxed then "U.compare cursor last <= 0" else "!cursor <= last"
+
 (* The loop of [fold_frames] over frames walked with [known] bytes of each
    known to be there. A walk that knows all its bounds may not read [stop]. *)
 let pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known =
@@ -219,11 +224,11 @@ let pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known =
   Format.pp_print_flush bppf ();
   let body = Buffer.contents body in
   Fmt.pf ppf
-    "for _ = 1 to len / stride do@\n\
+    "while %s do@\n\
      let base = %scursor in@\n\
      let current = %sacc in@\n\
      let next = (@\n"
-    read read;
+    (frames_while s) read read;
   if mentions "stop" body then Fmt.pf ppf "let stop = %s in@\n" stride;
   Fmt.pf ppf "%s) in@\nacc %s next;@\ncursor %s %s@\ndone" body assign assign
     (binop s.m.num "+" "base" stride)
@@ -244,20 +249,20 @@ let pp_frames_short ?step s =
           at
   in
   Fmt.pf s.ppf
-    "for _ = 1 to len / stride do@\n\
+    "while %s do@\n\
      let base = %scursor in@\n\
      let current = %sacc in@\n\
      acc %s %s;@\n\
      cursor %s %s@\n\
      done"
-    read read assign one assign
+    (frames_while s) read read assign one assign
     (binop s.m.num "+" "base" stride)
 
 (* [fold_frames], or with [step] [fold_frames_step], which calls the module
-   [step]'s functions by name. The frame guard and a positive stride make
-   [base + stride <= off + len] on every iteration, the last included. Each
-   frame still gets all its checks: a short frame cannot borrow bytes from the
-   next. *)
+   [step]'s functions by name. The frame guard and a positive stride keep
+   [last = off + len - stride] from overflowing and every frame inside
+   [off + len]. The loop runs [len / stride] times, and each frame gets all
+   its checks, so a short frame cannot borrow bytes from the next. *)
 let pp_frames ?step s ~unboxed =
   let native = s.m.num = Unboxed in
   let binding, reference, read =
@@ -297,6 +302,9 @@ let pp_frames ?step s ~unboxed =
         reference binding
         (if native then "U.of_int " else "ref ");
       if native then Fmt.pf ppf "let stride_word = U.of_int stride in@\n";
+      Fmt.pf ppf "let last = %s in@\n"
+        (if native then "U.of_int (off + len - stride)"
+         else "off + len - stride");
       let need = fixed_need s.plan.nodes in
       let loop known =
         pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known
