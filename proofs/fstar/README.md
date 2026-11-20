@@ -63,13 +63,19 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 
 ## What is assumed
 
-- OCaml's native int is 63 bits; `Int64.to_int` keeps the low 63 bits.
-- Constants the emitter adds at generation time (`p.at + need`) do not
-  overflow.
+- OCaml on a 64-bit host, from its manual: an `int` is a 63-bit two's
+  complement pattern and `land`, `lor`, `lsl` are bitwise on it; an
+  `int64` is a 64-bit pattern, `Int64.shift_right_logical` shifts it as
+  unsigned, `Int64.to_int` keeps its low 63 bits. `Plan.Word` states these
+  as `FStar.UInt` operations (`ocaml_*`) and proves the word extraction and
+  `Planner.word_range`'s `lor` on them.
+- A window is no longer than `Sys.max_string_length` (it lies in a
+  `Bytes`), and a run of prefixes and tests is no longer either (`wf`).
+  Then the constant the emitter adds at generation time, `p.at + need`,
+  which the model computes with OCaml's wrapping `+`, does not wrap. The
+  planner breaks the second premise at b1f6f756 (`Defect.PrefixWrap`).
 - A window lies in the buffer, so adding its base cannot overflow
   (`Plan.Frames` proves it for `fold_frames`; regions are not modelled).
-- `lor` of the two disjoint constants in `Planner.word_range` is their sum
-  (`lor_disjoint` proves they are disjoint, not the bit identity).
 
 ## What is not covered
 
@@ -100,6 +106,13 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 | 57535e21 | a region's size walk read past the region's end | `Defect.RegionWalk` | yes |
 | 787089f1 | validate accepted a repeat's partial element | `Defect.RepeatBudget` | yes, outside the plan model |
 | bf2c2866 (O1 lane) | `Planner.sum_add` raises out of its handler | `Defect.SumConst` | yes |
+| b1f6f756 (open) | 33 nested variable-size codecs fuse into a prefix whose size wraps: no bound, a load far outside the buffer | `Defect.PrefixWrap`, `prefix-run-unbounded.sed` | yes |
+
+The last two were found while writing the model. For `Defect.PrefixWrap`
+the scanner Wire_ocaml writes for the codec accepts two bytes the codec
+rejects and loads its last field at `o3 + -4467570830351532362`; the
+replay checks the model's walk faults on the same plan, and the fix side
+shows `wf` refuses the plan.
 
 The plan model expresses the bound and arithmetic defects directly
 (4da4e8ad as a mutant of the emitter model itself). 6a0fce0b, 57535e21,

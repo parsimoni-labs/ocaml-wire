@@ -11,6 +11,20 @@ let max_int : int = pow2 62 - 1
 let min_int : int = - (pow2 62)
 let in_int (x:int) : bool = min_int <= x && x <= max_int
 
+(* OCaml's wrapping [+] on the native int. *)
+let wrap (x:int) : int = ((x + pow2 62) % pow2 63) - pow2 62
+
+let wrap_id (x:int) : Lemma (requires in_int x) (ensures wrap x == x) =
+  FStar.Math.Lemmas.small_mod (x + pow2 62) (pow2 63);
+  FStar.Math.Lemmas.pow2_double_sum 62
+
+(* Sys.max_string_length on a 64-bit host: no Bytes is longer, and
+   Codec_seal.add_min_size keeps a record's fixed bytes below it. *)
+let max_string_length : int = pow2 57 - 9
+
+let max_string_length_small () : Lemma (0 < max_string_length /\ 2 * max_string_length <= max_int) =
+  assert_norm (0 < max_string_length /\ 2 * max_string_length <= max_int)
+
 type var = nat
 type env = var -> int
 let upd (en:env) (v:var) (x:int) (w:var) : int = if w = v then x else en w

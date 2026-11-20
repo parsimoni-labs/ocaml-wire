@@ -21,12 +21,14 @@ MODULES = $(MODEL) Plan.Word.fst Plan.Frames.fst Spec.Ipv4.fst
 
 # defects/Defect.<name>.Buggy.fst fails, defects/Defect.<name>.Fixed.fst
 # verifies.
-DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
+DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst \
+  PrefixWrap
 
 # defects/<name>.sed rewrites the module its "# mutates:" line names, and
 # the module its "# fails:" line names then fails to verify.
 MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
-  frames-quad-overlap frames-quad-guard
+  frames-quad-overlap frames-quad-guard word-lor-overlap word-mask-dropped \
+  prefix-run-unbounded
 
 .PHONY: verify defects clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 

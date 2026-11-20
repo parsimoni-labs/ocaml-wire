@@ -87,10 +87,20 @@ let rec fields_ok (sc:scope) (fs:list field) (size:nat) : Tot bool (decreases fs
 let rec fields_scope (sc:scope) (fs:list field) : Tot scope (decreases fs) =
   match fs with [] -> sc | f :: r -> fields_scope (extend sc f.id) r
 
+(* Emitter.ahead: the bytes a run of prefixes and tests needs. *)
+let rec ahead (l:list node) : nat =
+  match l with
+  | Prefix _ size :: r -> size + ahead r
+  | Test _ :: r -> ahead r
+  | _ -> 0
+
+(* A run of prefixes and tests holds fixed fields of one record, which
+   Codec_seal.add_min_size keeps below Sys.max_string_length. *)
 let rec wf (sc:scope) (l:list node) : Tot bool (decreases %[lsize l; 0; 0]) =
   match l with
   | [] -> true
-  | Prefix fs size :: r -> fields_ok sc fs size && wf (fields_scope sc fs) r
+  | Prefix fs size :: r ->
+    ahead l <= max_string_length && fields_ok sc fs size && wf (fields_scope sc fs) r
   | Span n e s :: r -> closed sc s && not (sc n) && not (sc e) && n <> e && wf (extend (extend sc n) e) r
   | Test c :: r -> cond_closed sc c && wf sc r
   | Gate sel cs d :: r ->
@@ -167,13 +177,6 @@ type opts = { cancel : bool; drop : bool }
 let nonnegative (w:st) (e:expr) : bool =
   (match range w.rg e with Some (lo, _) -> lo >= 0 | None -> false) ||
   (match e with Sub a b -> mem (a, b) w.facts | _ -> false)
-
-(* Emitter.ahead: the bytes a run of prefixes and tests needs. *)
-let rec ahead (l:list node) : nat =
-  match l with
-  | Prefix _ size :: r -> size + ahead r
-  | Test _ :: r -> ahead r
-  | _ -> 0
 
 let first_span (b:list node) : option expr =
   match b with Span _ _ s :: _ -> Some s | _ -> None
@@ -324,7 +327,9 @@ let rec exec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (l:list no
         let room = match w.p.pv with None -> V lim | Some v -> Sub (V lim) (V v) in
         match ev en room with
         | None -> None
-        | Some x -> if x < w.p.at + need then Some None else Some (Some need) in
+        (* [lit (p.at + need)]: the emitter adds the two at generation time,
+           with OCaml's wrapping [+]. *)
+        | Some x -> if x < wrap (w.p.at + need) then Some None else Some (Some need) in
     (match guard with
      | None -> Fault
      | Some None -> Reject

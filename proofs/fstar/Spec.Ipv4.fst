@@ -154,9 +154,10 @@ let spec_iff (s:LowParse.Bytes.bytes) (en:env)
 (* The code the emitter writes for this plan, with or without O1, accepts
    exactly the bytes the 3D parser accepts. *)
 let scanner_is_3d (o:opts) (s:LowParse.Bytes.bytes) (en:env)
-  : Lemma (requires Seq.length s <= max_int /\ en lim == Seq.length s)
+  : Lemma (requires Seq.length s <= max_string_length /\ en lim == Seq.length s)
           (ensures accepted (exec o (Seq.length s) lim (reader_of s) (start lim) en plan) <==>
                    Some? (parse p3d s))
   = plan_wf ();
     scanner_correct o (Seq.length s) lim (reader_of s) en plan;
+    max_string_length_small ();
     spec_iff s en

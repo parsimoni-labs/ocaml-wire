@@ -39,7 +39,7 @@ let pos_ok (w:st) (en:env) : prop =
   (match w.p.pv with Some v -> 0 <= en v /\ en v <= max_int | None -> True)
 
 let inv (len:nat) (lim:var) (w:st) (en:env) (pending:bool) : prop =
-  len <= max_int /\
+  len <= max_string_length /\ len <= max_int /\
   w.sc lim /\ en lim == len /\
   sound_ranges w.rg en /\
   facts_ok w.sc en w.facts /\
@@ -375,6 +375,11 @@ let rec exec_spec (o:opts) (len:nat) (lim:var) (rd:reader) (w:st) (en:env) (pend
     | Prefix fs size :: r ->
       let need = ahead l in
       (match w.p.pv with Some v -> assert (0 <= en v /\ en v <= max_int) | None -> ());
+      (* The constant the emitter adds does not wrap: the position's offset
+         lies in the window, the run's bytes in a record. *)
+      max_string_length_small ();
+      assert (w.p.at <= len /\ need <= max_string_length);
+      wrap_id (w.p.at + need);
       if w.known >= need then begin
         reads_ok len rd en pv fs w.sc size;
         bind_fields_ok len lim rd w en pv fs size;
@@ -505,15 +510,16 @@ let start (lim:var) : st = {
    binding the same values, with or without the O1 rewrites, and never reads
    outside the window nor wraps an operation. *)
 let scanner_correct (o:opts) (len:nat) (lim:var) (rd:reader) (en:env) (l:list node)
-  : Lemma (requires len <= max_int /\ en lim == len /\ wf (start lim).sc l)
+  : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l)
           (ensures exec o len lim rd (start lim) en l == spec len rd en 0 l /\
                    ~ (Fault? (exec o len lim rd (start lim) en l)))
-  = exec_spec o len lim rd (start lim) en false l;
+  = max_string_length_small ();
+    exec_spec o len lim rd (start lim) en false l;
     spec_no_fault len rd en 0 l
 
 (* The O1 rewrites change no answer. *)
 let o1_preserves (len:nat) (lim:var) (rd:reader) (en:env) (l:list node)
-  : Lemma (requires len <= max_int /\ en lim == len /\ wf (start lim).sc l)
+  : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l)
           (ensures exec ({ cancel = true; drop = true }) len lim rd (start lim) en l ==
                    exec ({ cancel = false; drop = false }) len lim rd (start lim) en l)
   = scanner_correct ({ cancel = true; drop = true }) len lim rd en l;

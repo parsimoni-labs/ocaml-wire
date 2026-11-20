@@ -189,3 +189,65 @@ let lor_disjoint (c d shift shift':nat)
           (ensures d * pow2 shift' < pow2 shift)
   = pow2_plus (shift - shift') shift';
     lemma_mult_lt_right (pow2 shift') d (pow2 (shift - shift'))
+
+(* {1 The OCaml operations, bit by bit}
+
+   What is assumed of OCaml, from its manual, for a 64-bit host: an [int]
+   is a 63-bit two's complement pattern, and [land], [lor] and [lsl] are
+   the bitwise operations on it; an [int64] is a 64-bit pattern, and
+   [Int64.shift_right_logical] shifts it as unsigned; [Int64.to_int] keeps
+   its low 63 bits. The planner's values here are not negative and below
+   [2^62], so the [int] the pattern stands for is the pattern's unsigned
+   value. Below, [UInt.uint_t 63] is the pattern of an [int] and
+   [UInt.uint_t 64] that of an [int64]. *)
+
+module UI = FStar.UInt
+
+let ocaml_to_int (x:UI.uint_t 64) : UI.uint_t 63 = x % pow2 63
+let ocaml_lsl (a:UI.uint_t 63) (s:nat) : UI.uint_t 63 = UI.shift_left #63 a s
+let ocaml_lor (a b:UI.uint_t 63) : UI.uint_t 63 = UI.logor #63 a b
+let ocaml_land (a b:UI.uint_t 63) : UI.uint_t 63 = UI.logand #63 a b
+let ocaml_srl64 (x:UI.uint_t 64) (s:nat) : UI.uint_t 64 = UI.shift_right #64 x s
+
+(* Planner.word_range's [lo]: the [lor] of the two shifted constants is
+   their sum, the bit identity [lor_disjoint] leaves out. *)
+let word_range_lo (c d:UI.uint_t 63) (shift shift':nat)
+  : Lemma (requires shift' <= shift /\ 0 < shift /\ shift < 62 /\ d < pow2 (shift - shift') /\
+                    c * pow2 shift < pow2 62)
+          (ensures ocaml_lor (ocaml_lsl c shift) (ocaml_lsl d shift') == c * pow2 shift + d * pow2 shift')
+  = lor_disjoint c d shift shift';
+    pow2_lt_compat 63 62;
+    pow2_le_compat 62 shift;
+    small_mod (c * pow2 shift) (pow2 63);
+    small_mod (d * pow2 shift') (pow2 63);
+    UI.shift_left_value_lemma #63 c shift;
+    UI.shift_left_value_lemma #63 d shift';
+    lemma_mod_mul_distr_l c (pow2 shift) (pow2 shift);
+    FStar.Math.Lemmas.cancel_mul_mod c (pow2 shift);
+    UI.logor_disjoint #63 (c * pow2 shift) (d * pow2 shift') shift
+
+(* Emitter.unsigned as OCaml computes it: [Int64.to_int
+   (Int64.shift_right_logical w s)], then [land (2^(8m) - 1)] unless the field
+   starts the word. *)
+let extract_ocaml (w:UI.uint_t 64) (a k:nat) (m:nat{1 <= m /\ m <= 7 /\ k + m <= a + 8}) : UI.uint_t 63 =
+  let s = 8 * (a + 8 - k - m) in
+  let v = ocaml_to_int (ocaml_srl64 w s) in
+  pow2_lt_compat 63 (8 * m);
+  if a = k then v else ocaml_land v (pow2 (8 * m) - 1)
+
+let extract_ocaml_is (w:UI.uint_t 64) (a k:nat) (m:nat{1 <= m /\ m <= 7 /\ k + m <= a + 8})
+  : Lemma (extract_ocaml w a k m == extract w a k m)
+  = let s = 8 * (a + 8 - k - m) in
+    UI.shift_right_value_lemma #64 w s;
+    pow2_le_compat 62 (8 * m);
+    pow2_lt_compat 63 (8 * m);
+    if a <> k then UI.logand_mask #63 (ocaml_to_int (ocaml_srl64 w s)) (8 * m)
+
+(* The field the code reads out of the shared word is the narrow load, on
+   OCaml's own operations. *)
+let word_field_ocaml (b:bytes) (a k:nat) (m:nat{1 <= m /\ m <= 7})
+  : Lemma (requires a <= k /\ k + m <= a + 8)
+          (ensures be b a 8 < pow2 64 /\ extract_ocaml (be b a 8) a k m == be b k m)
+  = be_bound b a 8;
+    extract_ocaml_is (be b a 8) a k m;
+    word_field b a k m
