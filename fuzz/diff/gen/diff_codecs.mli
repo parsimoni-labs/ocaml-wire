@@ -70,7 +70,8 @@ type scan_case =
       -> scan_case
 
 val scan_cases : scan_case list
-(** The structured cases: regions, optional fields, tags, bitfield tests and the
+(** The structured cases: regions, of a size a field gives or of a constant size
+    holding a record, optional fields, tags, bitfield tests and the
     {!Packet_stack} codec. *)
 
 val packet_bounds : (string * bytes * bool) list

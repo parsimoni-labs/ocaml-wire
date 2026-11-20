@@ -390,6 +390,43 @@ let small_scan at_most =
             (List.init 16 Fun.id));
     }
 
+(* A region of a constant size holding a record: EverParse before v2026.10
+   gave its standalone validator a module that krml could not bundle
+   (project-everest/everparse#321). *)
+let const_region_scan at_most =
+  let open Wire in
+  let leaf =
+    Codec.v "ConstLeaf" Fun.id Codec.[ Field.v "v" uint32be $ Fun.id ]
+  in
+  let inner = if at_most then nested_at_most else nested in
+  let codec =
+    Codec.v
+      (if at_most then "ScanConstAtMost" else "ScanConstExact")
+      (fun t a -> (t, a))
+      Codec.
+        [
+          Field.v "t" uint8 $ fst;
+          Field.v "a" (inner ~size:(int 4) (codec leaf)) $ snd;
+        ]
+  in
+  let project (t, a) = [ ("t", UInt8.to_int t); ("a_v", UInt32.to_int a) ] in
+  Scan
+    {
+      label = (if at_most then "scan_const_at_most" else "scan_const_exact");
+      codec;
+      project;
+      inputs = (fun b -> [ b ]);
+      corpus =
+        (fun () ->
+          List.concat_map
+            (fun t ->
+              let b =
+                Bytes.init 8 (fun i -> Char.chr (if i = 0 then t else i))
+              in
+              List.init 9 (fun len -> Bytes.sub b 0 len))
+            [ 0; 1; 255 ]);
+    }
+
 let optional_scan ~region =
   let open Wire in
   let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
@@ -959,6 +996,8 @@ let scan_cases =
       branch_scan;
       small_scan false;
       small_scan true;
+      const_region_scan false;
+      const_region_scan true;
       optional_scan ~region:false;
       optional_scan ~region:true;
       nested_optional_scan;
