@@ -211,3 +211,199 @@ let run_table ~title ~n ?(unit = "op") ?(prechecked = false) specs =
     specs
 
 let section label = Fmt.pr "\n  -- %s --\n" label
+
+(* -- Rows measured in their own process -- *)
+
+let oxcaml = Ox.v
+
+let compiler =
+  (if Ox.v then "OxCaml " else "OCaml ")
+  ^ Sys.ocaml_version
+  ^ if Ox.flambda then " flambda" else ""
+
+let read_file file =
+  Bytes.unsafe_of_string (In_channel.with_open_bin file In_channel.input_all)
+
+type filter = All | List | Row of { name : string; mutable matched : bool }
+
+let filter = function
+  | None -> All
+  | Some "--list" -> List
+  | Some name -> Row { name; matched = false }
+
+let finish = function
+  | Row { name; matched = false } ->
+      Fmt.epr "no row is named %S@." name;
+      exit 1
+  | All | List | Row _ -> ()
+
+(* Whether [filter] runs the row [name]; under [List], prints [name]. *)
+let selects filter name =
+  match filter with
+  | All -> true
+  | List ->
+      Fmt.pr "%s@." name;
+      false
+  | Row r ->
+      let m = String.equal r.name name in
+      if m then r.matched <- true;
+      m
+
+let cpu_time () =
+  let t = Unix.times () in
+  t.tms_utime +. t.tms_stime
+
+(* Best, 10th percentile, median and 90th percentile, sorted in place. *)
+let quantiles times =
+  Array.sort Float.compare times;
+  let pct p = times.((Array.length times - 1) * p / 100) in
+  (times.(0), pct 10, pct 50, pct 90)
+
+(* One warm-up pass, which also gives the result, then [runs] timed passes.
+   Each pass reads the wall clock and the process CPU time (user and system,
+   from [getrusage]) around the call; CPU time leaves out the time the process
+   spends descheduled, which on a loaded machine dominates the wall clock of
+   the slower rows. rust/cargo/src/timing.rs does exactly the same. *)
+let measure ~corpus ~filter ~name ~items ~runs ~pp f =
+  if selects filter name then begin
+    let items = float items in
+    let result = f () in
+    let cpu = Array.make runs 0. and wall = Array.make runs 0. in
+    for r = 0 to runs - 1 do
+      let w0 = Unix.gettimeofday () in
+      let c0 = cpu_time () in
+      ignore (Sys.opaque_identity (f ()));
+      let c1 = cpu_time () in
+      let w1 = Unix.gettimeofday () in
+      cpu.(r) <- (c1 -. c0) *. 1e9 /. items;
+      wall.(r) <- (w1 -. w0) *. 1e9 /. items
+    done;
+    let c_best, c10, c50, c90 = quantiles cpu in
+    let w_best, w10, w50, w90 = quantiles wall in
+    Fmt.pr
+      "RESULT\t%s\t%s \
+       (%s)\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%a@."
+      corpus name compiler c_best c10 c50 c90 w_best w10 w50 w90 pp result
+  end
+
+type row = {
+  corpus : string;
+  name : string;
+  cpu : float * float * float * float;
+  wall : float * float * float * float;
+  value : string;
+}
+
+let results files =
+  List.concat_map
+    (fun file ->
+      In_channel.with_open_text file In_channel.input_lines
+      |> List.filter_map (fun l ->
+          match String.split_on_char '\t' l with
+          | [ "RESULT"; corpus; name; c0; c1; c2; c3; w0; w1; w2; w3; value ] ->
+              let f = float_of_string in
+              Some
+                {
+                  corpus;
+                  name;
+                  cpu = (f c0, f c1, f c2, f c3);
+                  wall = (f w0, f w1, f w2, f w3);
+                  value;
+                }
+          | _ -> None))
+    files
+
+let best r =
+  let b, _, _, _ = r.cpu in
+  b
+
+let uniq l =
+  List.rev (List.fold_left (fun a x -> if List.mem x a then a else x :: a) [] l)
+
+(* The corpus [<family>-<order>] belongs to [<family>]: both orders hold the
+   same items, so they must give the same result. *)
+let family corpus =
+  match String.rindex_opt corpus '-' with
+  | Some i -> String.sub corpus 0 i
+  | None -> corpus
+
+let corpus_table ~unit rs corpus =
+  let rs = List.filter (fun r -> r.corpus = corpus) rs in
+  let rs = List.sort (fun a b -> Float.compare (best a) (best b)) rs in
+  let fastest = match rs with r :: _ -> best r | [] -> nan in
+  Fmt.pr "@.Corpus %s, ranked by best CPU time:@.@." corpus;
+  Fmt.pr "%-58s %8s %8s %8s %8s %9s %9s %8s@." "Implementation" "CPU" "CPU"
+    "CPU" "CPU" "wall" "wall" "vs best";
+  Fmt.pr "%-58s %8s %8s %8s %8s %9s %9s %8s@."
+    ("(ns/" ^ unit corpus ^ ")")
+    "best" "p10" "median" "p90" "best" "median" "(CPU)";
+  Fmt.pr "%s@." (String.make 127 '-');
+  List.iter
+    (fun r ->
+      let c0, c1, c2, c3 = r.cpu and w0, _, w2, _ = r.wall in
+      Fmt.pr "%-58s %8.2f %8.2f %8.2f %8.2f %9.2f %9.2f %7.2fx@." r.name c0 c1
+        c2 c3 w0 w2 (c0 /. fastest))
+    rs
+
+(* Best CPU time per corpus, one column each, ranked by the first corpus. *)
+let summary ~unit rs corpora =
+  let names = uniq (List.map (fun r -> r.name) rs) in
+  let cell name corpus =
+    List.find_opt (fun r -> r.name = name && r.corpus = corpus) rs
+  in
+  let first = List.hd corpora in
+  let key name =
+    match cell name first with Some r -> best r | None -> infinity
+  in
+  let names = List.sort (fun a b -> Float.compare (key a) (key b)) names in
+  (match uniq (List.map unit corpora) with
+  | [ u ] -> Fmt.pr "@.Best CPU ns/%s, by corpus:@.@." u
+  | _ ->
+      let per c = c ^ ": ns/" ^ unit c in
+      Fmt.pr "@.Best CPU time (%a), by corpus:@.@."
+        Fmt.(list ~sep:comma string)
+        (List.map per corpora));
+  Fmt.pr "%-58s" "Implementation";
+  List.iter (fun c -> Fmt.pr " %15s" c) corpora;
+  Fmt.pr "@.%s@." (String.make (58 + (16 * List.length corpora)) '-');
+  List.iter
+    (fun name ->
+      Fmt.pr "%-58s" name;
+      List.iter
+        (fun c ->
+          match cell name c with
+          | Some r -> Fmt.pr " %15.2f" (best r)
+          | None -> Fmt.pr " %15s" "-")
+        corpora;
+      Fmt.pr "@.")
+    names
+
+let agree rs =
+  let families = uniq (List.map (fun r -> family r.corpus) rs) in
+  let agree =
+    List.map
+      (fun fam ->
+        let mine = List.filter (fun r -> family r.corpus = fam) rs in
+        match uniq (List.map (fun r -> r.value) mine) with
+        | [ v ] ->
+            Fmt.pr "@.Every implementation gave the same result on %s: %s.@."
+              fam v;
+            true
+        | _ ->
+            Fmt.epr "The implementations disagree on %s:@." fam;
+            List.iter
+              (fun r -> Fmt.epr "  %s on %s: %s@." r.name r.corpus r.value)
+              mine;
+            false)
+      families
+  in
+  List.for_all Fun.id agree
+
+let report ~unit files =
+  let rs = results files in
+  if rs = [] then
+    Fmt.failwith "no RESULT lines in %a" Fmt.(list ~sep:sp string) files;
+  let corpora = uniq (List.map (fun r -> r.corpus) rs) in
+  List.iter (corpus_table ~unit rs) corpora;
+  summary ~unit rs corpora;
+  if not (agree rs) then exit 1

@@ -117,6 +117,12 @@ val bf_tf_vcid : (int, tm_frame) Wire.Codec.field
 val bf_tf_first_hdr : (int, tm_frame) Wire.Codec.field
 (** Bound field for the First Header Pointer. *)
 
+val bf_tf_mc_count : (int, tm_frame) Wire.Codec.field
+(** Bound field for the Master Channel Frame Count. *)
+
+val bf_tf_vc_count : (int, tm_frame) Wire.Codec.field
+(** Bound field for the Virtual Channel Frame Count. *)
+
 val tm_frame_data : int -> bytes array
 (** [tm_frame_data n] generates [n] synthetic TM Frame byte buffers. *)
 

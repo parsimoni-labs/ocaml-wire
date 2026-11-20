@@ -53,7 +53,7 @@ digests.
 | mix128-random | `eb051b87d495915d8f64fcbc101b021cec549933bce3f31d8eb1a555fd2716f0` |
 | mix128-sorted | `931fc45b7033d274f304753455284eacf77f1063d3424221c6de88041680c6d6` |
 
-Best CPU ns/packet:
+Best CPU ns/packet (stale: measured when `-O3` reached the OCaml harness only):
 
 | Row | fixed64 random | fixed64 sorted | mix128 random | mix128 sorted |
 | --- | ---: | ---: | ---: | ---: |

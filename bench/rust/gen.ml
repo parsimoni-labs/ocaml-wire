@@ -1,13 +1,16 @@
 (* Writes the code generated for the benchmark.
 
    With [--ocaml] (or [--oxcaml], for the OxCaml target), in the current
-   directory: the scanner of [Packet_stack.codec] after the checksum module it
-   calls by name, g_stack.ml, and its checksum consumers, stack_read.ml; the same scanner handing out only the
-   fields the checksum reads, g_selected.ml and selected_read.ml; and the
-   record modules of the fixed header codecs of [Headers], g_eth.ml,
-   g_ipv4.ml, g_tcp.ml and g_udp.ml. The batch consumers take the corpus
-   stride, which the harness passes as a literal so it stays a constant after
-   inlining.
+   directory: stack_read.ml, the scanner of [Packet_stack.codec] after the
+   checksum module it calls by name, as its submodule [G_stack], then its
+   checksum consumers; selected_read.ml, the same with the scanner handing out
+   only the fields the checksum reads, as [G_selected]; and the record modules
+   of the fixed header codecs of [Headers], g_eth.ml, g_ipv4.ml, g_tcp.ml and
+   g_udp.ml. A scanner shares its consumers' module so that the compiler sees
+   the fold and the consumer it inlines in one unit in every profile, and so
+   checks the batch consumers' [@zero_alloc] where the dev profile hides other
+   modules' code. The batch consumers take the corpus stride, which the
+   harness passes as a literal so it stays a constant after inlining.
 
    With [--rust DIR], in [DIR]: the Wire_rust modules of the fixed header
    codecs, eth.rs, ipv4.rs, tcp.rs and udp.rs; the scanner Wire_rust writes
@@ -180,17 +183,18 @@ let () =
       let selected =
         List.filter (fun (n, _) -> List.mem n checksum_fields) all
       in
-      write "g_stack.ml"
-        (step ~fields:all
-        ^ Wire_ocaml.scanner ~target ~step:"Step" ~codec:"Packet_stack.codec"
-            Packet_stack.codec);
-      write "stack_read.ml" (stack_reader target ~core:"G_stack" ~fields:all);
-      write "g_selected.ml"
-        (step ~fields:selected
-        ^ Wire_ocaml.scanner ~target ~fields:checksum_fields ~step:"Step"
-            ~codec:"Packet_stack.codec" Packet_stack.codec);
-      write "selected_read.ml"
-        (stack_reader target ~core:"G_selected" ~fields:selected);
+      let read file ~core ~fields scanner =
+        write file
+          ("module " ^ core ^ " = struct\n" ^ step ~fields ^ scanner
+         ^ "\nend\n\n"
+          ^ stack_reader target ~core ~fields)
+      in
+      read "stack_read.ml" ~core:"G_stack" ~fields:all
+        (Wire_ocaml.scanner ~target ~step:"Step" ~codec:"Packet_stack.codec"
+           Packet_stack.codec);
+      read "selected_read.ml" ~core:"G_selected" ~fields:selected
+        (Wire_ocaml.scanner ~target ~fields:checksum_fields ~step:"Step"
+           ~codec:"Packet_stack.codec" Packet_stack.codec);
       headers
         {
           g =

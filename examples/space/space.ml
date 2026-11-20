@@ -236,6 +236,14 @@ let f_tf_first_hdr = Field.v "FirstHdrPtr" (bits ~width:11 U16be)
 let bf_tf_vcid = Codec.(f_tf_vcid $ fun (f : tm_frame) -> f.vcid)
 let bf_tf_first_hdr = Codec.(f_tf_first_hdr $ fun (f : tm_frame) -> f.first_hdr)
 
+let bf_tf_mc_count =
+  Codec.(
+    Field.v "MCCount" (bits ~width:8 U16be) $ fun (f : tm_frame) -> f.mc_count)
+
+let bf_tf_vc_count =
+  Codec.(
+    Field.v "VCCount" (bits ~width:8 U16be) $ fun (f : tm_frame) -> f.vc_count)
+
 let tm_frame_codec =
   Codec.v "TMFrame"
     (fun version scid vcid ocf mc vc sec sync pkt seg hdr ->
@@ -261,10 +269,8 @@ let tm_frame_codec =
         bf_tf_vcid;
         ( Field.v "OCFFlag" (bits ~width:1 U16be) $ fun (f : tm_frame) ->
           f.ocf_flag );
-        ( Field.v "MCCount" (bits ~width:8 U16be) $ fun (f : tm_frame) ->
-          f.mc_count );
-        ( Field.v "VCCount" (bits ~width:8 U16be) $ fun (f : tm_frame) ->
-          f.vc_count );
+        bf_tf_mc_count;
+        bf_tf_vc_count;
         ( Field.v "SecHdrFlag" (bits ~width:1 U16be) $ fun (f : tm_frame) ->
           f.sec_hdr );
         (Field.v "SyncFlag" (bits ~width:1 U16be) $ fun (f : tm_frame) -> f.sync);

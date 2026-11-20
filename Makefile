@@ -1,6 +1,6 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
        fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
-       bench-clcw bench-rust \
+       bench-clcw bench-rust bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -86,60 +86,184 @@ fuzz-nightly:
 bench: bench-demo bench-routing bench-gateway bench-clcw
 
 bench-demo:
-	BUILD_EVERPARSE=1 dune exec --profile=release bench/demo/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=bench bench/demo/bench.exe
 
 bench-routing:
-	BUILD_EVERPARSE=1 dune exec --profile=release bench/routing/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=bench bench/routing/bench.exe
 
 bench-gateway:
-	BUILD_EVERPARSE=1 dune exec --profile=release bench/gateway/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=bench bench/gateway/bench.exe
 
 bench-clcw:
-	BUILD_EVERPARSE=1 dune exec --profile=release bench/clcw/bench.exe
+	BUILD_EVERPARSE=1 dune exec --profile=bench bench/clcw/bench.exe
 
-# Ethernet/IPv4/TCP-or-UDP headers: Wire.Codec and wire.ocaml on OCaml (and on
-# OxCaml when the switch OXCAML_SWITCH exists), wire.rust against etherparse,
-# smoltcp and pnet_packet, on each corpus of BENCH_RUST_CORPORA (name:stride,
-# written by bench.exe corpus), and with BUILD_EVERPARSE=1 the EverParse C
-# validator of the same codec. cargo fetches the crates the first time.
-# Results land in _build/bench-rust/.
+# The compilers the cross-language benchmarks run the OCaml rows on besides
+# the one on PATH, as name:switch: stock OCaml with flambda and OxCaml, each
+# skipped when its opam switch is absent.
+FLAMBDA_SWITCH ?= 5.4.1-flambda
 OXCAML_SWITCH ?= 5.4.0-ox9
+BENCH_SWITCHES = flambda:$(FLAMBDA_SWITCH) oxcaml:$(OXCAML_SWITCH)
+# $(1) a harness, $(2) commands: builds the harness $(1) on each switch of
+# BENCH_SWITCHES, into _build/NAME, then runs $(2) with $$n the switch's name
+# and $$h the harness.
+on_switches = for s in $(BENCH_SWITCHES); do n=$${s%%:*}; sw=$${s\#*:}; \
+	  if opam switch list --short 2>/dev/null | grep -qx "$$sw"; then \
+	    opam exec --switch "$$sw" -- dune build --profile=bench \
+	      --build-dir $(CURDIR)/_build/$$n $(1) || exit 1; \
+	    h=_build/$$n/default/$(1); $(2); \
+	  else echo "switch $$sw not found: skipping $$n"; fi; done
+
+# Ethernet/IPv4/TCP-or-UDP headers: Wire.Codec and wire.ocaml on OCaml, and on
+# each switch of BENCH_SWITCHES, wire.rust against etherparse, smoltcp and
+# pnet_packet, on each corpus of BENCH_RUST_CORPORA (name:stride, written by
+# bench.exe corpus), and with BUILD_EVERPARSE=1 the EverParse C validator of
+# the same codec. cargo fetches the crates the first time. Results land in
+# _build/bench-rust/.
 BENCH_RUST_PACKETS ?= 200000
 BENCH_RUST_RUNS ?= 21
 BENCH_RUST_CORPORA ?= fixed64-random:64 fixed64-sorted:64 \
                       mix128-random:128 mix128-sorted:128
 BENCH_RUST = _build/bench-rust
-# $(1) CORPUS STRIDE RUNS, for each corpus, appended to $(BENCH_RUST)/$(2).txt.
+# $(1) CORPUS STRIDE RUNS ROW, for each corpus and each row $(1) lists, each
+# row in a process of its own (bench/rows.sh), appended to
+# $(BENCH_RUST)/$(2).txt.
 bench_rust_each = for c in $(BENCH_RUST_CORPORA); do \
-	  $(1) $(BENCH_RUST)/$${c%:*}.bin $${c\#*:} $(BENCH_RUST_RUNS) \
-	    >> $(BENCH_RUST)/$(2).txt || exit 1; done
+	  sh bench/rows.sh $(1) $(BENCH_RUST)/$${c%:*}.bin $${c\#*:} \
+	    $(BENCH_RUST_RUNS) >> $(BENCH_RUST)/$(2).txt || exit 1; done
 bench-rust:
 	@mkdir -p $(BENCH_RUST) bench/rust/cargo/src/gen
-	dune build --profile=release bench/rust/bench.exe bench/rust/gen.exe
+	dune build --profile=bench bench/rust/bench.exe bench/rust/gen.exe
 	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
 	_build/default/bench/rust/bench.exe corpus $(BENCH_RUST) \
 	  $(BENCH_RUST_PACKETS)
 	cargo build --quiet --release --manifest-path bench/rust/cargo/Cargo.toml
 	rm -f $(BENCH_RUST)/*.txt
-	$(call bench_rust_each,cargo run --quiet --release \
-	  --manifest-path bench/rust/cargo/Cargo.toml --,rust)
+	$(call bench_rust_each,bench/rust/cargo/target/release/wire-bench-rust,rust)
 	$(call bench_rust_each,_build/default/bench/rust/bench.exe run,ocaml)
-	@if opam switch list --short 2>/dev/null | grep -qx '$(OXCAML_SWITCH)'; then \
-	  opam exec --switch $(OXCAML_SWITCH) -- dune build --profile=release \
-	    --build-dir $(CURDIR)/_build/oxcaml bench/rust/bench.exe && \
-	  $(call bench_rust_each,_build/oxcaml/default/bench/rust/bench.exe run,oxcaml); \
-	else echo "OxCaml switch $(OXCAML_SWITCH) not found: skipping OxCaml"; fi
+	@$(call on_switches,bench/rust/bench.exe,$(call bench_rust_each,$$h run,$$n))
 	@if [ "$(BUILD_EVERPARSE)" = 1 ]; then \
-	  BUILD_EVERPARSE=1 dune build --profile=release \
+	  BUILD_EVERPARSE=1 dune build --profile=bench \
 	    bench/rust/everparse/everparse.exe && \
 	  $(call bench_rust_each,_build/default/bench/rust/everparse/everparse.exe,everparse); \
 	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
 
+# The instructions and cycles each row of bench-rust spends per packet, as
+# bench-apps-count counts them below, on each corpus of BENCH_RUST_CORPORA
+# with BENCH_RUST_PACKETS packets, and with BUILD_EVERPARSE=1 the EverParse C
+# row too. Results in _build/bench-rust-count/counts.tsv: label, instructions
+# and cycles per packet, and the row's checksum.
+BENCH_RUST_COUNT_DIR = _build/bench-rust-count
+# $(1) a harness and its arguments up to the corpus, $(2) a label prefix: each
+# row it lists, on each corpus, appended to counts.tsv.
+bench_rust_count_rows = for c in $(BENCH_RUST_CORPORA); do \
+	  f=$(BENCH_RUST_COUNT_DIR)/$${c%:*}.bin; z=$${c\#*:}; \
+	  $(1) $$f $$z 1 --list > $(BENCH_RUST_COUNT_DIR)/rows || exit 1; \
+	  while IFS= read -r r; do \
+	    sh bench/count.sh $(BENCH_RUST_PACKETS) "$(2)$${c%:*} $$r" \
+	      $(1) $$f $$z RUNS "$$r" \
+	      >> $(BENCH_RUST_COUNT_DIR)/counts.tsv || exit 1; \
+	  done < $(BENCH_RUST_COUNT_DIR)/rows; \
+	done
+BENCH_RUST_BIN = bench/rust/cargo/target/release/wire-bench-rust
+
+bench-rust-count:
+	@mkdir -p $(BENCH_RUST_COUNT_DIR) bench/rust/cargo/src/gen
+	dune build --profile=bench bench/rust/bench.exe bench/rust/gen.exe
+	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
+	_build/default/bench/rust/bench.exe corpus $(BENCH_RUST_COUNT_DIR) \
+	  $(BENCH_RUST_PACKETS)
+	cargo build --quiet --release --manifest-path bench/rust/cargo/Cargo.toml
+	rm -f $(BENCH_RUST_COUNT_DIR)/counts.tsv
+	@$(call bench_rust_count_rows,$(BENCH_RUST_BIN),)
+	@$(call bench_rust_count_rows,_build/default/bench/rust/bench.exe run,)
+	@$(call on_switches,bench/rust/bench.exe,$(call bench_rust_count_rows,$$h run,$$n ))
+	@if [ "$(BUILD_EVERPARSE)" = 1 ]; then \
+	  BUILD_EVERPARSE=1 dune build --profile=bench \
+	    bench/rust/everparse/everparse.exe && \
+	  $(call bench_rust_count_rows,_build/default/bench/rust/everparse/everparse.exe,); \
+	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
+	@cat $(BENCH_RUST_COUNT_DIR)/counts.tsv
+
+# The application benchmarks (bench/routing, bench/gateway, bench/clcw) across
+# languages: each OCaml workload, and the same application logic over the
+# OCaml Wire_ocaml generates, on OCaml and on each switch of BENCH_SWITCHES,
+# against that logic over the Rust Wire_rust generates
+# from the same codecs and over the released crates that read and write the
+# same headers (spacepackets, ccsds_primary_header, gaia-ccsds-c2a,
+# chronus-gateway), on the inputs their generators write; cargo fetches the
+# crates the first time. Each workload runs reading, then writing. Their
+# EverParse C rows stay in bench-routing, bench-gateway and bench-clcw.
+# Results land in _build/bench-apps/.
+BENCH_APPS_PACKETS ?= 10000000
+BENCH_APPS_FRAMES ?= 1000000
+BENCH_APPS_WORDS ?= 1000000
+BENCH_APPS_RUNS ?= 21
+BENCH_APPS = _build/bench-apps
+# $(1) FILE ITEMS RUNS ROW, for each workload and each row $(1) lists, each row
+# in a process of its own (bench/rows.sh), appended to $(BENCH_APPS)/$(2).txt.
+bench_apps_each = for w in routing:$(BENCH_APPS_PACKETS) \
+	  gateway:$(BENCH_APPS_FRAMES) clcw:$(BENCH_APPS_WORDS); do \
+	  sh bench/rows.sh $(1) $(BENCH_APPS)/$${w%:*}.bin $${w\#*:} \
+	    $(BENCH_APPS_RUNS) >> $(BENCH_APPS)/$(2).txt || exit 1; done
+# The instructions and cycles each row of bench-apps-rust spends per item, on
+# inputs of BENCH_APPS_COUNT items, for every row each harness lists:
+# bench/count.sh runs the row with 1 and with 21 timed passes, each after its
+# warm-up pass, and divides the difference by 20 passes, so starting the
+# process, reading the input and printing the result never count. Results in
+# _build/bench-apps-count/counts.tsv: label, instructions and cycles per item,
+# and the row's result.
+BENCH_APPS_COUNT ?= 100000
+BENCH_APPS_COUNT_DIR = _build/bench-apps-count
+bench_count = sh bench/count.sh $(BENCH_APPS_COUNT)
+# $(1) a harness, $(2) a label prefix: each row it lists, on each workload,
+# reading and writing, appended to counts.tsv.
+bench_count_rows = for w in routing gateway clcw; do \
+	  f=$(BENCH_APPS_COUNT_DIR)/$$w.bin; \
+	  for m in run write; do \
+	    $(1) $$m $$f $(BENCH_APPS_COUNT) 1 --list \
+	      > $(BENCH_APPS_COUNT_DIR)/rows || exit 1; \
+	    while IFS= read -r r; do \
+	      $(bench_count) "$(2)$$w $$m $$r" $(1) $$m $$f $(BENCH_APPS_COUNT) \
+	        RUNS "$$r" >> $(BENCH_APPS_COUNT_DIR)/counts.tsv || exit 1; \
+	    done < $(BENCH_APPS_COUNT_DIR)/rows; \
+	  done; \
+	done
+BENCH_APPS_RUST = bench/apps/cargo/target/release/wire-bench-apps
+
+bench-apps-count:
+	@mkdir -p $(BENCH_APPS_COUNT_DIR) bench/apps/cargo/src/gen
+	dune build --profile=bench bench/apps/bench.exe bench/apps/gen.exe
+	_build/default/bench/apps/gen.exe --rust bench/apps/cargo/src/gen
+	_build/default/bench/apps/bench.exe inputs $(BENCH_APPS_COUNT_DIR) \
+	  $(BENCH_APPS_COUNT) $(BENCH_APPS_COUNT) $(BENCH_APPS_COUNT)
+	cargo build --quiet --release --manifest-path bench/apps/cargo/Cargo.toml
+	rm -f $(BENCH_APPS_COUNT_DIR)/counts.tsv
+	@$(call bench_count_rows,$(BENCH_APPS_RUST),)
+	@$(call bench_count_rows,_build/default/bench/apps/bench.exe,)
+	@$(call on_switches,bench/apps/bench.exe,$(call bench_count_rows,$$h,$$n ))
+	@cat $(BENCH_APPS_COUNT_DIR)/counts.tsv
+
+bench-apps-rust:
+	@mkdir -p $(BENCH_APPS) bench/apps/cargo/src/gen
+	dune build --profile=bench bench/apps/bench.exe bench/apps/gen.exe
+	_build/default/bench/apps/gen.exe --rust bench/apps/cargo/src/gen
+	_build/default/bench/apps/bench.exe inputs $(BENCH_APPS) \
+	  $(BENCH_APPS_PACKETS) $(BENCH_APPS_FRAMES) $(BENCH_APPS_WORDS)
+	cargo build --quiet --release --manifest-path bench/apps/cargo/Cargo.toml
+	rm -f $(BENCH_APPS)/*.txt
+	$(call bench_apps_each,$(BENCH_APPS_RUST) run,rust)
+	$(call bench_apps_each,$(BENCH_APPS_RUST) write,rust)
+	$(call bench_apps_each,_build/default/bench/apps/bench.exe run,ocaml)
+	$(call bench_apps_each,_build/default/bench/apps/bench.exe write,ocaml)
+	@$(call on_switches,bench/apps/bench.exe,$(call bench_apps_each,$$h run,$$n) && \
+	  $(call bench_apps_each,$$h write,$$n))
+	@_build/default/bench/apps/bench.exe report $(BENCH_APPS)/*.txt
+
 PROF_EXE ?= bench/clcw/bench.exe
 
 prof:
-	BUILD_EVERPARSE=1 dune build --profile=release $(PROF_EXE)
+	BUILD_EVERPARSE=1 dune build --profile=bench $(PROF_EXE)
 	xctrace record --template 'Time Profiler' --output prof.trace \
 		--launch -- _build/default/$(PROF_EXE)
 	@echo "Profile written to prof.trace — open with: open prof.trace"
@@ -147,19 +271,19 @@ prof:
 memtrace: memtrace-routing memtrace-gateway memtrace-clcw
 
 memtrace-demo:
-	BUILD_EVERPARSE=1 MEMTRACE=demo.ctf dune exec --profile=release bench/demo/bench.exe
+	BUILD_EVERPARSE=1 MEMTRACE=demo.ctf dune exec --profile=bench bench/demo/bench.exe
 	memtrace_hotspots demo.ctf
 
 memtrace-routing:
-	BUILD_EVERPARSE=1 MEMTRACE=routing.ctf dune exec --profile=release bench/routing/bench.exe
+	BUILD_EVERPARSE=1 MEMTRACE=routing.ctf dune exec --profile=bench bench/routing/bench.exe
 	memtrace_hotspots routing.ctf
 
 memtrace-gateway:
-	BUILD_EVERPARSE=1 MEMTRACE=gateway.ctf dune exec --profile=release bench/gateway/bench.exe
+	BUILD_EVERPARSE=1 MEMTRACE=gateway.ctf dune exec --profile=bench bench/gateway/bench.exe
 	memtrace_hotspots gateway.ctf
 
 memtrace-clcw:
-	BUILD_EVERPARSE=1 MEMTRACE=clcw.ctf dune exec --profile=release bench/clcw/bench.exe
+	BUILD_EVERPARSE=1 MEMTRACE=clcw.ctf dune exec --profile=bench bench/clcw/bench.exe
 	memtrace_hotspots clcw.ctf
 
 # Static analysis over the project's hand-written C: the benchmark application
