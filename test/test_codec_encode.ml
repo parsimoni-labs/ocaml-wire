@@ -151,7 +151,7 @@ let test_enum_over_carrier_base () =
   (match Codec.decode carrier_enum_codec buf 0 with
   | Ok v -> Alcotest.(check int) "decode listed code" 2 (UInt32.to_int v)
   | Error e -> Alcotest.failf "%a" pp_parse_error e);
-  Codec.validate carrier_enum_codec buf 0;
+  Codec.validate_exn carrier_enum_codec buf 0;
   let get = Staged.unstage (Codec.get carrier_enum_codec carrier_enum_field) in
   Alcotest.(check int) "get listed code" 2 (UInt32.to_int (get buf 0));
   expect_decode_rejects "unlisted code" carrier_enum_codec "\x00\x00\x00\x63";
@@ -180,7 +180,7 @@ let test_variants_over_carrier_base () =
   (match Codec.decode carrier_variants_codec buf 0 with
   | Ok v -> Alcotest.(check bool) "decode variant" true (v = `Zero)
   | Error e -> Alcotest.failf "%a" pp_parse_error e);
-  Codec.validate carrier_variants_codec buf 0;
+  Codec.validate_exn carrier_variants_codec buf 0;
   let get =
     Staged.unstage (Codec.get carrier_variants_codec carrier_variants_field)
   in
@@ -204,7 +204,7 @@ let test_lookup_and_bit_over_carrier_base () =
   (match Codec.decode carrier_lookup_codec buf 0 with
   | Ok v -> Alcotest.(check string) "lookup decode" "c" v
   | Error e -> Alcotest.failf "%a" pp_parse_error e);
-  Codec.validate carrier_lookup_codec buf 0;
+  Codec.validate_exn carrier_lookup_codec buf 0;
   let get =
     Staged.unstage (Codec.get carrier_lookup_codec carrier_lookup_field)
   in
@@ -286,7 +286,7 @@ let decode_accepts codec s =
   Result.is_ok (Codec.decode codec (Bytes.of_string s) 0)
 
 let validate_result codec s =
-  match Codec.validate codec (Bytes.of_string s) 0 with
+  match Codec.validate_exn codec (Bytes.of_string s) 0 with
   | () -> Ok ()
   | exception Parse_error e -> Error e
 
@@ -301,7 +301,7 @@ let expect_per_byte label ~at = function
 (* The refinement belongs to the span itself, so the compiled reader has to
    apply it: a [Codec.decode] more permissive than [Wire.of_string] is also more
    permissive than the EverParse validator built from the same schema, and
-   [Codec.validate] is the gate a caller runs before reading untrusted bytes
+   [Codec.validate_exn] is the gate a caller runs before reading untrusted bytes
    zero-copy. *)
 let test_decode_rejects_refined_byte () =
   expect_per_byte "decode" ~at:1

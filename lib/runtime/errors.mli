@@ -100,3 +100,15 @@ val byte_length : expected:int -> actual:int -> 'a
 val enum_encode : name:string -> valid:int list -> int -> 'a
 (** [enum_encode ~name ~valid v] raises the error for [v], which is not one of
     the cases [valid] of the enum [name]. *)
+
+val check_unsigned : bits:int -> int -> unit
+(** [check_unsigned ~bits v] raises {!unsigned_too_wide} unless an unsigned
+    field of [bits] bits holds [v]. *)
+
+val check_length : expected:int -> string -> unit
+(** [check_length ~expected s] raises {!byte_length} unless [s] has [expected]
+    bytes. *)
+
+val check_enum : name:string -> valid:int list -> int -> unit
+(** [check_enum ~name ~valid v] raises {!enum_encode} unless [v] is one of the
+    cases [valid] of the enum [name]. *)

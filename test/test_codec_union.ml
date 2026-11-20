@@ -75,7 +75,7 @@ let test_roundtrip () =
       Alcotest.(check string) "bytes" expected s;
       let r = decode_ok (Codec.decode packet_codec (Bytes.of_string s) 0) in
       Alcotest.(check bool) "value" true (r = p);
-      Codec.validate packet_codec (Bytes.of_string s) 0)
+      Codec.validate_exn packet_codec (Bytes.of_string s) 0)
     [
       (packet 1 (`Ping (UInt16.v 0x1234)), "\x01\xde\xad\xbe\xef\x12\x34\x7e");
       ( packet 2 (`Data (UInt32.of_int 7)),
@@ -123,7 +123,7 @@ let test_unknown_tag () =
       Alcotest.(check (list string)) "field" [ "V" ] field
   | Error e -> Alcotest.failf "expected Invalid_tag, got %a" pp_parse_error e
   | Ok _ -> Alcotest.fail "decoded an unclaimed tag");
-  match Codec.validate closed_codec buf 0 with
+  match Codec.validate_exn closed_codec buf 0 with
   | exception Parse_error { kind = Invalid_tag 99; _ } -> ()
   | () -> Alcotest.fail "validated an unclaimed tag"
 
@@ -221,10 +221,10 @@ let test_projection () =
 let test_validate_no_alloc () =
   skip_unless_gc_counters ();
   let buf = Bytes.of_string "\x02\xde\xad\xbe\xef\x00\x00\x01\x00\x7e" in
-  Codec.validate packet_codec buf 0;
+  Codec.validate_exn packet_codec buf 0;
   let before = Gc.minor_words () in
   for _ = 1 to 1000 do
-    Codec.validate packet_codec buf 0
+    Codec.validate_exn packet_codec buf 0
   done;
   let after = Gc.minor_words () in
   Alcotest.(check (float 0.)) "words" 0. (after -. before)

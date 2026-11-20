@@ -24,34 +24,42 @@
     codec checks it: an overflow rejects the record with the codec's error.
 
     A generator executable, run by a dune rule, prints the module for a codec
-    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)].
+    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)]. The text
+    is not laid out as ocamlformat would; a project that commits the module
+    pipes it through [ocamlformat --impl --name=FILE -] in that rule, so the
+    committed copy is formatted under the project's own [.ocamlformat] and
+    [dune fmt] leaves it alone, and keeps it current with a runtest [diff] and
+    [dune promote] or with [(mode promote)]. [examples/generated] in the sources
+    does this.
 
-    The generated module has [get_<field> buf off] for each field, which reads
+    The generated module has [Get.<field> buf off] for each field, which reads
     it as {!Wire.Codec.get} does with one bounds-checked load at a constant
-    offset, and [get_<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
+    offset, and [Get.<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
     validates the record at offset 0, as {!Wire.Codec.valid} does, and
     [read_<field>] on what it returns is one load with no check of its own. As
     for {!Wire.Codec.valid}, the promise is memory safety only: a buffer's
     length never changes, so a read never leaves the buffer, but if its bytes
     change after [Valid.v], a read may return a value that breaks a constraint.
     [(v :> bytes)] is the buffer itself, not a copy. For a bitfield,
-    [get_<field>_word] loads the word that holds it and [<field>_of_word] takes
+    [Get.<field>_word] loads the word that holds it and [<field>_of_word] takes
     the field out, so fields packed in one word share one load.
 
     [is_valid buf off] checks the record at [off] without raising, loading only
     the fields its constraints read; [validate] raises the codec's error where
-    it is false. [View.at buf off] validates the record at any offset and stands
-    for it, with the same promise as [Valid]: each [view_<field>] (and
-    [view_<field>_int], [view_<field>_word]) is one load with no bounds check.
-    [View.check buf off] does the same without raising, and [View.ok] tells
-    whether the record passed. A view that failed holds no bytes: [View.buf] is
-    then an empty buffer and each read gives zero without loading, so failed
-    views share nothing a caller can write. On OxCaml a view is an unboxed
-    record, held in registers; on OCaml it is a small record. A [Bigstring]
-    submodule has the same functions, [Valid] and [View] included, on a bigarray
-    of bytes. It has [size], [decode], [validate] and [write buf off v1 ... vn],
-    which stores field values in order. Without [~make] it also defines a record
-    [t] of the field values, [make] and [encode]. *)
+    it is false. A view reads a buffer named once with [Wire_runtime.Buf.v], as
+    ['b Buf.t], and whose length is read once: [View.check b len off] checks the
+    record at [off] without raising, [View.ok c] tells whether it passed and
+    [View.get c] turns an answer that passed into a ['b View.t], with the same
+    promise as [Valid]: each [view_<field> b v] (and [view_<field>_int],
+    [view_<field>_word]) is one load with no bounds check, and only the buffer
+    named ['b] is accepted. A view is an [int], so it allocates nothing.
+    [View.at] raises the codec's error where the check fails, and
+    [View.with_ b len off ~ok ~fail] hands the view to [ok] or calls [fail]. A
+    [Bigstring] submodule has the same functions, [Valid] and [View] included,
+    on a bigarray of bytes. It has [size], [decode], [validate] and
+    [write buf off v1 ... vn], which stores field values in order. Without
+    [~make] it also defines a record [t] of the field values, its constructor
+    [v] and [encode]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
@@ -62,7 +70,7 @@ type target = [ `OCaml | `OxCaml ]
 
 val ident : string -> string
 (** [ident name] is the OCaml name a generated module derives from the field
-    [name], for either target: its getter is [get_<ident name>], its read
+    [name], for either target: its getter is [Get.<ident name>], its read
     [read_<ident name>] and its record field [ident name]. It is [name]
     lower-cased, any character other than a letter, a digit or ['_'] turned into
     ['_'], prefixed with ["f_"] when that is empty or starts with a digit, and
@@ -95,8 +103,8 @@ val ml :
     Raises [Invalid_argument], naming the field and the reason, for a codec it
     cannot specialise: a variable size, parameters, actions, or a map [maps]
     does not name; and naming both fields when two of them would define the same
-    OCaml name ({!ident}), or one of them a name the module defines for itself,
-    such as [get_failed]. *)
+    OCaml name ({!ident}), or one of them a getter that would shadow a name the
+    getters call, such as [Get.cast]. *)
 
 val bridge :
   ?maps:(string * typ) list ->

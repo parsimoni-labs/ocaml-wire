@@ -37,7 +37,7 @@ let pp_verdict ppf = function
    returns a [result], so its rejection is easy to drop by mistake.) Any other
    exception surfaces as a crash, which is itself a divergence to report.
 
-   [Codec.validate] is the gate a caller actually runs on untrusted input and
+   [Codec.validate_exn] is the gate a caller actually runs on untrusted input and
    the closer counterpart of a C validator, since it checks without building a
    record. Run it alongside, so a refinement that reaches one of the two OCaml
    paths but not the other is caught here rather than papered over by whichever
@@ -50,10 +50,10 @@ let general_verdict (Pack g) =
 let ocaml_accepts label (Pack g) general b =
   let c = codec g in
   let decoded = rejection (fun () -> ignore (Wire.Codec.decode_exn c b 0)) in
-  let validated = rejection (fun () -> Wire.Codec.validate c b 0) in
+  let validated = rejection (fun () -> Wire.Codec.validate_exn c b 0) in
   let slow = general b in
   if Option.is_none decoded <> Option.is_none validated then
-    failf "%s: on %a, OCaml decode %a but Codec.validate %a" label pp_hex
+    failf "%s: on %a, OCaml decode %a but Codec.validate_exn %a" label pp_hex
       (Bytes.to_string b) pp_verdict decoded pp_verdict validated;
   if Option.is_none decoded <> Option.is_none slow then
     failf "%s: on %a, OCaml decode %a but its general path %a" label pp_hex

@@ -1,6 +1,33 @@
 ## unreleased
 
+### Breaking
+
+- Generated OCaml: a `View` is checked once in a buffer named by
+  `Wire_runtime.Buf.v` and read with that buffer (`view_<f> b v`), allocating
+  nothing; a bitfield or byte array is a `Value.<f>` carrier, checked when
+  built, so `write` checks no range. A `View.check` that fails answers a
+  negative `int`: test it with `View.ok`. Migrate with `match Buf.v buf with
+  Any b ->`, `View.check b (Buf.length b) off`, and `(x :> int)` (#492,
+  @samoht)
+
+- Generated OCaml: `write_at` and `write_int_at` write into a named buffer
+  whose length the caller read once (#492, @samoht)
+
+- Generated OCaml: `decode` returns a `result`, as `Wire.Codec.decode` does;
+  the raising one is `decode_exn`. Rename calls to `decode_exn` to keep
+  raising (#492, @samoht)
+
+- `Wire.Codec.validate` and a generated module's `validate` return a
+  `result`; the raising ones are `validate_exn`. Rename calls to
+  `validate_exn` to keep raising (#492, @samoht)
+
 ### Added
+
+- `Wire.S`, the signature a codec of fixed-size records gives, and
+  `Wire.Codec.Make`, the interpreted codec as one; a module `Wire_ocaml`
+  generates is one through its `Global` submodule, on OCaml and OxCaml, so
+  either runs the same code by changing one line. A field handle's `f.get`
+  reads as directly as `get_<f>` (#492, @samoht)
 
 - `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)
@@ -14,6 +41,10 @@
 - `wire.ocaml` (`Wire_ocaml`): generate plain OCaml from a fixed-size codec,
   with every offset a constant, needing only the new `wire.runtime`. It builds
   for js_of_ocaml, wasm_of_ocaml and OxCaml (#436, #459, #488, @samoht)
+
+- `Wire_ocaml`'s OxCaml target takes each buffer it does not keep, and the
+  constructor of `decode_with`, `local`, so a buffer may live on the caller's
+  stack, and its functions are `portable` (#492, @samoht)
 
 - Generated OCaml has a `View` of a record at any offset of a buffer, and
   `is_valid`, which checks without raising (#442, @samoht)

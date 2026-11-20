@@ -205,12 +205,17 @@ val to_string : ?env:Param.env -> 'r t -> 'r -> string
 val to_struct : 'r t -> Types.struct_
 (** Project to a {!Types.struct_} declaration. *)
 
-val validate : ?env:Param.env -> 'r t -> bytes -> int -> unit
-(** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
-    without constructing a record. Field [~action]s do fire, so a rejecting
-    action fails validation, but assigned output parameters are not written back
-    to [?env]. [?env] supplies bindings for any [Param.input] referenced in
-    those clauses.
+val validate :
+  ?env:Param.env -> 'r t -> bytes -> int -> (unit, Types.parse_error) result
+(** [validate ?env c buf off] is {!validate_exn}, answering the record's error
+    as a value. *)
+
+val validate_exn : ?env:Param.env -> 'r t -> bytes -> int -> unit
+(** [validate_exn ?env c buf off] checks field [~constraint_] and [~where]
+    clauses without constructing a record. Field [~action]s do fire, so a
+    rejecting action fails validation, but assigned output parameters are not
+    written back to [?env]. [?env] supplies bindings for any [Param.input]
+    referenced in those clauses.
 
     Raises [Invalid_argument] if [off] is negative or if [?env] belongs to
     another codec or leaves an input parameter unbound, and {!Types.Parse_error}
@@ -508,4 +513,19 @@ module Testing : sig
 
   val all_paths : string list
   (** Every name {!paths} can return. *)
+end
+
+(** [Make (C)] is [C.codec] as a {!Wire_runtime.Record.S}, so code written
+    against that signature runs on the interpreted codec or on the module
+    [Wire_ocaml] generates from it, by changing one line. A handle is built once
+    from a codec field. *)
+module Make (C : sig
+  type r
+
+  val codec : r t
+end) : sig
+  include Wire_runtime.Record.S with type t = C.r
+
+  val field : ('a, C.r) field -> 'a Field.t
+  (** [field f] is the handle of [f], whose getter is staged once. *)
 end

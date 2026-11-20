@@ -126,7 +126,7 @@ let no_populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit =
 (* A sub-codec field's check pass: run the sub-codec's own validator where the
    field sits. This is the whole of what the generated C emits for a sub-struct
    field, a call to the nested struct's validator, and it is what makes
-   [Codec.validate] reject at a use site everything the sub-codec's [decode]
+   [Codec.validate_exn] reject at a use site everything the sub-codec's [decode]
    rejects. No int slot is filled: a record-typed field has no scalar value an
    enclosing expression could reference. *)
 let sub_codec_populate ~codec_validate ~off_fn :
@@ -508,7 +508,7 @@ let repeat_raw_variable : type elt seq.
   in
   loop seq.empty start budget
 
-(* Accumulates nothing. [Codec.validate] wants a repeat's elements read for
+(* Accumulates nothing. [Codec.validate_exn] wants a repeat's elements read for
    their checks and does not want the sequence, so the walk it runs drops each
    element as it goes: a list built and thrown away is allocation the sender
    sizes through the byte budget, on the path a server runs once per packet.
@@ -556,7 +556,7 @@ let repeat_raw_reader : type elt seq.
    [By] says the element type carries its own validator, which a sub-codec does.
 
    The last two are departures from derivation, and each is a claim about a
-   reader that [Codec.validate] agreeing with [Codec.decode] is what keeps
+   reader that [Codec.validate_exn] agreeing with [Codec.decode] is what keeps
    honest. *)
 type 'a elem_strategy =
   | By_reading
@@ -612,7 +612,7 @@ let casetype_elem_check : type k.
 
 (* Every constructor is listed and there is deliberately no [| _ -> ...]: a typ
    added later must not pick a strategy by falling through, since picking
-   [Value_only] for a reader that checks something is how [Codec.validate] comes
+   [Value_only] for a reader that checks something is how [Codec.validate_exn] comes
    to accept what [Codec.decode] rejects. Adding one stops the build until
    somebody chooses.
 
@@ -770,7 +770,7 @@ let compile_repeat : type elt seq r.
     int_reader = null_int_reader;
     nested_readers = [];
     validator_off;
-    (* [Codec.validate] reaches a repeat only through its populate, and the
+    (* [Codec.validate_exn] reaches a repeat only through its populate, and the
        budget checks live in [repeat_raw_reader]. Run the same walk over
        {!seq_discard}, which checks every element and keeps none. *)
     populate =
@@ -860,7 +860,7 @@ let var_bytes_reader : type a.
   | _ -> assert false
 
 (* The scan a span type's reader performs, without the string it hands back.
-   [Codec.validate] returns unit, so running the reader for its checks alone
+   [Codec.validate_exn] returns unit, so running the reader for its checks alone
    turns over a copy of the span and drops it: allocation that scales with a
    length the sender chose, on the path a server runs once per packet.
    [None] for the spans whose reader only re-slices the buffer and has nothing
@@ -1598,7 +1598,7 @@ and compile_map : type a w r.
     cf with
     raw_reader = checked_reader;
     (* [decode] is where a lookup checks its index is in range; run it in
-       populate too so [Codec.validate] enforces the bound decode does. The inner
+       populate too so [Codec.validate_exn] enforces the bound decode does. The inner
        populate still fills the int slot from the raw value. *)
     populate =
       (fun arr runtime input_end buf base ->

@@ -16,22 +16,29 @@ type field = {
   views : Diff_ocaml.view list;
 }
 
+(* A bitfield or a byte array comes back in its carrier, [M.Value.<field>],
+   the [int] or [string] it holds. *)
+let rec carrier : type a. a T.typ -> string option = function
+  | T.Bits _ -> Some "int"
+  | T.Byte_array _ -> Some "string"
+  | T.Where { inner; _ } -> carrier inner
+  | T.Enum { base; _ } -> carrier base
+  | _ -> None
+
 let fields c =
   List.map
     (fun (T.Field f) ->
       let name = Option.get f.field_name in
+      let ident = Wire_ocaml.ident name in
       let show =
-        match Diff_ocaml.show_code f.field_typ with
-        | Some s -> s
-        | None ->
+        match (Diff_ocaml.show_code f.field_typ, carrier f.field_typ) with
+        | Some s, None -> s
+        | Some s, Some plain ->
+            Fmt.str "(fun v -> %s (v : M.Value.%s :> %s))" s ident plain
+        | None, _ ->
             Fmt.failwith "gen: field %s has a type the backend cannot show" name
       in
-      {
-        name;
-        ident = Wire_ocaml.ident name;
-        show;
-        views = Diff_ocaml.views f.field_typ;
-      })
+      { name; ident; show; views = Diff_ocaml.views f.field_typ })
     (Gen.to_struct c).fields
 
 let view = function
@@ -45,11 +52,11 @@ let pp_gets ~m ~buf ppf f =
     (fun v ->
       let read =
         match v with
-        | Diff_ocaml.Get -> Fmt.str "%s (%s.get_%s (%s) o)" f.show m f.ident buf
+        | Diff_ocaml.Get -> Fmt.str "%s (%s.Get.%s (%s) o)" f.show m f.ident buf
         | Get_int ->
-            Fmt.str "string_of_int (%s.get_%s_int (%s) o)" m f.ident buf
+            Fmt.str "string_of_int (%s.Get.%s_int (%s) o)" m f.ident buf
         | Of_word ->
-            Fmt.str "string_of_int (%s.%s_of_word (%s.get_%s_word (%s) o))" m
+            Fmt.str "string_of_int (%s.%s_of_word (%s.Get.%s_word (%s) o))" m
               f.ident m f.ident buf
       in
       Fmt.pf ppf "        (%S, %s, fun b o -> %s);@\n" f.name (view v) read)
@@ -68,37 +75,51 @@ let reads fields =
         f.views)
     fields
 
-let pp_read ?(prefix = "read") ~m ppf (f, v) =
+(* A read of [v], a [Valid.t]; or with [b], of the view [v] of the buffer
+   named [b]. *)
+let pp_read ?(prefix = "read") ?b ~m ppf (f, v) =
+  let args = match b with None -> "v" | Some b -> b ^ " v" in
   match v with
-  | Diff_ocaml.Get -> Fmt.pf ppf "%s (%s.%s_%s v)" f.show m prefix f.ident
-  | _ -> Fmt.pf ppf "string_of_int (%s.%s_%s_int v)" m prefix f.ident
+  | Diff_ocaml.Get -> Fmt.pf ppf "%s (%s.%s_%s %s)" f.show m prefix f.ident args
+  | _ -> Fmt.pf ppf "string_of_int (%s.%s_%s_int %s)" m prefix f.ident args
 
 (* The glue over [m] ("M" or "M.Bigstring"), whose buffer [buf] makes from
-   the bytes [b]; [back] wraps a write so its bytes land in [b]. *)
-let pp_ops ppf ~m ~buf ~back fields =
+   the bytes [b] and [brand] names; [back] wraps a write so its bytes land in
+   [b]. *)
+let pp_ops ppf ~m ~buf ~brand ~back fields =
   let reads = reads fields in
   Fmt.pf ppf
     "{@\n\
     \      Diff_ocaml.decode =@\n\
     \        (fun b o ->@\n\
     \          let out = Bytes.create M.size in@\n\
-    \          M.encode (%s.decode (%s) o) out 0;@\n\
+    \          M.encode (%s.decode_exn (%s) o) out 0;@\n\
     \          Bytes.to_string out);@\n\
-    \      validate = (fun b o -> %s.validate (%s) o);@\n\
+    \      validate = (fun b o -> %s.validate_exn (%s) o);@\n\
     \      encode =@\n\
     \        (fun s b o ->@\n\
-    \          let r = M.decode (Bytes.of_string s) 0 in@\n\
+    \          let r = M.decode_exn (Bytes.of_string s) 0 in@\n\
     \          %a);@\n\
     \      gets = [@\n\
      %a      ];@\n\
     \      reads = [ %a ];@\n\
     \      valid = (fun b -> let v = %s.Valid.v (%s) in [ %a ]);@\n\
     \      is_valid = (fun b o -> %s.is_valid (%s) o);@\n\
-    \      view = (fun b o -> let v = %s.View.at (%s) o in [ %a ]);@\n\
+    \      view =@\n\
+    \        (fun b o ->@\n\
+    \          match %s.v (%s) with@\n\
+    \          | %s.Any bb ->@\n\
+    \              let v = %s.View.at bb (%s.length bb) o in@\n\
+    \              [ %a ]);@\n\
     \      checked =@\n\
     \        (fun b o ->@\n\
-    \          let v = %s.View.check (%s) o in@\n\
-    \          (%s.View.ok v, [ %a ]));@\n\
+    \          match %s.v (%s) with@\n\
+    \          | %s.Any bb ->@\n\
+    \              let c = %s.View.check bb (%s.length bb) o in@\n\
+    \              if %s.View.ok c then@\n\
+    \                let v = %s.View.get c in@\n\
+    \                (true, [ %a ])@\n\
+    \              else (false, []));@\n\
     \    }"
     m buf m buf back (Fmt.str "%s.encode r" m)
     Fmt.(list ~sep:nop (pp_gets ~m ~buf))
@@ -107,10 +128,10 @@ let pp_ops ppf ~m ~buf ~back fields =
       list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
     reads m buf
     Fmt.(list ~sep:(any "; ") (pp_read ~m))
-    reads m buf m buf
-    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~m))
-    reads m buf m
-    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~m))
+    reads m buf brand buf brand m brand
+    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
+    reads brand buf brand m brand m m
+    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
     reads
 
 (* The module generated from [c], and its bridge, which checks it against
@@ -136,9 +157,11 @@ let pp_case ppf (label, c, src) =
      @\n"
     label src
     (Wire_ocaml.bridge ~codec:"codec" ~core:"M" c)
-    (pp_ops ~m:"M" ~buf:"b" ~back:(fun ppf w -> Fmt.pf ppf "%s b o" w))
+    (pp_ops ~m:"M" ~buf:"b" ~brand:"Wire_runtime.Buf" ~back:(fun ppf w ->
+         Fmt.pf ppf "%s b o" w))
     fields
-    (pp_ops ~m:"M.Bigstring" ~buf:"Diff_ocaml.big b" ~back:(fun ppf w ->
+    (pp_ops ~m:"M.Bigstring" ~buf:"Diff_ocaml.big b"
+       ~brand:"Wire_runtime.Buf.Bigstring" ~back:(fun ppf w ->
          Fmt.pf ppf
            "let bb = Diff_ocaml.big b in %s bb o; Diff_ocaml.blit_back bb b" w))
     fields
@@ -324,6 +347,11 @@ let () =
   Fmt.pf ppf
     "(* Generated by test/diff/gen_ocaml.exe from the codecs of \
      Diff_ocaml.codecs. *)@\n\
+     @\n\
+     (* Each case binds its module locally and uses only part of it: some of \
+     its@\n\
+    \   values, types and record fields go unused. *)@\n\
+     [@@@@@@warning \"-32-34-69\"]@\n\
      @\n";
   Fmt.pf ppf "let name = %S@\n@\n"
     (match target with `OCaml -> "ocaml" | `OxCaml -> "oxcaml");

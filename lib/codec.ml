@@ -726,7 +726,7 @@ let validate_fixed min_size pass buf off =
     | No_checks -> ()
     | _ -> run_plain_pass pass input_end buf off
 
-let validate ?env:e (t : _ t) buf off =
+let validate_exn ?env:e (t : _ t) buf off =
   match e with
   | None when t.n_params = 0 -> (
       match Atomic.get t.compiled with
@@ -736,14 +736,19 @@ let validate ?env:e (t : _ t) buf off =
           else c.plain_validate buf off
       | None -> validate_first t buf off)
   | _ ->
-      require_env ~op:"validate" t e;
+      require_env ~op:"validate_exn" t e;
       let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
       (compiled t).validate ?env_slots buf off
+
+let validate ?env t buf off =
+  match validate_exn ?env t buf off with
+  | () -> Ok ()
+  | exception Types.Parse_error e -> Error e
 
 let encode_fresh ~op ?env t v =
   let buf = Bytes.create (size_of_value ?env t v) in
   encode ?env t v buf 0;
-  (try validate ?env t buf 0
+  (try validate_exn ?env t buf 0
    with Types.Parse_error e ->
      Fmt.invalid_arg
        "Codec.%s %s: the encoded record is rejected by validation (%a)" op
@@ -1073,7 +1078,7 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
 type 'r valid = { buf : bytes; off : int; codec : int }
 
 let valid_slow env (t : 'r t) buf off =
-  validate ?env t buf off;
+  validate_exn ?env t buf off;
   { buf; off; codec = t.id }
 
 let valid ?env (t : 'r t) buf off =
@@ -1612,4 +1617,61 @@ module Testing = struct
     @ List.init 4 (fun i -> Fmt.str "encode.staged.%d" (i + 1))
     @ ([ "encode.staged.rows"; "encode.plain"; "encode.blit"; "read.scalar" ]
         : string list)
+end
+
+module Make (C : sig
+  type r
+
+  val codec : r t
+end) =
+struct
+  type t = C.r
+
+  let min_size = min_wire_size C.codec
+  let decode buf off = decode C.codec buf off
+  let decode_exn buf off = decode_exn C.codec buf off
+  let encode r buf off = encode C.codec r buf off
+  let validate buf off = validate C.codec buf off
+  let validate_exn buf off = validate_exn C.codec buf off
+
+  (* A negative offset holds no record, as the generated [is_valid] says,
+     where [validate] raises [Invalid_argument]. *)
+  let is_valid buf off =
+    off >= 0 && match validate buf off with Ok () -> true | Error _ -> false
+
+  module View = struct
+    type 'b t = int
+    type 'b check = int
+
+    let check b len off =
+      let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+      if off < 0 || off > (len : _ Wire_runtime.Buf.length :> int) - min_size
+      then -1
+      else if is_valid buf off then off
+      else -1
+
+    let at b _ off =
+      validate_exn (b : _ Wire_runtime.Buf.t :> bytes) off;
+      off
+
+    let ok c = c >= 0
+
+    let get c =
+      if c < 0 then invalid_arg (name C.codec ^ ".View.get: the check failed")
+      else c
+  end
+
+  module Field = struct
+    type 'a t = {
+      get : bytes -> int -> 'a;
+      view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
+    }
+  end
+
+  let field f =
+    let read = Staged.unstage (get C.codec f) in
+    {
+      Field.get = read;
+      view = (fun b v -> read (b : _ Wire_runtime.Buf.t :> bytes) (v : int));
+    }
 end

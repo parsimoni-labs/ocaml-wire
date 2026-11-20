@@ -387,7 +387,7 @@ let test_dep_size_arithmetic_overflow () =
           Alcotest.failf "%s decode: expected Value_out_of_range, got %a" name
             pp_parse_error e
       | Ok _ -> Alcotest.failf "%s decode: accepted the wrapped span" name);
-      match Codec.validate codec buf base with
+      match Codec.validate_exn codec buf base with
       | () -> Alcotest.failf "%s validate: accepted the wrapped span" name
       | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
           Alcotest.(check int) (name ^ " validate offset") base at)
@@ -412,7 +412,7 @@ let test_where_arithmetic_overflow_offset () =
       Alcotest.failf "decode: expected Value_out_of_range, got %a"
         pp_parse_error e
   | Ok _ -> Alcotest.fail "decode accepted overflowing where expression");
-  match Codec.validate codec buf base with
+  match Codec.validate_exn codec buf base with
   | () -> Alcotest.fail "validate accepted overflowing where expression"
   | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
       Alcotest.(check int) "validate offset" base at
@@ -449,7 +449,7 @@ let test_dep_size_zero_divisor () =
       | Ok _ -> Alcotest.failf "%s decode: accepted a zero divisor" name
       | exception Division_by_zero ->
           Alcotest.failf "%s decode: leaked Division_by_zero" name);
-      match Codec.validate codec buf base with
+      match Codec.validate_exn codec buf base with
       | exception Parse_error { at; kind = Zero_divisor; _ } ->
           Alcotest.(check int) (name ^ " validate offset") base at
       | () -> Alcotest.failf "%s validate: accepted a zero divisor" name

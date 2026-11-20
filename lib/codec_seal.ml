@@ -142,7 +142,7 @@ let guarded_dynamic_reader : type a r.
             reader runtime input_end buf base)
   | Fixed _ | Bitfield _ | Variable _ | Variable_dynamic _ -> reader
 
-(* [Codec.validate] reaches a field's bytes only through its populate: unlike
+(* [Codec.validate_exn] reaches a field's bytes only through its populate: unlike
    decode, it never walks the record field by field, so a field pushed past the
    end by an overlong variable-size predecessor is read at its computed offset
    with nothing in between to notice. Guard it with the same extent check the
@@ -167,7 +167,7 @@ let guarded_populate : type a r.
         populate arr runtime input_end buf base
 
 (* A field's two validators. [check_only] fills the field's int slot and tests
-   its constraint; [full] adds the field action. Decode and [Codec.validate]
+   its constraint; [full] adds the field action. Decode and [Codec.validate_exn]
    both run [full], so an action never fires on one path only. *)
 let field_validators ~field_idx ~validator_off ~populate ~check ~act =
   let check_only arr runtime input_end buf base =
@@ -688,7 +688,7 @@ let seed_param_slots arr n_total = function
    table the two lookups below can only answer 0 and drop the write, which is
    what an unbound context already does, and an unbound context is an immediate
    rather than two closures, a record and a block. The saving is per
-   [Codec.validate] call, and a validate is what a server runs per packet. *)
+   [Codec.validate_exn] call, and a validate is what a server runs per packet. *)
 let validation_runtime param_slots arr =
   if Hashtbl.length param_slots = 0 then no_runtime
   else
@@ -1221,7 +1221,7 @@ let build_checked_decode raw_decode wire_size_info min_size =
   check_decode_bounds wire_size_info min_size runtime input_end buf off;
   raw_decode runtime input_end buf off
 
-(* [Codec.validate] is the safety gate before a batch of zero-copy [get] calls on
+(* [Codec.validate_exn] is the safety gate before a batch of zero-copy [get] calls on
    untrusted input, so it must run decode's structural bounds check even for a
    constraint-free codec (whose constraint validator [validate_checks] is a
    no-op), or a [get] on a truncated buffer would read out of bounds. *)

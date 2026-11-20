@@ -156,11 +156,6 @@ val raise_no_matching_case : unit -> 'a
 val enum_values : (string * int) list -> int list
 (** The value set of an enum's named cases. *)
 
-val enum_member : int list -> int -> bool
-(** [enum_member valid v] is [true] when [v] is one of [valid]. The single
-    membership rule decode and encode share, so the two halves agree on what a
-    closed enum admits. *)
-
 val check_enum_decode : at:int -> cases:(string * int) list -> int -> unit
 (** Check a decoded value against a closed enum's named cases. An unlisted value
     raises {!constructor-Invalid_enum} carrying the case set. Scans the cases in

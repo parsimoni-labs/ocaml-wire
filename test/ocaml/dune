@@ -46,6 +46,7 @@
  (modules
   test
   test_wire_ocaml
+  test_same
   g_ipv4
   g_ipv4_wire
   g_ipv4_record
