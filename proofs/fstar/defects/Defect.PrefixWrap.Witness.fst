@@ -31,7 +31,7 @@ let plan : list node = [
 
 let rd : reader = fun o w -> 0
 let en : env = fun v -> if v = lim then 2 else 0
-let no_o1 : opts = { cancel = false; drop = false }
+let no_o1 : opts = plain
 
 let _ = assert_norm (wf (start lim).sc plan)
 let _ = assert_norm (spec rd 0 2 [] en 0 plan == Reject)

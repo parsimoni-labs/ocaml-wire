@@ -195,9 +195,19 @@ noeq type st = {
   bounded : list (expr & pos);    (* Emitter's [bounded]: span bounds a dispatch checked *)
   known : int;                    (* bytes known to be in the window after [p] *)
   p : pos;
+  held : list (int & nat);        (* Emitter's [held]: the words loaded at constant
+                                     offsets of the window, by offset, and their values *)
 }
 
-type opts = { cancel : bool; drop : bool }
+(* The rewrites, and the words of the int64 step scanner (057ff551) with
+   [keep], what Emitter.shared_words asks of a word besides its bounds (that
+   no word holds its field yet and it serves two fields). *)
+noeq type opts = {
+  cancel : bool;
+  drop : bool;
+  words : bool;
+  keep : int -> int -> nat -> bool;
+}
 
 (* Planner.nonnegative_in: by range, or by a passed check [a >= b] for [a - b]. *)
 let nonnegative (w:st) (e:expr) : bool =
@@ -343,14 +353,97 @@ let rec reads (wb len:int) (rd:reader) (en:env) (p:int) (fs:list field) : Tot (o
     if p + f.off < 0 || p + f.off + f.width > len then None
     else reads wb len rd (upd en f.id (rd (wb + p + f.off) f.width)) p r
 
+(* {2 Shared words (057ff551)} *)
+
+let imax (a b:int) : int = if a < b then b else a
+let imin (a b:int) : int = if a < b then a else b
+
+(* Emitter.shared_words: for each field, at [off] from the prefix's address
+   and [wd] bytes wide, the word of 8 bytes from it moved back to end at
+   [hi] but not before [lo], kept when it holds the field, ends by [hi] and
+   [keep] takes it. *)
+let rec choose (keep:int -> int -> nat -> bool) (lo hi:int) (fs:list (int & nat))
+  : Tot (list int) (decreases fs) =
+  match fs with
+  | [] -> []
+  | (off, wd) :: r ->
+    let a = imax lo (imin off (hi - 8)) in
+    if keep a off wd && a + 8 <= hi && a <= off && off + wd <= a + 8
+    then a :: choose keep lo hi r
+    else choose keep lo hi r
+
+(* The words [ws], from the prefix's address [v0] in a window of [len] bytes
+   at [wb]: each a load of 8 bytes, [None] outside the window. They are kept
+   by their offset in the window. *)
+let rec load_words (wb len:int) (rd:reader) (v0:int) (ws:list int)
+  : Tot (option (list (int & nat))) (decreases ws) =
+  match ws with
+  | [] -> Some []
+  | a :: r ->
+    let b = v0 + a in
+    if b < 0 || b + 8 > len then None
+    else (match load_words wb len rd v0 r with
+          | None -> None
+          | Some l -> Some ((b, rd (wb + b) 8) :: l))
+
+(* The [m] bytes [d] bytes into a word [v], as Emitter.unsigned takes them:
+   Plan.Word.extract at offset 0. *)
+let word_field (v:nat) (d:nat) (m:nat{1 <= m /\ m <= 7 /\ d + m <= 8}) : nat =
+  let x = (v / pow2 (8 * (8 - d - m))) % pow2 63 in
+  if d = 0 then x else x % pow2 (8 * m)
+
+(* The value of the field of [m] bytes at [q] from a word that holds it. *)
+let rec from_words (ws:list (int & nat)) (q:int) (m:nat{1 <= m /\ m <= 7})
+  : Tot (option nat) (decreases ws) =
+  match ws with
+  | [] -> None
+  | (b, v) :: r -> if 0 <= b && b <= q && q + m <= b + 8 then Some (word_field v (q - b) m) else from_words r q m
+
+(* The reads of a prefix whose fields the words [ws] may hold: a field a
+   word holds is taken from it, any other read on its own. *)
+let rec reads_w (wb len:int) (rd:reader) (ws:list (int & nat)) (en:env) (p:int) (fs:list field)
+  : Tot (option env) (decreases fs) =
+  match fs with
+  | [] -> Some en
+  | f :: r ->
+    match from_words ws (p + f.off) f.width with
+    | Some v -> reads_w wb len rd ws (upd en f.id v) p r
+    | None ->
+      if p + f.off < 0 || p + f.off + f.width > len then None
+      else reads_w wb len rd ws (upd en f.id (rd (wb + p + f.off) f.width)) p r
+
 (* A window around the current one: its base and length, the variable that
    holds its length, where the code after the region resumes, and the bounds
-   checked in it. *)
-noeq type frame = { fwb : int; flen : int; flim : var; fp : pos; fbounded : list (expr & pos) }
+   checked and words held in it. *)
+noeq type frame = {
+  fwb : int; flen : int; flim : var; fp : pos; fbounded : list (expr & pos); fheld : list (int & nat)
+}
 
 (* The current window: [len] bytes at [wb] in the buffer, the length in
    [lim] (Emitter's [base] and [limit]), and the windows around it. *)
 noeq type win = { wb : int; len : int; lim : var; frames : list frame }
+
+(* Emitter.prefix and load_words, once a check made [k] bytes from the
+   prefix's address known to be in the window: the words between [lo] and
+   [hi], the bytes the check covered, loaded, then the fields read, from the
+   words those loaded before at constant offsets of the window, and its
+   own, hold. The words held after it, and the fields' values. *)
+let prefix_reads (o:opts) (rd:reader) (x:win) (w:st) (en:env) (fs:list field) (k:int)
+  : option (list (int & nat) & env) =
+  let v0 = match w.p.pv with None -> 0 | Some v -> en v in
+  let constant = None? w.p.pv in
+  let lo = if constant then 0 else w.p.at in
+  let hi = extent w.p.at (if k < 0 then 0 else k) in
+  let fresh =
+    if o.words then choose o.keep lo hi (map (fun (f:field) -> ((w.p.at + f.off <: int), (f.width <: nat))) fs)
+    else [] in
+  match load_words x.wb x.len rd v0 fresh with
+  | None -> None
+  | Some fw ->
+    let ws = (if constant then w.held else []) @ fw in
+    match reads_w x.wb x.len rd ws en (posval en w.p) fs with
+    | None -> None
+    | Some en' -> Some (ws, en')
 
 (* One run of the code Emitter.walk writes. *)
 let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
@@ -375,11 +468,12 @@ let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
      | None -> Fault
      | Some None -> Reject
      | Some (Some k) ->
-       match reads x.wb len rd en (posval en w.p) fs with
+       match prefix_reads o rd x w en fs k with
        | None -> Fault
-       | Some en' ->
+       | Some (ws, en') ->
          let w' = bind_fields w fs in
-         exec o rd x ({ w' with known = k - size; p = { w.p with at = w.p.at + size } }) en' r)
+         exec o rd x ({ w' with known = k - size; p = { w.p with at = w.p.at + size };
+                                held = (if None? w.p.pv then ws else w.held) }) en' r)
   | Span n e s :: r ->
     (match span_size w en s with
      | None -> Fault
@@ -445,10 +539,10 @@ let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
          | None -> Fault
          | Some y ->
            let w1 = bind_span w false n e s ends in
-           let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded } in
+           let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held } in
            let x' = { wb = x.wb + posval en w.p; len = k; lim = n; frames = f :: x.frames } in
            (* The bounds checked in the window around do not hold in this one. *)
-           let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] } in
+           let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = []; held = [] } in
            exec o rd x' w' (upd (upd en n k) e y) (b @ (Close am :: r)))
   | Close am :: r ->
     (match x.frames with
@@ -461,4 +555,4 @@ let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
        | Some true -> Reject
        | Some false ->
          exec o rd ({ wb = f.fwb; len = f.flen; lim = f.flim; frames = fs })
-           ({ w with known = 0; p = f.fp; bounded = f.fbounded }) en r)
+           ({ w with known = 0; p = f.fp; bounded = f.fbounded; held = f.fheld }) en r)

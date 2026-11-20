@@ -10,3 +10,4 @@ let length l = Prims.of_int (List.length l)
 let rec assoc k = function
   | [] -> None
   | (k', v) :: r -> if k' = k then Some v else assoc k r
+let for_all = List.for_all

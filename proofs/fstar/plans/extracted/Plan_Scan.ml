@@ -267,32 +267,51 @@ type st =
   sums: Plan_Expr.var -> Plan_Sum.sum FStar_Pervasives_Native.option ;
   bounded: (Plan_Expr.expr * pos) Prims.list ;
   known: Prims.int ;
-  p: pos }
+  p: pos ;
+  held: (Prims.int * Prims.nat) Prims.list }
 let __proj__Mkst__item__sc (projectee : st) : Plan_Expr.scope=
-  match projectee with | { sc; rg; facts; sums; bounded; known; p;_} -> sc
+  match projectee with
+  | { sc; rg; facts; sums; bounded; known; p; held;_} -> sc
 let __proj__Mkst__item__rg (projectee : st) : Plan_Expr.ranges=
-  match projectee with | { sc; rg; facts; sums; bounded; known; p;_} -> rg
+  match projectee with
+  | { sc; rg; facts; sums; bounded; known; p; held;_} -> rg
 let __proj__Mkst__item__facts (projectee : st) :
   (Plan_Expr.expr * Plan_Expr.expr) Prims.list=
-  match projectee with | { sc; rg; facts; sums; bounded; known; p;_} -> facts
+  match projectee with
+  | { sc; rg; facts; sums; bounded; known; p; held;_} -> facts
 let __proj__Mkst__item__sums (projectee : st) :
   Plan_Expr.var -> Plan_Sum.sum FStar_Pervasives_Native.option=
-  match projectee with | { sc; rg; facts; sums; bounded; known; p;_} -> sums
+  match projectee with
+  | { sc; rg; facts; sums; bounded; known; p; held;_} -> sums
 let __proj__Mkst__item__bounded (projectee : st) :
   (Plan_Expr.expr * pos) Prims.list=
   match projectee with
-  | { sc; rg; facts; sums; bounded; known; p;_} -> bounded
+  | { sc; rg; facts; sums; bounded; known; p; held;_} -> bounded
 let __proj__Mkst__item__known (projectee : st) : Prims.int=
-  match projectee with | { sc; rg; facts; sums; bounded; known; p;_} -> known
+  match projectee with
+  | { sc; rg; facts; sums; bounded; known; p; held;_} -> known
 let __proj__Mkst__item__p (projectee : st) : pos=
-  match projectee with | { sc; rg; facts; sums; bounded; known; p;_} -> p
-type opts = {
+  match projectee with
+  | { sc; rg; facts; sums; bounded; known; p; held;_} -> p
+let __proj__Mkst__item__held (projectee : st) :
+  (Prims.int * Prims.nat) Prims.list=
+  match projectee with
+  | { sc; rg; facts; sums; bounded; known; p; held;_} -> held
+type opts =
+  {
   cancel: Prims.bool ;
-  drop: Prims.bool }
+  drop: Prims.bool ;
+  words: Prims.bool ;
+  keep: Prims.int -> Prims.int -> Prims.nat -> Prims.bool }
 let __proj__Mkopts__item__cancel (projectee : opts) : Prims.bool=
-  match projectee with | { cancel; drop;_} -> cancel
+  match projectee with | { cancel; drop; words; keep;_} -> cancel
 let __proj__Mkopts__item__drop (projectee : opts) : Prims.bool=
-  match projectee with | { cancel; drop;_} -> drop
+  match projectee with | { cancel; drop; words; keep;_} -> drop
+let __proj__Mkopts__item__words (projectee : opts) : Prims.bool=
+  match projectee with | { cancel; drop; words; keep;_} -> words
+let __proj__Mkopts__item__keep (projectee : opts) :
+  Prims.int -> Prims.int -> Prims.nat -> Prims.bool=
+  match projectee with | { cancel; drop; words; keep;_} -> keep
 let nonnegative (w : st) (e : Plan_Expr.expr) : Prims.bool=
   (match Plan_Expr.range w.rg e with
    | FStar_Pervasives_Native.Some (lo, uu___) -> lo >= Prims.int_zero
@@ -496,7 +515,8 @@ let bind_span (w : st) (implied : Prims.bool) (n : Plan_Expr.var)
     sums = (fun v -> if v = e then sm else w.sums v);
     bounded = (w.bounded);
     known = Prims.int_zero;
-    p = { pv = (FStar_Pervasives_Native.Some e); at = Prims.int_zero }
+    p = { pv = (FStar_Pervasives_Native.Some e); at = Prims.int_zero };
+    held = (w.held)
   }
 let bind_field (w : st) (f : field) : st=
   {
@@ -513,7 +533,8 @@ let bind_field (w : st) (f : field) : st=
     sums = (w.sums);
     bounded = (w.bounded);
     known = (w.known);
-    p = (w.p)
+    p = (w.p);
+    held = (w.held)
   }
 let rec bind_fields (w : st) (fs : field Prims.list) : st=
   match fs with | [] -> w | f::r -> bind_fields (bind_field w f) r
@@ -550,7 +571,8 @@ let refine (w : st) (c : cond) : st=
         sums = (w.sums);
         bounded = (w.bounded);
         known = (w.known);
-        p = (w.p)
+        p = (w.p);
+        held = (w.held)
       }
   | Eq (uu___, uu___1) -> w
 let rec reads (wb : Prims.int) (len : Prims.int) (rd : reader)
@@ -564,24 +586,94 @@ let rec reads (wb : Prims.int) (len : Prims.int) (rd : reader)
       else
         reads wb len rd
           (Plan_Expr.upd en f.id (rd ((wb + p) + f.off) f.width)) p r
+let imax (a : Prims.int) (b : Prims.int) : Prims.int= if a < b then b else a
+let imin (a : Prims.int) (b : Prims.int) : Prims.int= if a < b then a else b
+let rec choose (keep : Prims.int -> Prims.int -> Prims.nat -> Prims.bool)
+  (lo : Prims.int) (hi : Prims.int) (fs : (Prims.int * Prims.nat) Prims.list)
+  : Prims.int Prims.list=
+  match fs with
+  | [] -> []
+  | (off, wd)::r ->
+      let a = imax lo (imin off (hi - (Prims.of_int (8)))) in
+      if
+        (((keep a off wd) && ((a + (Prims.of_int (8))) <= hi)) && (a <= off))
+          && ((off + wd) <= (a + (Prims.of_int (8))))
+      then a :: (choose keep lo hi r)
+      else choose keep lo hi r
+let rec load_words (wb : Prims.int) (len : Prims.int) (rd : reader)
+  (v0 : Prims.int) (ws : Prims.int Prims.list) :
+  (Prims.int * Prims.nat) Prims.list FStar_Pervasives_Native.option=
+  match ws with
+  | [] -> FStar_Pervasives_Native.Some []
+  | a::r ->
+      let b = v0 + a in
+      if (b < Prims.int_zero) || ((b + (Prims.of_int (8))) > len)
+      then FStar_Pervasives_Native.None
+      else
+        (match load_words wb len rd v0 r with
+         | FStar_Pervasives_Native.None -> FStar_Pervasives_Native.None
+         | FStar_Pervasives_Native.Some l ->
+             FStar_Pervasives_Native.Some
+               ((b, (rd (wb + b) (Prims.of_int (8)))) :: l))
+let word_field (v : Prims.nat) (d : Prims.nat) (m : Prims.nat) : Prims.nat=
+  let x =
+    (mod)
+      (v / (Prims.pow2 ((Prims.of_int (8)) * (((Prims.of_int (8)) - d) - m))))
+      (Prims.pow2 (Prims.of_int (63))) in
+  if d = Prims.int_zero
+  then x
+  else (mod) x (Prims.pow2 ((Prims.of_int (8)) * m))
+let rec from_words (ws : (Prims.int * Prims.nat) Prims.list) (q : Prims.int)
+  (m : Prims.nat) : Prims.nat FStar_Pervasives_Native.option=
+  match ws with
+  | [] -> FStar_Pervasives_Native.None
+  | (b, v)::r ->
+      if
+        ((Prims.int_zero <= b) && (b <= q)) &&
+          ((q + m) <= (b + (Prims.of_int (8))))
+      then FStar_Pervasives_Native.Some (word_field v (q - b) m)
+      else from_words r q m
+let rec reads_w (wb : Prims.int) (len : Prims.int) (rd : reader)
+  (ws : (Prims.int * Prims.nat) Prims.list) (en : Plan_Expr.env)
+  (p : Prims.int) (fs : field Prims.list) :
+  Plan_Expr.env FStar_Pervasives_Native.option=
+  match fs with
+  | [] -> FStar_Pervasives_Native.Some en
+  | f::r ->
+      (match from_words ws (p + f.off) f.width with
+       | FStar_Pervasives_Native.Some v ->
+           reads_w wb len rd ws (Plan_Expr.upd en f.id v) p r
+       | FStar_Pervasives_Native.None ->
+           if
+             ((p + f.off) < Prims.int_zero) ||
+               (((p + f.off) + f.width) > len)
+           then FStar_Pervasives_Native.None
+           else
+             reads_w wb len rd ws
+               (Plan_Expr.upd en f.id (rd ((wb + p) + f.off) f.width)) p r)
 type frame =
   {
   fwb: Prims.int ;
   flen: Prims.int ;
   flim: Plan_Expr.var ;
   fp: pos ;
-  fbounded: (Plan_Expr.expr * pos) Prims.list }
+  fbounded: (Plan_Expr.expr * pos) Prims.list ;
+  fheld: (Prims.int * Prims.nat) Prims.list }
 let __proj__Mkframe__item__fwb (projectee : frame) : Prims.int=
-  match projectee with | { fwb; flen; flim; fp; fbounded;_} -> fwb
+  match projectee with | { fwb; flen; flim; fp; fbounded; fheld;_} -> fwb
 let __proj__Mkframe__item__flen (projectee : frame) : Prims.int=
-  match projectee with | { fwb; flen; flim; fp; fbounded;_} -> flen
+  match projectee with | { fwb; flen; flim; fp; fbounded; fheld;_} -> flen
 let __proj__Mkframe__item__flim (projectee : frame) : Plan_Expr.var=
-  match projectee with | { fwb; flen; flim; fp; fbounded;_} -> flim
+  match projectee with | { fwb; flen; flim; fp; fbounded; fheld;_} -> flim
 let __proj__Mkframe__item__fp (projectee : frame) : pos=
-  match projectee with | { fwb; flen; flim; fp; fbounded;_} -> fp
+  match projectee with | { fwb; flen; flim; fp; fbounded; fheld;_} -> fp
 let __proj__Mkframe__item__fbounded (projectee : frame) :
   (Plan_Expr.expr * pos) Prims.list=
-  match projectee with | { fwb; flen; flim; fp; fbounded;_} -> fbounded
+  match projectee with
+  | { fwb; flen; flim; fp; fbounded; fheld;_} -> fbounded
+let __proj__Mkframe__item__fheld (projectee : frame) :
+  (Prims.int * Prims.nat) Prims.list=
+  match projectee with | { fwb; flen; flim; fp; fbounded; fheld;_} -> fheld
 type win =
   {
   wb: Prims.int ;
@@ -596,6 +688,34 @@ let __proj__Mkwin__item__lim (projectee : win) : Plan_Expr.var=
   match projectee with | { wb; len; lim; frames;_} -> lim
 let __proj__Mkwin__item__frames (projectee : win) : frame Prims.list=
   match projectee with | { wb; len; lim; frames;_} -> frames
+let prefix_reads (o : opts) (rd : reader) (x : win) (w : st)
+  (en : Plan_Expr.env) (fs : field Prims.list) (k : Prims.int) :
+  ((Prims.int * Prims.nat) Prims.list * Plan_Expr.env)
+    FStar_Pervasives_Native.option=
+  let v0 =
+    match (w.p).pv with
+    | FStar_Pervasives_Native.None -> Prims.int_zero
+    | FStar_Pervasives_Native.Some v -> en v in
+  let constant = FStar_Pervasives_Native.uu___is_None (w.p).pv in
+  let lo = if constant then Prims.int_zero else (w.p).at in
+  let hi =
+    Plan_Expr.extent (w.p).at
+      (if k < Prims.int_zero then Prims.int_zero else k) in
+  let fresh =
+    if o.words
+    then
+      choose o.keep lo hi
+        (FStar_List_Tot_Base.map (fun f -> (((w.p).at + f.off), (f.width)))
+           fs)
+    else [] in
+  match load_words x.wb x.len rd v0 fresh with
+  | FStar_Pervasives_Native.None -> FStar_Pervasives_Native.None
+  | FStar_Pervasives_Native.Some fw ->
+      let ws = FStar_List_Tot_Base.op_At (if constant then w.held else []) fw in
+      (match reads_w x.wb x.len rd ws en (posval en w.p) fs with
+       | FStar_Pervasives_Native.None -> FStar_Pervasives_Native.None
+       | FStar_Pervasives_Native.Some en' ->
+           FStar_Pervasives_Native.Some (ws, en'))
 let rec exec (o : opts) (rd : reader) (x : win) (w : st) (en : Plan_Expr.env)
   (l : node Prims.list) : outcome=
   let len = x.len in
@@ -628,9 +748,9 @@ let rec exec (o : opts) (rd : reader) (x : win) (w : st) (en : Plan_Expr.env)
        | FStar_Pervasives_Native.Some (FStar_Pervasives_Native.None) ->
            Reject
        | FStar_Pervasives_Native.Some (FStar_Pervasives_Native.Some k) ->
-           (match reads x.wb len rd en (posval en w.p) fs with
+           (match prefix_reads o rd x w en fs k with
             | FStar_Pervasives_Native.None -> Fault
-            | FStar_Pervasives_Native.Some en' ->
+            | FStar_Pervasives_Native.Some (ws, en') ->
                 let w' = bind_fields w fs in
                 exec o rd x
                   {
@@ -642,7 +762,11 @@ let rec exec (o : opts) (rd : reader) (x : win) (w : st) (en : Plan_Expr.env)
                     known = (k - size);
                     p =
                       (let uu___ = w.p in
-                       { pv = (uu___.pv); at = ((w.p).at + size) })
+                       { pv = (uu___.pv); at = ((w.p).at + size) });
+                    held =
+                      (if FStar_Pervasives_Native.uu___is_None (w.p).pv
+                       then ws
+                       else w.held)
                   } en' r))
   | (Span (n, e, s))::r ->
       (match span_size w en s with
@@ -705,7 +829,8 @@ let rec exec (o : opts) (rd : reader) (x : win) (w : st) (en : Plan_Expr.env)
                                     sums = (w.sums);
                                     bounded = ((s, (w.p)) :: (w.bounded));
                                     known = (w.known);
-                                    p = (w.p)
+                                    p = (w.p);
+                                    held = (w.held)
                                   }))))
         | FStar_Pervasives_Native.None ->
             FStar_Pervasives_Native.Some (FStar_Pervasives_Native.Some w) in
@@ -743,7 +868,8 @@ let rec exec (o : opts) (rd : reader) (x : win) (w : st) (en : Plan_Expr.env)
                          flen = len;
                          flim = lim;
                          fp = (w1.p);
-                         fbounded = (w1.bounded)
+                         fbounded = (w1.bounded);
+                         fheld = (w1.held)
                        } in
                      let x' =
                        {
@@ -764,7 +890,8 @@ let rec exec (o : opts) (rd : reader) (x : win) (w : st) (en : Plan_Expr.env)
                            {
                              pv = FStar_Pervasives_Native.None;
                              at = Prims.int_zero
-                           }
+                           };
+                         held = []
                        } in
                      exec o rd x' w'
                        (Plan_Expr.upd (Plan_Expr.upd en n k) e y)
@@ -795,5 +922,6 @@ let rec exec (o : opts) (rd : reader) (x : win) (w : st) (en : Plan_Expr.env)
                     sums = (w.sums);
                     bounded = (f.fbounded);
                     known = Prims.int_zero;
-                    p = (f.fp)
+                    p = (f.fp);
+                    held = (f.fheld)
                   } en r))

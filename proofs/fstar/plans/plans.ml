@@ -278,8 +278,43 @@ let pp_kind ppf = function
         (if neg then "" else ", no negative test")
         (if c then ", cancelled" else "")
 
+(* Scan_module.fixed_need: the bytes the step scanner's frame loop knows a
+   frame holds, the frames shorter than that walked apart. *)
+let extent a b =
+  let s = a + b in
+  if s < a || s > Sys.max_string_length then Sys.max_string_length + 1 else s
+
+let rec fixed_need = function
+  | P.Prefix (_, n) :: rest -> extent n (fixed_need rest)
+  | P.Gate (_, _, _, inner) :: _ -> fixed_need inner
+  | _ -> 0
+
+(* The shared words of a prefix, out of their decision. *)
+type words = {
+  window : string;
+  constant : bool;
+  at : int;
+  fields : (int * int) list;
+  held : int list;
+  loads : int list;
+}
+
+let words_of =
+  List.filter_map (function
+    | P.Shared_words { window; constant; at; fields; held; loads; _ } ->
+        Some { window; constant; at; fields; held; loads }
+    | _ -> None)
+
 let plans = ref []
 let refused = ref []
+
+(* The shared words of the emitter's prefixes the model does not justify,
+   and the words held in a window that no prefix of that window loaded. *)
+let word_findings = ref []
+let not_wf = ref []
+let leaks = ref []
+let words = ref 0
+let held = ref 0
 
 (* The emitter's decisions for a codec the model does not justify. *)
 let findings = ref []
@@ -295,10 +330,14 @@ let add : type a. string -> a Wire.Codec.t -> unit =
       Hashtbl.reset ids;
       next := 1;
       let wf = nodes (P.nodes p) in
+
       Hashtbl.reset ids;
       next := 1;
       let d = dnodes ~runs:true (P.nodes p) in
       let d' = dnodes ~runs:false (P.nodes p) in
+      (* What Plan.Proof assumes of a plan, as F* extracts it. *)
+      let sc v = v = z 0 in
+      if not (S.wf sc d && S.wf sc d') then not_wf := name :: !not_wf;
       (* The decisions of the scanner and of its step form. *)
       let all = P.decisions c @ P.decisions ~step:"Step" c in
       (* A window's length is the size variable of the region that opened
@@ -334,6 +373,52 @@ let add : type a. string -> a Wire.Codec.t -> unit =
       let model = D.decisions (z 0) d @ D.decisions (z 0) d' in
       let bad = D.unjustified model spans in
       if bad <> [] then findings := (name, bad, model) :: !findings;
+      let ws = words_of all in
+      let records =
+        List.map
+          (fun (r : words) ->
+            {
+              D.edepth = z (depth r.window);
+              econst = r.constant;
+              eat = z r.at;
+              efields = List.map (fun (o, w) -> (z o, z w)) r.fields;
+              ewords =
+                List.map (fun a -> z (if !fabricate then a + 1 else a)) r.loads;
+            })
+          ws
+      in
+      words :=
+        !words
+        + List.fold_left (fun n (r : words) -> n + List.length r.loads) 0 ws;
+      held :=
+        !held
+        + List.fold_left (fun n (r : words) -> n + List.length r.held) 0 ws;
+      let model =
+        List.concat_map
+          (fun known ->
+            D.prefixes (z 0) (z known) d @ D.prefixes (z 0) (z known) d')
+          [ 0; fixed_need (P.nodes p) ]
+      in
+      (match D.words_unjustified model records with
+      | [] -> ()
+      | bad -> word_findings := (name, bad, model) :: !word_findings);
+      (* A prefix at a constant offset of a window reads only the words the
+         prefixes before it in that window loaded. *)
+      let loaded = Hashtbl.create 8 in
+      List.iter
+        (fun (r : words) ->
+          if r.constant then begin
+            let seen =
+              Option.value ~default:[] (Hashtbl.find_opt loaded r.window)
+            in
+            List.iter
+              (fun a ->
+                if not (List.mem a seen) then
+                  leaks := (name, r.window, a) :: !leaks)
+              r.held;
+            Hashtbl.replace loaded r.window (seen @ r.loads)
+          end)
+        ws;
       plans := (name, wf, List.length spans) :: !plans
   | exception Invalid_argument why -> refused := (name, why) :: !refused
 
@@ -450,7 +535,11 @@ let () =
     List.iter
       (fun (Diff_codecs.Scan { label; codec; _ }) -> add label codec)
       Diff_codecs.scan_cases;
-    build "prefix wrap (Defect.PrefixWrap)" Deep.codec
+    build "prefix wrap (Defect.PrefixWrap)" Deep.codec;
+    add "packet stack" Packet_stack.codec;
+    add "s_huge" Schemas.huge;
+    build "s_deep" (fun () -> Schemas.deep 32 (Sys.max_string_length - 1));
+    add "s_nested" (Schemas.nested 12)
   end;
   Fmt.pr "module %s@.@." module_name;
   Fmt.pr
@@ -482,7 +571,52 @@ let () =
         Fmt.(list ~sep:cut pp_decision)
         model)
     (List.rev !findings);
+  let pp_record ppf (r : D.wrecord) =
+    Fmt.pf ppf "%s regions deep, %s at %s: words at %a for fields %a"
+      (Prims.to_string r.edepth)
+      (if r.econst then "constant" else "variable")
+      (Prims.to_string r.eat)
+      Fmt.(list ~sep:comma (using Prims.to_string string))
+      r.ewords
+      Fmt.(
+        list ~sep:comma
+          (pair ~sep:(any "+")
+             (using Prims.to_string string)
+             (using Prims.to_string string)))
+      r.efields
+  in
+  let pp_wdecision ppf (m : D.wdecision) =
+    Fmt.pf ppf "%s regions deep, %s at %s: words in [%s, %s]"
+      (Prims.to_string m.wdepth)
+      (if m.wconst then "constant" else "variable")
+      (Prims.to_string m.wat) (Prims.to_string m.wlo) (Prims.to_string m.whi)
+  in
+  List.iter
+    (fun (name, bad, model) ->
+      Fmt.epr "@[<v2>%s: the emitter loads words the model does not:@,%a@," name
+        Fmt.(list ~sep:cut pp_record)
+        bad;
+      Fmt.epr "@[<v2>the model allows:@,%a@]@]@."
+        Fmt.(list ~sep:cut pp_wdecision)
+        model)
+    (List.rev !word_findings);
+  List.iter
+    (fun (name, limit, a) ->
+      Fmt.epr
+        "%s: a prefix of the window %s reads the word at %d, which no prefix \
+         of it loaded@."
+        name limit a)
+    (List.rev !leaks);
+  List.iter
+    (fun name -> Fmt.epr "%s: the plan is not what Plan.Proof assumes@." name)
+    (List.rev !not_wf);
   Fmt.epr
-    "decisions: %d plans, %d emitter decisions, %d plans with one the model \
-     does not justify@."
-    (List.length !plans) decisions (List.length !findings)
+    "decisions: %d plans, %d not well formed, %d emitter decisions, %d plans \
+     with one the model does not justify@."
+    (List.length !plans) (List.length !not_wf) decisions (List.length !findings);
+  Fmt.epr
+    "words: %d shared words, %d held over from a prefix before, %d plans with \
+     one the model does not justify, %d held across windows@."
+    !words !held
+    (List.length !word_findings)
+    (List.length !leaks)

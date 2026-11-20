@@ -10,4 +10,6 @@
   wire.ocaml
   diff_codecs
   fuzz_gen
+  net
+  schemas
   wire_fstar_model))

@@ -4,7 +4,8 @@ An F* model of the part of a `Wire_ocaml` plan that bounds care about,
 with proofs that the code the emitter writes reads only inside its window
 and accepts exactly what the codec accepts, with and without the O1
 rewrites (bf2c2866: cancel common terms in a bound, leave a span's bound
-to the next check). It uses the F*, Z3 and LowParse that ship with
+to the next check) and the words the int64 step scanner shares between
+prefixes (057ff551). It uses the F*, Z3 and LowParse that ship with
 EverParse and is outside the dune build.
 
 ```
@@ -16,11 +17,14 @@ make -C proofs/fstar check-extract # plans/extracted is the model
 
 `make plans` builds `plans/plans.exe`, which takes the plans
 `Wire_ocaml.Plan` makes of the sampled codecs of the differential fuzzer,
-its structured scan cases, the packet stack and the `Defect.PrefixWrap`
-codec, and checks two things of each.
+its structured scan cases, the `Defect.PrefixWrap` codec, the packet stack
+of `examples/net` and the `huge`, `deep` and `nested` schemas of
+`test/ocaml`, and checks three things of each.
 
-- F* evaluates `wf` on the plan: every variable bound once and read after
-  it is bound, the premise `scanner_correct` takes of the planner.
+- `wf` holds of the plan: every variable bound once and read after it is
+  bound, the premise `scanner_correct` takes of the planner. F* evaluates
+  it on the plans up to the packet stack; plans.exe evaluates it, as F*
+  extracts it, on all.
 - Every bound decision `Wire_ocaml.Plan.decisions` reports (`Span_bound`)
   (left to the next check, hoisted, checked with or without the negative
   test, cancelled) is one the model's walk takes for the same size, region
@@ -28,9 +32,18 @@ codec, and checks two things of each.
   `Plan.Decide.walk`, run as F* extracts it (`plans/extracted`, over exact
   integers instead of zarith), on two readings of each run of optional
   fields: one that may run no case, one where a case always runs.
+- Every shared word `Wire_ocaml.Plan.decisions` reports (`Shared_words`)
+  a prefix of the step scanner loads is one `Plan.Scan.choose` may keep for
+  one of the prefix's fields, between the bounds the model's walk gives the same prefix
+  (`Plan.Decide.words_justified`), from a window start of no known bytes or
+  of the bytes the frame loop's `stride` test ensures (`fixed_need`). And a
+  prefix at a constant offset reads only words the prefixes before it in
+  the same window loaded: none crosses into a region or out of it.
 
-The control claims every bound is left to the next check, which the model
-must refuse for some plan.
+The control claims every bound is left to the next check and moves every
+word one byte on, which the model must refuse for some plan. Run against
+emitters mutated to keep `held` into a region, and to keep a word past the
+checked bytes, the check reports each.
 
 `EVERPARSE` defaults to `~/.local/everparse`.
 
@@ -48,7 +61,20 @@ must refuse for some plan.
   window inside the one around it and ending where the code after it
   resumes, so contents cannot borrow bytes from beyond their region, as a
   frame of `fold_frames` cannot from the next frame.
-- `Plan.Proof.o1_preserves`: with and without O1, the same answer.
+- `Plan.Proof.o1_preserves`: with and without O1 and the shared words,
+  the same answer.
+- Shared words (M5, `Plan.Proof.prefix_words`): each word
+  `Emitter.shared_words` keeps for a prefix lies in `[lo, hi]`, `lo` the
+  window's start for a prefix at a constant offset and the prefix's address
+  otherwise, `hi` the end of the bytes the last check covered
+  (`extent at known`), so its 8 bytes are in the window; every field a word
+  holds, whether loaded by this prefix or held from one before it in the
+  window, is the bytes it covers (`from_words_ok`, given a `consistent`
+  reader, which `Plan.Bytes.be_consistent` proves a big-endian buffer is);
+  and the words held (`held`) are cleared on entering a region and restored
+  on leaving it (`held_ok`, `frames_held`). Which words to keep beyond
+  their bounds (unheld, serving two fields) is a parameter `keep` the
+  proof quantifies over.
 - `Plan.Proof.exec_spec`: the inductive statement behind both, for any
   walk state the invariant `inv` describes, including the state right after
   a span whose bound was left to the next check (`pending`).
@@ -80,6 +106,8 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 | `exec` | `Emitter.walk` / `step` |
 | `win`, `frame` | the walk's `base` and `limit`, and those `step`'s `Region` case restores |
 | `ahead`, the `Prefix` guard, `known` | `Emitter.ahead`, `Emitter.bound`, the `known` field |
+| `choose`, `load_words`, `prefix_reads`, `held` | `Emitter.shared_words`, `Emitter.load_words`, `Emitter.prefix`, the `held` field |
+| `from_words`, `word_field` | `Emitter.unsigned` with a word (`Boxed`) |
 | `span_size`, `outside`, `room_expr` | `Emitter.span`, `Emitter.outside` |
 | `cancelled`, `pos_sum` | `Emitter.cancelled`, `Emitter.pos_sum` |
 | `checks_next`, `hoisted`, the `Gate` case | `Emitter.checks_next`, `Emitter.hoisted`, `Emitter.hoist_bound` |
@@ -127,8 +155,9 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   always runs a case is not decided, both readings are walked.
 - The int64 form of the step scanner (`Boxed`): the model's integers are
   mathematical and its ranges those of the 63-bit int, which is the
-  narrower; the words a step scanner shares between prefixes (`held`,
-  `Emitter.shared_words`) are not modelled.
+  narrower. Of its shared words, the fields read unsigned are modelled;
+  signed fields and bitfields take the unmasked word (`raw`) and mask or
+  sign-extend it after, which `Plan.Word` covers only for `word_range`.
 
 ## Past defects
 
@@ -173,6 +202,16 @@ span instead of none: with a 2-byte window, a 1-byte field `a = 1`, a span
 of `a` bytes and a 1-byte field, the span fits and the last field is read
 at offset 2. `bind_span_ok` then fails: the invariant
 `position + known <= len` no longer holds after a span.
+
+The mutants `word-past-check`, `word-before-window` and `held-leak` take
+out of `Emitter.shared_words` and the region walk, in turn, the test that
+a word ends by the last checked byte, the `max lo` that keeps it from
+starting before the window or the prefix, and the clearing of `held` on
+entering a region. Each makes `Plan.Proof` fail, and its witness runs the
+mutant: two bytes the codec accepts where the first two load a word of
+eight, before or past the window; a field at offset 0 of a region at 8
+taken from the word held at offset 0 of the buffer, accepting what the
+codec rejects.
 
 The mutants `o1-drop-negative`, `o1-drop-wrap` and `o1-drop-unchecked`
 remove one premise each of the O1 rule that leaves a span's bound to the

@@ -421,16 +421,121 @@ let pos_expr_ev (len:nat) (lim:var) (w:st) (en:env)
    nothing known and no bound checked in it. *)
 let region_inv (len:nat) (lim:var) (w1:st) (en1:env) (k:nat) (n:var)
   : Lemma (requires inv len lim w1 en1 false /\ w1.sc n /\ en1 n == k /\ k <= len)
-          (ensures inv k n ({ w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] }) en1 false)
+          (ensures inv k n ({ w1 with p = { pv = None; at = 0 }; known = 0; bounded = []; held = [] }) en1 false)
   = ()
 
 (* The window around once the contents are read: the code resumes after the
    region, with the bounds checked in that window. *)
 let close_inv (len:nat) (lim:var) (w:st) (en:env) (f:frame) (fs:list frame) (wb:int)
   : Lemma (requires inv len lim w en false /\ frames_ok w.sc en wb len (f :: fs))
-          (ensures inv f.flen f.flim ({ w with known = 0; p = f.fp; bounded = f.fbounded }) en false /\
+          (ensures inv f.flen f.flim ({ w with known = 0; p = f.fp; bounded = f.fbounded; held = f.fheld }) en false /\
                    frames_ok w.sc en f.fwb f.flen fs)
   = max_string_length_small ()
+
+(* {1 Shared words (057ff551)} *)
+
+(* What the int64 step scanner assumes of the buffer: a field taken out of a
+   word of 8 bytes that holds it is the field read on its own. A big-endian
+   reader of bytes is one (Plan.Word.word_field). *)
+let consistent (rd:reader) : prop =
+  forall (a k:int) (m:nat{1 <= m /\ m <= 7}).
+    (a <= k /\ k + m <= a + 8) ==> word_field (rd a 8) (k - a) m == rd k m
+
+(* Words loaded in a window of [len] bytes at [wb]: inside it, each the value
+   of its 8 bytes. *)
+let rec words_ok (wb len:int) (rd:reader) (ws:list (int & nat)) : Tot prop (decreases ws) =
+  match ws with
+  | [] -> True
+  | (b, v) :: r -> 0 <= b /\ b + 8 <= len /\ v == rd (wb + b) 8 /\ words_ok wb len rd r
+
+let rec words_ok_append (wb len:int) (rd:reader) (a b:list (int & nat))
+  : Lemma (requires words_ok wb len rd a /\ words_ok wb len rd b) (ensures words_ok wb len rd (a @ b))
+          (decreases a)
+  = match a with [] -> () | _ :: r -> words_ok_append wb len rd r b
+
+(* The words the windows around hold, each in its own window. *)
+let rec frames_held (o:opts) (rd:reader) (fs:list frame) : Tot prop (decreases fs) =
+  match fs with
+  | [] -> True
+  | f :: r -> words_ok f.fwb f.flen rd f.fheld /\ (o.words \/ f.fheld == []) /\ frames_held o rd r
+
+(* The words the walk holds: in its window, none without [words], and a
+   consistent reader with them. *)
+let held_ok (o:opts) (rd:reader) (x:win) (w:st) : prop =
+  words_ok x.wb x.len rd w.held /\ frames_held o rd x.frames /\
+  (o.words \/ w.held == []) /\ (o.words ==> consistent rd)
+
+let rec all_in (lo hi:int) (ws:list int) : Tot prop (decreases ws) =
+  match ws with [] -> True | a :: r -> lo <= a /\ a + 8 <= hi /\ all_in lo hi r
+
+(* Every word Emitter.shared_words chooses lies between [lo] and [hi]. *)
+let rec choose_in (keep:int -> int -> nat -> bool) (lo hi:int) (fs:list (int & nat))
+  : Lemma (ensures all_in lo hi (choose keep lo hi fs)) (decreases fs)
+  = match fs with [] -> () | _ :: r -> choose_in keep lo hi r
+
+(* Words between [lo] and [hi] from an address [v0] that keeps them in the
+   window are loaded, each the value of its bytes. *)
+let rec load_words_ok (wb len:int) (rd:reader) (v0 lo hi:int) (ws:list int)
+  : Lemma (requires all_in lo hi ws /\ 0 <= v0 + lo /\ v0 + hi <= len)
+          (ensures (match load_words wb len rd v0 ws with
+                    | Some fw -> words_ok wb len rd fw
+                    | None -> False))
+          (decreases ws)
+  = match ws with [] -> () | _ :: r -> load_words_ok wb len rd v0 lo hi r
+
+let rec from_words_ok (wb len:int) (rd:reader) (ws:list (int & nat)) (q:int) (m:nat{1 <= m /\ m <= 7})
+  : Lemma (requires words_ok wb len rd ws /\ (ws == [] \/ consistent rd))
+          (ensures (match from_words ws q m with Some v -> v == rd (wb + q) m | None -> True))
+          (decreases ws)
+  = match ws with
+    | [] -> ()
+    | (b, v) :: r ->
+      if 0 <= b && b <= q && q + m <= b + 8 then
+        assert (word_field (rd (wb + b) 8) ((wb + q) - (wb + b)) m == rd (wb + q) m)
+      else from_words_ok wb len rd r q m
+
+(* With the words, the prefix's fields are what it reads on its own. *)
+let rec reads_w_ok (wb:int) (len:nat) (rd:reader) (ws:list (int & nat)) (en:env) (p:int)
+    (fs:list field) (sc:scope) (size:nat)
+  : Lemma (requires words_ok wb len rd ws /\ (ws == [] \/ consistent rd) /\
+                    fields_ok sc fs size /\ 0 <= p /\ p + size <= len)
+          (ensures reads_w wb len rd ws en p fs == Some (read_fields rd en (wb + p) fs))
+          (decreases fs)
+  = match fs with
+    | [] -> ()
+    | f :: r ->
+      from_words_ok wb len rd ws (p + f.off) f.width;
+      let v = rd (wb + p + f.off) f.width in
+      reads_w_ok wb len rd ws (upd en f.id v) p r (extend sc f.id) size
+
+(* M5: a prefix's words lie between [lo], the window's start or the
+   prefix's address, and [hi], the end of the bytes the check covered, so
+   they are loaded inside the window; with the words held before, they
+   answer each field as the field read on its own; and the words held after
+   it are in the window. *)
+let prefix_words (o:opts) (rd:reader) (x:win) (w:st) (en:env) (fs:list field) (size:nat) (k:int)
+  : Lemma (requires held_ok o rd x w /\ fields_ok w.sc fs size /\ x.len <= max_string_length /\
+                    0 <= w.p.at /\ (match w.p.pv with Some v -> 0 <= en v | None -> True) /\
+                    size <= k /\ posval en w.p + k <= x.len)
+          (ensures (match prefix_reads o rd x w en fs k with
+                    | Some (ws, en') ->
+                      en' == read_fields rd en (x.wb + posval en w.p) fs /\
+                      words_ok x.wb x.len rd ws /\ (o.words \/ ws == [])
+                    | None -> False))
+  = let v0 = match w.p.pv with None -> 0 | Some v -> en v in
+    let constant = None? w.p.pv in
+    let lo = if constant then 0 else w.p.at in
+    let hi = extent w.p.at (if k < 0 then 0 else k) in
+    max_string_length_small ();
+    assert (hi == w.p.at + k);
+    let cands = map (fun (f:field) -> ((w.p.at + f.off <: int), (f.width <: nat))) fs in
+    choose_in o.keep lo hi cands;
+    let fresh = if o.words then choose o.keep lo hi cands else [] in
+    load_words_ok x.wb x.len rd v0 lo hi fresh;
+    let Some fw = load_words x.wb x.len rd v0 fresh in
+    let held = if constant then w.held else [] in
+    words_ok_append x.wb x.len rd held fw;
+    reads_w_ok x.wb x.len rd (held @ fw) en (posval en w.p) fs w.sc size
 
 let pos_bound (len:nat) (lim:var) (w:st) (en:env) (pending:bool)
   : Lemma (requires inv len lim w en pending) (ensures 0 <= w.p.at /\ (not pending ==> w.p.at <= len))
@@ -439,7 +544,7 @@ let pos_bound (len:nat) (lim:var) (w:st) (en:env) (pending:bool)
 #push-options "--z3rlimit 200 --fuel 2 --ifuel 2 --split_queries always"
 let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l:list node)
   : Lemma (requires 0 <= x.len /\ inv x.len x.lim w en pending /\ frames_ok w.sc en x.wb x.len x.frames /\
-                    wf w.sc l /\ (pending ==> checks_next l))
+                    held_ok o rd x w /\ wf w.sc l /\ (pending ==> checks_next l))
           (ensures exec o rd x w en l ==
                    (if posval en w.p > x.len then Reject
                     else spec rd x.wb x.len (spec_frames en x.frames) en (posval en w.p) l))
@@ -464,11 +569,14 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
       end
       else begin
         let k = if w.known >= need then w.known else need in
-        reads_ok x.wb len rd en pv fs w.sc size;
+        assert (size <= need);
+        prefix_words o rd x w en fs size k;
+        let Some (ws, en') = prefix_reads o rd x w en fs k in
         bind_fields_ok len lim rd w en (x.wb + pv) fs size;
         let w' = bind_fields w fs in
-        let w2 = { w' with known = k - size; p = { w.p with at = w.p.at + size } } in
-        let en' = read_fields rd en (x.wb + pv) fs in
+        let w2 = { w' with known = k - size; p = { w.p with at = w.p.at + size };
+                           held = (if None? w.p.pv then ws else w.held) } in
+        assert (held_ok o rd x w2);
         assert (posval en' w2.p == pv + size);
         frames_agree w.sc w2.sc en en' x.wb len x.frames;
         exec_spec o rd x w2 en' false r
@@ -562,20 +670,23 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
         : Lemma (requires ev en s == Some k /\ k >= 0 /\ pv + k <= len /\ span_size w en s == Some k /\ pv >= 0)
                 (ensures (let w1 = bind_span w false n e s ends in
                           let en1 = upd (upd en n k) e (pv + k) in
-                          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded } in
+                          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held } in
                           let x' = { wb = x.wb + pv; len = k; lim = n; frames = f :: x.frames } in
-                          let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] } in
+                          let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = []; held = [] } in
                           exec o rd x' w' en1 (b @ (Close am :: r)) ==
                           spec rd (x.wb + pv) k ((x.wb, len, pv + k) :: fr) en1 0 (b @ (Close am :: r))))
         = let w1 = bind_span w false n e s ends in
           let en1 = upd (upd en n k) e (pv + k) in
           bind_span_ok len lim w en pending false n e s k;
-          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded } in
+          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held } in
           let x' = { wb = x.wb + pv; len = k; lim = n; frames = f :: x.frames } in
-          let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] } in
+          let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = []; held = [] } in
           region_inv len lim w1 en1 k n;
           frames_agree w.sc w1.sc en en1 x.wb len x.frames;
           assert (frames_ok w'.sc en1 x'.wb k x'.frames);
+          (* The words held in the window around stay there. *)
+          assert (w1.held == w.held);
+          assert (held_ok o rd x' w');
           exec_spec o rd x' w' en1 false (b @ (Close am :: r))
       in
       if mem (s, w.p) w.bounded then begin
@@ -599,7 +710,7 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
          if not am then pos_expr_ev len lim w en;
          close_inv len lim w en f fs x.wb;
          exec_spec o rd ({ wb = f.fwb; len = f.flen; lim = f.flim; frames = fs })
-           ({ w with known = 0; p = f.fp; bounded = f.fbounded }) en false r)
+           ({ w with known = 0; p = f.fp; bounded = f.fbounded; held = f.fheld }) en false r)
 #pop-options
 
 (* {1 Corollaries for a walk from the start of a buffer} *)
@@ -644,27 +755,33 @@ let start (lim:var) : st = {
   bounded = [];
   known = 0;
   p = { pv = None; at = 0 };
+  held = [];
 }
 
 (* The buffer's window: [len] bytes at 0, none around it. *)
 let top (len:nat) (lim:var) : win = { wb = 0; len = len; lim = lim; frames = [] }
 
 (* M1, M2 and M3: the generated code accepts exactly what the codec accepts,
-   binding the same values, with or without the O1 rewrites. It never reads
-   outside the innermost window it is in, whose bytes lie in the windows
-   around it and so in the buffer, nor wraps an operation. *)
+   binding the same values, with or without the O1 rewrites and the shared
+   words of the int64 step scanner, given a reader that answers a field
+   taken out of a word as the field read on its own. It never reads outside
+   the innermost window it is in, whose bytes lie in the windows around it
+   and so in the buffer, nor wraps an operation. *)
 let scanner_correct (o:opts) (len:nat) (lim:var) (rd:reader) (en:env) (l:list node)
-  : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l)
+  : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l /\
+                    (o.words ==> consistent rd))
           (ensures exec o rd (top len lim) (start lim) en l == spec rd 0 len [] en 0 l /\
                    ~ (Fault? (exec o rd (top len lim) (start lim) en l)))
   = max_string_length_small ();
     exec_spec o rd (top len lim) (start lim) en false l;
     spec_no_fault rd 0 len [] en 0 l
 
-(* The O1 rewrites change no answer. *)
-let o1_preserves (len:nat) (lim:var) (rd:reader) (en:env) (l:list node)
-  : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l)
-          (ensures exec ({ cancel = true; drop = true }) rd (top len lim) (start lim) en l ==
-                   exec ({ cancel = false; drop = false }) rd (top len lim) (start lim) en l)
-  = scanner_correct ({ cancel = true; drop = true }) len lim rd en l;
-    scanner_correct ({ cancel = false; drop = false }) len lim rd en l
+let plain : opts = { cancel = false; drop = false; words = false; keep = (fun _ _ _ -> true) }
+
+(* The O1 rewrites and the shared words change no answer. *)
+let o1_preserves (o:opts) (len:nat) (lim:var) (rd:reader) (en:env) (l:list node)
+  : Lemma (requires len <= max_string_length /\ en lim == len /\ wf (start lim).sc l /\
+                    (o.words ==> consistent rd))
+          (ensures exec o rd (top len lim) (start lim) en l == exec plain rd (top len lim) (start lim) en l)
+  = scanner_correct o len lim rd en l;
+    scanner_correct plain len lim rd en l

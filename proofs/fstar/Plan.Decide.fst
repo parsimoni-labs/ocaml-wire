@@ -43,10 +43,20 @@ let at_const (p:pos) : option nat = match p.pv with None -> Some p.at | Some _ -
 let decide (s:expr) (k:kind) (fr:list around) (p:pos) : decision =
   { dsize = s; dkind = k; depth = length fr; dat = at_const p }
 
+(* Where a prefix may load its shared words (057ff551): how many regions
+   deep, whether its position is a constant of the window, that position's
+   constant part, and the bytes [wlo] to [whi] from its address the words
+   must lie in. *)
+type wdecision = { wdepth : nat; wconst : bool; wat : int; wlo : int; whi : int }
+
+type event =
+  | ESpan of decision
+  | EWords of wdecision
+
 (* The walk takes fuel rather than a measure, so evaluating it calls no
    lemma about the sizes of the lists it builds. *)
 let rec walk (fuel:nat) (w:st) (lim:var) (fr:list around) (l:list node)
-  : Tot (list decision) (decreases %[fuel; 0; 0]) =
+  : Tot (list event) (decreases %[fuel; 0; 0]) =
   if fuel = 0 then [] else
   let fuel = fuel - 1 in
   match l with
@@ -55,21 +65,24 @@ let rec walk (fuel:nat) (w:st) (lim:var) (fr:list around) (l:list node)
     let need = ahead l in
     let k = if w.known >= need then w.known else need in
     let w' = bind_fields w fs in
+    let constant = None? w.p.pv in
+    EWords ({ wdepth = length fr; wconst = constant; wat = w.p.at;
+              wlo = (if constant then 0 else w.p.at); whi = extent w.p.at (if k < 0 then 0 else k) }) ::
     walk fuel ({ w' with known = k - size; p = { w.p with at = w.p.at + size } }) lim fr r
   | Span n e s :: r ->
     let (d, implied, ends) = span_decision w lim s r true in
-    decide s d fr w.p :: walk fuel (bind_span w implied n e s ends) lim fr r
+    ESpan (decide s d fr w.p) :: walk fuel (bind_span w implied n e s ends) lim fr r
   | Test c :: r -> walk fuel (refine w c) lim fr r
   | Gate sel cs d :: r ->
-    let hoist : list decision & st =
+    let hoist : list event & st =
       match hoisted cs d with
       | Some s ->
         if mem (s, w.p) w.bounded then ([], w)
         else (let (k, _, _) = span_decision w lim s [] false in
-              ([ decide s k fr w.p ], { w with bounded = (s, w.p) :: w.bounded }))
+              ([ ESpan (decide s k fr w.p) ], { w with bounded = (s, w.p) :: w.bounded }))
       | None -> ([], w) in
     let (ds, w1) = hoist in
-    let rest : list decision =
+    let rest : list event =
       match d with
       | Some b -> walk fuel w1 lim fr (b @ (Join :: r))
       | None -> walk fuel w1 lim fr (Join :: r) in
@@ -79,31 +92,50 @@ let rec walk (fuel:nat) (w:st) (lim:var) (fr:list around) (l:list node)
     let (d, _, ends) = span_decision w lim s [] false in
     let w1 = bind_span w false n e s ends in
     let a = { alim = lim; ap = w1.p; abounded = w1.bounded } in
-    decide s d fr w.p :: walk fuel ({ w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] }) n (a :: fr)
+    ESpan (decide s d fr w.p) :: walk fuel ({ w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] }) n (a :: fr)
                 (b @ (Close am :: r))
   | Close _ :: r ->
     (match fr with
      | [] -> walk fuel w lim [] r
      | a :: fs -> walk fuel ({ w with known = 0; p = a.ap; bounded = a.abounded }) a.alim fs r)
 and walk_cases (fuel:nat) (w:st) (lim:var) (fr:list around) (cs:list (int & list node)) (r:list node)
-  : Tot (list decision) (decreases %[fuel; 1; cs]) =
+  : Tot (list event) (decreases %[fuel; 1; cs]) =
   match cs with
   | [] -> []
   | (_, b) :: cs' -> walk fuel w lim fr (b @ (Join :: r)) @ walk_cases fuel w lim fr cs' r
 
 (* The model's decisions for a plan, from the start of a window whose length
    variable [lim] holds. *)
-let decisions (lim:var) (l:list node) : list decision =
+let events (lim:var) (known:nat) (l:list node) : list event =
   let w : st = {
     sc = (fun v -> v = lim);
     rg = (fun v -> if v = lim then Some (0, max_int) else None);
     facts = [];
     sums = (fun _ -> None);
     bounded = [];
-    known = 0;
+    known = known;
     p = { pv = None; at = 0 };
+    held = [];
   } in
   walk 100000 w lim [] l
+
+let rec spans_of (es:list event) : list decision =
+  match es with
+  | [] -> []
+  | ESpan d :: r -> d :: spans_of r
+  | _ :: r -> spans_of r
+
+let rec words_of (es:list event) : list wdecision =
+  match es with
+  | [] -> []
+  | EWords d :: r -> d :: words_of r
+  | _ :: r -> words_of r
+
+let decisions (lim:var) (l:list node) : list decision = spans_of (events lim 0 l)
+
+(* Where the prefixes may load words, in a window of at least [known]
+   bytes. *)
+let prefixes (lim:var) (known:nat) (l:list node) : list wdecision = words_of (events lim known l)
 
 (* A model decision [m] justifies an emitter decision [k] for the same size
    when it decides at least as much: the same bound left out or hoisted, a
@@ -130,3 +162,24 @@ let rec unjustified (ms:list decision) (es:list decision) : list decision =
   match es with
   | [] -> []
   | e :: r -> if justified ms e then unjustified ms r else e :: unjustified ms r
+
+(* The shared words an emitter's prefix loads, [ewords], with the fields
+   of its prefix, [efields], at offsets from its address. *)
+noeq type wrecord = { edepth : nat; econst : bool; eat : int; efields : list (int & nat); ewords : list int }
+
+(* [m] justifies the words of [e]: the same prefix, and each word one
+   Plan.Scan.choose may keep for one of its fields, so between [m]'s bounds
+   and holding the field. A prefix at a position the emitter only knows at
+   run time, such as a frame's in the step scanner, loads no word before
+   its address. A prefix that loads no word needs no justification. *)
+let words_justified (ms:list wdecision) (e:wrecord) : bool =
+  Nil? e.ewords ||
+  existsb (fun (m:wdecision) ->
+    m.wdepth = e.edepth && m.wat = e.eat && (m.wconst || not e.econst) &&
+    (let lo = if e.econst then m.wlo else (if m.wlo < e.eat then e.eat else m.wlo) in
+     for_all (fun (a:int) -> Cons? (choose (fun a' _ _ -> a' = a) lo m.whi e.efields)) e.ewords)) ms
+
+let rec words_unjustified (ms:list wdecision) (es:list wrecord) : list wrecord =
+  match es with
+  | [] -> []
+  | e :: r -> if words_justified ms e then words_unjustified ms r else e :: words_unjustified ms r

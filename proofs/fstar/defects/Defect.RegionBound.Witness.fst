@@ -28,7 +28,7 @@ let plan : list node = [
 
 let rd : reader = fun _ _ -> 0
 let en : env = fun v -> if v = lim then 6 else 0
-let o : opts = { cancel = false; drop = false }
+let o : opts = plain
 
 let _ = assert_norm (wf (start lim).sc plan)
 let _ = assert_norm (spec rd 0 6 [] en 0 plan == Reject)

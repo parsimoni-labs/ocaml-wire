@@ -206,3 +206,5 @@ let ( > ) = Z.gt
 let ( mod ) = Z.erem
 let ( ~- ) = Z.neg
 let pow2 x = Z.shift_left Z.one (Z.to_int x)
+let uu___is_Cons = function [] -> false | _ :: _ -> true
+let uu___is_Nil = function [] -> true | _ :: _ -> false
