@@ -154,7 +154,7 @@ let rec apply_struct_field acc inner_struct =
         ( sz,
           Dynamic
             (fun runtime input_end buf base ->
-              prev_end runtime input_end buf base + sz) )
+              offset_add (prev_end runtime input_end buf base) sz) )
     | _, Variable { min_size; compute } ->
         ( min_size,
           Dynamic

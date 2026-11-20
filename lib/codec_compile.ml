@@ -115,7 +115,8 @@ let advance_next_off (no : next_off) (n : int) : next_off =
   | Static k -> Static (k + n)
   | Dynamic f ->
       Dynamic
-        (fun runtime input_end buf base -> f runtime input_end buf base + n)
+        (fun runtime input_end buf base ->
+          offset_add (f runtime input_end buf base) n)
 
 let null_int_reader : runtime -> Input_end.t -> bytes -> int -> int =
  fun _runtime _input_end _buf _base -> 0
@@ -326,9 +327,9 @@ let compile_codec_variable : type a r.
     next_off =
       Dynamic
         (fun runtime input_end buf base ->
-          base
-          + off_fn runtime input_end buf base
-          + size_fn runtime input_end buf base);
+          offset_add
+            (base + off_fn runtime input_end buf base)
+            (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers;
@@ -392,7 +393,8 @@ let dynamic_optional_next_off ctx present_fn fsize =
         | Static n -> base + n
         | Dynamic f -> f runtime input_end buf base
       in
-      if present_fn runtime input_end buf base then off + fsize else off)
+      if present_fn runtime input_end buf base then offset_add off fsize
+      else off)
 
 (* Absolute byte position a [next_off] points at, given the record [base]. *)
 let next_off_pos : next_off -> runtime -> Input_end.t -> bytes -> int -> int =
@@ -763,9 +765,9 @@ let compile_repeat : type elt seq r.
     next_off =
       Dynamic
         (fun runtime input_end buf base ->
-          base
-          + off_fn runtime input_end buf base
-          + size_fn runtime input_end buf base);
+          offset_add
+            (base + off_fn runtime input_end buf base)
+            (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers = [];
@@ -798,7 +800,7 @@ let missing_before ~first ~sz ~len =
    as end-of-input instead. *)
 let[@inline] check_span_bounds buf ~first ~sz =
   let len = Bytes.length buf in
-  if sz < 0 || first < 0 || first + sz > len then
+  if sz < 0 || first < 0 || first > len - sz then
     raise_eof ~at:first
       ~expected:(missing_before ~first ~sz ~len)
       ~got:(bytes_from (Input_end.of_bytes buf) first)
@@ -1208,7 +1210,7 @@ let compile_var_bytes : type a r.
       Dynamic
         (fun runtime input_end buf base ->
           let fo = off_fn runtime input_end buf base in
-          base + fo + size_fn runtime input_end buf base);
+          offset_add (base + fo) (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader;
     nested_readers = [];
@@ -1409,7 +1411,7 @@ let compile_union : type a k r.
       Dynamic
         (fun runtime input_end buf base ->
           let fo = off_fn runtime input_end buf base in
-          base + fo + size_fn runtime input_end buf base);
+          offset_add (base + fo) (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers = [];

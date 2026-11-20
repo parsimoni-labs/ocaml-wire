@@ -49,6 +49,12 @@ codec is built, so no input can break it.
 - **Bytes never choose an unchecked offset.** An offset that depends on the
   data (after a variable-size field, or set by a parameter) is always read
   with a check.
+- **Offsets do not wrap.** The start of a field after a variable-size one
+  and the end of the record are sums of sizes read from the input. They are
+  added with saturating arithmetic (`Codec_repr.offset_add`), so a sum past
+  `max_int` is `max_int`, past the end of any buffer, and the frame check
+  rejects it. A span is tested as `first > len - size`, which cannot
+  overflow.
 - **Input never raises `Invalid_argument`.** Bad bytes give a parse error;
   `Invalid_argument` is for misuse of the API (a negative offset, a missing
   `env`).

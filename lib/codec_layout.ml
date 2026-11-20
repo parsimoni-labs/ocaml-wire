@@ -244,7 +244,7 @@ let build_layout ~min_size items =
 let rec layout_end items input_end buf off cur =
   match items with
   | [] -> cur
-  | Fix k :: rest -> layout_end rest input_end buf off (cur + k)
+  | Fix k :: rest -> layout_end rest input_end buf off (checked_add cur k)
   | Span size :: rest ->
       layout_end rest input_end buf off (checked_add cur (size buf off () ()))
   | Rest :: rest -> layout_end rest input_end buf off (Bytes.length buf)
@@ -262,7 +262,7 @@ let rec layout_end items input_end buf off cur =
 let rec extent_end items c input_end buf cur =
   match items with
   | [] -> cur
-  | EFix k :: rest -> extent_end rest c input_end buf (cur + k)
+  | EFix k :: rest -> extent_end rest c input_end buf (checked_add cur k)
   | ESpan size :: rest ->
       extent_end rest c input_end buf (checked_add cur (size c))
   | ERest :: rest -> extent_end rest c input_end buf (Bytes.length buf)

@@ -57,6 +57,11 @@ type bf_info = {
 val no_runtime : Types.eval_ctx
 (** The context with no parameter bindings. *)
 
+val offset_add : int -> int -> int
+(** [offset_add a b] is [a + b], saturated at [max_int] and [min_int]. A
+    saturated offset lies outside any buffer, so every bounds check rejects it.
+*)
+
 val fallback_runtime : Types.eval_ctx
 (** The context of the general passes a record without parameters falls back on
     when its layout walk has not accepted it. It binds no parameter, and a
