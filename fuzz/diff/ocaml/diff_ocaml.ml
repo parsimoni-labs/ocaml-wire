@@ -649,9 +649,9 @@ let scan_corpus ?oracle (Diff_codecs.Scan c as case) backends =
   let check = check_scan ?oracle ~expand:false ref_ backends in
   let corpus = c.corpus () in
   List.iter check corpus;
-  (* Good, bad and good frames of one length, then a partial one, through
-     the batch fold: recovery after a rejected frame, and the order of the
-     accumulator. *)
+  (* The batch fold recovers after a rejected frame and keeps the order of
+     the accumulator. Runs of three, six and nine frames, then a partial one,
+     leave every remainder for a fold that walks four frames an iteration. *)
   let frames = Hashtbl.create 16 in
   List.iter
     (fun b ->
@@ -669,11 +669,17 @@ let scan_corpus ?oracle (Diff_codecs.Scan c as case) backends =
       Option.iter
         (fun good ->
           let bad = Option.value ~default:good bad in
-          let joined =
-            Bytes.concat Bytes.empty
-              [ good; bad; good; Bytes.sub good 0 (n / 2) ]
-          in
-          check_scan ?oracle ~strides:[ n ] ~expand:false ref_ backends joined)
+          let partial = Bytes.sub good 0 (n / 2) in
+          List.iter
+            (fun frames ->
+              let joined = Bytes.concat Bytes.empty (frames @ [ partial ]) in
+              check_scan ?oracle ~strides:[ n ] ~expand:false ref_ backends
+                joined)
+            [
+              [ good; bad; good ];
+              [ good; bad; good; good; good; bad ];
+              [ good; bad; good; good; bad; good; good; bad; good ];
+            ])
         good)
     frames
 
