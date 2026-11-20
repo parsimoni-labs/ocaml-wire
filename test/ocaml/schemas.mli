@@ -244,6 +244,17 @@ val huge : huge Codec.t
     [Sys.max_string_length], then a byte [Tail]. The three fields are one
     prefix. *)
 
+type deep = { inner : deep option; big : Bytesrw.Bytes.Slice.t }
+type deep_top = { body : deep; tail : UInt8.t }
+
+val deep : int -> int -> deep_top Codec.t
+(** [deep depth big] is [depth + 1] variable-size codecs nested in each other,
+    each ending with a slice of [big] bytes, then a byte {!field-tail}. The
+    innermost starts with a byte [len] and a slice of [len] bytes. The constant
+    offset of {!field-tail} after that slice is about [depth * big], which
+    overflows the native int for [depth = 32] and [big] close to
+    [Sys.max_string_length]. *)
+
 val gated : int -> unit Codec.t
 (** [gated n] has [n] optional fields, each present when the tag before it is 1.
 *)

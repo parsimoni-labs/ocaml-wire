@@ -351,6 +351,37 @@ let huge =
         (Field.v "Tail" uint8 $ fun (_, _, t) -> t);
       ]
 
+type deep = { inner : deep option; big : Bytesrw.Bytes.Slice.t }
+type deep_top = { body : deep; tail : UInt8.t }
+
+let deep depth big =
+  let rec level k : deep Codec.t =
+    let slice = Field.v "big" (byte_slice ~size:(int big)) in
+    if k = 0 then
+      let len = Field.v "len" uint8 in
+      let data = Field.v "data" (byte_slice ~size:(Field.ref len)) in
+      Codec.v "L0"
+        (fun _ _ big -> { inner = None; big })
+        Codec.
+          [
+            (len $ fun _ -> UInt8.v 0);
+            (data $ fun r -> r.big);
+            (slice $ fun r -> r.big);
+          ]
+    else
+      let inner = Field.v "inner" (codec (level (k - 1))) in
+      Codec.v
+        ("L" ^ string_of_int k)
+        (fun inner big -> { inner = Some inner; big })
+        Codec.
+          [ (inner $ fun r -> Option.get r.inner); (slice $ fun r -> r.big) ]
+  in
+  let body = Field.v "body" (codec (level depth)) in
+  let tail = Field.v "tail" uint8 in
+  Codec.v "Top"
+    (fun body tail -> { body; tail })
+    Codec.[ (body $ fun r -> r.body); (tail $ fun r -> r.tail) ]
+
 let rec gated n =
   let tag = Field.v "tag" uint8 in
   let value =

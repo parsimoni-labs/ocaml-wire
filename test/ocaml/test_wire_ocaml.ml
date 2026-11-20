@@ -1227,6 +1227,29 @@ let test_huge_prefix () =
     (fun s -> Diff_ocaml.check_scan huge_reference [ huge ] (Bytes.of_string s))
     [ ""; "\001"; "\001\002"; String.make 64 '\001' ]
 
+let deep_reference =
+  Diff_ocaml.Reference
+    {
+      label = "deep";
+      codec = Schemas.deep 32 (Sys.max_string_length - 1);
+      known = Some [ "tail" ];
+      project =
+        (fun _ (r : Schemas.deep_top) -> [ ("tail", UInt8.to_int r.tail) ]);
+      inputs = (fun b -> [ b ]);
+    }
+
+(* A constant offset that overflows the native int rejects every frame, as
+   the codec does, and reads nothing (the paranoid profile checks reads). *)
+let test_scan_deep () =
+  let deep =
+    scan_ops "S_deep" [ "tail" ] (fun b o n ->
+        let v = S_deep.decode b o n in
+        if v.ok then Some [ ("tail", v.tail) ] else None)
+  in
+  List.iter
+    (fun s -> Diff_ocaml.check_scan deep_reference [ deep ] (Bytes.of_string s))
+    [ ""; "\000"; "\000\042"; "\001\042\042"; String.make 64 '\000' ]
+
 (* Optional fields are written once each: the code after one is joined, or
    copied into its branches only while it is short, holds no optional field
    and the copies on a path stay few, and an output under more than
@@ -1511,6 +1534,7 @@ let suite =
         test_scan_overflow;
       Alcotest.test_case "overflow in a condition the facts decide" `Quick
         test_scan_skipped;
+      Alcotest.test_case "offsets past the largest buffer" `Quick test_scan_deep;
       Alcotest.test_case "prefix of a huge fixed slice" `Quick test_huge_prefix;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
       Alcotest.test_case "nested optional fields allocate nothing" `Quick
