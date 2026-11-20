@@ -1261,6 +1261,40 @@ let test_scan_deep () =
     (fun s -> Diff_ocaml.check_scan deep_reference [ deep ] (Bytes.of_string s))
     [ ""; "\000"; "\000\042"; "\001\042\042"; String.make 64 '\000' ]
 
+let bigspan_reference =
+  Diff_ocaml.Reference
+    {
+      label = "bigspan";
+      codec = Schemas.bigspan;
+      known = None;
+      project =
+        (fun _ (a, b, _, _, t) ->
+          [
+            ("a", UInt8.to_int a); ("b", UInt8.to_int b); ("t", UInt8.to_int t);
+          ]);
+      inputs = (fun b -> [ b ]);
+    }
+
+(* When the ends of two spans sum past the native int, the scanner is still
+   generated and rejects every frame, as the codec does. *)
+let test_scan_bigspan () =
+  let bigspan =
+    scan_ops "S_bigspan" [ "a"; "b"; "t" ] (fun b o n ->
+        let v = S_bigspan.decode b o n in
+        if v.ok then Some [ ("a", v.a); ("b", v.b); ("t", v.t) ] else None)
+  in
+  List.iter
+    (fun s ->
+      Diff_ocaml.check_scan bigspan_reference [ bigspan ] (Bytes.of_string s))
+    [
+      "";
+      "\000";
+      "\000\000";
+      "\000\000\000";
+      "\255\255\255\255";
+      String.make 64 '\001';
+    ]
+
 (* Optional fields are written once each: the code after one is joined, or
    copied into its branches only while it is short, holds no optional field
    and the copies on a path stay few, and an output under more than
@@ -1583,6 +1617,8 @@ let suite =
         test_scan_skipped;
       Alcotest.test_case "offsets past the largest buffer" `Quick test_scan_deep;
       Alcotest.test_case "prefix of a huge fixed slice" `Quick test_huge_prefix;
+      Alcotest.test_case "span ends past the largest int" `Quick
+        test_scan_bigspan;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
       Alcotest.test_case "nested optional fields allocate nothing" `Quick
         test_nested_no_alloc;

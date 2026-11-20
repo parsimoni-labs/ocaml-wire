@@ -72,6 +72,8 @@
   s_deep.mli
   s_huge.ml
   s_huge.mli
+  s_bigspan.ml
+  s_bigspan.mli
   s_nested.ml
   s_nested.mli
   s_nested_step.ml)
@@ -115,6 +117,7 @@
   s_skipped
   s_deep
   s_huge
+  s_bigspan
   s_nested
   s_nested_step)
  (libraries

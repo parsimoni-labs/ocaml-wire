@@ -255,6 +255,14 @@ val deep : int -> int -> deep_top Codec.t
     overflows the native int for [depth = 32] and [big] close to
     [Sys.max_string_length]. *)
 
+type bigspan =
+  UInt8.t * UInt8.t * Bytesrw.Bytes.Slice.t * Bytesrw.Bytes.Slice.t * UInt8.t
+
+val bigspan : bigspan Codec.t
+(** [bigspan] is two bytes [A] and [B], two byte spans of [A + 2{^61}] and
+    [B + 2{^61}] bytes, then a byte [T]. No frame holds the spans, and the sum
+    of their ends overflows the native int. *)
+
 val gated : int -> unit Codec.t
 (** [gated n] has [n] optional fields, each present when the tag before it is 1.
 *)
