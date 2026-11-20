@@ -12,7 +12,8 @@ let read_file path = In_channel.with_open_text path In_channel.input_all
 (* The fake EverParse below is a shell script, which only a POSIX system runs. *)
 let needs_posix () = if Sys.win32 then Alcotest.skip ()
 
-(* [with_fake_3d f] puts a fake [3d.exe] first on PATH, one that writes its cwd
+(* [with_fake_3d f] puts a fake [3d.exe] first on PATH, one that reports no
+   version, so it is run with no flag of Wire's own, and otherwise writes its cwd
    and then each argument on a line of [observed], in the directory [--odir]
    names or else in that cwd, and calls [f ~outdir ~exe ~observed] with an
    output directory whose name needs quoting. *)
@@ -32,6 +33,7 @@ let with_fake_3d f =
       Out_channel.with_open_text exe (fun oc ->
           output_string oc
             "#!/bin/sh\n\
+             if [ \"$1\" = --version ]; then exit 1; fi\n\
              out=observed\n\
              if [ \"$2\" = --odir ]; then out=\"$3/observed\"; fi\n\
              { pwd -P; for arg do printf '%s\\n' \"$arg\"; done; } > \"$out\"\n");
@@ -292,6 +294,21 @@ let test_spawned_3d_same_c () =
   Alcotest.(check (list string))
     "generated C" (generated in_outdir) (generated spawned)
 
+(* Only a release that extracts through Custard gets the larger budget, so
+   v2026.08.21 runs F* as it always did. *)
+let test_has_custard () =
+  List.iter
+    (fun (version, want) ->
+      Alcotest.(check bool) version want (Wire_3d.Private.has_custard version))
+    [
+      ("EverParse/3d v2026.10.27", true);
+      ("EverParse/3d v2027.01.05", true);
+      ("EverParse/3d v2026.08.21", false);
+      ("EverParse/3d v2025.12.01", false);
+      ("EverParse/3d", false);
+      ("", false);
+    ]
+
 let suite =
   ( "wire_3d_proc",
     [
@@ -305,6 +322,8 @@ let suite =
       Alcotest.test_case "locate each name of the 3D compiler" `Quick
         test_locate_3d_exe_names;
       Alcotest.test_case "pools give the same verdicts" `Quick test_pools_agree;
+      Alcotest.test_case "a larger Custard budget from v2026.10" `Quick
+        test_has_custard;
       Alcotest.test_case "spawned 3d.exe writes the same C (needs 3d.exe)"
         `Quick test_spawned_3d_same_c;
     ] )
