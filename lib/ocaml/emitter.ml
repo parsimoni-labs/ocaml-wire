@@ -2,6 +2,8 @@ open Wire.Private
 open Layout
 module T = Types
 open Planner
+open Decision
+open Dispatch_tree
 
 (* {1 The emitter}
 
@@ -96,6 +98,13 @@ let local_bigstring_src =
 
 (* Where a walk failed: a bound, a field's check, or a where clause. *)
 type failure = Bounds | Check of field * check | Where
+type pos = Decision.pos = { var : string option; at : int }
+
+(* How a walk of [num] holds integer values. *)
+let values : num -> Decision.values = function
+  | Tagged -> `Int
+  | Boxed -> `Int64
+  | Unboxed -> `Int64_u
 
 type mode = {
   num : num;
@@ -116,9 +125,8 @@ type mode = {
   fail : failure -> string;
   overflowed : failure -> string -> string;
       (* What a cold walk raises for an overflow, given the exception. *)
+  decide : Decision.t -> unit;
 }
-
-type pos = { var : string option; at : int }
 
 type cuts = {
   prefix : string;
@@ -882,6 +890,7 @@ let cut w ~label body =
         |> List.rev
       in
       let name = function_name c label in
+      w.m.decide (Cut { name; window = w.limit; known = w.known });
       let param (v, ty) =
         match ty with None -> "~" ^ v | Some t -> Fmt.str "~(%s : %s)" v t
       in
@@ -926,6 +935,9 @@ let room w p =
 (* The window has [need] bytes from [p]. An end at [Planner.beyond] always
    fails the check, so the code after it is unreachable and checks nothing. *)
 let bound w p need =
+  w.m.decide
+    (Prefix_bound
+       { at = p; window = w.limit; bytes = need; tested = w.known < need });
   if w.known >= need then w
   else begin
     let num, room = room w p in
@@ -1082,6 +1094,18 @@ let shared_words ~held ~lo ~hi ~later live =
     [] live
   |> List.rev
 
+(* The words [loads] {!shared_words} chose for the [fields] of a prefix at
+   [k], between [lo] and [hi], as a decision. *)
+let shared w ~k ~constant ~lo ~hi ~held fields loads =
+  let fields =
+    List.filter_map
+      (fun f ->
+        if in_word Boxed f then Some (f.offset, width_bytes f.store) else None)
+      fields
+  in
+  Shared_words
+    { at = k; constant; lo; hi; window = w.limit; fields; held; loads }
+
 (* The words a prefix at [o + k] of [size] bytes loads once: the 64-bit ones
    two or more live fields share, then each word of a live bitfield, which
    the bitfields' views read. With [Boxed], the words are [shared_words]
@@ -1102,7 +1126,10 @@ let load_words w ~o ~k ~size ~constant ~lo ~hi ~later live =
     match m.num with
     | Boxed ->
         let at f = { f with offset = extent k f.offset } in
-        shared_words ~held ~lo ~hi ~later (List.map at worded)
+        let fields = List.map at worded in
+        let fresh = shared_words ~held ~lo ~hi ~later fields in
+        m.decide (shared w ~k ~constant ~lo ~hi ~held fields fresh);
+        fresh
     | Tagged | Unboxed -> List.map (fun a -> k + a) (words m.num ~size worded)
   in
   let w =
@@ -1221,6 +1248,11 @@ let word_range w bitwords f g =
     Option.bind (Planner.word_range f g) (fun (at, lo, hi) ->
         Option.map (fun word -> (word, lo, hi)) (List.assoc_opt at bitwords))
 
+(* The checks of the bitfields [f] and [g] of the prefix at [p], tested as
+   one range [lo, hi] of their word, as a decision. *)
+let word_range_decision w p f g lo hi =
+  Word_range { at = p; window = w.limit; first = f.id; second = g.id; lo; hi }
+
 (* The live fields that start before [until] in the prefixes of [nodes], at
    constant offsets from [at]. The prefix that starts each optional field of
    a following run counts too. *)
@@ -1245,6 +1277,11 @@ and starts live ~until at = function
       following live ~until at body @ starts live ~until at rest
   | _ -> []
 
+(* The bytes known to be in the window after a prefix of [size] bytes; a
+   count past any buffer stays there. *)
+let known_after w size =
+  if w.known >= beyond then beyond else max 0 (w.known - size)
+
 (* A prefix, then [k] with the state and position after it, [after] the
    nodes that follow it. The fields after one that would make the function
    too deep or too long go in a function of their own. *)
@@ -1268,13 +1305,7 @@ let prefix w fields size p ~need ~after k =
   let field ?checked w f = field ?checked w ~o ~k:at ~size ~words ~bitwords f in
   let rec go w = function
     | [] ->
-        k
-          {
-            w with
-            known =
-              (if w.known >= beyond then beyond else max 0 (w.known - size));
-          }
-          { p with at = extent p.at size }
+        k { w with known = known_after w size } { p with at = extent p.at size }
     | f :: rest as fields ->
         let range =
           match rest with g :: _ -> word_range w bitwords f g | [] -> None
@@ -1284,6 +1315,7 @@ let prefix w fields size p ~need ~after k =
         else
           begin match (range, rest) with
           | Some (word, lo, hi), g :: rest ->
+              w.m.decide (word_range_decision w p f g lo hi);
               let w = field ~checked:false (field ~checked:false w f) g in
               let num = w.m.num in
               pf w "if %s || %s then %s else@\n"
@@ -1317,11 +1349,11 @@ let pos_sum w ~expand p =
   in
   sum_add var (sum_int p.at)
 
-(* The test that [size] bytes at [p] overflow the window, with the terms
-   shared by the position and the size cancelled. [None] when cancelling does
-   not shorten the test, or when the result needs checked arithmetic. *)
+(* The sides [lhs > rhs] of the test that [size] bytes at [p] overflow the
+   window, with the terms shared by the position and the size cancelled.
+   [None] when cancelling does not shorten the test, or when the result needs
+   checked arithmetic. *)
 let cancelled w size p =
-  let num = w.m.num in
   let used expand =
     match (pos_sum w ~expand p, sum_of size) with
     | Some pos, Some n -> sum_add pos n
@@ -1344,13 +1376,14 @@ let cancelled w size p =
       | None -> None
       | Some (lhs, rhs) ->
           let ov = ref false in
-          let l = expr w ov lhs and r = expr w ov rhs in
-          if !ov then None else Some (relation num ">" l r))
+          ignore (expr w ov lhs);
+          ignore (expr w ov rhs);
+          if !ov then None else Some (lhs, rhs))
   | _ -> None
 
-(* The test that a span of [n] bytes at [p] ends past the window, or that [n]
-   is negative unless [nonnegative]. *)
-let outside w ~ov ~nonnegative size p n =
+(* The test that a span of [n] bytes at [p] ends past the window, as
+   [Checked] says. *)
+let outside w ~negative ~cancelled p n =
   let num, room = room w p in
   (* An [int64] size is compared as one. *)
   let num, room =
@@ -1360,11 +1393,13 @@ let outside w ~ov ~nonnegative size p n =
   in
   let room = if p.at = 0 then room else binop num "-" room (lit num p.at) in
   let upper =
-    match if ov then None else cancelled w size p with
-    | Some test -> test
+    match cancelled with
+    | Some (lhs, rhs) ->
+        let ov = ref false in
+        relation w.m.num ">" (expr w ov lhs) (expr w ov rhs)
     | None -> relation num ">" n room
   in
-  if nonnegative then upper
+  if not negative then upper
   else Fmt.str "%s || %s" (relation num "<" n (lit num 0)) upper
 
 (* The range of the end of a span at [p] whose size is in [n_range], or
@@ -1425,10 +1460,25 @@ let span ?(implied = false) w size p =
   let n_range = (max 0 lo, max 0 hi) in
   let ends = end_range w n_range p in
   let implied = implied && nonnegative && Option.is_some ends in
-  if not (implied || List.mem (span_bound w size p) w.bounded) then
-    pf w "if %s then %s else@\n"
-      (outside w ~ov ~nonnegative size p n)
-      (w.m.fail Bounds);
+  let bound =
+    if implied then Next
+    else if List.mem (span_bound w size p) w.bounded then Hoisted
+    else
+      Checked
+        {
+          negative = not nonnegative;
+          cancelled = (if ov then None else cancelled w size p);
+        }
+  in
+  w.m.decide
+    (Span_bound
+       { size; at = p; window = w.limit; size_var = n; overflows = ov; bound });
+  (match bound with
+  | Checked { negative; cancelled } ->
+      pf w "if %s then %s else@\n"
+        (outside w ~negative ~cancelled p n)
+        (w.m.fail Bounds)
+  | Next | Hoisted -> ());
   let e = w.fresh "e" in
   (* With [Boxed], the end is a position, so an [int]. *)
   let n_int = if w.m.num = Boxed then Fmt.str "(Int64.to_int %s)" n else n in
@@ -1444,80 +1494,8 @@ let rec ahead = function
 
 (* {3 Optional fields}
 
-   A run of optional fields whose conditions exclude each other, such as the
-   cases of a tag, is one dispatch: a decision tree over the atoms of their
-   conditions, each tested at most once on a path, whose leaves run one case
-   or none. A subtree reached twice is written once, in a local function, as
-   is a case reached twice; the code after the run is written once too. *)
-
-type tree = { tid : int; node : tnode }
-and tnode = Leaf of int option | Branch of bool T.expr * tree * tree
-
-let decide facts conds =
-  let memo = Hashtbl.create 16 in
-  let count = ref 0 in
-  let mk key node =
-    match Hashtbl.find_opt memo key with
-    | Some t -> t
-    | None ->
-        incr count;
-        let t = { tid = !count; node = node () } in
-        Hashtbl.replace memo key t;
-        t
-  in
-  let leaf i = mk (Fmt.str "leaf %a" Fmt.(option int) i) (fun () -> Leaf i) in
-  let rec choose facts c yes no =
-    match simplify facts c with
-    | T.Bool true -> yes facts
-    | T.Bool false -> no facts
-    | T.And (a, b) -> choose facts a (fun f -> choose f b yes no) no
-    | T.Or (a, b) -> choose facts a yes (fun f -> choose f b yes no)
-    | T.Not a -> choose facts a no yes
-    | atom ->
-        let y = yes (assume facts atom true) in
-        let n = no (assume facts atom false) in
-        incr count;
-        { tid = !count; node = Branch (atom, y, n) }
-  in
-  let rec among facts conds =
-    let residual =
-      List.filter_map
-        (fun (i, c) ->
-          match simplify facts c with T.Bool false -> None | c -> Some (i, c))
-        conds
-    in
-    let k =
-      String.concat ";"
-        (List.map (fun (i, c) -> Fmt.str "%d:%s" i (key c)) residual)
-    in
-    match residual with
-    | [] -> leaf None
-    | (i, c) :: rest ->
-        mk k (fun () ->
-            (choose facts c (fun _ -> leaf (Some i)) (fun f -> among f rest))
-              .node)
-  in
-  among facts conds
-
-(* Whether the conditions [a] and [b], [b] after [a], exclude each other, so
-   [b] need not be evaluated where [a] holds: the codec evaluates it there, so
-   it must not be one that may overflow, unless what [a] establishes decides
-   it before any overflow. *)
-let exclusive facts a b =
-  simplify (assume facts a true) b = T.Bool false
-  || (simplify (assume facts b true) a = T.Bool false && not (may_overflow b))
-
-(* The optional fields at the head of [nodes] whose conditions, as [lower]
-   writes them, exclude each other, and the nodes after them. *)
-let gate_run ~lower facts nodes =
-  let rec go acc = function
-    | Gate (c, p, o, body) :: rest
-      when let c = lower c in
-           List.for_all (fun (c', _, _, _) -> exclusive facts c' c) acc ->
-        go ((lower c, p, o, body) :: acc) rest
-    | rest -> (List.rev acc, rest)
-  in
-  go [] nodes
+   A run of optional fields is one dispatch over its decision tree
+   ({!Dispatch_tree}). *)
 
 (* A jump to the join [j] from the case [fired] of [gates], or from none:
    the outputs of the case that ran, absent ones for the others. *)
@@ -1587,40 +1565,6 @@ let copyable = copyable 8
 
 (* The most copies of one continuation the dispatches on a path make. *)
 let max_copies = 16
-
-(* Whether a subtree of [tree] is reached more than once, and a case; and
-   how many leaves are written, a shared case once. *)
-let reach tree =
-  let refs = Hashtbl.create 16 and cases = Hashtbl.create 16 in
-  let rec count t =
-    let n = Option.value ~default:0 (Hashtbl.find_opt refs t.tid) in
-    Hashtbl.replace refs t.tid (n + 1);
-    match t.node with
-    | Leaf (Some i) ->
-        Hashtbl.replace cases i
-          (1 + Option.value ~default:0 (Hashtbl.find_opt cases i))
-    | Leaf None -> ()
-    | Branch (_, a, b) ->
-        if n = 0 then begin
-          count a;
-          count b
-        end
-  in
-  count tree;
-  let shared t =
-    match t.node with
-    | Branch _ -> Hashtbl.find refs t.tid > 1
-    | Leaf _ -> false
-  in
-  let rec leaves t =
-    match t.node with
-    | Leaf None -> 1
-    | Leaf (Some _) -> 0
-    | Branch (_, a, b) -> leaves a + leaves b
-  in
-  ( shared,
-    (fun i -> Option.value ~default:0 (Hashtbl.find_opt cases i) > 1),
-    leaves tree + Hashtbl.length cases )
 
 (* The atom [id = c] on an [int64_u] variable [id], which is [c] where it
    holds; on a field held by its little-endian bytes too, the atom as a test of
@@ -1715,15 +1659,6 @@ let pp_tree w ~j ~shared ~leaf tree =
   define tree;
   if shared tree then pf w "d%d_%s ()@\n" tree.tid j else emit w tree
 
-(* The conditions a path through [tree] opens, a shared subtree as one
-   call. *)
-let rec tree_depth shared t =
-  match t.node with
-  | Leaf _ -> 0
-  | Branch (_, a, b) ->
-      let sub t = if shared t then 0 else tree_depth shared t in
-      1 + max (sub a) (sub b)
-
 (* The name of the function a case of [o] is cut into: its presence
    without the prefix that numbers it. *)
 let case_label (o : output) =
@@ -1764,28 +1699,6 @@ let define_join w ~j ~exported indexed gates k =
   scoped w (fun () -> k inner { var = Some e; at = 0 });
   pf w "in@\n";
   fun ~fired w' p -> jump w' ~j ~exported indexed ~fired p
-
-(* Whether some path through [tree] runs no case. *)
-let rec runs_none t =
-  match t.node with
-  | Leaf None -> true
-  | Leaf (Some _) -> false
-  | Branch (_, a, b) -> runs_none a || runs_none b
-
-(* The size of the span every case of [gates] starts with, when a case
-   always runs: its bound is then checked once before the dispatch. *)
-let hoisted gates tree =
-  let first (_, _, _, body) =
-    match body with
-    | (Region (size, _, _) | Span size) :: _ -> Some size
-    | _ -> None
-  in
-  match List.map first gates with
-  | Some size :: rest
-    when List.for_all (( = ) (Some (key size))) (List.map (Option.map key) rest)
-         && not (runs_none tree) ->
-      Some size
-  | _ -> None
 
 (* The run of gates at the head of [nodes], the nodes after it, and its
    decision tree. *)
@@ -1898,6 +1811,16 @@ and dispatch w gates tree p ~copy k =
       (fun w -> dispatch w gates tree p ~copy k)
   else
     let copy = copy && w.copies * leaves <= max_copies in
+    w.m.decide
+      (Dispatch
+         {
+           at = p;
+           window = w.limit;
+           cases = List.length gates;
+           choice = choice tree;
+           join = (if copy then Copied else Joined);
+           hoisted = hoisted gates tree;
+         });
     let j = w.fresh "j" in
     let finish =
       if copy then fun ~fired w' p ->
@@ -1943,8 +1866,11 @@ and dispatch_case w ~copy ~copies (cond, (present : output), _, body) p finish =
   in
   if copy then cut w ~label:(case_label present) go else go w
 
-let start ?cuts ?(scope = []) ?first ~m ~ppf ~ranges ~base ~limit ~known nodes k
-    =
+let start ?cuts ?(scope = []) ?first ?name ~m ~ppf ~ranges ~base ~limit ~known
+    nodes k =
+  Option.iter
+    (fun name -> m.decide (Walk { name; values = values m.num; known }))
+    name;
   let n = ref 0 in
   let fresh s =
     incr n;

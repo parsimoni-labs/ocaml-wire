@@ -42,7 +42,7 @@ let slots (plan : plan) selected =
   in
   List.filter (fun (o : output) -> Sset.mem o.id deep) selected
 
-let scan_mode (plan : plan) ~num selected =
+let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
   let ids = List.map (fun (o : output) -> o.id) in
   {
     num;
@@ -61,6 +61,7 @@ let scan_mode (plan : plan) ~num selected =
     slots = Sset.of_list (ids (slots plan selected));
     fail = (fun _ -> "");
     overflowed = (fun _ _ -> "");
+    decide;
   }
 
 (* The labelled arguments [valid] receives. *)
@@ -140,14 +141,14 @@ let scope s names =
    slots: each rejection is the text [reject] and each acceptance what
    [accept] writes, in place, so a continuation the generator knows is never
    a closure. *)
-let pp_scan ?cuts ?(known = 0) ~scope s ~reject ~accept =
+let pp_scan ?cuts ?(known = 0) ~name ~scope s ~reject ~accept =
   pp_slots s.m s.ppf s.selected;
   let m =
     { s.m with fail = (fun _ -> reject); overflowed = (fun _ _ -> reject) }
   in
   start ?cuts ~scope
     ?first:(Option.map (fun _ -> "record") cuts)
-    ~m ~ppf:s.ppf ~ranges:s.plan.ranges ~base:"base" ~limit:"stop" ~known
+    ~name ~m ~ppf:s.ppf ~ranges:s.plan.ranges ~base:"base" ~limit:"stop" ~known
     s.plan.nodes
     (fun w _ -> accept w)
 
@@ -179,7 +180,7 @@ let rec fixed_need = function
   | Gate (_, _, _, inner) :: _ -> fixed_need inner
   | _ -> 0
 
-let pp_entry ?cuts ~scope s ~reject ~accept =
+let pp_entry ?cuts ~name ~scope s ~reject ~accept =
   Fmt.pf s.ppf
     "if off < 0 || len < 0 || off > Bytes.length buf || len > Bytes.length buf \
      - off then %s else@\n"
@@ -187,7 +188,7 @@ let pp_entry ?cuts ~scope s ~reject ~accept =
   Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
     (if s.m.num = Unboxed then "U.of_int off" else "off")
     (if s.m.num = Unboxed then "U.of_int len" else "len");
-  pp_scan ?cuts ~scope s ~reject ~accept
+  pp_scan ?cuts ~name ~scope s ~reject ~accept
 
 (* The types of the callbacks [fold_frames_unboxed] takes, whose accumulator
    has layout [bits64]. *)
@@ -233,12 +234,12 @@ let unroll = 4
    the loop first walks [unroll] frames per iteration, then the rest one by
    one. The guard [stride <= len / unroll] keeps
    [off + len - unroll * stride] from overflowing or falling below [off]. *)
-let pp_frames_loop ?cuts ?step s ~names ~unboxed ~invalid ~valid ~known
+let pp_frames_loop ?cuts ?step s ~name ~names ~unboxed ~invalid ~valid ~known
     ~unrolled =
   let ppf = s.ppf and read, assign, stride = frames_vars s in
   let body = Buffer.create 4096 in
   let bppf = Format.formatter_of_buffer body in
-  pp_scan ?cuts ~known ~scope:(scope s names) { s with ppf = bppf }
+  pp_scan ?cuts ~known ~name ~scope:(scope s names) { s with ppf = bppf }
     ~reject:(invalid ^ " current")
     ~accept:(call ~step:(Option.is_some step) s ~unboxed (valid ^ " current"));
   Format.pp_print_flush bppf ();
@@ -354,6 +355,22 @@ let pp_frames_head s ~name ~unboxed ~callbacks =
        let cursor = ref off in@\n\
        let last = off + len - stride in@\n"
 
+(* The frame loop [name] as a decision: [pp_frames] below writes it. A walk
+   with slots is not cut, so its loop is not unrolled. *)
+let frame_loop s ~name ~need ~apart ~unboxed =
+  let native = s.m.num = Unboxed in
+  Decision.Frame_loop
+    {
+      name;
+      need;
+      frames = (if native && Sset.is_empty s.m.slots then unroll else 1);
+      short =
+        (if need = 0 then None
+         else if Option.is_some apart then Some Decision.Apart
+         else if unboxed then Some Decision.Walked
+         else Some Decision.Inline);
+    }
+
 (* [fold_frames], or with [step] [fold_frames_step], which calls the module
    [step]'s functions by name. The frame guard and a positive stride keep
    [last = off + len - stride] from overflowing and every frame inside
@@ -376,12 +393,13 @@ let pp_frames ?step s ~unboxed =
   let apart =
     if need > 0 && not native then Some (pp_frames_apart ?step s name) else None
   in
+  s.m.decide (frame_loop s ~name ~need ~apart ~unboxed);
   with_cuts ~poly s name (fun s cuts ->
       let ppf = s.ppf in
       pp_frames_head s ~name ~unboxed ~callbacks;
       let loop ~unrolled known =
-        pp_frames_loop ?cuts ?step s ~names ~unboxed ~invalid ~valid ~known
-          ~unrolled
+        pp_frames_loop ?cuts ?step s ~name ~names ~unboxed ~invalid ~valid
+          ~known ~unrolled
       in
       (* The loop over frames that hold the leading prefixes comes last,
          where the compiler closes it with one conditional branch. On the
@@ -408,7 +426,7 @@ let pp_fold s ~unboxed =
   with_cuts s name (fun s cuts ->
       Fmt.pf s.ppf "let[@inline always] %s %s off len ~invalid ~valid =@\n" name
         s.m.src.buf;
-      pp_entry ?cuts
+      pp_entry ?cuts ~name
         ~scope:(scope s [ ("invalid", None); ("valid", None) ])
         s ~reject:"invalid ()" ~accept:(call s ~unboxed "valid");
       Fmt.pf s.ppf "@\n")
@@ -418,7 +436,7 @@ let pp_fold_step s m =
   with_cuts s "fold_step" (fun s cuts ->
       Fmt.pf s.ppf "let[@inline always] fold_step %s off len ~init =@\n"
         s.m.src.buf;
-      pp_entry ?cuts
+      pp_entry ?cuts ~name:"fold_step"
         ~scope:(scope s [ ("init", None) ])
         s ~reject:(m ^ ".invalid init")
         ~accept:(call ~step:true s ~unboxed:false (m ^ ".valid init"));
@@ -499,7 +517,7 @@ let pp_unboxed_decoder s =
   Fmt.pf s.ppf "let invalid () = #{ok = false;%a} in@\n" (pp_fields s) zero;
   Fmt.pf s.ppf "let valid %a = #{ok = true;%a} in@\n" (pp_args ~conv:output_id)
     s.selected (pp_fields s) output_id;
-  pp_entry ~scope:(scope s []) s ~reject:"invalid ()"
+  pp_entry ~name:"decode_unboxed" ~scope:(scope s []) s ~reject:"invalid ()"
     ~accept:(call s ~unboxed:true "valid")
 
 let pp_box s =
@@ -541,7 +559,11 @@ let pp_body ?step s =
       (* On OCaml the step functions hold values as [int64]. *)
       let s =
         if unboxed then s
-        else { s with m = scan_mode s.plan ~num:Boxed s.selected }
+        else
+          {
+            s with
+            m = scan_mode ~decide:s.m.decide s.plan ~num:Boxed s.selected;
+          }
       in
       pp_fold_step s m;
       pp_frames ~step:m s ~unboxed:false)
@@ -559,7 +581,7 @@ let pp_body ?step s =
     pp_box s
   end
 
-let scanner ?(target = `OCaml) ?fields ?step ~codec c =
+let scanner ?decide ?(target = `OCaml) ?fields ?step ~codec c =
   try
     let plan = scan_plan c in
     let num = if target = `OxCaml then Unboxed else Tagged in
@@ -570,7 +592,7 @@ let scanner ?(target = `OCaml) ?fields ?step ~codec c =
       {
         plan;
         selected;
-        m = scan_mode plan ~num selected;
+        m = scan_mode ?decide plan ~num selected;
         ppf;
         taken = Hashtbl.create 16;
       }

@@ -34,6 +34,7 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     slots = Sset.empty;
     fail = (fun _ -> fail);
     overflowed = (fun _ _ -> fail);
+    decide = ignore;
   }
 
 let cold ~src ~live =
@@ -59,6 +60,7 @@ let cold ~src ~live =
             Fmt.str "%s.relocate ~at:(off + %d) ~field:[ %S ] %s" errors
               f.offset f.name e
         | Where | Bounds -> Fmt.str "%s.relocate ~at:off ~field:[] %s" errors e);
+    decide = ignore;
   }
 
 (* A fixed record's walk at [off], whose frame is checked before it. *)
