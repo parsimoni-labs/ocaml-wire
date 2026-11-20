@@ -60,6 +60,7 @@ let () =
   s "s_deep.ml" "deep 32 (Sys.max_string_length - 1)"
     (Schemas.deep 32 (Sys.max_string_length - 1));
   s "s_huge.ml" "huge" Schemas.huge;
+  s "s_bigspan.ml" "bigspan" Schemas.bigspan;
   write "s_nested_step.ml" (summed (Schemas.nested 12));
   s "s_nested.ml" ~step:"S_nested_step" "nested 12" (Schemas.nested 12);
   g "g_mapped.ml" "mapped" Schemas.mapped

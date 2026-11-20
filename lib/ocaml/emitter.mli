@@ -59,6 +59,7 @@ type mode = {
   ox : bool;
   cold : bool;
   raw32 : bool;
+  ranged : bool;
   live : Sset.t;
   exported : Sset.t;
   slots : Sset.t;
@@ -67,8 +68,10 @@ type mode = {
 }
 (** What a walk writes: how it holds integers, the buffer it reads, whether the
     target is OxCaml, whether it is the cold walk that raises the codec's
-    errors, the variables it binds, the outputs it hands out, those of them that
-    are slots, and what it writes on a failure. *)
+    errors, whether it may test two bitfields of a word as one range of the word
+    (a scan, which names no failed field), the variables it binds, the outputs
+    it hands out, those of them that are slots, and what it writes on a failure.
+*)
 
 type pos = { var : string option; at : int }
 (** A position in the record: a variable when the data decides it, plus a
@@ -102,6 +105,7 @@ type w = {
   raws : (string * (string * int)) list;
   deferred : (string * (string * bool)) list ref;
   bounded : (string * string * string * string) list;
+  sums : (string * sum) list;
   base : string;
   limit : string;
   known : int;
@@ -116,12 +120,13 @@ type w = {
   section : string;
 }
 (** The state of a walk: its mode and output, the ranges and facts known at its
-    position, the bitfield words it holds, the window of the buffer it is in;
-    and, for a walk cut into functions, where they go, the function being
-    written and the conditions open around the position in it, the variables it
-    binds with the type a function cut out of it gives each, the outputs known
-    present or absent, whether the code here jumps to a join outside it, and the
-    case being written, which names its functions. *)
+    position, the bitfield words it holds, the spans whose bound is checked and
+    the end of each as a sum, the window of the buffer it is in; and, for a walk
+    cut into functions, where they go, the function being written and the
+    conditions open around the position in it, the variables it binds with the
+    type a function cut out of it gives each, the outputs known present or
+    absent, whether the code here jumps to a join outside it, and the case being
+    written, which names its functions. *)
 
 val pf : w -> ('a, Format.formatter, unit) format -> 'a
 (** [pf w fmt] writes to the output of [w]. *)
@@ -205,6 +210,7 @@ val bound : w -> pos -> int -> w
     [p]. *)
 
 val field :
+  ?checked:bool ->
   w ->
   o:string ->
   k:int ->
@@ -213,8 +219,9 @@ val field :
   bitwords:((int * T.bitfield_base) * string) list ->
   field ->
   w
-(** [field w ~o ~k ~size ~words ~bitwords f] writes a field of a prefix at [k]
-    from [o]: bound when live, then checked. *)
+(** [field ?checked w ~o ~k ~size ~words ~bitwords f] writes a field of a prefix
+    at [k] from [o]: bound when live, then checked. [checked] defaults to
+    [true]; with [false] the caller writes the checks. *)
 
 type tree = { tid : int; node : tnode }
 (** The dispatch over a run of optional fields whose conditions exclude each

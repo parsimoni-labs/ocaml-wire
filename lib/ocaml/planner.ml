@@ -722,3 +722,123 @@ let nonnegative_in ranges facts (e : int T.expr) =
       || known (T.Gt (a, b))
       || known (T.Lt (b, a))
   | _ -> false
+
+(* {2 Bitfields tested together} *)
+
+(* The word [f] and [g] share, when [f] is its top bits and [g] the bits
+   right below, with the shift of each from the low bit and its width. *)
+let stacked f g =
+  match (f.store, g.store) with
+  | ( Bits { base; shift; width },
+      Bits { base = base'; shift = shift'; width = width' } )
+    when base = base' && f.offset = g.offset && shift' + width' = shift ->
+      let bits = 8 * Bitfield.byte_size base in
+      if shift + width = bits && bits < Sys.int_size - 1 then
+        Some ((f.offset, base), shift, width, shift', width')
+      else None
+  | _ -> None
+
+let word_range f g =
+  match (stacked f g, f.checks, g.checks) with
+  | ( Some (at, shift, width, shift', width'),
+      [ { cond = T.Eq (T.Ref (T.I, x), T.Int c); _ } ],
+      [ { cond = T.Ge (T.Ref (T.I, y), T.Int d); _ } ] )
+    when x = f.id && y = g.id && 0 <= c
+         && c < 1 lsl width
+         && 0 <= d
+         && d < 1 lsl width' ->
+      Some (at, (c lsl shift) lor (d lsl shift'), ((c + 1) lsl shift) - 1)
+  | _ -> None
+
+(* {2 Sums}
+
+   An integer expression in linear form: a constant plus terms, each a
+   coefficient times an expression that is not a sum, a difference or a
+   literal. Two offsets that share a term compare without it. *)
+
+type sum = { terms : (string * (int * int T.expr)) list; const : int }
+
+let sum_int n = { terms = []; const = n }
+let sum_atom e = { terms = [ (key e, (1, e)) ]; const = 0 }
+
+(* [None] when a coefficient or the constant overflows. Both are computed
+   inside the [match], so its handler catches the overflow. *)
+let sum_add a b =
+  match
+    let const = T.checked_add a.const b.const in
+    let terms =
+      List.fold_left
+        (fun terms (k, (c, e)) ->
+          match List.assoc_opt k terms with
+          | None -> terms @ [ (k, (c, e)) ]
+          | Some (c', _) ->
+              let c = T.checked_add c c' in
+              if c = 0 then List.remove_assoc k terms
+              else
+                List.map
+                  (fun (k', t) -> if k' = k then (k, (c, e)) else (k', t))
+                  terms)
+        a.terms b.terms
+    in
+    { terms; const }
+  with
+  | s -> Some s
+  | exception Wire.Parse_error _ -> None
+
+let sum_neg s =
+  match
+    {
+      terms = List.map (fun (k, (c, e)) -> (k, (T.checked_sub 0 c, e))) s.terms;
+      const = T.checked_sub 0 s.const;
+    }
+  with
+  | s -> Some s
+  | exception Wire.Parse_error _ -> None
+
+let sum_sub a b = Option.bind (sum_neg b) (sum_add a)
+
+let rec sum_of (e : int T.expr) =
+  match e with
+  | T.Int n -> Some (sum_int n)
+  | T.Add (a, b) -> (
+      match (sum_of a, sum_of b) with
+      | Some a, Some b -> sum_add a b
+      | _ -> None)
+  | T.Sub (a, b) -> (
+      match (sum_of a, sum_of b) with
+      | Some a, Some b -> sum_sub a b
+      | _ -> None)
+  | e -> Some (sum_atom e)
+
+(* The number of terms of [s], counting a constant that is not zero. *)
+let sum_size s = List.length s.terms + if s.const = 0 then 0 else 1
+
+(* [d >= 0] as [not (lhs > rhs)], with every coefficient positive. The
+   constant is subtracted on one side and never added, so a side that holds a
+   window's length cannot overflow. [None] when negating a coefficient
+   overflows. *)
+let sum_fails d =
+  match
+    let int n : int T.expr = T.Int n in
+    let side terms =
+      List.fold_left
+        (fun acc (c, e) ->
+          let t = if c = 1 then e else T.Mul (int c, e) in
+          match acc with None -> Some t | Some a -> Some (T.Add (a, t)))
+        None terms
+    in
+    let pos, neg =
+      List.partition (fun (c, _) -> c > 0) (List.map snd d.terms)
+    in
+    let neg = List.map (fun (c, e) -> (T.checked_sub 0 c, e)) neg in
+    let minus side n =
+      match side with
+      | None -> int (T.checked_sub 0 n)
+      | Some s -> if n = 0 then s else T.Sub (s, int n)
+    in
+    let lhs = side neg and rhs = side pos in
+    if d.const >= 0 then (minus lhs d.const, Option.value rhs ~default:(int 0))
+    else (Option.value lhs ~default:(int 0), minus rhs (T.checked_sub 0 d.const))
+  with
+  | sides -> Some sides
+  | exception Wire.Parse_error _ -> None

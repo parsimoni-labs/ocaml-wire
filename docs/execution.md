@@ -75,7 +75,12 @@ shape in scope. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
 their consumer by name, with no closure call and no allocation per frame.
-The invariants above hold for it as follows.
+Their loop over frames is unrolled four times, then walks the remaining
+frames one by one. OCaml polls for signals and other domains once per loop
+iteration, so the unrolled loop polls once per four frames. The loop over
+frames that hold the leading prefixes comes last in the function, where the
+compiler closes it with one branch. The invariants above hold for it as
+follows.
 
 - **Unchecked reads stay in the frame.** A prefix is read only after one
   check that the bytes it spans, and those of the prefixes and where clauses
@@ -86,6 +91,11 @@ The invariants above hold for it as follows.
   When every case of a dispatch starts with the same span, its size is
   checked once before the dispatch. The check is remembered with its window,
   so a region, which opens a new window, checks its own spans.
+  A span's check is dropped when the next check, which runs before any read,
+  covers the span's bytes too. This needs ranges to prove the span's size not
+  negative and its end inside the native int. A bound is compared with the
+  terms shared by its position and its size cancelled, so the IPv4 payload
+  check is `total_length <= stop - 14`.
   Positions are relative to the window, so adding the window's offset to
   reach a byte cannot overflow, and a short frame in `fold_frames` cannot
   borrow bytes from the next. The generator adds the codec's constant
@@ -129,13 +139,19 @@ The invariants above hold for it as follows.
   checks it.
 - **Selecting outputs keeps every check.** A field is read when an output
   needs it or a check, a size or a condition reads it; every check runs
-  either way.
+  either way. A scanner names no failed field, so it merges an equality on
+  the top bits of a word and a lower bound on the bits right below into one
+  range test of the word: the IPv4 version and header length are one byte in
+  `[0x45, 0x4f]`.
 
 `Wire_rust.scanner` writes the same plan out as Rust, from `Wire_ocaml.Plan`,
 which hands it the same decisions. A window is a slice of exactly its bytes:
 a prefix is checked by `split_first_chunk`, whose array its loads index at
 constant offsets, and a size is compared as `u64` with the slice's length,
-which also rejects a negative one. An operation the plan checks returns
+which also rejects a negative one. The slice's length is the room left, so
+a bound needs no cancelling and every span keeps its check. Two bitfields of
+one word are one range test where `Plan.word_range` finds one. An operation
+the plan checks returns
 `None` where the 63-bit int overflows, which rejects the record. A run of
 optional fields binds the tail it leaves and its immutable outputs in one
 `let`, so the code after it is written once; an output under more than

@@ -1261,6 +1261,40 @@ let test_scan_deep () =
     (fun s -> Diff_ocaml.check_scan deep_reference [ deep ] (Bytes.of_string s))
     [ ""; "\000"; "\000\042"; "\001\042\042"; String.make 64 '\000' ]
 
+let bigspan_reference =
+  Diff_ocaml.Reference
+    {
+      label = "bigspan";
+      codec = Schemas.bigspan;
+      known = None;
+      project =
+        (fun _ (a, b, _, _, t) ->
+          [
+            ("a", UInt8.to_int a); ("b", UInt8.to_int b); ("t", UInt8.to_int t);
+          ]);
+      inputs = (fun b -> [ b ]);
+    }
+
+(* When the ends of two spans sum past the native int, the scanner is still
+   generated and rejects every frame, as the codec does. *)
+let test_scan_bigspan () =
+  let bigspan =
+    scan_ops "S_bigspan" [ "a"; "b"; "t" ] (fun b o n ->
+        let v = S_bigspan.decode b o n in
+        if v.ok then Some [ ("a", v.a); ("b", v.b); ("t", v.t) ] else None)
+  in
+  List.iter
+    (fun s ->
+      Diff_ocaml.check_scan bigspan_reference [ bigspan ] (Bytes.of_string s))
+    [
+      "";
+      "\000";
+      "\000\000";
+      "\000\000\000";
+      "\255\255\255\255";
+      String.make 64 '\001';
+    ]
+
 (* Optional fields are written once each: the code after one is joined, or
    copied into its branches only while it is short, holds no optional field
    and the copies on a path stay few, and an output under more than
@@ -1485,6 +1519,50 @@ let test_scanners () =
         ((List.assoc c.label Ocaml_index.scanners) ()))
     Diff_codecs.scan_cases
 
+(* The codec and every scanner, alone and in a frame fold, accept the frames
+   of [cases] marked accepted and reject the others. *)
+let check_packet cases =
+  let label = "scan_packet" in
+  let codec =
+    match
+      List.find
+        (fun (Diff_codecs.Scan c) -> c.label = label)
+        Diff_codecs.scan_cases
+    with
+    | Diff_codecs.Scan c -> fun b -> Result.is_ok (Codec.decode c.codec b 0)
+  in
+  let backends = (List.assoc label Ocaml_index.scanners) () in
+  List.iter
+    (fun (name, b, accepted) ->
+      let len = Bytes.length b in
+      Alcotest.(check bool) (name ^ ": codec") accepted (codec b);
+      List.iter
+        (fun (s : Diff_ocaml.scan_ops) ->
+          Alcotest.(check bool)
+            (Fmt.str "%s: %s" name s.scan_name)
+            accepted
+            (Option.is_some (s.scan b 0 len));
+          Option.iter
+            (fun batch ->
+              let frames =
+                Option.value ~default:[] (batch (Bytes.cat b b) 0 (2 * len) len)
+              in
+              Alcotest.(check (list bool))
+                (Fmt.str "%s: %s fold_frames" name s.scan_name)
+                [ accepted; accepted ]
+                (List.map Option.is_some frames))
+            s.scan_batch)
+        backends)
+    cases
+
+(* A frame that exactly fits a bound is accepted, and one a byte over is
+   rejected. *)
+let test_packet_bounds () = check_packet Diff_codecs.packet_bounds
+
+(* The IPv4 version and header length byte is accepted exactly in
+   [0x45, 0x4f]. *)
+let test_packet_versions () = check_packet Diff_codecs.packet_versions
+
 (* A backend sizes its ports from the plan's outputs: a signed field keeps its
    width on the wire and says it is signed, so a negative value survives. *)
 let test_plan_signed_output () =
@@ -1547,6 +1625,8 @@ let suite =
         test_scan_skipped;
       Alcotest.test_case "offsets past the largest buffer" `Quick test_scan_deep;
       Alcotest.test_case "prefix of a huge fixed slice" `Quick test_huge_prefix;
+      Alcotest.test_case "span ends past the largest int" `Quick
+        test_scan_bigspan;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
       Alcotest.test_case "nested optional fields allocate nothing" `Quick
         test_nested_no_alloc;
@@ -1556,6 +1636,8 @@ let suite =
         test_scanner_outputs;
       Alcotest.test_case "portable when values fit 31 bits" `Quick test_portable;
       Alcotest.test_case "structured scanners" `Quick test_scanners;
+      Alcotest.test_case "packet bounds" `Quick test_packet_bounds;
+      Alcotest.test_case "packet versions" `Quick test_packet_versions;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;

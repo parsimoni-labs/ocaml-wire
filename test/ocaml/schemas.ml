@@ -382,6 +382,24 @@ let deep depth big =
     (fun body tail -> { body; tail })
     Codec.[ (body $ fun r -> r.body); (tail $ fun r -> r.tail) ]
 
+type bigspan =
+  UInt8.t * UInt8.t * Bytesrw.Bytes.Slice.t * Bytesrw.Bytes.Slice.t * UInt8.t
+
+let bigspan =
+  let a = Field.v "A" uint8 and b = Field.v "B" uint8 in
+  let big = 1 lsl 61 in
+  let large f = Expr.(Field.ref f + int big) in
+  Codec.v "Bigspan"
+    (fun a b x y t -> (a, b, x, y, t))
+    Codec.
+      [
+        (a $ fun (a, _, _, _, _) -> a);
+        (b $ fun (_, b, _, _, _) -> b);
+        (Field.v "X" (byte_slice ~size:(large a)) $ fun (_, _, x, _, _) -> x);
+        (Field.v "Y" (byte_slice ~size:(large b)) $ fun (_, _, _, y, _) -> y);
+        (Field.v "T" uint8 $ fun (_, _, _, _, t) -> t);
+      ]
+
 let rec gated n =
   let tag = Field.v "tag" uint8 in
   let value =

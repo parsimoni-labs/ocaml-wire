@@ -55,6 +55,7 @@ let scan_mode (plan : plan) ~num selected =
     ox = false;
     cold = false;
     raw32 = false;
+    ranged = true;
     live = live plan ~outputs:(ids selected);
     exported = Sset.of_list (ids selected);
     slots = Sset.of_list (ids (slots plan selected));
@@ -207,9 +208,25 @@ let frames_callbacks s ~unboxed =
 let frames_vars s =
   if s.m.num = Unboxed then ("", "<-", "stride_word") else ("!", ":=", "stride")
 
+(* The condition of a frame loop: [cursor] has not passed [last], the offset
+   of the last frame the iteration walks. The cursor is the loop's only
+   counter. *)
+let frames_while ?(last = "last") s =
+  if s.m.num = Unboxed then Fmt.str "U.compare cursor %s <= 0" last
+  else Fmt.str "!cursor <= %s" last
+
+(* The frames walked per iteration of the hot frame loop. OCaml polls for
+   signals at each loop back edge (ocaml/ocaml#10039), so unrolling the loop
+   amortises one poll over [unroll] frames. *)
+let unroll = 4
+
 (* The loop of [fold_frames] over frames walked with [known] bytes of each
-   known to be there. A walk that knows all its bounds may not read [stop]. *)
-let pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known =
+   known to be there. A walk that knows all its bounds may not read [stop].
+   With [unrolled], and when the walk of a frame is a function of its own,
+   the loop first walks [unroll] frames per iteration, then the rest one by
+   one. The guard [stride <= len / unroll] keeps
+   [off + len - unroll * stride] from overflowing or falling below [off]. *)
+let pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known ~unrolled =
   let ppf = s.ppf and read, assign, stride = frames_vars s in
   let body = Buffer.create 4096 in
   let bppf = Format.formatter_of_buffer body in
@@ -218,15 +235,35 @@ let pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known =
     ~accept:(call s ~unboxed (valid ^ " current"));
   Format.pp_print_flush bppf ();
   let body = Buffer.contents body in
-  Fmt.pf ppf
-    "for _ = 1 to len / stride do@\n\
-     let base = %scursor in@\n\
-     let current = %sacc in@\n\
-     let next = (@\n"
-    read read;
-  if mentions "stop" body then Fmt.pf ppf "let stop = %s in@\n" stride;
-  Fmt.pf ppf "%s) in@\nacc %s next;@\ncursor %s %s@\ndone" body assign assign
-    (binop s.m.num "+" "base" stride)
+  let num = s.m.num in
+  let frame base =
+    if mentions "base" body then Fmt.pf ppf "let base = %s in@\n" base;
+    Fmt.pf ppf "let current = %sacc in@\nlet next = (@\n" read;
+    if mentions "stop" body then Fmt.pf ppf "let stop = %s in@\n" stride;
+    Fmt.pf ppf "%s) in@\nacc %s next;@\n" body assign
+  in
+  if unrolled && Option.is_some cuts then begin
+    let int n = if num = Unboxed then Fmt.str "U.of_int (%s)" n else n in
+    Fmt.pf ppf "if stride <= len / %d then (@\nlet last_%d = %s in@\n" unroll
+      unroll
+      (Fmt.kstr int "off + len - (%d * stride)" unroll);
+    for j = 2 to unroll do
+      Fmt.pf ppf "let stride_%d = %s in@\n" j (Fmt.kstr int "%d * stride" j)
+    done;
+    Fmt.pf ppf "while %s do@\n"
+      (frames_while ~last:(Fmt.str "last_%d" unroll) s);
+    frame (read ^ "cursor");
+    frame (binop num "+" (read ^ "cursor") stride);
+    for j = 2 to unroll - 1 do
+      frame (binop num "+" (read ^ "cursor") (Fmt.str "stride_%d" j))
+    done;
+    Fmt.pf ppf "cursor %s %s@\ndone);@\n" assign
+      (binop num "+" (read ^ "cursor") (Fmt.str "stride_%d" unroll))
+  end;
+  Fmt.pf ppf "while %s do@\n" (frames_while s);
+  frame (read ^ "cursor");
+  Fmt.pf ppf "cursor %s %s@\ndone" assign
+    (binop num "+" (read ^ "cursor") stride)
 
 (* A batch of frames too short for the bounds a frame loop leaves out goes
    through the walk of one frame, already written, rather than a second copy
@@ -244,20 +281,20 @@ let pp_frames_short ?step s =
           at
   in
   Fmt.pf s.ppf
-    "for _ = 1 to len / stride do@\n\
+    "while %s do@\n\
      let base = %scursor in@\n\
      let current = %sacc in@\n\
      acc %s %s;@\n\
      cursor %s %s@\n\
      done"
-    read read assign one assign
+    (frames_while s) read read assign one assign
     (binop s.m.num "+" "base" stride)
 
 (* [fold_frames], or with [step] [fold_frames_step], which calls the module
-   [step]'s functions by name. The frame guard and a positive stride make
-   [base + stride <= off + len] on every iteration, the last included. Each
-   frame still gets all its checks: a short frame cannot borrow bytes from the
-   next. *)
+   [step]'s functions by name. The frame guard and a positive stride keep
+   [last = off + len - stride] from overflowing and every frame inside
+   [off + len]. The loop runs [len / stride] times, and each frame gets all
+   its checks, so a short frame cannot borrow bytes from the next. *)
 let pp_frames ?step s ~unboxed =
   let native = s.m.num = Unboxed in
   let binding, reference, read =
@@ -297,20 +334,25 @@ let pp_frames ?step s ~unboxed =
         reference binding
         (if native then "U.of_int " else "ref ");
       if native then Fmt.pf ppf "let stride_word = U.of_int stride in@\n";
+      Fmt.pf ppf "let last = %s in@\n"
+        (if native then "U.of_int (off + len - stride)"
+         else "off + len - stride");
       let need = fixed_need s.plan.nodes in
-      let loop known =
-        pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known
+      let loop ~unrolled known =
+        pp_frames_loop ?cuts s ~names ~unboxed ~invalid ~valid ~known ~unrolled
       in
+      (* The loop over frames that hold the leading prefixes comes last,
+         where the compiler closes it with one conditional branch. *)
       if need > 0 then begin
-        Fmt.pf ppf "if stride >= %d then (@\n" need;
-        loop need;
-        Fmt.pf ppf ")@\nelse (@\n";
+        Fmt.pf ppf "if stride < %d then (@\n" need;
         (* [fold_unboxed] is not polymorphic in the layout of its answer, so
            the unboxed loop keeps a walk of its own. *)
-        if unboxed then loop 0 else pp_frames_short ?step s;
+        if unboxed then loop ~unrolled:false 0 else pp_frames_short ?step s;
+        Fmt.pf ppf ")@\nelse (@\n";
+        loop ~unrolled:true need;
         Fmt.pf ppf ")"
       end
-      else loop 0;
+      else loop ~unrolled:true 0;
       Fmt.pf ppf ";@\n%sacc@\n@\n" read)
 
 (* [fold], or [fold_unboxed], whose consumer takes the outputs unboxed. *)

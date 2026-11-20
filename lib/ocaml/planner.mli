@@ -220,3 +220,47 @@ val refined :
 val nonnegative_in : (int * int) Smap.t -> facts -> int T.expr -> bool
 (** [nonnegative_in ranges facts e] is [true] when [e] is known not to be
     negative. *)
+
+(** {1 Bitfields tested together} *)
+
+val word_range :
+  field ->
+  field ->
+  ((int * Wire.Private.Types.bitfield_base) * int * int) option
+(** [word_range f g] is [Some (word, lo, hi)] when [f] is the top bits of the
+    word at [word] (its offset and base), [g] the bits right below, and their
+    only checks are [f = c] and [g >= d]. Both checks hold exactly when the word
+    lies in [lo, hi], so one range test replaces two field tests. *)
+
+(** {1 Sums} *)
+
+type sum
+(** An integer expression in linear form: a constant plus terms, each a
+    coefficient times an expression that is not a sum, a difference or a
+    literal. *)
+
+val sum_int : int -> sum
+(** [sum_int n] is the constant [n]. *)
+
+val sum_atom : int T.expr -> sum
+(** [sum_atom e] is [e] as one term. *)
+
+val sum_add : sum -> sum -> sum option
+(** [sum_add a b] is [a + b], or [None] when a coefficient or the constant
+    overflows. *)
+
+val sum_sub : sum -> sum -> sum option
+(** [sum_sub a b] is [a - b], as {!sum_add}. *)
+
+val sum_of : int T.expr -> sum option
+(** [sum_of e] is [e] as a sum, or [None] when its constant overflows. *)
+
+val sum_size : sum -> int
+(** [sum_size s] is the number of terms of [s], counting a constant that is not
+    zero. *)
+
+val sum_fails : sum -> (int T.expr * int T.expr) option
+(** [sum_fails d] is [(lhs, rhs)] such that [d < 0] exactly when [lhs > rhs].
+    Every coefficient is positive and the constant is subtracted from one side,
+    so a side that holds a window's length cannot overflow. [None] when negating
+    a coefficient overflows. *)

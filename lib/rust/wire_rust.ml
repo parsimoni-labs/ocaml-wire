@@ -819,6 +819,22 @@ let scan_value a words (f : P.field) =
       else Fmt.str "((%s >> %d) & %s)" w shift (mask width)
   | Bytes _ -> invalid_arg "Wire_rust.scan_value: a byte array"
 
+(* Binds each word of the prefix array [a] that holds a live bitfield, once,
+   keyed by its offset and base. *)
+let scan_words s a live =
+  List.filter_map
+    (fun (f : P.field) ->
+      match f.store with
+      | Bits { base; _ } -> Some (f.offset, base)
+      | Int _ | Bytes _ -> None)
+    live
+  |> List.sort_uniq compare
+  |> List.map (fun ((at, base) as key) ->
+      let w = s.fresh "w" in
+      line s "let %s: i64 = %s as i64;" w
+        (load a at (Bitfield.byte_size base) (base_endian base) (base_type base));
+      (key, w))
+
 (* A prefix: the tail [rest] must hold its [size] bytes, which come back as an
    array; each field the walk binds is read from it, and each field's checks
    follow it in the codec's order. *)
@@ -831,34 +847,35 @@ let scan_prefix s (fields : P.field list) size rest =
     "let Some((%s, %s)) = %s.split_first_chunk::<%d>() else { return None; };"
     (if live = [] then "_" else a)
     next rest size;
-  let words =
-    List.filter_map
-      (fun (f : P.field) ->
-        match f.store with
-        | Bits { base; _ } -> Some (f.offset, base)
-        | Int _ | Bytes _ -> None)
-      live
-    |> List.sort_uniq compare
-    |> List.map (fun ((at, base) as key) ->
-        let w = s.fresh "w" in
-        line s "let %s: i64 = %s as i64;" w
-          (load a at (Bitfield.byte_size base) (base_endian base)
-             (base_type base));
-        (key, w))
+  let words = scan_words s a live in
+  let bind (f : P.field) =
+    if List.memq f live then
+      line s "%s = %s;"
+        (if s.slot f.id then f.id else Fmt.str "let %s: i64" f.id)
+        (scan_value a words f)
   in
-  let s =
-    List.fold_left
-      (fun s (f : P.field) ->
-        if List.memq f live then
-          line s "%s = %s;"
-            (if s.slot f.id then f.id else Fmt.str "let %s: i64" f.id)
-            (scan_value a words f);
+  let refine s conditions =
+    { s with scope = P.Scope.refine s.scope conditions }
+  in
+  let range f g =
+    Option.bind (P.word_range f g) (fun (at, lo, hi) ->
+        Option.map (fun w -> (w, lo, hi)) (List.assoc_opt at words))
+  in
+  let rec go s = function
+    | [] -> s
+    | f :: g :: rest when Option.is_some (range f g) ->
+        let w, lo, hi = Option.get (range f g) in
+        bind f;
+        bind g;
+        line s "if !(%s >= %di64 && %s <= %di64) { return None; }" w lo w hi;
+        go (refine s (P.conditions f @ P.conditions g)) rest
+    | f :: rest ->
+        bind f;
         let conditions = P.conditions f in
         List.iter (scan_check s) conditions;
-        { s with scope = P.Scope.refine s.scope conditions })
-      s fields
+        go (refine s conditions) rest
   in
-  (s, next)
+  (go s fields, next)
 
 (* A size checked against the tail [rest], compared as [u64], which holds
    both the size and any slice length, so no cast narrows it. A negative size
