@@ -1,0 +1,94 @@
+; Translation validation of the code Wire_ocaml generates: main.exe reads a
+; generated module, executes it symbolically to bit-vector formulas, and has
+; Z3 prove its reads in bounds and its answers equal to those of the EverParse
+; 3D specification of the same codec (main.ml says what each check states).
+; It needs EverParse (3d.exe, for the specification's SMT encoding) and z3,
+; so it runs only with BUILD_EVERPARSE=1, as the other EverParse lanes do.
+
+(executable
+ (name gen)
+ (modules gen)
+ (libraries wire wire.ocaml space net demo))
+
+(executable
+ (name main)
+ (modules main check spec symex smt z3)
+ (libraries compiler-libs.common fmt unix))
+
+(rule
+ (targets
+  Clcw.3d
+  Stack.3d
+  BfConstrained.3d
+  ReservedFields.3d
+  stack_ox.gen
+  bf_constrained.gen
+  reserved_fields.gen)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (action
+  (run ./gen.exe .)))
+
+; The record modules: is_valid, View.check and the accessors behind it, each
+; window of up to 16 bytes compared with the specification.
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   %{bin-available:z3}))
+ (deps
+  %{project_root}/examples/generated/clcw.ml
+  Clcw.3d
+  BfConstrained.3d
+  ReservedFields.3d
+  bf_constrained.gen
+  reserved_fields.gen)
+ (action
+  (run
+   ./main.exe
+   .
+   %{project_root}/examples/generated/clcw.ml:record:Clcw.WireCLCW:16
+   bf_constrained.gen:record:BfConstrained.WireBfConstrained:16
+   reserved_fields.gen:record:ReservedFields.WireReservedFields:16)))
+
+; The packet-stack scanner, on OCaml and on OxCaml: every read of fold,
+; frames_record and (on OCaml) fold_frames in bounds, and no input raising.
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   %{bin-available:z3}))
+ (deps %{project_root}/examples/generated/stack.ml Stack.3d stack_ox.gen)
+ (action
+  (run
+   ./main.exe
+   --bounds-only
+   .
+   %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128
+   stack_ox.gen:scanner-ox/34:Stack.WireEthernetStack:128)))
+
+; The scanner's answers against the specification, on every window of up to
+; 128 bytes: one query per path, the longest of which take minutes, so they
+; run on their own: BUILD_EVERPARSE=1 dune build @verify/equivalence.
+
+(rule
+ (alias equivalence)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   %{bin-available:z3}))
+ (deps %{project_root}/examples/generated/stack.ml Stack.3d stack_ox.gen)
+ (action
+  (run
+   ./main.exe
+   --jobs
+   8
+   --timeout
+   1800
+   .
+   %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128
+   stack_ox.gen:scanner-ox/34:Stack.WireEthernetStack:128)))

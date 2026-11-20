@@ -7,3 +7,9 @@ exclude = ["E350"]
 [[rules]]
 files = "examples/generated/stack.ml"
 exclude = ["E005"]
+
+# verify/ checks the code the generators write against EverParse: a tool of
+# its own, beside lib/, test/ and bench/.
+[[rules]]
+files = "verify/dune"
+exclude = ["E912"]
