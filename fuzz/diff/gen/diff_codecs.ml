@@ -250,8 +250,45 @@ let packet_inputs raw =
   let tcp = mutate true 0 and udp = mutate false 0 in
   [ raw; tcp; udp; mutate true 0x2000; Bytes.sub tcp 0 (byte 3 mod 129) ]
 
+(* The packet fixture cut to [len] bytes, with the IPv4 total length set to
+   [total]. *)
+let edge ~tcp ~ihl ~words ~fragment ~total len =
+  let b = packet ~tcp ~ihl ~words ~fragment in
+  Bytes.set_uint16_be b 16 total;
+  Bytes.sub b 0 len
+
+let packet_bounds =
+  let pair name ~tcp ~ihl ~words ?(fragment = 0) ~total ~len ~short () =
+    let fits = edge ~tcp ~ihl ~words ~fragment ~total len in
+    [
+      (name ^ " fits", fits, true);
+      (name ^ " overflows by one byte", short fits, false);
+    ]
+  in
+  let cut b = Bytes.sub b 0 (Bytes.length b - 1) in
+  let at i v b =
+    let b = Bytes.copy b in
+    Bytes.set_uint16_be b i v;
+    b
+  in
+  let total_minus_one b = at 16 (Bytes.get_uint16_be b 16 - 1) b in
+  pair "IPv4 options in the frame" ~tcp:true ~ihl:15 ~words:5 ~fragment:0x2000
+    ~total:60 ~len:74 ~short:cut ()
+  @ pair "IPv4 payload in the frame" ~tcp:true ~ihl:5 ~words:5 ~total:70 ~len:84
+      ~short:cut ()
+  @ pair "IPv4 payload after options in the frame" ~tcp:true ~ihl:6 ~words:5
+      ~total:70 ~len:84 ~short:cut ()
+  @ pair "TCP options in the TCP header" ~tcp:true ~ihl:5 ~words:6 ~total:44
+      ~len:128 ~short:total_minus_one ()
+  @ pair "TCP options after IPv4 options" ~tcp:true ~ihl:7 ~words:6 ~total:52
+      ~len:128 ~short:total_minus_one ()
+  @ pair "UDP payload in the IPv4 payload" ~tcp:false ~ihl:5 ~words:18 ~total:38
+      ~len:128 ~short:total_minus_one ()
+  @ pair "UDP payload after IPv4 options" ~tcp:false ~ihl:6 ~words:18 ~total:42
+      ~len:128 ~short:total_minus_one ()
+
 let packet_corpus () =
-  let cases = ref [] in
+  let cases = ref (List.map (fun (_, b, _) -> b) packet_bounds) in
   List.iter
     (fun tcp ->
       List.iter

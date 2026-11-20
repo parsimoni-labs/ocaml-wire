@@ -73,6 +73,11 @@ val scan_cases : scan_case list
 (** The structured cases: regions, optional fields, tags, bitfield tests and the
     {!Packet_stack} codec. *)
 
+val packet_bounds : (string * bytes * bool) list
+(** [packet_bounds] is frames of {!Packet_stack.codec} at the edge of each bound
+    its scanners check. Each bound has a frame that fits exactly and one that is
+    a byte over, with whether the codec accepts it. *)
+
 val packet_payload_corpus : unit -> bytes list
 (** [packet_payload_corpus ()] is long TCP and UDP packets, with options and
     fragments, of Ethernet frame lengths 1500, 9000, 65535 and 65549 bytes, each

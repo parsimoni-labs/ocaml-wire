@@ -1485,6 +1485,42 @@ let test_scanners () =
         ((List.assoc c.label Ocaml_index.scanners) ()))
     Diff_codecs.scan_cases
 
+(* At the edge of each bound of the packet stack, every scanner accepts and
+   rejects the frames the codec does, alone and in a frame fold. *)
+let test_packet_bounds () =
+  let label = "scan_packet" in
+  let codec =
+    match
+      List.find
+        (fun (Diff_codecs.Scan c) -> c.label = label)
+        Diff_codecs.scan_cases
+    with
+    | Diff_codecs.Scan c -> fun b -> Result.is_ok (Codec.decode c.codec b 0)
+  in
+  let backends = (List.assoc label Ocaml_index.scanners) () in
+  List.iter
+    (fun (name, b, accepted) ->
+      let len = Bytes.length b in
+      Alcotest.(check bool) (name ^ ": codec") accepted (codec b);
+      List.iter
+        (fun (s : Diff_ocaml.scan_ops) ->
+          Alcotest.(check bool)
+            (Fmt.str "%s: %s" name s.scan_name)
+            accepted
+            (Option.is_some (s.scan b 0 len));
+          Option.iter
+            (fun batch ->
+              let frames =
+                Option.value ~default:[] (batch (Bytes.cat b b) 0 (2 * len) len)
+              in
+              Alcotest.(check (list bool))
+                (Fmt.str "%s: %s fold_frames" name s.scan_name)
+                [ accepted; accepted ]
+                (List.map Option.is_some frames))
+            s.scan_batch)
+        backends)
+    Diff_codecs.packet_bounds
+
 (* A backend sizes its ports from the plan's outputs: a signed field keeps its
    width on the wire and says it is signed, so a negative value survives. *)
 let test_plan_signed_output () =
@@ -1556,6 +1592,7 @@ let suite =
         test_scanner_outputs;
       Alcotest.test_case "portable when values fit 31 bits" `Quick test_portable;
       Alcotest.test_case "structured scanners" `Quick test_scanners;
+      Alcotest.test_case "packet bounds" `Quick test_packet_bounds;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;
