@@ -29,6 +29,16 @@
   either runs the same code by changing one line. A field handle's `f.get`
   reads as directly as `get_<f>` (#492, @samoht)
 
+- Generated OCaml: `Value.<f>_low x`, the carrier of a bitfield's low bits,
+  for a loop whose values are in range by construction and would pay a
+  check in `Value.<f>` (#493, @samoht)
+
+- `Wire_ocaml.ml ~simd:true` on OxCaml for arm64 or amd64 gives a 4-byte
+  record whose fields each sit in one byte an `X4` module: four records per
+  SIMD register (NEON or SSE), read with one load and written with one store.
+  Writes build a `part` from each field's bits (`<f>_bits`, or `<f>_of` to
+  check the range), so `store` and `fill` test only the span (#493, @samoht)
+
 - `Wire.Field.union`: a field holding one of several cases, selected by an
   earlier integer field of the record (#414, #450, @samoht)
 
@@ -44,7 +54,8 @@
 
 - `Wire_ocaml`'s OxCaml target takes each buffer it does not keep, and the
   constructor of `decode_with`, `local`, so a buffer may live on the caller's
-  stack, and its functions are `portable` (#492, @samoht)
+  stack, and its functions are `portable`, as is each module of
+  `wire.runtime` (#492, #493, @samoht)
 
 - Generated OCaml has a `View` of a record at any offset of a buffer, and
   `is_valid`, which checks without raising (#442, @samoht)
@@ -76,6 +87,10 @@
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
   fixed-size codecs, and `decode` no longer slows with nesting depth (#435,
   #445, @samoht)
+
+- The code `Wire_ocaml` writes for OxCaml has its `[@zero_alloc]` checked in
+  every dune profile, the dev one included, where the runtime's interfaces
+  state what allocates nothing (#493, @samoht)
 
 - `Wire_3d.generate_corpus` keeps a seeded input under 4 KiB; a 16-bit length
   used to give lines of up to 64 KiB (#455, @samoht)
@@ -117,6 +132,16 @@
 - **Breaking:** an integer under `map`, `where`, `enum` or an optional that is
   always present has its own C type, not `uint32_t`, so a wrapped `uint64`
   keeps its high bits. Rebuild C plugs (#474, @frejsoya)
+
+- **Breaking:** on OxCaml, `Wire_runtime.Target`'s 32-bit and 64-bit loads
+  return, and `Target.Local`'s stores take, `int32_u` and `int64_u`, so none
+  boxes a value across a module boundary. Convert with
+  `Target.Int32_u.to_int32` and `of_int32` (#493, @samoht)
+
+- **Breaking:** on OxCaml, `Wire_runtime.Target`'s loads at an `int64_u`
+  offset are removed, and the scanner `Wire_ocaml` writes reads through
+  `Target.Local`, so it takes its buffer `local`. Read at `Target.offset off`
+  with `Target.Local` (#493, @samoht)
 
 ### Removed
 

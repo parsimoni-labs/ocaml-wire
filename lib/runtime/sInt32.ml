@@ -13,8 +13,8 @@ let max_int = Carrier.of_int32 Int32.max_int
 
 (* Signed on both carriers: a native [int] compares as itself, and [Int32]
    compares signed, which is what a signed field means. *)
-let compare = Carrier.compare
-let equal = Carrier.equal
+let compare a b = Carrier.compare a b
+let equal a b = Carrier.equal a b
 let mask16 = Carrier.of_int 0xFFFF
 
 (* On a 64-bit host [Carrier.t] is the native [int], and matching on
@@ -67,9 +67,8 @@ let set_be buf off v =
 
 (* Optint's emulated conversions assume 31-bit ints. JavaScript has 32-bit
    ints, so use the exact Int32 conversion there instead of losing the sign. *)
-let to_int =
-  if Sys.int_size = 32 then fun v -> Int32.to_int (to_int32 v)
-  else Carrier.to_int
+let to_int v =
+  if Sys.int_size = 32 then Int32.to_int (to_int32 v) else Carrier.to_int v
 
 (* [Int32.to_int] truncates where the native [int] is narrower than 32 bits, so
    round-trip through it to tell a value it held from one it dropped bits of. *)
@@ -78,9 +77,9 @@ let to_int_opt v =
   let i = Int32.to_int w in
   if Int32.equal (Int32.of_int i) w then Some i else None
 
-let of_int =
-  if Sys.int_size <= 32 then fun n -> of_int32 (Int32.of_int n)
-  else fun n ->
+let of_int n =
+  if Sys.int_size <= 32 then of_int32 (Int32.of_int n)
+  else
     let v = Carrier.of_int n in
     if compare v min_int < 0 || compare v max_int > 0 then
       invalid_arg

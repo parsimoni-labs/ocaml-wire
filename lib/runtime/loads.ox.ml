@@ -1,62 +1,19 @@
 module Int64_u = Stdlib_upstream_compatible.Int64_u
+module Int32_u = Stdlib_upstream_compatible.Int32_u
 
 type cell = { mutable cell : int64_u }
-
-external checked16 : bytes -> int64_u -> int @@ portable
-  = "%caml_bytes_get16_indexed_by_int64#"
-
-external unchecked16 : bytes -> int64_u -> int @@ portable
-  = "%caml_bytes_get16u_indexed_by_int64#"
-
-external checked32 : bytes -> int64_u -> int32 @@ portable
-  = "%caml_bytes_get32_indexed_by_int64#"
-
-external unchecked32 : bytes -> int64_u -> int32 @@ portable
-  = "%caml_bytes_get32u_indexed_by_int64#"
-
-external checked64 : bytes -> int64_u -> int64 @@ portable
-  = "%caml_bytes_get64_indexed_by_int64#"
-
-external unchecked64 : bytes -> int64_u -> int64 @@ portable
-  = "%caml_bytes_get64u_indexed_by_int64#"
 
 external swap16 : int -> int @@ portable = "%bswap16"
 external swap32 : int32 -> int32 @@ portable = "%bswap_int32"
 external swap64 : int64 -> int64 @@ portable = "%bswap_int64"
 
-(* No indexed primitive loads one byte: the paranoid profile checks the full
-   offset before narrowing it to an [int]. *)
-let[@inline always] u8 b off =
-  if
-    Paranoid.enabled
-    && (Int64_u.compare off (Int64_u.of_int 0) < 0
-       || Int64_u.compare off (Int64_u.of_int (Bytes.length b)) >= 0)
-  then invalid_arg "index out of bounds";
-  Char.code (Bytes.unsafe_get b (Int64_u.to_int off))
-
-let[@inline always] u16 b o =
-  if Paranoid.enabled then checked16 b o else unchecked16 b o
-
-let[@inline always] i32 b o =
-  if Paranoid.enabled then checked32 b o else unchecked32 b o
-
-let[@inline always] i64 b o =
-  if Paranoid.enabled then checked64 b o else unchecked64 b o
-
-let[@inline always] u16be b o =
-  if Sys.big_endian then u16 b o else swap16 (u16 b o)
-
-let[@inline always] u16le b o =
-  if Sys.big_endian then swap16 (u16 b o) else u16 b o
-
-let[@inline always] i32be b o =
-  if Sys.big_endian then i32 b o else swap32 (i32 b o)
-
-let[@inline always] i32le b o =
-  if Sys.big_endian then swap32 (i32 b o) else i32 b o
-
-let[@inline always] i64be b o =
-  if Sys.big_endian then i64 b o else swap64 (i64 b o)
+(* The paranoid profile checks that [off] fits an [int] before narrowing it,
+   so an offset that would wrap raises instead. *)
+let[@inline always] offset off =
+  let o = Int64_u.to_int off in
+  if Paranoid.enabled && Int64_u.compare (Int64_u.of_int o) off <> 0 then
+    invalid_arg "index out of bounds";
+  o
 
 module Local = struct
   external get8 : bytes @ local -> int -> char @@ portable = "%bytes_unsafe_get"
@@ -112,10 +69,10 @@ module Local = struct
 
   let[@inline always] u16be b o = be16 (g16 b o)
   let[@inline always] u16le b o = le16 (g16 b o)
-  let[@inline always] i32be b o = be32 (g32 b o)
-  let[@inline always] i32le b o = le32 (g32 b o)
-  let[@inline always] i64be b o = be64 (g64 b o)
-  let[@inline always] i64le b o = le64 (g64 b o)
+  let[@inline always] i32be b o = Int32_u.of_int32 (be32 (g32 b o))
+  let[@inline always] i32le b o = Int32_u.of_int32 (le32 (g32 b o))
+  let[@inline always] i64be b o = Int64_u.of_int64 (be64 (g64 b o))
+  let[@inline always] i64le b o = Int64_u.of_int64 (le64 (g64 b o))
 
   let[@inline always] set_u8 b o v =
     let c = Char.unsafe_chr (v land 0xff) in
@@ -123,11 +80,12 @@ module Local = struct
 
   let[@inline always] set_u16be b o v = s16 b o (be16 v)
   let[@inline always] set_u16le b o v = s16 b o (le16 v)
-  let[@inline always] set_i32be b o v = s32 b o (be32 v)
-  let[@inline always] set_i32le b o v = s32 b o (le32 v)
+  let[@inline always] set_i32be b o v = s32 b o (be32 (Int32_u.to_int32 v))
+  let[@inline always] set_i32le b o v = s32 b o (le32 (Int32_u.to_int32 v))
   (* OxCaml fences every 64-bit store to memory on arm64 and no narrower one,
      so a 64-bit value goes out as two 32-bit stores. *)
   let[@inline always] set_i64be b o v =
+    let v = Int64_u.to_int64 v in
     if Sys.big_endian then s64 b o v
     else begin
       s32 b o (be32 (Int64.to_int32 (Int64.shift_right_logical v 32)));
@@ -135,6 +93,7 @@ module Local = struct
     end
 
   let[@inline always] set_i64le b o v =
+    let v = Int64_u.to_int64 v in
     if Sys.big_endian then s64 b o (swap64 v)
     else begin
       s32 b o (Int64.to_int32 v);
@@ -163,11 +122,11 @@ module Local = struct
 
   let[@inline always] get_int32_be b o =
     check b o 4;
-    be32 (get32 b o)
+    Int32_u.of_int32 (be32 (get32 b o))
 
   let[@inline always] get_int32_le b o =
     check b o 4;
-    le32 (get32 b o)
+    Int32_u.of_int32 (le32 (get32 b o))
 
   let sub_string b o n =
     if o < 0 || n < 0 || o > Bytes.length b - n then
@@ -224,19 +183,19 @@ module Local = struct
 
     let[@inline always] i32be b o =
       check b o 4;
-      be32 (get32 b o)
+      Int32_u.of_int32 (be32 (get32 b o))
 
     let[@inline always] i32le b o =
       check b o 4;
-      le32 (get32 b o)
+      Int32_u.of_int32 (le32 (get32 b o))
 
     let[@inline always] i64be b o =
       check b o 8;
-      be64 (get64 b o)
+      Int64_u.of_int64 (be64 (get64 b o))
 
     let[@inline always] i64le b o =
       check b o 8;
-      le64 (get64 b o)
+      Int64_u.of_int64 (le64 (get64 b o))
 
     let[@inline always] set_u8 b o v =
       check b o 1;
@@ -252,13 +211,14 @@ module Local = struct
 
     let[@inline always] set_i32be b o v =
       check b o 4;
-      set32 b o (be32 v)
+      set32 b o (be32 (Int32_u.to_int32 v))
 
     let[@inline always] set_i32le b o v =
       check b o 4;
-      set32 b o (le32 v)
+      set32 b o (le32 (Int32_u.to_int32 v))
 
     let[@inline always] set_i64be b o v =
+      let v = Int64_u.to_int64 v in
       check b o 8;
       if Sys.big_endian then set64 b o v
       else begin
@@ -267,6 +227,7 @@ module Local = struct
       end
 
     let[@inline always] set_i64le b o v =
+      let v = Int64_u.to_int64 v in
       check b o 8;
       if Sys.big_endian then set64 b o (swap64 v)
       else begin
@@ -291,11 +252,11 @@ module Local = struct
 
     let[@inline always] get_int32_be b o =
       bounds b o 4;
-      be32 (get32 b o)
+      Int32_u.of_int32 (be32 (get32 b o))
 
     let[@inline always] get_int32_le b o =
       bounds b o 4;
-      le32 (get32 b o)
+      Int32_u.of_int32 (le32 (get32 b o))
 
     let sub_string b o n =
       if o < 0 || n < 0 || o > length b - n then
@@ -311,25 +272,4 @@ module Local = struct
         set b (o + i) (String.unsafe_get s (so + i))
       done
   end
-end
-
-(* The runtime as the code for OxCaml sees it: every module of it is
-   [portable] on OxCaml, so this only gathers them. *)
-module Portable = struct
-  module Errors = Errors
-  module Arith = Arith
-  module UInt8 = UInt8
-  module UInt16 = UInt16
-  module SInt8 = SInt8
-  module SInt16 = SInt16
-  module UInt32 = UInt32
-  module SInt32 = SInt32
-  module Unchecked = Unchecked
-
-  module Target = struct
-    module Local = Local
-  end
-
-  module Buf = Buf
-  module Staged = Staged
 end

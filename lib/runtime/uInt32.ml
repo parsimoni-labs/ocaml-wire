@@ -11,7 +11,7 @@ let compare =
   else fun a b ->
     Int32.unsigned_compare (Carrier.to_int32 a) (Carrier.to_int32 b)
 
-let equal = Carrier.equal
+let equal a b = Carrier.equal a b
 let zero = Carrier.zero
 let pp = Carrier.pp
 
@@ -66,7 +66,7 @@ let set_be buf off v =
   Bytes.set_uint16_be buf off (low16 (Carrier.shift_right_logical v 16));
   Bytes.set_uint16_be buf (off + 2) (low16 v)
 
-let to_int = Carrier.to_int
+let to_int v = Carrier.to_int v
 
 (* Refuses rather than masks. Masking turns a number the field cannot hold into
    a legal 32-bit value on the wire that nothing downstream can tell from the

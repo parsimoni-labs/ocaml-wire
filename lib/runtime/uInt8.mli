@@ -12,7 +12,7 @@
 
 type t = private int
 
-val v : int -> t
+val [@zero_alloc] v : int -> t
 (** [v n] is [n] as an unsigned 8-bit value. Raises [Invalid_argument] when [n]
     is outside [[0, 255]], rather than masking it to a legal value the caller
     did not mean: 511 masks to a perfectly good 255 that no decoder can tell

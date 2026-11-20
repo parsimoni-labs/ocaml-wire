@@ -969,8 +969,8 @@ let test_bigstring () =
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
    as raising, adds a stack-allocated decode for the generated record, takes
    each buffer it does not keep and the constructor of [decode_with] [local],
-   and sees the runtime [portable]. The stock compiler cannot build it; the
-   OxCaml tests do. *)
+   and holds a 32-bit or 64-bit value unboxed. The stock compiler cannot build
+   it; the OxCaml tests do. *)
 let test_oxcaml () =
   let src = Wire_ocaml.ml ~target:`OxCaml ~codec:"Schemas.ipv4" Schemas.ipv4 in
   List.iter
@@ -988,7 +988,7 @@ let test_oxcaml () =
       "let[@inline] decode_with (make @ local) (buf @ local) off";
       "let[@inline][@zero_alloc] src (buf @ local) off";
       "let[@inline][@zero_alloc] write (buf @ local) off";
-      "module Wire_runtime = Wire_runtime.Target.Portable";
+      "module Int32_u = Wire_runtime.Target.Int32_u";
       "let[@inline][@zero_alloc] validate_written (buf @ local) off";
     ];
   (* Every allocation check runs: only a path that ends in a raise is assumed
@@ -1000,6 +1000,56 @@ let test_oxcaml () =
   Alcotest.(check bool)
     "stock has no OxCaml syntax" false
     (contains stock "exclave_" || contains stock "#{")
+
+(* [~simd:true] gives a 4-byte record whose fields each sit in one byte an [X4]
+   of NEON lanes, each field at its byte's bits of a little-endian lane, and
+   gives every other record none. *)
+let test_simd () =
+  let ox ?simd codec c = Wire_ocaml.ml ~target:`OxCaml ?simd ~codec c in
+  let lanes = ox ~simd:true "Schemas.lanes" Schemas.lanes in
+  List.iter
+    (fun s -> Alcotest.(check bool) s true (contains lanes s))
+    [
+      "module X4 : sig";
+      "val ( ++ ) : part -> part -> part";
+      "let[@inline] a w = V.logand (V.shift_right_logical 4 w)";
+      "let[@inline] c w = V.logand (V.shift_right_logical 8 w)";
+      "let[@inline] d w = V.logand (V.shift_right_logical 21 w)";
+      "let[@inline] f w = (V.shift_right_logical 26 w)";
+      "let[@inline] write_int_at";
+    ];
+  Alcotest.(check bool)
+    "no X4 without ~simd" false
+    (contains (ox "Schemas.lanes" Schemas.lanes) "module X4");
+  List.iter
+    (fun (name, src) ->
+      Alcotest.(check bool) name false (contains src "module X4"))
+    [
+      ("ipv4", ox ~simd:true "Schemas.ipv4" Schemas.ipv4);
+      ("small", ox ~simd:true "Schemas.small" Schemas.small);
+      ("checked", ox ~simd:true "Schemas.checked" Schemas.checked);
+      ("mixed", ox ~simd:true "Schemas.mixed" Schemas.mixed);
+    ];
+  match
+    Wire_ocaml.ml ~target:`OCaml ~simd:true ~codec:"Schemas.lanes" Schemas.lanes
+  with
+  | _ -> Alcotest.fail "~simd on the OCaml target is refused"
+  | exception Invalid_argument m ->
+      Alcotest.(check bool) m true (contains m "OxCaml")
+
+(* [Value.<f>_low x] is the carrier of [x]'s low bits, as [Value.<f>] of the
+   masked value is, for any [x]. *)
+let test_low () =
+  for _ = 1 to 1000 do
+    let x = Random.State.bits rand - (1 lsl 29) in
+    let check name width low checked =
+      Alcotest.(check int) name (checked (x land ((1 lsl width) - 1))) (low x)
+    in
+    let open G_lanes.Value in
+    check "a" 4 (fun x -> (a_low x :> int)) (fun x -> (a x :> int));
+    check "d" 3 (fun x -> (d_low x :> int)) (fun x -> (d x :> int));
+    check "f" 6 (fun x -> (f_low x :> int)) (fun x -> (f x :> int))
+  done
 
 (* A frame of [len] bytes holding [n], then [rest]. *)
 let frame n rest =
@@ -1416,6 +1466,8 @@ let suite =
       Alcotest.test_case "no literal needs more than 31 bits" `Quick
         test_narrow_ints;
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
+      Alcotest.test_case "NEON lanes" `Quick test_simd;
+      Alcotest.test_case "carriers from low bits" `Quick test_low;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "validated view" `Quick test_valid;
       Alcotest.test_case "view at an offset" `Quick test_view;

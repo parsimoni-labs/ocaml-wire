@@ -37,12 +37,13 @@ val ident : string -> string
 
 val ml :
   ?target:[ `OCaml | `OxCaml ] ->
+  ?simd:bool ->
   ?make:string ->
   ?maps:(string * typ) list ->
   codec:string ->
   'a Wire.Codec.t ->
   string
-(** [ml ?target ?make ?maps ~codec c] is the module generated for [c]; see
+(** [ml ?target ?simd ?make ?maps ~codec c] is the module generated for [c]; see
     {!Wire_ocaml.ml}. *)
 
 val bridge :

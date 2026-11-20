@@ -22,77 +22,92 @@ module Value : sig
 
   val controlwordtype : int -> controlwordtype
   val controlwordtype_eq : (controlwordtype, int) Type.eq
+  val controlwordtype_low : int -> controlwordtype
 
   type clcwversion = private int
 
   val clcwversion : int -> clcwversion
   val clcwversion_eq : (clcwversion, int) Type.eq
+  val clcwversion_low : int -> clcwversion
 
   type statusfield = private int
 
   val statusfield : int -> statusfield
   val statusfield_eq : (statusfield, int) Type.eq
+  val statusfield_low : int -> statusfield
 
   type copineffect = private int
 
   val copineffect : int -> copineffect
   val copineffect_eq : (copineffect, int) Type.eq
+  val copineffect_low : int -> copineffect
 
   type vcid = private int
 
   val vcid : int -> vcid
   val vcid_eq : (vcid, int) Type.eq
+  val vcid_low : int -> vcid
 
   type spare = private int
 
   val spare : int -> spare
   val spare_eq : (spare, int) Type.eq
+  val spare_low : int -> spare
 
   type norf = private int
 
   val norf : int -> norf
   val norf_eq : (norf, int) Type.eq
+  val norf_low : int -> norf
 
   type nobitlock = private int
 
   val nobitlock : int -> nobitlock
   val nobitlock_eq : (nobitlock, int) Type.eq
+  val nobitlock_low : int -> nobitlock
 
   type lockout = private int
 
   val lockout : int -> lockout
   val lockout_eq : (lockout, int) Type.eq
+  val lockout_low : int -> lockout
 
   type wait = private int
 
   val wait : int -> wait
   val wait_eq : (wait, int) Type.eq
+  val wait_low : int -> wait
 
   type retransmit = private int
 
   val retransmit : int -> retransmit
   val retransmit_eq : (retransmit, int) Type.eq
+  val retransmit_low : int -> retransmit
 
   type farmbcounter = private int
 
   val farmbcounter : int -> farmbcounter
   val farmbcounter_eq : (farmbcounter, int) Type.eq
+  val farmbcounter_low : int -> farmbcounter
 
   type spare2 = private int
 
   val spare2 : int -> spare2
   val spare2_eq : (spare2, int) Type.eq
+  val spare2_low : int -> spare2
 
   type reportvalue = private int
 
   val reportvalue : int -> reportvalue
   val reportvalue_eq : (reportvalue, int) Type.eq
+  val reportvalue_low : int -> reportvalue
 end = struct
   type controlwordtype = int
 
   let[@inline] controlwordtype x =
     if x lsr 1 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:1 x else x
 
+  let[@inline] controlwordtype_low x = x land 0x1
   let controlwordtype_eq = Type.Equal
 
   type clcwversion = int
@@ -100,6 +115,7 @@ end = struct
   let[@inline] clcwversion x =
     if x lsr 2 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:2 x else x
 
+  let[@inline] clcwversion_low x = x land 0x3
   let clcwversion_eq = Type.Equal
 
   type statusfield = int
@@ -107,6 +123,7 @@ end = struct
   let[@inline] statusfield x =
     if x lsr 3 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:3 x else x
 
+  let[@inline] statusfield_low x = x land 0x7
   let statusfield_eq = Type.Equal
 
   type copineffect = int
@@ -114,6 +131,7 @@ end = struct
   let[@inline] copineffect x =
     if x lsr 2 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:2 x else x
 
+  let[@inline] copineffect_low x = x land 0x3
   let copineffect_eq = Type.Equal
 
   type vcid = int
@@ -121,6 +139,7 @@ end = struct
   let[@inline] vcid x =
     if x lsr 6 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:6 x else x
 
+  let[@inline] vcid_low x = x land 0x3f
   let vcid_eq = Type.Equal
 
   type spare = int
@@ -128,6 +147,7 @@ end = struct
   let[@inline] spare x =
     if x lsr 2 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:2 x else x
 
+  let[@inline] spare_low x = x land 0x3
   let spare_eq = Type.Equal
 
   type norf = int
@@ -135,6 +155,7 @@ end = struct
   let[@inline] norf x =
     if x lsr 1 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:1 x else x
 
+  let[@inline] norf_low x = x land 0x1
   let norf_eq = Type.Equal
 
   type nobitlock = int
@@ -142,6 +163,7 @@ end = struct
   let[@inline] nobitlock x =
     if x lsr 1 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:1 x else x
 
+  let[@inline] nobitlock_low x = x land 0x1
   let nobitlock_eq = Type.Equal
 
   type lockout = int
@@ -149,6 +171,7 @@ end = struct
   let[@inline] lockout x =
     if x lsr 1 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:1 x else x
 
+  let[@inline] lockout_low x = x land 0x1
   let lockout_eq = Type.Equal
 
   type wait = int
@@ -156,6 +179,7 @@ end = struct
   let[@inline] wait x =
     if x lsr 1 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:1 x else x
 
+  let[@inline] wait_low x = x land 0x1
   let wait_eq = Type.Equal
 
   type retransmit = int
@@ -163,6 +187,7 @@ end = struct
   let[@inline] retransmit x =
     if x lsr 1 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:1 x else x
 
+  let[@inline] retransmit_low x = x land 0x1
   let retransmit_eq = Type.Equal
 
   type farmbcounter = int
@@ -170,6 +195,7 @@ end = struct
   let[@inline] farmbcounter x =
     if x lsr 2 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:2 x else x
 
+  let[@inline] farmbcounter_low x = x land 0x3
   let farmbcounter_eq = Type.Equal
 
   type spare2 = int
@@ -177,6 +203,7 @@ end = struct
   let[@inline] spare2 x =
     if x lsr 1 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:1 x else x
 
+  let[@inline] spare2_low x = x land 0x1
   let spare2_eq = Type.Equal
 
   type reportvalue = int
@@ -184,6 +211,7 @@ end = struct
   let[@inline] reportvalue x =
     if x lsr 8 <> 0 then Wire_runtime.Errors.unsigned_too_wide ~bits:8 x else x
 
+  let[@inline] reportvalue_low x = x land 0xff
   let reportvalue_eq = Type.Equal
 end
 

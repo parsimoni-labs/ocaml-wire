@@ -33,14 +33,16 @@ test-wasm:
 
 # The wire.ocaml tests and its differential lane on the code it writes for
 # OxCaml, with every [@zero_alloc] checked: run from an OxCaml switch that has
-# the test dependencies (alcobar included). The release profile, because the
-# dev one compiles libraries -opaque and the checks cannot pass there, then the
+# the test dependencies (alcobar included). The dev profile, which compiles
+# libraries -opaque, so each check relies on the [@zero_alloc] the runtime's
+# interfaces state; the release one, which inlines across them; then the
 # paranoid one, which checks every unchecked load as well.
 OXCAML_LANES = @test/ocaml-ox/runtest @fuzz/diff/ocaml-ox/runtest \
   @test/runtime-ox/runtest
 test-oxcaml:
 	@test "$$(ocamlopt -config-var ox)" = true || \
 	  { echo "not an OxCaml compiler"; exit 1; }
+	dune build $(OXCAML_LANES)
 	dune build --profile release $(OXCAML_LANES)
 	dune build --profile paranoid $(OXCAML_LANES)
 

@@ -16,11 +16,20 @@ type src = {
   checked : string;
   brand : string;
   buf : string;
+  unboxed : bool;
 }
 (** The buffer the generated code reads: its type, its unchecked accessors, its
     length, the module of its bounds-checked loads and string copies, the
-    runtime module that names a buffer of that type, and the parameter that
-    binds it. *)
+    runtime module that names a buffer of that type, the parameter that binds
+    it, and whether its 32-bit and 64-bit loads give unboxed values, as on
+    OxCaml. *)
+
+val i32 : src -> string
+(** [i32 src] is the module of the 32-bit values [src] loads: [Int32], or
+    [Int32_u] when they are unboxed. *)
+
+val i64 : src -> string
+(** [i64 src] is {!i32} for 64-bit values. *)
 
 val rt : string
 (** [rt] is the name of the runtime library the generated code links. *)

@@ -5,3 +5,29 @@
  (enabled_if
   (= %{ocaml-config:ox} true))
  (libraries wire.runtime alcotest fmt))
+
+; The lanes of [Vec] against four [int]s. They exist only on OxCaml for arm64
+; and amd64, so only there does test_vec.ml.ox become the suite; elsewhere it
+; is empty.
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (or
+    (= %{architecture} arm64)
+    (= %{architecture} amd64))))
+ (action
+  (copy test_vec.ml.ox test_vec.ml)))
+
+(rule
+ (enabled_if
+  (or
+   (<> %{ocaml-config:ox} true)
+   (and
+    (<> %{architecture} arm64)
+    (<> %{architecture} amd64))))
+ (action
+  (with-stdout-to
+   test_vec.ml
+   (echo "let suite = (\"vec\", [])\n"))))

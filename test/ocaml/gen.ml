@@ -18,15 +18,16 @@ let summed ~target ~codec c =
   ^ "\nend\n\n"
   ^ Wire_ocaml.scanner ~target ~step:"Step" ~codec c
 
-(* [--oxcaml] generates for the OxCaml target. *)
+(* [--oxcaml] generates for the OxCaml target, and [--simd] adds the SIMD
+   lanes of the records that have them (OxCaml on arm64 or amd64). *)
 let () =
-  let target =
-    if Array.exists (String.equal "--oxcaml") Sys.argv then `OxCaml else `OCaml
-  in
+  let flag f = Array.exists (String.equal f) Sys.argv in
+  let target = if flag "--oxcaml" then `OxCaml else `OCaml in
+  let simd = flag "--simd" in
   (* Each module, and the bridge that checks it against its codec. *)
   let g name ?make ?maps codec c =
     let codec = "Schemas." ^ codec in
-    write name (Wire_ocaml.ml ~target ?make ?maps ~codec c);
+    write name (Wire_ocaml.ml ~target ~simd ?make ?maps ~codec c);
     let base = Filename.remove_extension name in
     write (base ^ "_wire.ml")
       (Wire_ocaml.bridge ?maps ~codec ~core:(String.capitalize_ascii base) c)
@@ -42,6 +43,7 @@ let () =
   g "g_packed.ml" ~make:"Schemas.packed_make" "packed" Schemas.packed;
   g "g_refined.ml" ~make:"Schemas.refined_make" "refined" Schemas.refined;
   g "g_overflow.ml" ~make:"Schemas.overflow_make" "overflow" Schemas.overflow;
+  g "g_lanes.ml" ~make:"Schemas.lanes_make" "lanes" Schemas.lanes;
   write "s_sized.ml"
     (Wire_ocaml.scanner ~target ~codec:"Schemas.sized" Schemas.sized);
   write "s_overflow.ml"
