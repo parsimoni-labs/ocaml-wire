@@ -1191,6 +1191,42 @@ let test_scan_skipped () =
         [ 3; 4; 5 ])
     [ 0l; 1l; 46341l; 0x5a827999l; 0x7fffffffl; -1l ]
 
+let huge_reference =
+  Diff_ocaml.Reference
+    {
+      label = "huge";
+      codec = Schemas.huge;
+      known = None;
+      project =
+        (fun _ (flag, _, tail) ->
+          [ ("flag", UInt8.to_int flag); ("tail", UInt8.to_int tail) ]);
+      inputs = (fun b -> [ b ]);
+    }
+
+(* Generating code for a prefix takes time in its number of fields, whatever
+   its size in bytes. *)
+let test_huge_prefix () =
+  let array =
+    Codec.v "HugeArray"
+      (fun flag _ tail -> (flag, tail))
+      Codec.
+        [
+          Field.v "Flag" uint8 $ fst;
+          ( Field.v "Body" (byte_array ~size:(int (Sys.max_string_length - 8)))
+          $ fun _ -> "" );
+          Field.v "Tail" uint8 $ snd;
+        ]
+  in
+  ignore (Wire_ocaml.ml ~codec:"array" array : string);
+  let huge =
+    scan_ops "S_huge" [ "flag"; "tail" ] (fun b o n ->
+        let v = S_huge.decode b o n in
+        if v.ok then Some [ ("flag", v.flag); ("tail", v.tail) ] else None)
+  in
+  List.iter
+    (fun s -> Diff_ocaml.check_scan huge_reference [ huge ] (Bytes.of_string s))
+    [ ""; "\001"; "\001\002"; String.make 64 '\001' ]
+
 (* Optional fields are written once each: the code after one is joined, or
    copied into its branches only while it is short, holds no optional field
    and the copies on a path stay few, and an output under more than
@@ -1475,6 +1511,7 @@ let suite =
         test_scan_overflow;
       Alcotest.test_case "overflow in a condition the facts decide" `Quick
         test_scan_skipped;
+      Alcotest.test_case "prefix of a huge fixed slice" `Quick test_huge_prefix;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
       Alcotest.test_case "nested optional fields allocate nothing" `Quick
         test_nested_no_alloc;

@@ -338,6 +338,19 @@ let skipped =
         $ fun (_, _, _, b) -> b );
       ]
 
+type huge = UInt8.t * Bytesrw.Bytes.Slice.t * UInt8.t
+
+let huge =
+  let size = Sys.max_string_length - 8 in
+  Codec.v "Huge"
+    (fun flag body tail -> (flag, body, tail))
+    Codec.
+      [
+        (Field.v "Flag" uint8 $ fun (f, _, _) -> f);
+        (Field.v "Body" (byte_slice ~size:(int size)) $ fun (_, b, _) -> b);
+        (Field.v "Tail" uint8 $ fun (_, _, t) -> t);
+      ]
+
 let rec gated n =
   let tag = Field.v "tag" uint8 in
   let value =

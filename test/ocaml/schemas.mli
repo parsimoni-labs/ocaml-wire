@@ -237,6 +237,13 @@ val skipped : skipped Codec.t
     but the codec still evaluates [n * n], which overflows the native int for a
     large [n]. *)
 
+type huge = UInt8.t * Bytesrw.Bytes.Slice.t * UInt8.t
+
+val huge : huge Codec.t
+(** [huge] is a byte [Flag], a byte slice of a fixed size close to
+    [Sys.max_string_length], then a byte [Tail]. The three fields are one
+    prefix. *)
+
 val gated : int -> unit Codec.t
 (** [gated n] has [n] optional fields, each present when the tag before it is 1.
 *)

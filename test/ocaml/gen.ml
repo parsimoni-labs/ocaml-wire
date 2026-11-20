@@ -57,6 +57,7 @@ let () =
   s "s_sized.ml" "sized" Schemas.sized;
   s "s_overflow.ml" "overflow" Schemas.overflow;
   s "s_skipped.ml" "skipped" Schemas.skipped;
+  s "s_huge.ml" "huge" Schemas.huge;
   write "s_nested_step.ml" (summed (Schemas.nested 12));
   s "s_nested.ml" ~step:"S_nested_step" "nested 12" (Schemas.nested 12);
   g "g_mapped.ml" "mapped" Schemas.mapped
