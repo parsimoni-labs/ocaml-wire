@@ -92,3 +92,82 @@
    .
    %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128
    stack_ox.gen:scanner-ox/34:Stack.WireEthernetStack:128)))
+
+; The checker finds defects planted in the generated scanner: the header
+; check of fold_ipv4 removed (reads past the frame), the payload check off by
+; one (rejects a frame whose payload ends the window, which the
+; specification accepts), and fold_frames taking the
+; walk without frame checks for strides too short for it.
+
+(rule
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (action
+  (with-stdout-to
+   no_header_check.mutant
+   (run
+    sed
+    "s/if (stop : int) < 34 then invalid ()/if false then invalid ()/"
+    %{dep:../examples/generated/stack.ml}))))
+
+(rule
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (action
+  (with-stdout-to
+   payload_off_by_one.mutant
+   (run
+    sed
+    "s/if (f9_ipv4_total_length : int) > stop - 14 then invalid ()/if (f9_ipv4_total_length : int) >= stop - 14 then invalid ()/"
+    %{dep:../examples/generated/stack.ml}))))
+
+(rule
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (action
+  (with-stdout-to
+   stride_threshold.mutant
+   (run
+    sed
+    "s/if stride < 34 then/if stride < 30 then/"
+    %{dep:../examples/generated/stack.ml}))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   %{bin-available:z3}))
+ (deps
+  Stack.3d
+  no_header_check.mutant
+  payload_off_by_one.mutant
+  stride_threshold.mutant)
+ (action
+  (progn
+   (run
+    ./main.exe
+    --bounds-only
+    --only
+    fold
+    --expect-refuted
+    "reads 8 bytes inside the buffer"
+    .
+    no_header_check.mutant:scanner/34:Stack.WireEthernetStack:64)
+   (run
+    ./main.exe
+    --only
+    fold
+    --expect-refuted
+    "answers as"
+    .
+    payload_off_by_one.mutant:scanner/34:Stack.WireEthernetStack:64)
+   (run
+    ./main.exe
+    --bounds-only
+    --only
+    fold_frames
+    --expect-refuted
+    "inside the buffer"
+    .
+    stride_threshold.mutant:scanner/34:Stack.WireEthernetStack:64))))
