@@ -31,6 +31,8 @@
   g_mapped_wire.ml
   g_signed.ml
   g_signed_wire.ml
+  g_packed.ml
+  g_packed_wire.ml
   g_refined.ml
   g_refined_wire.ml
   g_overflow.ml
@@ -64,6 +66,8 @@
   g_mapped_wire.ml
   g_signed.ml
   g_signed_wire.ml
+  g_packed.ml
+  g_packed_wire.ml
   g_refined.ml
   g_refined_wire.ml
   g_overflow.ml
@@ -127,6 +131,8 @@
   g_mapped_wire
   g_signed
   g_signed_wire
+  g_packed
+  g_packed_wire
   g_refined
   g_refined_wire
   g_overflow

@@ -150,6 +150,42 @@ val signed_make : SInt8.t -> SInt16.t -> signed
 val signed : signed Codec.t
 (** [signed] refines signed fields against negative literals. *)
 
+type packed = {
+  a : SInt8.t;
+  b : UInt8.t;
+  c : SInt16.t;
+  d : UInt16.t;
+  e : int;
+  f : SInt32.t;
+  g : SInt8.t;
+  h : UInt8.t;
+  i : SInt16.t;
+  j : UInt16.t;
+  k : SInt8.t;
+  l : UInt8.t;
+}
+
+val packed_make :
+  SInt8.t ->
+  UInt8.t ->
+  SInt16.t ->
+  UInt16.t ->
+  int ->
+  SInt32.t ->
+  SInt8.t ->
+  UInt8.t ->
+  SInt16.t ->
+  UInt16.t ->
+  SInt8.t ->
+  UInt8.t ->
+  packed
+(** [packed_make] builds a {!packed} record. *)
+
+val packed : packed Codec.t
+(** [packed] has runs of adjacent fields that fill 8 bytes in little-endian
+    order, then 8 in big-endian order, then 4, with signed fields inside each
+    run, and a field after them. *)
+
 type refined = int * int * UInt8.t * UInt8.t
 
 val refined_make : int -> int -> UInt8.t -> UInt8.t -> refined

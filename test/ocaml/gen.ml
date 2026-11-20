@@ -39,6 +39,7 @@ let () =
   g "g_eth.ml" ~make:"Schemas.eth_make" "eth" Schemas.eth;
   g "g_wide.ml" ~make:"Schemas.wide_make" "wide" Schemas.wide;
   g "g_signed.ml" ~make:"Schemas.signed_make" "signed" Schemas.signed;
+  g "g_packed.ml" ~make:"Schemas.packed_make" "packed" Schemas.packed;
   g "g_refined.ml" ~make:"Schemas.refined_make" "refined" Schemas.refined;
   g "g_overflow.ml" ~make:"Schemas.overflow_make" "overflow" Schemas.overflow;
   write "s_sized.ml"
