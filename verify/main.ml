@@ -70,6 +70,7 @@ let record ~spec ~bound ctx =
       window = ("off", "Bytes.length buf - off");
       spec = Some spec;
       bound;
+      misuse = false;
     };
     {
       Check.name = "View.check";
@@ -79,6 +80,7 @@ let record ~spec ~bound ctx =
       window = ("off", "len - off");
       spec = Some spec;
       bound;
+      misuse = false;
     };
   ]
   @ List.map
@@ -95,6 +97,7 @@ let record ~spec ~bound ctx =
           window = ("off", "len - off");
           spec = None;
           bound;
+          misuse = false;
         })
       view_names
 
@@ -120,6 +123,17 @@ let scanner ~ox ~spec ~bound ~min_stride _ctx =
           window = ("off", "len");
           spec = None;
           bound;
+          misuse = false;
+        };
+        {
+          Check.name = "fold_frames, any arguments";
+          inputs = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ];
+          pre = "true";
+          expr = "fold_frames buf off len ~stride ~init:0 ~invalid ~valid";
+          window = ("off", "len");
+          spec = None;
+          bound;
+          misuse = true;
         };
       ]
   in
@@ -133,6 +147,7 @@ let scanner ~ox ~spec ~bound ~min_stride _ctx =
         window = ("off", "len");
         spec = Some spec;
         bound;
+        misuse = false;
       };
       {
         Check.name = "frames_record";
@@ -147,6 +162,68 @@ let scanner ~ox ~spec ~bound ~min_stride _ctx =
         window = ("base", "stop");
         spec = Some spec;
         bound;
+        misuse = false;
+      };
+    ]
+
+(* The step scanner: [fold_step] and [frames_step_record] answer through
+   [Step.valid] and [Step.invalid]; on OCaml, [fold_frames_step] too. *)
+let step_scanner ~ox ~spec ~bound ~min_stride _ctx =
+  let at x = if ox then Fmt.str "~%s:(Int64.of_int %s)" x x else "~" ^ x in
+  let frames =
+    if ox then []
+    else
+      [
+        {
+          Check.name = "fold_frames_step";
+          inputs = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ];
+          pre =
+            "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && \
+             len <= Bytes.length buf - off";
+          expr = "fold_frames_step buf off len ~stride ~init:0";
+          window = ("off", "len");
+          spec = None;
+          bound;
+          misuse = false;
+        };
+        {
+          Check.name = "fold_frames_step, any arguments";
+          inputs = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ];
+          pre = "true";
+          expr = "fold_frames_step buf off len ~stride ~init:0";
+          window = ("off", "len");
+          spec = None;
+          bound;
+          misuse = true;
+        };
+      ]
+  in
+  frames
+  @ [
+      {
+        Check.name = "fold_step";
+        inputs = [ buf; Int_input "off"; Int_input "len" ];
+        pre = "true";
+        expr = "fold_step buf off len ~init:0";
+        window = ("off", "len");
+        spec = Some spec;
+        bound;
+        misuse = false;
+      };
+      {
+        Check.name = "frames_step_record";
+        inputs =
+          [ buf; Int_input "base"; Int_input "stop"; Int_input "current" ];
+        pre =
+          Fmt.str "stop >= %d && base >= 0 && base <= Bytes.length buf - stop"
+            min_stride;
+        expr =
+          Fmt.str "frames_step_record ~buf %s %s ~current" (at "base")
+            (at "stop");
+        window = ("base", "stop");
+        spec = Some spec;
+        bound;
+        misuse = false;
       };
     ]
 
@@ -175,6 +252,9 @@ type options = {
   timeout : int;
   bounds_only : bool;
   any_size : bool;
+  classify : bool;
+  check : string option;
+  expect : string option;
   expect_refuted : string option;
 }
 
@@ -223,6 +303,56 @@ let check_target ~z3 ~threed ~specs o t =
           [ { Check.property = e.name; verdict = Unknown why; seconds = 0. } ])
     entries
 
+let pp_class ppf = function
+  | Check.Safety (p, cex) -> Fmt.pf ppf "needed for safety: %s fails: %s" p cex
+  | Check.Semantics (p, cex) ->
+      Fmt.pf ppf "needed for semantics: %s fails: %s" p cex
+  | Check.Redundant -> Fmt.string ppf "REDUNDANT"
+  | Check.Redundant_for_safety ->
+      Fmt.string ppf "redundant for safety (no answer to compare)"
+  | Check.Undecided why -> Fmt.pf ppf "undecided: %s" why
+
+(* Each check of each entry of [t], disabled in turn and classified. *)
+let class_name = function
+  | Check.Safety _ -> "safety"
+  | Check.Semantics _ -> "semantics"
+  | Check.Redundant | Check.Redundant_for_safety -> "redundant"
+  | Check.Undecided _ -> "undecided"
+
+let selected o (e : Check.entry) =
+  match o.only with None -> true | Some n -> String.equal n e.name
+
+(* Each check of each entry of [t], disabled in turn and classified; the
+   names of the classes. *)
+let classify_target ~z3 o t =
+  let src = read t.file in
+  let classify (e : Check.entry) =
+    let ctx = Symex.v ~file:t.file src in
+    ignore (Check.walk ctx e);
+    let all = Symex.checks ctx in
+    Fmt.pr "%s: %s, %d checks: %s@." (Filename.basename t.file) e.name
+      (List.length all)
+      (String.concat ", " (List.map (fun (c : Symex.check) -> c.id) all));
+    List.filter_map
+      (fun (c : Symex.check) ->
+        match o.check with
+        | Some id when not (String.equal id c.id || String.equal id c.text) ->
+            None
+        | _ ->
+            let walk () = Symex.v ~file:t.file src in
+            let t0 = Unix.gettimeofday () in
+            let cl =
+              Check.classify ~z3 ~timeout:o.timeout ~jobs:o.jobs ~walk e c.id
+            in
+            Fmt.pr "  %-6s %-40s %a (%.0fs)@." c.id c.text pp_class cl
+              (Unix.gettimeofday () -. t0);
+            Some (class_name cl))
+      all
+  in
+  List.concat_map
+    (fun e -> if selected o e then classify e else [])
+    (t.entries (Symex.v ~file:t.file src))
+
 let target_of_arg arg =
   (* FILE:KIND:SPEC:BOUND, KIND being record, or scanner/MIN_STRIDE or
      scanner-ox/MIN_STRIDE for the OxCaml target. *)
@@ -233,12 +363,17 @@ let target_of_arg arg =
       { file; three_d; entries = record ~spec ~bound }
   | [ file; kind; spec; bound ] -> (
       match String.split_on_char '/' kind with
-      | [ ("scanner" | "scanner-ox"); stride ] ->
-          let ox = String.equal kind ("scanner-ox/" ^ stride) in
+      | [ (("scanner" | "scanner-ox" | "step" | "step-ox") as k); stride ] ->
+          let ox = String.ends_with ~suffix:"-ox" k in
           let min_stride = int_of_string stride in
           let three_d = List.hd (String.split_on_char '.' spec) ^ ".3d" in
           let bound = int_of_string bound in
-          { file; three_d; entries = scanner ~ox ~spec ~bound ~min_stride }
+          let entries =
+            if String.starts_with ~prefix:"step" k then
+              step_scanner ~ox ~spec ~bound ~min_stride
+            else scanner ~ox ~spec ~bound ~min_stride
+          in
+          { file; three_d; entries }
       | _ -> Fmt.invalid_arg "bad target %S" arg)
   | _ -> Fmt.invalid_arg "bad target %S" arg
 
@@ -258,7 +393,8 @@ let locate name extra =
 let usage () =
   prerr_endline
     "usage: main.exe [--keep] [--only ENTRY] [--jobs N] [--timeout SECONDS] \
-     [--bounds-only] [--any-size] [--expect-refuted PROPERTY] SPECS \
+     [--bounds-only] [--any-size] [--classify-checks [--check LINE:COL] \
+     [--expect CLASS]] [--expect-refuted PROPERTY] SPECS \
      FILE:(record|scanner/N|scanner-ox/N):SPEC:BOUND...";
   exit 2
 
@@ -272,6 +408,9 @@ let () =
     | "--timeout" :: n :: rest -> opts { o with timeout = int_of_string n } rest
     | "--bounds-only" :: rest -> opts { o with bounds_only = true } rest
     | "--any-size" :: rest -> opts { o with any_size = true } rest
+    | "--classify-checks" :: rest -> opts { o with classify = true } rest
+    | "--check" :: id :: rest -> opts { o with check = Some id } rest
+    | "--expect" :: c :: rest -> opts { o with expect = Some c } rest
     | "--expect-refuted" :: p :: rest ->
         opts { o with expect_refuted = Some p } rest
     | rest -> (o, rest)
@@ -285,6 +424,9 @@ let () =
         timeout = 600;
         bounds_only = false;
         any_size = false;
+        classify = false;
+        check = None;
+        expect = None;
         expect_refuted = None;
       }
       (List.tl (Array.to_list Sys.argv))
@@ -300,11 +442,25 @@ let () =
     | None -> failwith "3d.exe is neither in PATH nor in ~/.local/everparse/bin"
   in
   match args with
+  | _ :: (_ :: _ as targets) when o.classify ->
+      (* Every target is read before any runs: a misplaced option fails at
+         once. *)
+      let targets = List.map target_of_arg targets in
+      let classes = List.concat_map (classify_target ~z3 o) targets in
+      (* With [--expect CLASS], every check classified must be of it. *)
+      Option.iter
+        (fun c ->
+          if
+            classes = []
+            || List.exists (fun c' -> not (String.equal c c')) classes
+          then (
+            Fmt.epr "a check is not %s@." c;
+            exit 1))
+        o.expect
   | specs :: (_ :: _ as targets) -> (
+      let targets = List.map target_of_arg targets in
       let results =
-        List.concat_map
-          (fun t -> check_target ~z3 ~threed ~specs o (target_of_arg t))
-          targets
+        List.concat_map (fun t -> check_target ~z3 ~threed ~specs o t) targets
       in
       match o.expect_refuted with
       | None ->

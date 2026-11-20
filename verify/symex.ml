@@ -13,6 +13,10 @@ module IMap = Map.Make (Int)
 
 exception Unsupported of Location.t * string
 
+(* A [while] loop's int reference that its body makes something else: the
+   loop is walked again without tracking it. *)
+exception Untrack of Location.t * int
+
 let fail_unsupported loc fmt =
   Fmt.kstr (fun s -> raise (Unsupported (loc, s))) fmt
 
@@ -68,7 +72,15 @@ and ctx = {
   mutable window : (Smt.t * Smt.t) option;
   mutable declared : (string * Smt.sort) list;
   mutable loads : string list;
+  mutable checks : check list; (* the checks the walk met, latest first *)
+  mutable disabled : string option;
+      (* the check the walk takes as never failing *)
 }
+
+(* A check of the generated code: a condition that sends it to a rejection,
+   or a load that checks its own bounds. *)
+and check = { id : string; text : string; check_kind : check_kind }
+and check_kind = Branch | Checked_load
 
 and obligation = {
   kind : kind;
@@ -78,7 +90,12 @@ and obligation = {
   offset : Smt.t option;
 }
 
-and kind = Read of string * int | Window of string * int | Shift of string
+and kind =
+  | Read of string * int
+  | Window of string * int
+  | Shift of string
+  | Invariant of string
+
 and outcome = Returned of value | Raised of string
 
 type env = { locals : value SMap.t; scope : string list }
@@ -95,6 +112,7 @@ let describe_kind = function
       Fmt.str "%s reads %d byte%s inside the window" f w
         (if w = 1 then "" else "s")
   | Shift f -> Fmt.str "%s shifts by an amount in range" f
+  | Invariant r -> Fmt.str "the loop keeps %s at or above its start" r
 
 let pp_loc ppf (loc : Location.t) = Fmt.pf ppf "line %d" loc.loc_start.pos_lnum
 
@@ -176,6 +194,19 @@ let oblige ctx path loc kind ?offset cond =
       ctx.obligations <-
         { kind; loc; pc = pc path; cond; offset } :: ctx.obligations
 
+(* {1 Checks} *)
+
+let check_id (loc : Location.t) =
+  Fmt.str "%d:%d" loc.loc_start.pos_lnum
+    (loc.loc_start.pos_cnum - loc.loc_start.pos_bol)
+
+(* Records the check at [loc] and tells whether the walk disables it. *)
+let meet ctx loc check_kind text =
+  let id = check_id loc in
+  if not (List.exists (fun c -> String.equal c.id id) ctx.checks) then
+    ctx.checks <- { id; text; check_kind } :: ctx.checks;
+  match ctx.disabled with Some d -> String.equal d id | None -> false
+
 (* {1 Buffer reads} *)
 
 type endian = Be | Le
@@ -244,6 +275,12 @@ let unchecked name w endian kind =
 let checked name w endian kind =
   let run ctx path loc args k =
     match args with
+    | [ Buffer; off ] when meet ctx loc Checked_load name ->
+        (* Made unchecked: the bounds become an obligation. *)
+        let o = index_of loc off in
+        oblige ctx path loc (Read (name, w)) ~offset:o (in_bounds o w buflen);
+        read_window ctx path loc name o w;
+        k path (result_of ctx w endian kind o)
     | [ Buffer; off ] ->
         let o = index_of loc off in
         fork path (in_bounds o w buflen)
@@ -342,6 +379,10 @@ let continuation name answer =
 let accept = continuation "valid" true
 let reject = continuation "invalid" false
 
+(* The step scanners call their consumer by name, as [Step]. *)
+let step_continuations =
+  [ continuation "Step.valid" true; continuation "Step.invalid" false ]
+
 let compare64 loc a b =
   let a = i64 loc a and b = i64 loc b in
   Int
@@ -434,7 +475,7 @@ let ref_prims =
 
 let prims =
   let l =
-    ref_prims
+    step_continuations @ ref_prims
     @ [
         int_op "+" Smt.add;
         int_op "-" Smt.sub;
@@ -723,6 +764,26 @@ let havoc_store ctx path assigned =
       | _ -> IMap.add id Opaque store)
     path.store assigned
 
+(* Whether [e] rejects: it applies a rejecting continuation, fails, or is
+   the [refused] or [false] answer of a check. *)
+let is_rejection e =
+  match e.pexp_desc with
+  | Pexp_ident { txt = Lident "refused"; _ } -> true
+  | Pexp_construct ({ txt = Lident "false"; _ }, None) -> true
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
+      match Longident.flatten txt with
+      | [ ("invalid" | "invalid_arg" | "fail") ] | [ "Step"; "invalid" ] -> true
+      | _ -> false)
+  | _ -> false
+
+let rec disjuncts e =
+  match e.pexp_desc with
+  | Pexp_apply
+      ( { pexp_desc = Pexp_ident { txt = Lident "||"; _ }; _ },
+        [ (_, a); (_, b) ] ) ->
+      disjuncts a @ disjuncts b
+  | _ -> [ e ]
+
 let rec lookup_global ctx loc key =
   match Hashtbl.find_opt ctx.globals key with
   | None -> None
@@ -827,15 +888,30 @@ and eval ctx env path e k =
           eval_args ctx env path args [] (fun path args ->
               apply ctx path loc fv args k))
   | Pexp_ifthenelse (c, t, e_opt) ->
-      eval ctx env path c (fun path vc ->
-          fork path (bool c.pexp_loc vc)
-            (fun path -> eval ctx env path t k)
-            (fun path ->
-              match e_opt with
-              | Some e -> eval ctx env path e k
-              | None -> k path Unit))
+      let otherwise path =
+        match e_opt with Some e -> eval ctx env path e k | None -> k path Unit
+      in
+      if is_rejection t then
+        (* Each disjunct of a condition that rejects is a check. *)
+        let kept =
+          List.filter
+            (fun d ->
+              not
+                (meet ctx d.pexp_loc Branch (Pprintast.string_of_expression d)))
+            (disjuncts c)
+        in
+        eval_or ctx env path kept (fun path vc ->
+            fork path (bool c.pexp_loc vc)
+              (fun path -> eval ctx env path t k)
+              otherwise)
+      else
+        eval ctx env path c (fun path vc ->
+            fork path (bool c.pexp_loc vc)
+              (fun path -> eval ctx env path t k)
+              otherwise)
+  | Pexp_while (c, body) -> while_loop ctx env path c body k
   | Pexp_sequence (a, b) ->
-      eval ctx env path a (fun path va ->
+      eval_merged ctx env path a (fun path va ->
           match va with
           | Unit -> eval ctx env path b k
           | v -> fail_unsupported a.pexp_loc "a sequence of %s" (type_name v))
@@ -852,7 +928,7 @@ and bind_all ctx env path vbs locals k =
   match vbs with
   | [] -> k path locals
   | vb :: rest ->
-      eval ctx env path vb.pvb_expr (fun path v ->
+      eval_merged ctx env path vb.pvb_expr (fun path v ->
           let hint = pattern_name vb.pvb_pat in
           let v =
             match v with
@@ -861,6 +937,65 @@ and bind_all ctx env path vbs locals k =
           in
           let locals = bind_pattern vb.pvb_pat v locals in
           bind_all ctx env path rest locals k)
+
+(* [e] evaluated, its paths joined into one when no value they end with
+   can steer the code after them: unit, the answer of a consumer or a value
+   the walk does not track, in the result and in every reference. The
+   joined path holds when one of them does. A run of frames, each of whose
+   answers only goes on to the next consumer, then walks in paths that add
+   up instead of multiplying. *)
+and eval_merged ctx env path e k =
+  let ends = ref [] in
+  let outcomes = List.length ctx.outcomes in
+  eval ctx env path e (fun p v -> ends := (p, v) :: !ends);
+  (* The paths of [e] split the inputs of [path]: when none of them ended,
+     they hold together exactly when [path] does. *)
+  let complete = List.length ctx.outcomes = outcomes in
+  let untracked = function Unit | Answer _ | Opaque -> true | _ -> false in
+  let join a b =
+    match (a, b) with
+    | Unit, Unit -> Some Unit
+    | Answer x, Answer y when Bool.equal x y -> a |> Option.some
+    | _ when untracked a && untracked b -> Some Opaque
+    | _ -> if a == b then Some a else None
+  in
+  match List.rev !ends with
+  | [] -> ()
+  | [ (p, v) ] -> k p v
+  | (p0, v0) :: rest as all -> (
+      let value =
+        List.fold_left
+          (fun acc (_, v) -> Option.bind acc (fun a -> join a v))
+          (if untracked v0 then Some v0 else None)
+          rest
+      in
+      let store =
+        IMap.fold
+          (fun id v0 acc ->
+            Option.bind acc (fun acc ->
+                Option.map
+                  (fun v -> IMap.add id v acc)
+                  (List.fold_left
+                     (fun j (p, _) ->
+                       Option.bind j (fun j ->
+                           match IMap.find_opt id p.store with
+                           | Some v -> join j v
+                           | None -> None))
+                     (Some v0) rest)))
+          p0.store (Some IMap.empty)
+      in
+      let same_refs =
+        List.for_all
+          (fun (p, _) -> IMap.cardinal p.store = IMap.cardinal p0.store)
+          rest
+      in
+      match (value, store) with
+      | Some v, Some store when same_refs ->
+          if complete then k { path with store } v
+          else
+            let pc = Smt.or_ (List.map (fun (p, _) -> pc p) all) in
+            k { pc = [ pc ]; store } v
+      | _ -> List.iter (fun (p, v) -> k p v) all)
 
 and eval_args ctx env path args acc k =
   match args with
@@ -986,6 +1121,59 @@ and for_loop ctx env path pat lo hi body k =
           (Smt.extract 62 0 count) (Smt.int63 0)
       in
       k { path with store = exact_store path assigned steps n } Unit
+
+and eval_or ctx env path ds k =
+  match ds with
+  | [] -> k path (Bool Smt.False)
+  | d :: rest ->
+      eval ctx env path d (fun path v ->
+          fork path (bool d.pexp_loc v)
+            (fun path -> k path (Bool Smt.True))
+            (fun path -> eval_or ctx env path rest k))
+
+(* A [while] loop runs its body once, from any state that its invariant and
+   its condition allow, and goes on from any state its invariant allows and
+   its condition does not. The invariant states that each int reference the
+   body assigns is at or above its value before the loop, and the body must
+   keep it: an obligation of each path through it. Any other reference is a
+   value the walk stops tracking. *)
+and while_loop ?(untracked = []) ctx env path c body k =
+  let assigned = assigned_refs env body in
+  let x64 = Smt.sign_extend 1 in
+  let tracked, facts, store =
+    List.fold_left
+      (fun (tracked, facts, store) id ->
+        match IMap.find id path.store with
+        | Int r0 when not (List.mem id untracked) ->
+            let v = fresh_var ctx (Fmt.str "r%d" id) (Smt.Bv 63) in
+            ( (id, r0) :: tracked,
+              Smt.sge (x64 v) (x64 r0) :: facts,
+              IMap.add id (Int v) store )
+        | _ -> (tracked, facts, IMap.add id Opaque store))
+      ([], [], path.store) assigned
+  in
+  let entry = { (assume path (Smt.and_ facts)) with store } in
+  let saved = (ctx.obligations, ctx.outcomes) in
+  try
+    eval ctx env entry c (fun path vc ->
+        fork path (bool c.pexp_loc vc)
+          (fun path ->
+            eval ctx env path body (fun path _ ->
+                List.iter
+                  (fun (id, r0) ->
+                    match IMap.find id path.store with
+                    | Int v ->
+                        oblige ctx path c.pexp_loc
+                          (Invariant ("reference " ^ string_of_int id))
+                          (Smt.sge (x64 v) (x64 r0))
+                    | _ -> raise (Untrack (c.pexp_loc, id)))
+                  tracked))
+          (fun path -> k path Unit))
+  with
+  | Untrack (loc, id) when String.equal (check_id loc) (check_id c.pexp_loc) ->
+    ctx.obligations <- fst saved;
+    ctx.outcomes <- snd saved;
+    while_loop ~untracked:(id :: untracked) ctx env path c body k
 
 and eval_cases ctx env path loc v cases k =
   match cases with
@@ -1160,7 +1348,7 @@ let parse_expression src =
   Location.init lexbuf "<entry>";
   Parse.expression lexbuf
 
-let v ~file src =
+let v ?disabled ~file src =
   let ctx =
     {
       file;
@@ -1173,6 +1361,8 @@ let v ~file src =
       window = None;
       declared = [];
       loads = [];
+      checks = [];
+      disabled;
     }
   in
   load_structure ctx [] (parse_implementation ctx ~file src);
@@ -1221,5 +1411,7 @@ let run ctx env src =
 
 let defs ctx = List.rev ctx.defs
 let declared ctx = List.rev ctx.declared
+let checks ctx = List.rev ctx.checks
+let set_disabled ctx d = ctx.disabled <- d
 let loads ctx = ctx.loads
 let set_window ctx w = ctx.window <- w

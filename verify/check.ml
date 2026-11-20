@@ -8,6 +8,9 @@ type entry = {
   window : string * string;
   spec : string option;
   bound : int;
+  misuse : bool;
+      (* the entry takes any arguments: [Invalid_argument] for a misuse of
+         the API is an answer, not a failure *)
 }
 
 type verdict = Proved | Refuted of string | Unknown of string
@@ -279,6 +282,13 @@ let no_raise_property = "no input raises"
 (* That the precondition is satisfiable, that no path raises, and that each
    obligation holds. *)
 let bounds_jobs q obligations raised =
+  let raised =
+    if q.entry.misuse then
+      List.filter
+        (fun (_, msg) -> not (String.starts_with ~prefix:"invalid_arg" msg))
+        raised
+    else raised
+  in
   let satisfiable =
     bounds_job q ~witness:true ~property:"the precondition holds of some input"
       Smt.True
@@ -299,8 +309,8 @@ let bounds_jobs q obligations raised =
   in
   satisfiable :: no_raise :: reads
 
-let run ?stop ~z3 ~timeout ~jobs ~keep ~bounds_only ~any_size ~encodings ctx
-    (entry : entry) =
+let run ?stop ?(spec_only = false) ~z3 ~timeout ~jobs ~keep ~bounds_only
+    ~any_size ~encodings ctx (entry : entry) =
   let q, obligations, outcomes = walk ctx entry in
   let raised =
     List.filter_map
@@ -316,7 +326,8 @@ let run ?stop ~z3 ~timeout ~jobs ~keep ~bounds_only ~any_size ~encodings ctx
   in
   let results =
     solve_all ?stop ~z3 ~timeout ~jobs ~keep
-      (bounds_jobs q obligations raised @ equivalence)
+      ((if spec_only then [] else bounds_jobs q obligations raised)
+      @ equivalence)
   in
   let raises = String.concat " | " (List.map snd raised) in
   let results =
@@ -333,3 +344,103 @@ let run ?stop ~z3 ~timeout ~jobs ~keep ~bounds_only ~any_size ~encodings ctx
       results
   in
   (results, List.length outcomes)
+
+(* {1 Checks} *)
+
+type class_ =
+  | Safety of string * string
+    (* without the check, the property refuted, and its counterexample *)
+  | Semantics of string * string
+  | Redundant
+  | Redundant_for_safety (* no specification to compare the answers with *)
+  | Undecided of string
+
+let refuted results =
+  List.find_map
+    (fun r ->
+      match r.verdict with Refuted cex -> Some (r.property, cex) | _ -> None)
+    results
+
+let undecided results =
+  List.find_map
+    (fun r -> match r.verdict with Unknown why -> Some why | _ -> None)
+    results
+
+let accepts_of entry outcomes =
+  Smt.or_
+    (List.map (fun (pc, o) -> Smt.and_ [ pc; answer_of entry o ]) outcomes)
+
+(* Whether the walk of [entry] with the check [id] disabled answers as the
+   walk with every check does, on every input: one query per path of the
+   former, against the whole answer of the latter. Both walks read the
+   window only, so the answer holds for every length. *)
+let same_answers ?stop ~z3 ~timeout ~jobs ctx (entry : entry) id =
+  let q, _, original = walk ctx entry in
+  Symex.set_disabled ctx (Some id);
+  let _, _, modified = walk ctx entry in
+  Symex.set_disabled ctx None;
+  let before = accepts_of entry original in
+  let jobs_ =
+    List.mapi
+      (fun i (pc, o) ->
+        let after = answer_of entry o in
+        let goal = Smt.and_ [ pc; Smt.not_ (Smt.eq after before) ] in
+        {
+          property =
+            Fmt.str "path %d of the code without it answers as the code" i;
+          scripts =
+            [
+              script q goal
+                ~extra:[ ("with_check", before); ("without_check", after) ];
+            ];
+          names = [];
+          confirm = None;
+          bound = q.entry.bound;
+          witness = false;
+        })
+      modified
+  in
+  solve_all ?stop ~z3 ~timeout ~jobs ~keep:false jobs_
+
+(* [classify ~walk entry id] disables the check [id] and asks whether every
+   read stays in the buffer and in the window and no input raises, then
+   whether every answer stays the answer of the code with the check. The
+   code with every check answers as the specification (the equivalence
+   lane proves it), so an unchanged answer is the specification's. The
+   first refutation decides. *)
+let classify ~z3 ~timeout ~jobs ~walk (entry : entry) id =
+  let stop _ _ = true in
+  (* A loop invariant the code without the check does not keep fails the
+     proof, not the code: only a read or a raise is a refutation. *)
+  let is_access p = not (String.starts_with ~prefix:"the loop keeps" p) in
+  let ctx = walk () in
+  Symex.set_disabled ctx (Some id);
+  let bounds =
+    fst
+      (run
+         ~stop:(fun p r -> r && is_access p)
+         ~z3 ~timeout ~jobs ~keep:false ~bounds_only:true ~any_size:false
+         ~encodings:[] ctx entry)
+  in
+  let access = List.filter (fun (r : result) -> is_access r.property) bounds in
+  let invariant =
+    List.filter (fun (r : result) -> not (is_access r.property)) bounds
+  in
+  match (refuted access, undecided access, refuted invariant) with
+  | Some (p, cex), _, _ -> Safety (p, cex)
+  | None, Some why, _ -> Undecided why
+  | None, None, Some (p, cex) ->
+      Fmt.kstr
+        (fun s -> Undecided s)
+        "no read is refuted, but %s fails: %s" p cex
+  | None, None, None -> (
+      match entry.spec with
+      | None -> Redundant_for_safety
+      | Some _ -> (
+          let answers =
+            same_answers ~stop ~z3 ~timeout ~jobs (walk ()) entry id
+          in
+          match (refuted answers, undecided answers) with
+          | Some (p, cex), _ -> Semantics (p, cex)
+          | None, Some why -> Undecided why
+          | None, None -> Redundant))
