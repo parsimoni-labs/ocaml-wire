@@ -124,7 +124,11 @@ The invariants above hold for the generated code as follows.
   borrow bytes from the next. The generator adds the codec's constant
   offsets and sizes with saturating arithmetic, capped at
   `Sys.max_string_length + 1`. No buffer is that long, so a prefix that ends
-  there fails its bound check, and no sum wraps.
+  there fails its bound check, and no sum wraps. The entry of `fold` and
+  `decode` checks `off` and `len` against the buffer. Where the walk starts
+  with the bound check of a prefix, that check rejects a negative `len`, and
+  `len > Bytes.length buf - off` then rejects an `off` past the buffer, so the
+  entry tests `off < 0` and that bound only.
 - **Arithmetic agrees with the codec.** An addition, subtraction or product
   whose operands' ranges keep it inside the native int is written as plain
   arithmetic; any other is checked, and an overflow rejects the record, or

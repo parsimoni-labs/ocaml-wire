@@ -1651,6 +1651,30 @@ let test_decisions () =
   | _ -> Alcotest.fail "decisions of a refused codec"
   | exception Invalid_argument _ -> ()
 
+(* The entry of a scan tests [len < 0] and [off > Bytes.length buf] only when
+   the walk does not start with the bound check of a prefix: that check
+   rejects a negative [len], and [len > Bytes.length buf - off] then rejects
+   an [off] past the buffer. *)
+let test_entry_bounds () =
+  let full = "if off < 0 || len < 0 || off > Bytes.length buf ||" in
+  let short = "if off < 0 || len > Bytes.length buf - off then" in
+  let stack = Wire_ocaml.scanner ~codec:"c" Packet_stack.codec in
+  let ox = Wire_ocaml.scanner ~target:`OxCaml ~codec:"c" Packet_stack.codec in
+  List.iter
+    (fun (what, src) ->
+      Alcotest.(check bool)
+        (what ^ ": the short entry")
+        true (contains src short);
+      Alcotest.(check bool) (what ^ ": no full entry") false (contains src full))
+    [ ("OCaml", stack); ("OxCaml", ox) ];
+  let region =
+    Codec.v "Region" Fun.id
+      Codec.[ Field.v "a" (nested ~size:(int 4) uint32be) $ Fun.id ]
+  in
+  Alcotest.(check bool)
+    "a walk that starts with a region keeps both" true
+    (contains (Wire_ocaml.scanner ~codec:"c" region) full)
+
 (* The structured cases' corpora, and the EverParse C validator when built. *)
 let test_scanners () =
   List.iter
@@ -1783,6 +1807,7 @@ let suite =
       Alcotest.test_case "a word shared across prefixes" `Quick
         test_shared_words;
       Alcotest.test_case "the scanner's decisions" `Quick test_decisions;
+      Alcotest.test_case "the entry's bounds" `Quick test_entry_bounds;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;

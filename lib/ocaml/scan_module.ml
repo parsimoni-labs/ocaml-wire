@@ -181,10 +181,20 @@ let rec fixed_need = function
   | Gate (_, _, _, inner) :: _ -> fixed_need inner
   | _ -> 0
 
+(* [true] when the walk of [plan] starts with the bound check of a prefix,
+   which runs before any read and rejects a negative length. *)
+let checks_len plan =
+  match plan.nodes with Prefix (_, n) :: _ -> n > 0 | _ -> false
+
+(* The entry tests [len < 0] and [off > Bytes.length buf] unless
+   {!checks_len} holds: then the walk's first check rejects a negative [len],
+   and [len > Bytes.length buf - off] an [off] past the buffer. *)
 let pp_entry ?cuts ~name ~scope s ~reject ~accept =
-  Fmt.pf s.ppf
-    "if off < 0 || len < 0 || off > Bytes.length buf || len > Bytes.length buf \
-     - off then %s else@\n"
+  Fmt.pf s.ppf "if %s then %s else@\n"
+    (if checks_len s.plan then "off < 0 || len > Bytes.length buf - off"
+     else
+       "off < 0 || len < 0 || off > Bytes.length buf || len > Bytes.length buf \
+        - off")
     reject;
   Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
     (if s.m.num = Unboxed then "U.of_int off" else "off")

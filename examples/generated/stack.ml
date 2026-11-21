@@ -275,9 +275,7 @@ let[@inline always] fold_record ~buf ~base ~stop ~invalid ~valid =
         ~ipv4_udp_checksum:0 ~ipv4_opaque_present:false
 
 let[@inline always] fold buf off len ~invalid ~valid =
-  if
-    off < 0 || len < 0 || off > Bytes.length buf || len > Bytes.length buf - off
-  then invalid ()
+  if off < 0 || len > Bytes.length buf - off then invalid ()
   else
     let base = off in
     let stop = len in
