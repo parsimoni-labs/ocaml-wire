@@ -137,6 +137,16 @@ built-in integer `*`, so an older one no longer checks them.
   loaded in the loop over short frames, and each one loaded lies in the
   bytes the loop knows (`ahead_in`). `frame_walks_frames`: both branches
   walk the frames the counted loop did.
+- `Plan.Join.join_correct`: the code after a dispatch written once, in a
+  join every case jumps to with the position it ended at (`Joined`), walks
+  from the state before the cases, its position a fresh variable `e` and
+  no byte known (`join_state`, Emitter.define_join), and accepts what the
+  codec accepts from that position, binding the same values and `e`, never
+  faulting. Its premises are that the case bound only variables the walk
+  before it had not, which `wf` gives, and that the walk's ranges name only
+  variables it bound, which `inv` does not state (below). The model's `exec` still copies the code after a dispatch into
+  each case (`Copied`); `make plans` counts the joined dispatches, whose
+  checks after the join are tested from a variable position (above).
 - `Plan.Range.range_correct`: for every word of `bits` bits, bounds that
   `range_ok` accepts hold exactly where the two checks do
   (`Plan.Word.word_range`, here for the bounds the plans use).
@@ -199,9 +209,9 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 
 ## What is not covered
 
-- The join of a dispatch: the model continues each case into the code after
-  it (the emitter's copy mode); the join's state forgets more, which only
-  makes it decide less.
+- That the walk's ranges name only variables it bound, the premise
+  `join_correct` takes: `inv` does not carry it, so it is not proved of
+  the state `exec` reaches before a dispatch.
 - `Planner.nonnegative_in` beyond a range or a passed `a >= b`; products in
   ranges (the planner bounds them by their corners, the model does not).
 - That a walk reads a field loaded ahead of it from the variable the loop
@@ -230,10 +240,6 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 `Wire_ocaml.Plan.decisions` hands out decisions the model has no notion of
 yet; each is the next thing to model and check against the plans.
 
-- The join (`Joined` or `Copied`): the model copies the code after a
-  dispatch into each case; a join's state forgets the case's facts and
-  makes the position a variable, which the prefix check above only accepts
-  where it tests.
 - Cuts (`Cut`): a function cut out of a walk keeps its window and the
   bytes known there; the model has no functions.
 - How values are held (`Walk.values`): the model's integers are
@@ -313,6 +319,10 @@ runs the second of two cases where the first holds.
 The mutant `range-top-bits` accepts a range of two fields below the top
 bits of their word, which makes `range_correct` fail; its witness is a byte
 whose checks hold outside the bounds, the bits above the fields set.
+
+The mutant `join-known` keeps in the join the bytes the walk before the
+cases knew, though the join's position is where a case ended; it makes
+`join_holds` fail.
 
 The mutants `o1-drop-negative`, `o1-drop-wrap` and `o1-drop-unchecked`
 remove one premise each of the O1 rule that leaves a span's bound to the

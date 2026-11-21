@@ -366,6 +366,9 @@ let loops = Array.make 3 0
 (* The dispatch trees checked. *)
 let trees = ref 0
 
+(* Those that write the code after them once, in a join. *)
+let joined = ref 0
+
 (* The emitter's decisions for a codec the model does not justify. *)
 let findings = ref []
 
@@ -573,6 +576,7 @@ let add : type a. string -> a Wire.Codec.t -> unit =
               in
               let choice = if !fabricate then swap g.choice else g.choice in
               trees := !trees + 1;
+              if g.join = P.Joined then incr joined;
               if
                 g.cases <> List.length g.conditions
                 || not
@@ -912,7 +916,8 @@ let () =
     (List.length !check_findings);
   Fmt.epr "loops: %d frame loops, %d of four frames, %d fields read ahead@."
     loops.(0) loops.(1) loops.(2);
-  Fmt.epr "trees: %d dispatch trees, %d atoms@." !trees (Hashtbl.length atoms);
+  Fmt.epr "trees: %d dispatch trees, %d atoms, %d joined@." !trees
+    (Hashtbl.length atoms) !joined;
   Fmt.epr "ranges: %d ranges of bitfields@." !ranges;
   Fmt.epr
     "words: %d shared words, %d held over from a prefix before, %d plans with \
