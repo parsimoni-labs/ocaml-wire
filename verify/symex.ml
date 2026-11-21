@@ -72,6 +72,9 @@ and ctx = {
   mutable window : (Smt.t * Smt.t) option;
   mutable declared : (string * Smt.sort) list;
   mutable loads : string list;
+  loaded : (Smt.t * int * bool, Smt.t) Hashtbl.t;
+      (* each load by its offset, width and byte order: the buffer does not
+         change, so two loads of the same bytes are one value *)
   mutable checks : check list; (* the checks the walk met, latest first *)
   mutable disabled : string option;
   mutable contracts : (string * expression) list;
@@ -252,14 +255,23 @@ let read_window ctx path loc name o w =
            ])
 
 (* A load is named, so a query that does not need two loads of one byte to
-   agree can leave it unconstrained (see [loads]). *)
+   agree can leave it unconstrained (see [loads]); a load of the bytes an
+   earlier one read, at the same offset term, is that load. *)
 let result_of ctx w endian kind o =
-  ctx.fresh <- ctx.fresh + 1;
-  let n = Fmt.str "|load~%d|" ctx.fresh in
-  let t = load o w endian in
-  ctx.defs <- (n, t) :: ctx.defs;
-  ctx.loads <- n :: ctx.loads;
-  let raw = Smt.name n (Smt.sort t) in
+  let key = (o, w, endian = Be) in
+  let raw =
+    match Hashtbl.find_opt ctx.loaded key with
+    | Some raw -> raw
+    | None ->
+        ctx.fresh <- ctx.fresh + 1;
+        let n = Fmt.str "|load~%d|" ctx.fresh in
+        let t = load o w endian in
+        ctx.defs <- (n, t) :: ctx.defs;
+        ctx.loads <- n :: ctx.loads;
+        let raw = Smt.name n (Smt.sort t) in
+        Hashtbl.replace ctx.loaded key raw;
+        raw
+  in
   match kind with
   | `U -> Int (Smt.zero_extend (63 - (8 * w)) raw)
   | `I32 -> I32 raw
@@ -1387,6 +1399,7 @@ let v ?disabled ~file src =
       window = None;
       declared = [];
       loads = [];
+      loaded = Hashtbl.create 17;
       checks = [];
       disabled;
       contracts = [];
