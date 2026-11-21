@@ -73,6 +73,11 @@ of the OxCaml scanner, and checks three things of each.
   bounds are `c * 2^shift + d * 2^shift'` and `(c + 1) * 2^shift - 1`
   (`Plan.Decide.range_justified`), which `Plan.Range.range_correct` proves
   test exactly the two checks.
+- Every walk holds values as `Plan.Values` models for its run: `int` in
+  the scanner, `int64` in its step functions, `int64_u` on OxCaml
+  (`Walk.values`); every signed field is at most 64 bits wide and every
+  bitfield lies inside its word, the premises of `sign_extend` and
+  `view_raw`.
 
 The control claims every bound is left to the next check, moves every word
 one byte on and every tested run untested, which the model must refuse for
@@ -147,6 +152,17 @@ built-in integer `*`, so an older one no longer checks them.
   variables it bound, which `inv` does not state (below). The model's `exec` still copies the code after a dispatch into
   each case (`Copied`); `make plans` counts the joined dispatches, whose
   checks after the join are tested from a variable position (above).
+- `Plan.Values`: a value of the 63-bit int held as an `int64` or
+  `int64_u` is itself (`signed_of_int`); plain `add`, `sub` and `mul` of
+  two such values, where the result lies in the 63-bit int as the
+  planner's ranges prove before writing them plain, give the result
+  (`plain_ops`); checked arithmetic, through `to_int`, gets back the
+  operands the `int` walk has (`checked_operands`), so the step and OxCaml
+  walks reject and hold what the `int` walk does. The sign extension
+  `shift_right (shift_left v (64 - w)) (64 - w)` of a word whose low `w`
+  bits are a field's, whatever it holds above them, is the field's signed
+  value (`sign_extend`), and a bitfield read from a word that holds more
+  than its bytes above them is the bitfield of its bytes (`view_raw`).
 - `Plan.Range.range_correct`: for every word of `bits` bits, bounds that
   `range_ok` accepts hold exactly where the two checks do
   (`Plan.Word.word_range`, here for the bounds the plans use).
@@ -200,6 +216,14 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   overflow (`Plan.Frames` proves it for `fold_frames`; a region's window
   lies in the one around it).
 
+- OCaml's `Int64` (and `Int64_u`, whose operations are the same on the
+  pattern), from its manual: `add`, `sub` and `mul` are modulo 2^64,
+  `of_int` sign-extends, `shift_left` multiplies the pattern by a power of
+  two modulo 2^64, `shift_right` divides the signed value rounding down,
+  `shift_right_logical` divides the pattern and `logand` with `2^w - 1`
+  keeps its low `w` bits. `Plan.Values` states them as operations on the
+  pattern.
+
 ## Where the model departs from the code
 
 - On entering a region the model clears the bounds a dispatch checked
@@ -229,11 +253,12 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   shifts right, casts) become variables it knows nothing of, and signed
   fields keep the model's unsigned range; whether a run of optional fields
   always runs a case is not decided, both readings are walked.
-- The int64 form of the step scanner (`Boxed`): the model's integers are
-  mathematical and its ranges those of the 63-bit int, which is the
-  narrower. Of its shared words, the fields read unsigned are modelled;
-  signed fields and bitfields take the unmasked word (`raw`) and mask or
-  sign-extend it after, which `Plan.Word` covers only for `word_range`.
+- The int64 form of the step scanner (`Boxed`) runs `exec` over
+  mathematical integers: `Plan.Values` proves each operation the emitter
+  writes holds the value `exec` computes, operation by operation, but
+  `exec` is not run over patterns. The `int` form's sign extension on
+  63 bits (`Sys.int_size - w`) and Wire_runtime.Arith's overflow tests
+  are not proved; `ev` assumes the latter.
 
 ## Next proof targets
 
@@ -242,10 +267,6 @@ yet; each is the next thing to model and check against the plans.
 
 - Cuts (`Cut`): a function cut out of a walk keeps its window and the
   bytes known there; the model has no functions.
-- How values are held (`Walk.values`): the model's integers are
-  mathematical and its ranges the 63-bit int's; `int64` and `int64_u`
-  arithmetic, and the masking of signed fields and bitfields read raw from
-  a shared word, are not modelled.
 
 ## Past defects
 
@@ -323,6 +344,10 @@ whose checks hold outside the bounds, the bits above the fields set.
 The mutant `join-known` keeps in the join the bytes the walk before the
 cases knew, though the join's position is where a case ended; it makes
 `join_holds` fail.
+
+The mutant `sign-shift` writes the int64 sign extension with the shift of
+a 63-bit int, which leaves a field's sign bit below the word's: it makes
+`sign_extend` fail.
 
 The mutants `o1-drop-negative`, `o1-drop-wrap` and `o1-drop-unchecked`
 remove one premise each of the O1 rule that leaves a span's bound to the

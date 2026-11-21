@@ -342,6 +342,9 @@ let range_justified p ~first ~second ~lo ~hi =
   | _ -> false
 
 let ranges = ref 0
+
+(* The walks whose values were checked. *)
+let walks = ref 0
 let plans = ref []
 let refused = ref []
 
@@ -565,6 +568,48 @@ let add : type a. string -> a Wire.Codec.t -> unit =
                      r.second)
           | _ -> ())
         all;
+      (* How each walk holds values, by run: [int] in the scanner, [int64]
+         in the step functions, [int64_u] on OxCaml; and the fields whose
+         raw word Plan.Values masks or sign-extends: a signed integer of at
+         most 64 bits, a bitfield inside its word. *)
+      List.iteri
+        (fun i run ->
+          List.iter
+            (function
+              | P.Walk w ->
+                  let step =
+                    String.length w.name >= 4
+                    && String.sub w.name (String.length w.name - 4) 4 = "step"
+                  in
+                  let expected =
+                    match i with
+                    | 2 -> `Int64_u
+                    | 1 when step -> `Int64
+                    | _ -> `Int
+                  in
+                  let values = if !fabricate then `Int else w.values in
+                  walks := !walks + 1;
+                  if values <> expected then
+                    found
+                      (Fmt.str "walk %s holds values as %a" w.name P.pp_decision
+                         (P.Walk w))
+              | _ -> ())
+            run)
+        runs;
+      List.iter
+        (fun (f : P.field) ->
+          match f.store with
+          | L.Bits { base; shift; width } ->
+              let bits =
+                match base with T.U8 -> 8 | T.U16 _ -> 16 | T.U32 _ -> 32
+              in
+              if shift + width > bits || width < 1 then
+                found (Fmt.str "bitfield %s past its word" f.id)
+          | L.Int { width; signed = true; _ } ->
+              if width < 1 || width > 64 then
+                found (Fmt.str "signed field %s of %d bits" f.id width)
+          | _ -> ())
+        (plan_fields (P.nodes p));
       (* Each dispatch's tree against the conditions it decided, as
          Plan.Tree reads them; the control swaps every test's branches. *)
       List.iter
@@ -918,7 +963,7 @@ let () =
     loops.(0) loops.(1) loops.(2);
   Fmt.epr "trees: %d dispatch trees, %d atoms, %d joined@." !trees
     (Hashtbl.length atoms) !joined;
-  Fmt.epr "ranges: %d ranges of bitfields@." !ranges;
+  Fmt.epr "ranges: %d ranges of bitfields; values: %d walks@." !ranges !walks;
   Fmt.epr
     "words: %d shared words, %d held over from a prefix before, %d plans with \
      one the model does not justify, %d held across windows@."
