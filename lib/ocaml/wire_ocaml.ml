@@ -152,7 +152,7 @@ module Plan = struct
         need : int;
         frames : int;
         short : short_frames option;
-        ahead : string list;
+        ahead : (string * int * int) list;
       }
 
   let pp_decision = Decision.pp

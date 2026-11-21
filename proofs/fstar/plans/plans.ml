@@ -295,6 +295,10 @@ let held = ref 0
 let check_findings = ref []
 let checks = Array.make 5 0
 
+(* The frame loops, those of four frames an iteration, and the fields they
+   load ahead. *)
+let loops = Array.make 3 0
+
 (* The emitter's decisions for a codec the model does not justify. *)
 let findings = ref []
 
@@ -319,7 +323,13 @@ let add : type a. string -> a Wire.Codec.t -> unit =
       if not (S.wf sc d && S.wf sc d') then not_wf := name :: !not_wf;
       (* The decisions of the scanner, and of its step form, each with the
          decisions of its own walks. *)
-      let runs = [ P.decisions c; P.decisions ~step:"Step" c ] in
+      let runs =
+        [
+          P.decisions c;
+          P.decisions ~step:"Step" c;
+          P.decisions ~target:`OxCaml c;
+        ]
+      in
       let all = List.concat runs in
       (* A window's length is the size variable of the region that opened
          it, or the record's own: so many regions deep. *)
@@ -470,6 +480,73 @@ let add : type a. string -> a Wire.Codec.t -> unit =
                Fmt.(option ~none:(any "nothing") pp_value)
                g.ghoisted))
         (D.gates_unjustified (D.gates_of events) gates);
+      (* A frame loop as Plan.Loop.frame_walks models it: the frames shorter
+         than its [need] bytes walked by [fold] or by a walk of its own that
+         knows none, the others by a walk that knows [need], and the fields
+         it loads ahead, four frames an iteration, inside those bytes. *)
+      let frame_loop run ~name ~need:lneed ~frames ~short ~ahead =
+        let short, ahead = if !fabricate then (None, []) else (short, ahead) in
+        loops.(0) <- loops.(0) + 1;
+        if frames = 4 then loops.(1) <- loops.(1) + 1;
+        loops.(2) <- loops.(2) + List.length ahead;
+        if Prims.op_Greater (z lneed) need then
+          found
+            (Fmt.str
+               "frame loop %s knows %d bytes, past the %s its leading fields \
+                need"
+               name lneed (Prims.to_string need));
+        if frames <> 1 && frames <> 4 then
+          found
+            (Fmt.str "frame loop %s walks %d frames an iteration" name frames);
+        if lneed = 0 <> Option.is_none short then
+          found
+            (Fmt.str "frame loop %s knows %d bytes and %s short frames" name
+               lneed
+               (if lneed = 0 then "walks" else "does not walk"));
+        let walks =
+          List.filter_map
+            (function P.Walk w when w.name = name -> Some w.known | _ -> None)
+            run
+        in
+        List.iter
+          (fun known ->
+            if known <> lneed && not (known = 0 && short = Some P.Walked) then
+              found
+                (Fmt.str "frame loop %s walks a frame knowing %d bytes" name
+                   known))
+          walks;
+        if not (List.mem lneed walks) then
+          found
+            (Fmt.str "frame loop %s has no walk knowing its %d bytes" name lneed);
+        (match short with
+        | Some (P.Apart | P.Inline)
+          when not
+                 (List.exists
+                    (function
+                      | P.Walk { name = "fold" | "fold_step"; known; _ } ->
+                          known = 0
+                      | _ -> false)
+                    run) ->
+            found (Fmt.str "frame loop %s walks short frames by no fold" name)
+        | _ -> ());
+        if ahead <> [] then begin
+          if frames <> 4 then
+            found
+              (Fmt.str "frame loop %s reads ahead one frame an iteration" name);
+          if
+            not
+              (D.ahead_justified (z lneed) d
+                 (List.map (fun (v, k, n) -> (z (var v), (z k, z n))) ahead))
+          then
+            found
+              (Fmt.str "frame loop %s reads %s ahead, not in its %d bytes" name
+                 (String.concat ", "
+                    (List.map
+                       (fun (v, k, n) -> Fmt.str "%s (%d at %d)" v n k)
+                       ahead))
+                 lneed)
+        end
+      in
       List.iter
         (fun run ->
           let loops =
@@ -479,17 +556,8 @@ let add : type a. string -> a Wire.Codec.t -> unit =
           in
           List.iter
             (function
-              | P.Frame_loop l ->
-                  if Prims.op_Greater (z l.need) need then
-                    found
-                      (Fmt.str
-                         "frame loop %s knows %d bytes, past the %s its \
-                          leading fields need"
-                         l.name l.need (Prims.to_string need));
-                  if l.frames <> 1 && l.frames <> 4 then
-                    found
-                      (Fmt.str "frame loop %s walks %d frames an iteration"
-                         l.name l.frames)
+              | P.Frame_loop { name; need; frames; short; ahead } ->
+                  frame_loop run ~name ~need ~frames ~short ~ahead
               | P.Walk w ->
                   if w.known <> 0 && not (List.mem w.known loops) then
                     found
@@ -618,6 +686,24 @@ let () =
   in
   let mode = if Array.length Sys.argv > 2 then Sys.argv.(2) else "wf" in
   fabricate := mode = "control";
+  if mode = "dump" then begin
+    let dump name runs =
+      List.iter
+        (fun (target, ds) ->
+          Fmt.pr "@[<v2>%s, %s:@,%a@]@." name target
+            Fmt.(list ~sep:cut P.pp_decision)
+            ds)
+        runs
+    in
+    let c = Packet_stack.codec in
+    dump "packet stack"
+      [
+        ("ocaml", P.decisions c);
+        ("step", P.decisions ~step:"Step" c);
+        ("oxcaml", P.decisions ~target:`OxCaml c);
+      ];
+    exit 0
+  end;
   if mode = "leak" then add "hoisted bound in a region (#504)" Leak.codec
   else begin
     List.iter
@@ -718,6 +804,8 @@ let () =
      justify@."
     checks.(0) checks.(1) checks.(2) checks.(3) checks.(4)
     (List.length !check_findings);
+  Fmt.epr "loops: %d frame loops, %d of four frames, %d fields read ahead@."
+    loops.(0) loops.(1) loops.(2);
   Fmt.epr
     "words: %d shared words, %d held over from a prefix before, %d plans with \
      one the model does not justify, %d held across windows@."

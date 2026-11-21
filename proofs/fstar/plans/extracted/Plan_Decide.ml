@@ -280,3 +280,29 @@ let rec fixed_need (l : (Plan_Scan.node) list) : Prims.int =
     | tmp -> Prims.int_zero
   )
 
+let rec lead_fields (at : Prims.int) (l : (Plan_Scan.node) list) : ((Prims.int * (Prims.int * Prims.int))) list =
+  (match l with
+    | ((Plan_Scan.Prefix (fs, size)) :: r) -> (FStar_List_Tot_Base.op_At (FStar_List_Tot_Base.map (fun f -> ((f).Plan_Scan.id, ((Prims.op_Plus at (f).Plan_Scan.off), (f).Plan_Scan.width))) fs) (lead_fields (Prims.op_Plus at size) r))
+    | ((Plan_Scan.Test (tmp)) :: r) -> (lead_fields at r)
+    | ((Plan_Scan.Gate (tmp, ((tmp1, b) :: tmp2), tmp3)) :: tmp4) -> (lead_fields at b)
+    | ((Plan_Scan.Gate (tmp, [], (Some (b)))) :: tmp1) -> (lead_fields at b)
+    | tmp -> []
+  )
+
+let rec ahead_in (need : Prims.int) (ah : ((Prims.int * Prims.int)) list) : bool =
+  (match ah with
+    | [] -> true
+    | ((k, wd) :: r) -> ((Prims.op_Less_Equals (Prims.op_Plus k wd) need) && (ahead_in need r))
+  )
+
+let rec ahead_at (lead : ((Prims.int * (Prims.int * Prims.int))) list) (ah : ((Prims.int * (Prims.int * Prims.int))) list) : bool =
+  (match ah with
+    | [] -> true
+    | ((v, kw) :: r) -> (((=) (FStar_List_Tot_Base.assoc v lead) (Some (kw))) && (ahead_at lead r))
+  )
+
+let ahead_justified (need : Prims.int) (l : (Plan_Scan.node) list) (ah : ((Prims.int * (Prims.int * Prims.int))) list) : bool =
+  ((ahead_at (lead_fields Prims.int_zero l) ah) && (ahead_in need (FStar_List_Tot_Base.map (fun x -> (match x with
+    | (u__1, u__2) -> u__2
+  )) ah)))
+

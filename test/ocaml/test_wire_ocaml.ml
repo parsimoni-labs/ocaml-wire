@@ -1636,7 +1636,7 @@ let test_decisions () =
           need = 34;
           frames = 4;
           short = Some Inline;
-          ahead = [ "f14_ipv4_protocol" ];
+          ahead = [ ("f14_ipv4_protocol", 23, 1) ];
         } ->
         true
     | _ -> false);

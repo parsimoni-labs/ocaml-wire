@@ -258,20 +258,27 @@ let rec tested = function
   | Region (_, _, body) :: rest -> tested body @ tested rest
   | (Prefix _ | Span _ | Test _) :: rest -> tested rest
 
+(* The bytes {!read_ahead} loads for the field [f]. *)
+let loaded (f : field) =
+  match f.store with Int { width; _ } -> width / 8 | _ -> 0
+
 (* The fields an unrolled frame loop reads for every frame of an iteration
    before the walk of its first frame: those the walk tests to choose an
    optional field, in the [need] bytes every frame has, and inside an optional
    field itself, which the walk reaches after checks of its own (it loads the
-   leading fields first anyway). Each is a variable and its value at a frame
-   start. A frame's walk then dispatches on a value loaded before the previous
-   frames' branches, so a mispredicted branch of one frame does not delay the
-   next frame's choice by a load. *)
+   leading fields first anyway). Each is a variable, the field's offset and
+   the bytes loaded, with its value at a frame start. A frame's walk then
+   dispatches on a value loaded before the previous frames' branches, so a
+   mispredicted branch of one frame does not delay the next frame's choice by
+   a load. *)
 let read_aheads s ~need =
   let tested = tested s.plan.nodes in
   List.filter_map
     (fun ((f : field), k) ->
       if Sset.mem f.id s.m.live && List.mem f.id tested then
-        Option.map (fun ahead -> (f.id, ahead)) (read_ahead s.m ~size:need ~k f)
+        Option.map
+          (fun ahead -> ((f.id, k, loaded f), ahead))
+          (read_ahead s.m ~size:need ~k f)
       else None)
     (gated_fields ~gated:false 0 s.plan.nodes)
 

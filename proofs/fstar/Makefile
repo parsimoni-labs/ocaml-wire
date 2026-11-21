@@ -27,7 +27,8 @@ CACHED = --cache_checked_modules --cache_dir $(CACHE)
 FSTAR_FLAGS = $(FLAGS) $(CACHED) --include .
 
 MODEL = Plan.Expr.fst Plan.Sum.fst Plan.Scan.fst Plan.Proof.fst
-MODULES = $(MODEL) Plan.Word.fst Plan.Bytes.fst Plan.Frames.fst Spec.Ipv4.fst Plan.Decide.fst
+MODULES = $(MODEL) Plan.Word.fst Plan.Bytes.fst Plan.Frames.fst Spec.Ipv4.fst Plan.Decide.fst \
+  Plan.Loop.fst
 
 # defects/Defect.<name>.Buggy.fst fails on one line (F* may report a
 # conjunction there as several errors), defects/Defect.<name>.Fixed.fst
@@ -40,6 +41,7 @@ DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
 MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
   frames-quad-overlap frames-quad-guard word-lor-overlap word-mask-dropped \
   prefix-wrap region-bounded-leak region-unchecked region-inexact \
+  short-known ahead-short \
   word-past-check word-before-window held-leak
 
 .PHONY: verify defects plans extract check-extract clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)

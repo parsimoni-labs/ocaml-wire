@@ -71,7 +71,7 @@ type t =
       need : int;
       frames : int;
       short : short_frames option;
-      ahead : string list;
+      ahead : (string * int * int) list;
     }
 
 val pp : Format.formatter -> t -> unit

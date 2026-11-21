@@ -19,7 +19,8 @@ make -C proofs/fstar check-extract # plans/extracted is the model
 `Wire_ocaml.Plan` makes of the sampled codecs of the differential fuzzer,
 its structured scan cases, the `Defect.PrefixWrap` codec, the packet stack
 of `examples/net` and the `huge`, `deep` and `nested` schemas of
-`test/ocaml`, and checks three things of each.
+`test/ocaml`, and the decisions of the OCaml scanner, of its step form and
+of the OxCaml scanner, and checks three things of each.
 
 - `wf` holds of the plan: every variable bound once and read after it is
   bound, the premise `scanner_correct` takes of the planner. F* evaluates
@@ -51,7 +52,13 @@ of `examples/net` and the `huge`, `deep` and `nested` schemas of
   starts with no byte known, or with the bytes its frame loop's `stride`
   test ensures (`Frame_loop`), which are no more than the model's
   `fixed_need`, and walks one frame or four an iteration, the loops
-  `Plan.Frames` proves.
+  `Plan.Frames` proves. A frame loop is the one `Plan.Loop.frame_walks`
+  models: it walks the frames shorter than its bytes (`short`) by `fold`
+  or by a walk of its own that knows no byte, and only when it knows some,
+  the others by a walk that knows them all; each field it loads ahead
+  (`ahead`), only four frames an iteration, is one of the model's
+  `lead_fields`, at the offset and of the width the walk reads it at,
+  inside the bytes the loop knows (`Plan.Decide.ahead_justified`).
 
 The control claims every bound is left to the next check, moves every word
 one byte on and every tested run untested, which the model must refuse for
@@ -107,6 +114,15 @@ built-in integer `*`, so an older one no longer checks them.
   frame guard each frame lies in the buffer and the cursor arithmetic stays
   in the native int; each frame is its own window, so a short frame cannot
   borrow bytes from the next.
+- `Plan.Loop.frame_loop_correct`: behind the frame guard, every frame
+  the loop of `fold_frames` walks, one an iteration or four, lies in the
+  buffer; its walk, from the bytes the loop gives it as known (none for a
+  frame shorter than the leading fields, `frame_known`), accepts what the
+  codec accepts in the frame and never faults; and every field the OxCaml
+  loop loads ahead of the walk (922e2bce) lies in that frame: none is
+  loaded in the loop over short frames, and each one loaded lies in the
+  bytes the loop knows (`ahead_in`). `frame_walks_frames`: both branches
+  walk the frames the counted loop did.
 - `Spec.Ipv4.scanner_is_3d` (M3): for a plan of the IPv4 header's first
   four bytes and checks, the generated walk accepts exactly the inputs the
   LowParse parser EverParse builds for the same 3D accepts.
@@ -163,6 +179,10 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   makes it decide less.
 - `Planner.nonnegative_in` beyond a range or a passed `a >= b`; products in
   ranges (the planner bounds them by their corners, the model does not).
+- That a walk reads a field loaded ahead of it from the variable the loop
+  bound instead of loading it: `make plans` checks the loop loads the field
+  from the bytes the model's walk reads it at, but `exec` is not run with
+  the field bound beforehand.
 - Cuts into functions, the `bounded` key's textual form, OxCaml's unboxed
   integers, bitfield views other than `word_range`, the Rust backend.
 - In `make plans`, expressions the model cannot write (division, masks,
@@ -197,9 +217,6 @@ yet; each is the next thing to model and check against the plans.
   mathematical and its ranges the 63-bit int's; `int64` and `int64_u`
   arithmetic, and the masking of signed fields and bitfields read raw from
   a shared word, are not modelled.
-- Short frames (`Frame_loop.short`): the frames shorter than the bytes the
-  loop knows go through `fold` or a walk of their own, which knows no byte;
-  the model checks those walks but not that the loop picks the right one.
 
 ## Past defects
 
@@ -254,6 +271,15 @@ mutant: two bytes the codec accepts where the first two load a word of
 eight, before or past the window; a field at offset 0 of a region at 8
 taken from the word held at offset 0 of the buffer, accepting what the
 codec rejects.
+
+The mutants `short-known` and `ahead-short` change the frame loop of
+`Plan.Loop`: its test of a short frame off by one (`stride + 1 < need`),
+and the fields loaded ahead in the loop over short frames too. Each makes
+`frame_walks_in` fail, and its witness runs the mutant: a frame of one byte
+walked knowing the two its prefix needs faults reading its field at 1; a
+field at 1 is loaded ahead of a frame of one byte at 0. Run against an
+emitter mutated to load each field eleven bytes past its offset, `make
+plans` reports the read-ahead of the packet stack and of two scan cases.
 
 The mutants `o1-drop-negative`, `o1-drop-wrap` and `o1-drop-unchecked`
 remove one premise each of the O1 rule that leaves a span's bound to the

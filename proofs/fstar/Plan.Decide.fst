@@ -249,3 +249,34 @@ let rec fixed_need (l:list node) : nat =
   | Gate _ ((_, b) :: _) _ :: _ -> fixed_need b
   | Gate _ [] (Some b) :: _ -> fixed_need b
   | _ -> 0
+
+(* {1 The fields a frame loop loads ahead} *)
+
+(* The fields at constant offsets of the bytes [fixed_need] counts, each with
+   its offset from the frame's start and its width: those
+   Scan_module.gated_fields finds, so those the OxCaml frame loop may load
+   ahead of a frame's walk. *)
+let rec lead_fields (at:nat) (l:list node) : Tot (list (var & (nat & nat))) (decreases l) =
+  match l with
+  | Prefix fs size :: r ->
+    map (fun (f:field) -> (f.id, ((at + f.off <: nat), (f.width <: nat)))) fs @ lead_fields (at + size) r
+  | Test _ :: r -> lead_fields at r
+  | Gate _ ((_, b) :: _) _ :: _ -> lead_fields at b
+  | Gate _ [] (Some b) :: _ -> lead_fields at b
+  | _ -> []
+
+(* Every field loaded ahead lies in the [need] bytes the loop knows. *)
+let rec ahead_in (need:nat) (ah:list (nat & nat)) : bool =
+  match ah with [] -> true | (k, wd) :: r -> k + wd <= need && ahead_in need r
+
+(* Each field loaded ahead, with the offset from the frame's start and the
+   bytes the loop loads it from, is one of [lead]: the bytes the walk reads
+   it from. *)
+let rec ahead_at (lead:list (var & (nat & nat))) (ah:list (var & (nat & nat))) : bool =
+  match ah with [] -> true | (v, kw) :: r -> assoc v lead = Some kw && ahead_at lead r
+
+(* A frame loop's read-ahead [ah] is justified when each field is loaded from
+   the bytes of the leading fields the walk reads it from, inside the [need]
+   bytes the loop knows. *)
+let ahead_justified (need:nat) (l:list node) (ah:list (var & (nat & nat))) : bool =
+  ahead_at (lead_fields 0 l) ah && ahead_in need (map snd ah)

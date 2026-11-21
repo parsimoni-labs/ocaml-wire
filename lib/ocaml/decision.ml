@@ -55,7 +55,7 @@ type t =
       need : int;
       frames : int;
       short : short_frames option;
-      ahead : string list;
+      ahead : (string * int * int) list;
     }
 
 let pp_pos ppf p =
@@ -126,5 +126,8 @@ let pp ppf = function
         short
         Fmt.(
           if ahead = [] then nop
-          else any ", reads ahead " ++ list ~sep:(any ", ") string)
+          else
+            any ", reads ahead "
+            ++ list ~sep:(any ", ") (fun ppf (v, k, n) ->
+                pf ppf "%s (%d bytes at %d)" v n k))
         ahead
