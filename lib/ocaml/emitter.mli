@@ -76,6 +76,7 @@ type mode = {
   live : Sset.t;
   exported : Sset.t;
   slots : Sset.t;
+  ahead : Sset.t;
   fail : failure -> string;
   overflowed : failure -> string -> string;
   decide : Decision.t -> unit;
@@ -84,8 +85,9 @@ type mode = {
     target is OxCaml, whether it is the cold walk that raises the codec's
     errors, whether it may test two bitfields of a word as one range of the word
     (a scan, which names no failed field), the variables it binds, the outputs
-    it hands out, those of them that are slots, what it writes on a failure, and
-    what it does with each decision it takes. *)
+    it hands out, those of them that are slots, the variables its caller binds
+    before it by {!read_ahead}, what it writes on a failure, and what it does
+    with each decision it takes. *)
 
 type cuts = {
   prefix : string;
@@ -222,6 +224,14 @@ val check : w -> failure -> bool T.expr -> w
 val bound : w -> pos -> int -> w
 (** [bound w p need] is [w] after checking that the window has [need] bytes from
     [p]. *)
+
+val read_ahead :
+  mode -> size:int -> k:int -> field -> (string * (string -> string)) option
+(** [read_ahead m ~size ~k f] is the variable {!field} binds for the field [f]
+    at [k] from the start of a frame whose first [size] bytes are known, and its
+    value at a start [o], when a caller may bind it before the walk: a byte, or
+    an unsigned big-endian field of 16 or 32 bits held unboxed. A walk whose
+    {!field-ahead} holds the variable reads it instead of loading the field. *)
 
 val field :
   ?checked:bool ->

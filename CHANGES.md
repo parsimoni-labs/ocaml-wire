@@ -147,6 +147,13 @@
   `encode` into a buffer allocates nothing. `check` of a TCP header takes 95
   instructions, down from 118 (#435, #445, #496, #512, @samoht)
 
+- On OxCaml, the scanner's `fold_frames` (and its unboxed and step forms)
+  reads the IPv4 protocol, or whatever field chooses a frame's nested
+  optional fields, of all four frames of a loop iteration before checking
+  the first. On packets whose kind changes from one frame to the next, the
+  Ethernet/IPv4/TCP-or-UDP scan takes about 8% fewer cycles, as many as
+  wire.rust's (#516, @samoht)
+
 - `Wire.Codec.get` and `set` of an integer or bitfield are faster: `set`
   writes a space packet header field in a third of the instructions (#496,
   @samoht)

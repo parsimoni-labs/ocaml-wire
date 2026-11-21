@@ -1606,13 +1606,26 @@ let test_decisions () =
     | _ -> false);
   has ocaml "the frame loop" (function
     | Frame_loop
-        { name = "fold_frames"; need = 34; frames = 1; short = Some Apart } ->
+        {
+          name = "fold_frames";
+          need = 34;
+          frames = 1;
+          short = Some Apart;
+          ahead = [];
+        } ->
         true
     | _ -> false);
-  has (decisions ~target:`OxCaml c) "four frames an iteration on OxCaml"
+  has (decisions ~target:`OxCaml c)
+    "four frames an iteration on OxCaml, their dispatch fields read ahead"
     (function
     | Frame_loop
-        { name = "fold_frames"; need = 34; frames = 4; short = Some Inline } ->
+        {
+          name = "fold_frames";
+          need = 34;
+          frames = 4;
+          short = Some Inline;
+          ahead = [ "f14_ipv4_protocol" ];
+        } ->
         true
     | _ -> false);
   has (decisions ~step:"Step" c)

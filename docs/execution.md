@@ -90,7 +90,12 @@ frame where the compiler inlines the consumer and the runtime's loads.
 
 On OxCaml their loop over frames is unrolled four times, then walks the
 remaining frames one by one. OCaml polls for signals and other domains once
-per loop iteration, so the unrolled loop polls once per four frames. On
+per loop iteration, so the unrolled loop polls once per four frames. An
+iteration computes where its four frames start and loads, for each, the
+fields in its leading bytes that choose a nested optional field (the IPv4
+protocol of a packet stack), before the first frame's checks: on input whose
+kind varies from frame to frame, the branch on that field mispredicts often,
+and the next frame's choice then waits for no load. On
 OCaml the loop walks one frame per iteration, because four inlined walks
 cost the stock compiler more in spilled registers than the polls they save.
 The loop over frames that hold the leading prefixes comes last in the

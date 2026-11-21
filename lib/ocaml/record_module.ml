@@ -32,6 +32,7 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     live;
     exported = Sset.empty;
     slots = Sset.empty;
+    ahead = Sset.empty;
     fail = (fun _ -> fail);
     overflowed = (fun _ _ -> fail);
     decide = ignore;
@@ -48,6 +49,7 @@ let cold ~src ~live =
     live;
     exported = Sset.empty;
     slots = Sset.empty;
+    ahead = Sset.empty;
     fail =
       (function
       | Bounds -> "no_error ()"
