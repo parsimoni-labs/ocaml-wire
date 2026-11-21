@@ -197,6 +197,11 @@ prefix whose fields it holds, such as the Ethernet type and the start of the
 IPv4 header. A word is loaded only inside the bytes the last bound check
 covered, so the check that covers the fields covers the word too.
 
+A region that starts at one term plus a constant, such as the TCP header at
+`ihl * 4 - 20` bytes from 34, takes the term as its base and the constant in
+each of its loads, so the term reaches a load by one addition. A load that
+reads a byte through a wider one never starts before the region's first byte.
+
 `Wire_rust.scanner` writes the same plan out as Rust, from `Wire_ocaml.Plan`,
 which hands it the same decisions. A window is a slice of exactly its bytes:
 a prefix is checked by `split_first_chunk`, whose array its loads index at

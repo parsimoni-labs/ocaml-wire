@@ -760,6 +760,10 @@ let word_range f g =
 type sum = { terms : (string * (int * int T.expr)) list; const : int }
 
 let sum_int n = { terms = []; const = n }
+
+let sum_offset s =
+  match s.terms with [ (_, (1, e)) ] -> Some (e, s.const) | _ -> None
+
 let sum_atom e = { terms = [ (key e, (1, e)) ]; const = 0 }
 
 (* [None] when a coefficient or the constant overflows. Both are computed

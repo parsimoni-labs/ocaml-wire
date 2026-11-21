@@ -120,6 +120,7 @@ type w = {
   sums : (string * sum) list;
   ints : Sset.t;
   base : string;
+  disp : int;
   limit : string;
   known : int;
   tail : bool;
@@ -136,13 +137,14 @@ type w = {
 (** The state of a walk: its mode and output, the ranges and facts known at its
     position, the bitfield words it holds, the spans whose bound is checked and
     the end of each as a sum, the variables that hold an [int] in the [int64]
-    form, the window of the buffer it is in; and, for a walk cut into functions,
-    where they go, the function being written and the conditions open around the
-    position in it, the variables it binds with the type a function cut out of
-    it gives each, the outputs known present or absent, whether the code here
-    jumps to a join outside it, and the case being written, which names its
-    functions; and, as [int64], the 64-bit words loaded at constant offsets of
-    the window, by offset. *)
+    form, the window of the buffer it is in, as a variable and a constant
+    distance from it; and, for a walk cut into functions, where they go, the
+    function being written and the conditions open around the position in it,
+    the variables it binds with the type a function cut out of it gives each,
+    the outputs known present or absent, whether the code here jumps to a join
+    outside it, and the case being written, which names its functions; and, as
+    [int64], the 64-bit words loaded at constant offsets of the window, by
+    offset. *)
 
 val pf : w -> ('a, Format.formatter, unit) format -> 'a
 (** [pf w fmt] writes to the output of [w]. *)
@@ -189,6 +191,7 @@ val words : num -> size:int -> field list -> int list
 val unsigned :
   mode ->
   ?size:int ->
+  ?lo:int ->
   ?raw:bool ->
   o:string ->
   words:int list ->
@@ -197,24 +200,26 @@ val unsigned :
   endian:T.endian ->
   unit ->
   string
-(** [unsigned m ?size ?raw ~o ~words ~k ~bytes ~endian ()] is the text of an
+(** [unsigned m ?size ?lo ?raw ~o ~words ~k ~bytes ~endian ()] is the text of an
     unsigned value of [bytes] bytes at [k] from [o], from a word when one holds
-    it; [size] bounds the bytes a wider load may read. With [raw] (default
-    [false]), the value may hold any bits above its [bytes], for a caller that
-    masks it below them. *)
+    it; [size] bounds the bytes a wider load may read and [lo] (default [0]) is
+    the first byte a load may read. With [raw] (default [false]), the value may
+    hold any bits above its [bytes], for a caller that masks it below them. *)
 
 val value :
   mode ->
   ?size:int ->
+  ?lo:int ->
   ?bitword:string ->
   o:string ->
   words:int list ->
   k:int ->
   field ->
   string
-(** [value m ?size ?bitword ~o ~words ~k f] is the text of the plain value of
-    the field [f] at [k] from [o], from the variable [bitword] of a bitfield's
-    word when it has one. *)
+(** [value m ?size ?lo ?bitword ~o ~words ~k f] is the text of the plain value
+    of the field [f] at [k] from [o], read between [lo] and [size] as
+    {!unsigned} does, from the variable [bitword] of a bitfield's word when it
+    has one. *)
 
 val check : w -> failure -> bool T.expr -> w
 (** [check w failure cond] writes a check that fails with [failure] when [cond]

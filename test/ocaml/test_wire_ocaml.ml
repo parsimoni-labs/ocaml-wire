@@ -1567,8 +1567,9 @@ let test_shared_words () =
    with the step functions: the IPv4 header's two bitfields tested as one range
    of their byte, the IPv4 options' bound left to the check of the bytes after
    them, the payload's bound checked once before the dispatch on the protocol
-   and hoisted in each case, the frame loop's shape and, in the step functions,
-   the words the Ethernet and IPv4 headers share. Collecting them writes the
+   and hoisted in each case, the frame loop's shape, in the step functions the
+   words the Ethernet and IPv4 headers share, and the TCP header's base.
+   Collecting them writes the
    scanner it describes, which examples/generated/stack.ml pins, and leaves the
    next one written unchanged. *)
 let test_decisions () =
@@ -1635,6 +1636,16 @@ let test_decisions () =
   has ocaml "the IPv4 header cut into a function of its own" (function
     | Cut { name = "fold_ipv4"; window = "stop"; known = 0 } -> true
     | _ -> false);
+  (* The TCP header starts at [ihl * 4 - 20] bytes from 34: its base is the
+     term and the constant is in each load. *)
+  Alcotest.(check bool)
+    "the TCP header's base" true
+    (contains src "i64be buf (b14 + 14)");
+  Alcotest.(check bool)
+    "the TCP header's base on OxCaml" true
+    (contains
+       (Wire_ocaml.scanner ~target:`OxCaml ~codec:"c" c)
+       "(L.i64be_at buf (U.add b14 #14L))");
   (* A codec the scanner refuses has no decisions either. *)
   match decisions (Schemas.deep 32 (Sys.max_string_length - 1)) with
   | _ -> Alcotest.fail "decisions of a refused codec"

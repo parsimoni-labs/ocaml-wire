@@ -242,6 +242,10 @@ type sum
 val sum_int : int -> sum
 (** [sum_int n] is the constant [n]. *)
 
+val sum_offset : sum -> (int T.expr * int) option
+(** [sum_offset s] is [(e, n)] when [s] is the single term [e] plus the constant
+    [n]. *)
+
 val sum_atom : int T.expr -> sum
 (** [sum_atom e] is [e] as one term. *)
 

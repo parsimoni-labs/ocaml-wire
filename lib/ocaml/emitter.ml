@@ -168,7 +168,11 @@ type w = {
       (* With [Boxed], the variables that hold an [int]: the window's length
          and the positions and sizes the walk binds. An expression over values
          reads them through [Int64.of_int]. *)
-  base : string; (* The offset in the buffer of the current window. *)
+  base : string;
+  disp : int;
+      (* The window starts at [disp] bytes from [base] in the buffer: a
+         region whose start is a variable plus a constant takes the constant
+         in its loads. *)
   limit : string; (* The length of the current window. *)
   known : int; (* Bytes known to be in the window after the position. *)
   tail : bool;
@@ -577,7 +581,7 @@ let words num ~size fields =
    the [int32]'s sign irrelevant, so the word needs no zero extension first;
    otherwise the shift is on the [int32], which zero-extends and needs no
    mask. *)
-let u16_in_word m ~size ~raw ~o ~k ~endian =
+let u16_in_word m ~lo ~size ~raw ~o ~k ~endian =
   let i32 = i32 m.src in
   let low, high =
     match m.num with
@@ -600,18 +604,19 @@ let u16_in_word m ~size ~raw ~o ~k ~endian =
   let at k = load m ~o ~k ~bytes:4 ~endian in
   match (m.ox || m.num = Unboxed, size, endian) with
   | false, _, _ | _, None, _ -> None
-  | _, Some _, T.Big when k >= 2 -> Some (low (at (k - 2)))
+  | _, Some _, T.Big when k >= lo + 2 -> Some (low (at (k - 2)))
   | _, Some size, T.Big when k + 4 <= size -> Some (high (at k))
   | _, Some size, T.Little when k + 4 <= size -> Some (low (at k))
-  | _, Some _, T.Little when k >= 2 -> Some (high (at (k - 2)))
+  | _, Some _, T.Little when k >= lo + 2 -> Some (high (at (k - 2)))
   | _ -> None
 
 (* An unsigned value of [bytes] bytes at [k] from [o], from a word when one
-   holds it; [size] bounds the bytes a wider load may read. With [raw], the
+   holds it; [size] bounds the bytes a wider load may read and [lo] is the
+   first byte a narrower one may. With [raw], the
    value may keep whatever its [int] holds above its [bytes], for a caller that
    masks below them: that mask would cost an instruction the compiler does not
    remove. *)
-let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
+let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
   let mask32 v = if raw then v else Fmt.str "(%s land mask32)" v in
   let word = List.find_opt (fun a -> a <= k && k + bytes <= a + 8) words in
   match (m.num, word) with
@@ -648,7 +653,7 @@ let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
   | Tagged, _ when bytes = 4 ->
       Fmt.kstr mask32 "%s.to_int %s" (i32 m.src) (load m ~o ~k ~bytes ~endian)
   | Tagged, _ when bytes = 2 -> (
-      match u16_in_word m ~size ~raw ~o ~k ~endian with
+      match u16_in_word m ~lo ~size ~raw ~o ~k ~endian with
       | Some v -> v
       | None -> load m ~o ~k ~bytes ~endian)
   | Tagged, _ -> load m ~o ~k ~bytes ~endian
@@ -661,7 +666,7 @@ let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
         Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes:2 ~endian:T.Little)
       in
       let starts = match size with Some s -> k + 2 <= s | None -> false in
-      let ends = Option.is_some size && k >= 1 in
+      let ends = Option.is_some size && k >= lo + 1 in
       if ends && not (starts && List.mem (k - 1) words) then
         Fmt.str "(U.shift_right_logical %s 8)" (le16 (k - 1))
       else if starts then Fmt.str "(U.logand %s #255L)" (le16 k)
@@ -672,14 +677,14 @@ let unsigned m ?size ?(raw = false) ~o ~words ~k ~bytes ~endian () =
       Fmt.str "(U.logand (U.of_int32_u %s) #0xffffffffL)"
         (load m ~o ~k ~bytes ~endian)
   | Unboxed, _ when bytes = 2 -> (
-      match u16_in_word m ~size ~raw ~o ~k ~endian with
+      match u16_in_word m ~lo ~size ~raw ~o ~k ~endian with
       | Some v -> v
       | None -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian))
   | Unboxed, _ -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian)
 
 (* A field's plain value, at [k] from [o]: from the variable [bitword] of a
    bitfield's word when it has one. *)
-let value m ?size ?bitword ~o ~words ~k f =
+let value m ?size ?lo ?bitword ~o ~words ~k f =
   let sign v width =
     match m.num with
     | Tagged ->
@@ -697,7 +702,7 @@ let value m ?size ?bitword ~o ~words ~k f =
         match bitword with
         | Some v -> v
         | None ->
-            unsigned m ?size ~raw:(not whole) ~o ~words ~k:(k + f.offset)
+            unsigned m ?size ?lo ~raw:(not whole) ~o ~words ~k:(k + f.offset)
               ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ()
       in
       match m.num with
@@ -724,7 +729,7 @@ let value m ?size ?bitword ~o ~words ~k f =
       (* The sign extension drops what an [int64] holds above the field. *)
       let raw = signed && m.num = Boxed in
       let v =
-        unsigned m ?size ~raw ~o ~words ~k:(k + f.offset) ~bytes:(width / 8)
+        unsigned m ?size ?lo ~raw ~o ~words ~k:(k + f.offset) ~bytes:(width / 8)
           ~endian ()
       in
       if signed then sign v width else v
@@ -956,11 +961,11 @@ let bound w p need =
    constant to add. *)
 let address w p =
   match p.var with
-  | None -> (w, w.base, p.at)
+  | None -> (w, w.base, w.disp + p.at)
   | Some v ->
       let o = w.fresh "o" in
       pf w "let %s = %s in@\n" o (binop (pos_num w.m.num) "+" w.base v);
-      (bind_num w o, o, p.at)
+      (bind_num w o, o, w.disp + p.at)
 
 (* Bitfields read through their word, by the variable holding it: a test of
    several bitfields of one word becomes one test of the word. *)
@@ -1157,7 +1162,7 @@ let load_words w ~o ~k ~size ~constant ~lo ~hi ~later live =
     |> List.map (fun (at, base) ->
         let v = w.fresh "bw" in
         pf w "let %s = %s in@\n" v
-          (unsigned m ~size:(k + size) ~o ~words ~k:(k + at)
+          (unsigned m ~size:(k + size) ~lo:w.disp ~o ~words ~k:(k + at)
              ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ());
         ((at, base), v))
   in
@@ -1228,7 +1233,7 @@ let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
         bind_field w (value m ~bitword ~o ~words ~k:0 shifted)
     | Int { width = (16 | 32) as width; signed = false; endian = T.Big }
       when m.num = Unboxed ->
-        let v = value m ~size:(k + size) ~o ~words ~k:0 shifted in
+        let v = value m ~size:(k + size) ~lo:w.disp ~o ~words ~k:0 shifted in
         let w =
           if is_slot m f.id then bind_field w v
           else begin
@@ -1239,7 +1244,9 @@ let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
         let raw, v = raw_le m ~o ~k:shifted.offset f.id width in
         if not (Sset.mem raw m.ahead) then pf w "let %s = %s in@\n" raw v;
         { (bind_num w raw) with raws = (f.id, (raw, width)) :: w.raws }
-    | _ -> bind_field w (value m ~size:(k + size) ~o ~words ~k:0 shifted)
+    | _ ->
+        bind_field w
+          (value m ~size:(k + size) ~lo:w.disp ~o ~words ~k:0 shifted)
   in
   let w = if checked then checks w f else w in
   match f.store with
@@ -1310,7 +1317,7 @@ let prefix w fields size p ~need ~after k =
   (* The bytes known to be in the window start at 0 for a prefix at a
      constant offset, and at the prefix otherwise. *)
   let constant = Option.is_none p.var in
-  let lo = if constant then 0 else at and hi = extent at w.known in
+  let lo = if constant then w.disp else at and hi = extent at w.known in
   (* A word that holds a field of this prefix ends within 8 bytes of it. *)
   let ends = extent at size in
   let later =
@@ -1746,6 +1753,31 @@ let checks_next w = function
       Option.is_some (hoisted gates tree)
   | Test _ :: _ | [] -> false
 
+(* Where a region at [p] starts: a variable from the window's offset, and the
+   distance from it. A start that is one term plus a positive constant, such
+   as the end of a span of [ihl * 4 - 20] bytes at 34, is the term and the
+   constant, which the region's loads take as their displacement: the term
+   reaches the loads by one addition. *)
+let region_start w p =
+  let num = pos_num w.m.num in
+  let whole = (pos_expr w.m.num p, w.disp) in
+  match p.var with
+  | None -> whole
+  | Some v -> (
+      match Option.bind (List.assoc_opt v w.sums) sum_offset with
+      | Some (e, c) when c + p.at > 0 ->
+          let ov = ref false in
+          let s = expr w ov e in
+          if !ov then whole
+          else
+            let s =
+              if w.m.num = Boxed && num <> Boxed then
+                Fmt.str "(Int64.to_int %s)" s
+              else s
+            in
+            (s, w.disp + c + p.at)
+      | _ -> whole)
+
 let rec walk w nodes p k =
   match nodes with
   | [] -> k w p
@@ -1768,13 +1800,14 @@ and step w nodes p k =
   | Region (size, at_most, body) :: rest ->
       let w', n, stop = span w size p in
       let b = w.fresh "b" in
-      pf w' "let %s = %s in@\n" b
-        (binop (pos_num w.m.num) "+" w.base (pos_expr w.m.num p));
+      let start, disp = region_start w p in
+      pf w' "let %s = %s in@\n" b (binop (pos_num w.m.num) "+" w.base start);
       let w' = bind_num w' b in
       walk
         {
           w' with
           base = b;
+          disp;
           limit = n;
           known = 0;
           tail = w.tail && copyable rest;
@@ -1798,6 +1831,7 @@ and step w nodes p k =
             {
               w'' with
               base = w.base;
+              disp = w.disp;
               limit = w.limit;
               known = 0;
               tail = w.tail;
@@ -1909,6 +1943,7 @@ let start ?cuts ?(scope = []) ?first ?name ~m ~ppf ~ranges ~base ~limit ~known
       sums = [];
       ints = Sset.singleton limit;
       base;
+      disp = 0;
       limit;
       known;
       tail = true;
