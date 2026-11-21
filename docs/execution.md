@@ -113,7 +113,10 @@ The invariants above hold for the generated code as follows.
   checked not to be negative unless a range or a passed check proves it.
   When every case of a dispatch starts with the same span, its size is
   checked once before the dispatch. The check is remembered with its window,
-  so a region, which opens a new window, checks its own spans.
+  so a region, which opens a new window, checks its own spans. The window
+  holds at least the bytes the range of its size proves, so a region of
+  constant size checks no bound for the prefixes it holds, nor, when it is
+  exact and they fill that size, where they end.
   A span's check is dropped when the next check, which runs before any read,
   covers the span's bytes too. This needs ranges to prove the span's size not
   negative and its end inside the native int. A bound is compared with the

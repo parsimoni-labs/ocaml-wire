@@ -1675,6 +1675,45 @@ let test_entry_bounds () =
     "a walk that starts with a region keeps both" true
     (contains (Wire_ocaml.scanner ~codec:"c" region) full)
 
+(* A region's window holds the bytes the range of its size proves: in a region
+   of constant size, the record it holds checks no bound and its exact end is
+   not tested, while a region whose size a field gives checks both. *)
+let test_constant_region () =
+  let open Wire_ocaml.Plan in
+  let leaf = Codec.v "Leaf" Fun.id Codec.[ Field.v "v" uint32be $ Fun.id ] in
+  let n = Field.v "n" uint8 in
+  let constant =
+    Codec.v "Constant"
+      (fun t a -> (t, a))
+      Codec.
+        [
+          Field.v "t" uint8 $ fst;
+          Field.v "a" (nested ~size:(int 4) (codec leaf)) $ snd;
+        ]
+  in
+  let sized =
+    Codec.v "Sized"
+      (fun t a -> (t, a))
+      Codec.
+        [ n $ fst; Field.v "a" (nested ~size:(Field.ref n) (codec leaf)) $ snd ]
+  in
+  let leaf_bound tested = function
+    | Prefix_bound { window = "n1"; bytes = 4; tested = t; _ } -> t = tested
+    | _ -> false
+  in
+  Alcotest.(check bool)
+    "the record in a constant region is known" true
+    (List.exists (leaf_bound false) (decisions constant));
+  Alcotest.(check bool)
+    "the record in a sized region is tested" true
+    (List.exists (leaf_bound true) (decisions sized));
+  Alcotest.(check bool)
+    "a constant region's end is not tested" false
+    (contains (Wire_ocaml.scanner ~codec:"c" constant) "<> n1)");
+  Alcotest.(check bool)
+    "a sized region's end is tested" true
+    (contains (Wire_ocaml.scanner ~codec:"c" sized) "<> n1)")
+
 (* The structured cases' corpora, and the EverParse C validator when built. *)
 let test_scanners () =
   List.iter
@@ -1808,6 +1847,7 @@ let suite =
         test_shared_words;
       Alcotest.test_case "the scanner's decisions" `Quick test_decisions;
       Alcotest.test_case "the entry's bounds" `Quick test_entry_bounds;
+      Alcotest.test_case "a region of constant size" `Quick test_constant_region;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;

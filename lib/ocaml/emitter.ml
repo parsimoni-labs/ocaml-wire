@@ -1799,6 +1799,10 @@ and step w nodes p k =
       walk (refine w [ cond ]) rest p k
   | Region (size, at_most, body) :: rest ->
       let w', n, stop = span w size p in
+      (* The window holds at least the bytes the range of its size proves. *)
+      let lo, hi =
+        Option.value ~default:(0, max_int) (Smap.find_opt n w'.ranges)
+      in
       let b = w.fresh "b" in
       let start, disp = region_start w p in
       pf w' "let %s = %s in@\n" b (binop (pos_num w.m.num) "+" w.base start);
@@ -1809,14 +1813,14 @@ and step w nodes p k =
           base = b;
           disp;
           limit = n;
-          known = 0;
+          known = lo;
           tail = w.tail && copyable rest;
           held = [];
         }
         body { var = None; at = 0 }
         (fun w'' cp ->
           let w'' =
-            if at_most then w''
+            if at_most || (cp.var = None && lo = cp.at && hi = cp.at) then w''
             else begin
               pf w'' "if %s then %s else@\n"
                 (let at = pos_expr w.m.num cp in
