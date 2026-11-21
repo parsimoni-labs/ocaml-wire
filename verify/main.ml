@@ -87,18 +87,101 @@ let frame_pre min_stride =
   Fmt.str "stop >= %d && base >= 0 && base <= Bytes.length buf - stop"
     min_stride
 
+(* The same, on OxCaml, where frames_record takes positions as int64_u. *)
+let frame_pre_ox min_stride =
+  Fmt.str
+    "stop >= %dL && base >= 0L && base <= Int64.sub (Int64.of_int \
+     (Bytes.length buf)) stop"
+    min_stride
+
+(* The parameters of the top-level function [name]; none when the module
+   has no such function, whose entry then fails as it is walked. *)
+let function_params ctx name =
+  match Hashtbl.find_opt ctx.globals name with
+  | Some (Unevaluated ({ pexp_desc = Pexp_function (params, _, _); _ }, _)) ->
+      params
+  | _ -> []
+
+(* The arguments the frame loop loads ahead of [record]'s walk, each with
+   the expression of the frame start [base] that the loop binds it to for a
+   frame it walks alone (the unrolled loop binds the same load at each of
+   its frame starts, then renames it): frames_record is proved for frames
+   whose arguments hold what those expressions read, and each call of the
+   loop is checked to pass that. *)
+let loaded_ahead ctx ~record ~frames =
+  let standard = [ "buf"; "base"; "stop"; "current"; "invalid"; "valid" ] in
+  let ahead =
+    List.filter_map
+      (fun (p : Parsetree.function_param) ->
+        match p.pparam_desc with
+        | Pparam_val (Labelled l, _, _) when not (List.mem l standard) -> Some l
+        | _ -> None)
+      (function_params ctx record)
+  in
+  let body () =
+    match Hashtbl.find_opt ctx.globals frames with
+    | Some (Unevaluated (e, _)) -> e
+    | _ -> Fmt.failwith "%s is not a top-level function" frames
+  in
+  List.map
+    (fun x ->
+      let found = ref [] in
+      let expr it (e : Parsetree.expression) =
+        (match e.pexp_desc with
+        | Pexp_let (_, vbs, _) ->
+            List.iter
+              (fun (vb : Parsetree.value_binding) ->
+                match (vb.pvb_pat.ppat_desc, vb.pvb_expr.pexp_desc) with
+                | Ppat_var _, Pexp_ident _ ->
+                    (* the unrolled loop renames what it loaded *) ()
+                | Ppat_var { txt; _ }, _ when String.equal txt x ->
+                    found :=
+                      Pprintast.string_of_expression vb.pvb_expr :: !found
+                | _ -> ())
+              vbs
+        | _ -> ());
+        Ast_iterator.default_iterator.expr it e
+      in
+      let it = { Ast_iterator.default_iterator with expr } in
+      it.expr it (body ());
+      match List.sort_uniq String.compare !found with
+      | [ e ] -> (x, e)
+      | _ ->
+          Fmt.failwith "%s binds %s, which %s takes, %d times instead of once"
+            frames x record (List.length !found))
+    ahead
+
+(* The precondition of the frame loop's body, as its calls state it (on
+   OxCaml over int64_u positions) and as its entry states it over ints: the
+   frame and the fields loaded ahead of it. *)
+let frame_contract ~ox ~min_stride ahead =
+  let holds = List.map (fun (x, e) -> Fmt.str " && %s = (%s)" x e) ahead in
+  let contract =
+    if ox then String.concat "" (frame_pre_ox min_stride :: holds)
+    else frame_pre min_stride
+  in
+  let record_pre =
+    String.concat ""
+      (frame_pre min_stride
+      :: List.map
+           (fun (x, e) ->
+             Fmt.str
+               " && Int64.of_int %s = (let base = Int64.of_int base in %s)" x e)
+           ahead)
+  in
+  (contract, record_pre)
+
 let valid_arguments =
   "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && len <= \
    Bytes.length buf - off"
 
 (* A scanner: its one-frame entry, the body of its frame loop for a stride
-   the loop walks without frame checks, from what the loop establishes,
-   and, on the OCaml target ([let mutable] has no Parsetree in OCaml's
-   compiler-libs), the frame loop itself with valid and with any
-   arguments, its calls to the body checked against that. [step] names the
-   step scanner's entries, which answer through [Step.valid] and
-   [Step.invalid]. *)
-let scanner ~step ~ox ~spec ~bound ~min_stride _ctx =
+   the loop walks without frame checks, from what the loop establishes
+   (with, on OxCaml, the fields the loop loads ahead of the body), and the
+   frame loop itself with valid and with any arguments, its calls to the
+   body checked against that. [step] names the step scanner's entries,
+   which answer through [Step.valid] and [Step.invalid]. *)
+let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
   let at x = if ox then Fmt.str "~%s:(Int64.of_int %s)" x x else "~" ^ x in
   let fold, fold_expr, record, record_args, frames, frames_expr =
     if step then
@@ -116,27 +199,31 @@ let scanner ~step ~ox ~spec ~bound ~min_stride _ctx =
         "fold_frames",
         "fold_frames buf off len ~stride ~init:0 ~invalid ~valid" )
   in
-  let contracts = [ (record, frame_pre min_stride) ] in
+  let ahead = if ox then loaded_ahead ctx ~record ~frames else [] in
+  let contract, record_pre = frame_contract ~ox ~min_stride ahead in
+  let record_args =
+    String.concat " " (record_args :: List.map (fun (x, _) -> at x) ahead)
+  in
+  let contracts = [ (record, contract) ] in
   let framed = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ] in
   let loops =
-    if ox then []
-    else
-      [
-        entry ~pre:valid_arguments ~contracts ~bound ~inputs:framed
-          ~window:("off", "len") frames frames_expr;
-        entry ~misuse:true ~contracts ~bound ~inputs:framed
-          ~window:("off", "len")
-          (frames ^ ", any arguments")
-          frames_expr;
-      ]
+    [
+      entry ~pre:valid_arguments ~contracts ~bound ~inputs:framed
+        ~window:("off", "len") frames frames_expr;
+      entry ~misuse:true ~contracts ~bound ~inputs:framed ~window:("off", "len")
+        (frames ^ ", any arguments")
+        frames_expr;
+    ]
   in
   loops
   @ [
       entry ~spec ~bound
         ~inputs:[ buf; Int_input "off"; Int_input "len" ]
         ~window:("off", "len") fold fold_expr;
-      entry ~pre:(frame_pre min_stride) ~spec ~bound
-        ~inputs:[ buf; Int_input "base"; Int_input "stop"; Int_input "current" ]
+      entry ~pre:record_pre ~spec ~bound
+        ~inputs:
+          ([ buf; Int_input "base"; Int_input "stop"; Int_input "current" ]
+          @ List.map (fun (x, _) -> Int_input x) ahead)
         ~window:("base", "stop") record
         (Fmt.str "%s ~buf %s %s %s" record (at "base") (at "stop") record_args);
     ]

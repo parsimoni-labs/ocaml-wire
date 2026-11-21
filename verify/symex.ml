@@ -32,6 +32,7 @@ type value =
   | Answer of bool
     (* What a continuation returns; applying it to more arguments keeps it. *)
   | Ref of int
+  | Mutable of int (* an OxCaml [let mutable], whose value is in the store *)
   | Opaque (* A value the walk does not track: it may only be passed on. *)
   | Exn of string
   | Closure of closure
@@ -137,6 +138,7 @@ let type_name = function
   | Equal -> "Type.Equal"
   | Answer _ -> "the answer of a continuation"
   | Ref _ -> "a reference"
+  | Mutable _ -> "a mutable variable"
   | Opaque -> "a value the walk does not track"
   | Exn e -> e
   | Closure c -> Fmt.str "the function %s" c.cname
@@ -620,6 +622,12 @@ let rec pattern_name p =
   | Ppat_constraint (p, _) -> pattern_name p
   | _ -> "v"
 
+(* [let mutable x = e], which [strip_oxcaml] reads as [let[@mutable] x = e]. *)
+let is_mutable vb =
+  List.exists
+    (fun (a : attribute) -> String.equal a.attr_name.txt "mutable")
+    vb.pvb_attributes
+
 let is_type_equal = function
   | Longident.Ldot ({ txt = Lident "Type"; _ }, { txt = "Equal"; _ }) -> true
   | _ -> false
@@ -705,6 +713,13 @@ let assigned_refs env body =
         | _ ->
             fail_unsupported pexp_loc
               "(:=) on %s, not a reference of the loop's scope" x);
+        walk v
+    | Pexp_setinstvar ({ txt = x; loc }, v) ->
+        (match SMap.find_opt x env.locals with
+        | Some (Mutable id) -> if not (List.mem id !ids) then ids := id :: !ids
+        | _ ->
+            fail_unsupported loc
+              "(<-) on %s, not a mutable variable of the loop's scope" x);
         walk v
     | _ -> iter_sub walk e
   in
@@ -893,7 +908,10 @@ and constant_value ctx key e scope =
 and eval ctx env path e k =
   let loc = e.pexp_loc in
   match e.pexp_desc with
-  | Pexp_ident { txt; _ } -> k path (lookup ctx env loc txt)
+  | Pexp_ident { txt; _ } -> (
+      match lookup ctx env loc txt with
+      | Mutable id -> k path (IMap.find id path.store)
+      | v -> k path v)
   | Pexp_constant c -> k path (constant loc c)
   | Pexp_construct ({ txt = Lident "()"; _ }, None) -> k path Unit
   | Pexp_construct ({ txt = Lident "true"; _ }, None) -> k path (Bool Smt.True)
@@ -908,6 +926,19 @@ and eval ctx env path e k =
           match v with
           | Str s -> k path (Exn (c ^ " " ^ String.escaped s))
           | v -> fail_unsupported loc "%s of %s" c (type_name v))
+  | Pexp_let (Nonrecursive, [ vb ], body) when is_mutable vb ->
+      eval_merged ctx env path vb.pvb_expr (fun path v ->
+          ctx.fresh <- ctx.fresh + 1;
+          let id = ctx.fresh in
+          let path = { path with store = IMap.add id v path.store } in
+          let locals = bind_pattern vb.pvb_pat (Mutable id) env.locals in
+          eval ctx { env with locals } path body k)
+  | Pexp_setinstvar ({ txt = x; _ }, e) -> (
+      match SMap.find_opt x env.locals with
+      | Some (Mutable id) ->
+          eval ctx env path e (fun path v ->
+              k { path with store = IMap.add id v path.store } Unit)
+      | _ -> fail_unsupported loc "(<-) on %s, not a mutable variable" x)
   | Pexp_let (Nonrecursive, vbs, body) ->
       bind_all ctx env path vbs env.locals (fun path locals ->
           eval ctx { env with locals } path body k)
@@ -1186,22 +1217,26 @@ and eval_or ctx env path ds k =
 
 (* A [while] loop runs its body once, from any state that its invariant and
    its condition allow, and goes on from any state its invariant allows and
-   its condition does not. The invariant states that each int reference the
-   body assigns is at or above its value before the loop, and the body must
-   keep it: an obligation of each path through it. Any other reference is a
-   value the walk stops tracking. *)
+   its condition does not. The invariant states that each int or int64
+   reference or mutable variable the body assigns is at or above its value
+   before the loop, and the body must keep it: an obligation of each path
+   through it. Any other reference is a value the walk stops tracking. *)
 and while_loop ?(untracked = []) ctx env path c body k =
   let assigned = assigned_refs env body in
-  let x64 = Smt.sign_extend 1 in
   let tracked, facts, store =
     List.fold_left
       (fun (tracked, facts, store) id ->
+        let fresh r0 wrap =
+          let v = fresh_var ctx (Fmt.str "r%d" id) (Smt.sort r0) in
+          ( (id, r0) :: tracked,
+            Smt.sge v r0 :: facts,
+            IMap.add id (wrap v) store )
+        in
         match IMap.find id path.store with
-        | Int r0 when not (List.mem id untracked) ->
-            let v = fresh_var ctx (Fmt.str "r%d" id) (Smt.Bv 63) in
-            ( (id, r0) :: tracked,
-              Smt.sge (x64 v) (x64 r0) :: facts,
-              IMap.add id (Int v) store )
+        | _ when List.mem id untracked ->
+            (tracked, facts, IMap.add id Opaque store)
+        | Int r0 -> fresh r0 (fun v -> Int v)
+        | I64 r0 -> fresh r0 (fun v -> I64 v)
         | _ -> (tracked, facts, IMap.add id Opaque store))
       ([], [], path.store) assigned
   in
@@ -1215,10 +1250,10 @@ and while_loop ?(untracked = []) ctx env path c body k =
                 List.iter
                   (fun (id, r0) ->
                     match IMap.find id path.store with
-                    | Int v ->
+                    | (Int v | I64 v) when Smt.width v = Smt.width r0 ->
                         oblige ctx path c.pexp_loc
                           (Invariant ("reference " ^ string_of_int id))
-                          (Smt.sge (x64 v) (x64 r0))
+                          (Smt.sge v r0)
                     | _ -> raise (Untrack (c.pexp_loc, id)))
                   tracked))
           (fun path -> k path Unit))
@@ -1275,14 +1310,32 @@ and load_module ctx scope me =
         (Longident.flatten txt)
   | _ -> ()
 
-(* OxCaml's unboxed literals ([#20L]) and mode annotations ([@ local]) have
-   no Parsetree in OCaml's compiler-libs. Both are dropped outside strings and
-   comments: an [int64_u] is a 64-bit vector as an [int64] is, and a mode does
-   not change a value. *)
+(* OxCaml's unboxed literals ([#20L]), mode annotations ([@ local]) and
+   mutable variables ([let mutable]) have no Parsetree in OCaml's
+   compiler-libs. Outside strings and comments, the first two are dropped:
+   an [int64_u] is a 64-bit vector as an [int64] is, and a mode does not
+   change a value. [let mutable x = e] is read as [let[@mutable] x = e],
+   which OCaml parses, and its assignment [x <- e] parses as that of an
+   instance variable; the walk gives both their OxCaml meaning, a variable
+   whose value is in the store. OxCaml lets no closure capture such a
+   variable, so the walk reading it through the store from a closure does
+   not arise in code that compiles. *)
+let is_digit c = c >= '0' && c <= '9'
+
+(* Whether [src] holds the keywords [let mutable] at [i]. *)
+let let_mutable_at src i =
+  let is_ident c =
+    is_digit c || c = '_' || c = '\''
+    || (c >= 'a' && c <= 'z')
+    || (c >= 'A' && c <= 'Z')
+  in
+  i + 12 <= String.length src
+  && String.sub src i 12 = "let mutable "
+  && (i = 0 || not (is_ident src.[i - 1]))
+
 let strip_oxcaml src =
   let b = Buffer.create (String.length src) in
   let n = String.length src in
-  let is_digit c = c >= '0' && c <= '9' in
   let rec code i =
     if i >= n then ()
     else
@@ -1296,6 +1349,9 @@ let strip_oxcaml src =
       | '#' when i + 1 < n && (is_digit src.[i + 1] || src.[i + 1] = '-') ->
           code (i + 1)
       | '@' when i + 7 <= n && String.sub src i 7 = "@ local" -> code (i + 7)
+      | 'l' when let_mutable_at src i ->
+          Buffer.add_string b "let[@mutable] ";
+          code (i + 12)
       | c ->
           Buffer.add_char b c;
           code (i + 1)
@@ -1339,12 +1395,14 @@ let parse_at ~file ~line src =
 let phrases src =
   let lines = String.split_on_char '\n' src in
   (* The OxCaml code is not indented: a local [let] also starts a line, but
-     its line ends with [in], or it is a [let[@local]] function. *)
+     its line ends with [in] or with the parenthesis that opens its
+     expression, or it is a [let[@local]] function. *)
   let starts l =
     List.exists
       (fun p -> String.starts_with ~prefix:p l)
       [ "let "; "let["; "module "; "type "; "open " ]
     && (not (String.ends_with ~suffix:" in" (String.trim l)))
+    && (not (String.ends_with ~suffix:"(" (String.trim l)))
     && not (String.starts_with ~prefix:"let[@local]" l)
   in
   let flush acc cur line =
