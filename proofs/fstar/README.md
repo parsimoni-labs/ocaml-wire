@@ -266,7 +266,14 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 yet; each is the next thing to model and check against the plans.
 
 - Cuts (`Cut`): a function cut out of a walk keeps its window and the
-  bytes known there; the model has no functions.
+  bytes known there. `Emitter.cut` walks the rest with the walk's own
+  state, so in the model a cut is the identity on `exec`, and what it can
+  break lies outside the plan: a variable its body reads that is not one
+  of its parameters, or one a parameter shadows, is a property of the
+  text. The decision carries no position, so `make plans` cannot tie its
+  `known` to the model's walk at the same place; that needs the position
+  in `Decision.Cut` and the model's walk to report its state before each
+  node.
 
 ## Past defects
 
