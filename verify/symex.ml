@@ -1046,9 +1046,16 @@ and apply ctx path loc f args k =
         | [] -> (
             match List.assoc_opt c.cname ctx.contracts with
             | Some pre ->
-                (* The callee's answer is not tracked. *)
+                (* The callee's answer is not tracked. The precondition is
+                   a statement, not code that runs: a load it states makes
+                   no obligation of its own. *)
+                let before = ctx.obligations and holds = ref [] in
                 eval ctx { locals; scope = c.scope } path pre (fun path v ->
-                    oblige ctx path loc (Contract c.cname) (bool loc v));
+                    holds := (path, bool loc v) :: !holds);
+                ctx.obligations <- before;
+                List.iter
+                  (fun (path, v) -> oblige ctx path loc (Contract c.cname) v)
+                  (List.rev !holds);
                 apply ctx path loc Opaque args k
             | None ->
                 eval ctx { locals; scope = c.scope } path c.body (fun path v ->
