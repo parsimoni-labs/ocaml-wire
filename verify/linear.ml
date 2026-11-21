@@ -4,7 +4,9 @@
    Each bit-vector term is read as the signed integer it holds. A sum, a
    difference or a product by a constant is then the integer operation,
    provided it does not wrap: that is a side condition, a bit-vector
-   lemma of its own (small: one operation each). Any other term is a leaf,
+   lemma of its own (small: one operation each). A choice between two terms
+   on a condition that reads this way is the same choice between their
+   integers. Any other term is a leaf,
    an integer in the range of its width. A hypothesis that does not read
    this way is dropped, which only weakens the query. So when the side
    conditions hold under the path condition and the integer query is
@@ -84,9 +86,19 @@ let rec int l t =
       (* Truncating one bit keeps the value when it fits. *)
       l.sides <- eq (sign_extend 1 t) a :: l.sides;
       int l a
+  | App ("ite", [ c; a; b ], Bv _) -> (
+      (* [Int64_u.compare] answers by cases, which a comparison of its
+         answer with 0 reads back. *)
+      let saved = (l.leaves, l.sides) in
+      match formula l c with
+      | c -> Fmt.str "(ite %s %s %s)" c (int l a) (int l b)
+      | exception Exit ->
+          l.leaves <- fst saved;
+          l.sides <- snd saved;
+          leaf l t (width t))
   | _ -> ( match sort t with Bv w -> leaf l t w | _ -> raise Exit)
 
-let rec formula l t =
+and formula l t =
   match t with
   | True -> "true"
   | False -> "false"
