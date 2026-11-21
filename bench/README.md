@@ -263,6 +263,13 @@ fields into the checksum. Its
 slot and constructs its ordinary nested values. Byte fields are zero-copy
 slices.
 
+The frame loop of the batch rows (`fold_frames` and its unboxed and step
+forms) walks four frames per iteration on OxCaml only, so that it polls
+for signals once per four frames. On stock OCaml it walks one frame per
+iteration, because four inlined walks cost the stock compiler more in
+spilled registers than the polls they save. The generated Rust has no frame
+loop: its rows call `scan` once per slot.
+
 The `linked headers` rows, OCaml and Rust, use the
 fixed header codecs in `headers.ml` with a harness that links the layers. The crate adapters apply the same
 checks (`smoltcp` checks the bounds itself; `pnet_packet`'s adapter supplies
