@@ -51,8 +51,15 @@ lands on, the instructions do not. OCaml 5.4.1 with `-inline 50`; OCaml
 (switch `5.4.0-ox9`, `-O4`), each on every unit as `bench/README.md`
 (Compiler flags) explains;
 rustc 1.94.1 with etherparse 0.21.0, smoltcp 0.14.0 and pnet_packet 0.35.0,
-as `cargo/Cargo.lock` pins them. The corpora are deterministic: `bench.exe
-corpus DIR 200000` writes them with these SHA-256 digests.
+as `cargo/Cargo.lock` pins them. The four OxCaml batch rows and the two
+`wire.rust` scanner rows were counted again at commit `922e2bce`, after
+the OxCaml frame loop started loading each frame's IPv4 protocol ahead of
+its walk: the median of forty runs, the six rows interleaved on each
+corpus with their order rotated from run to run, under a load average of
+120 to 200. Interleaving makes the rows share the host's load, which ten
+runs taken one row after another do not; the medians still move by about
+5% from one such session to the next. The corpora are deterministic:
+`bench.exe corpus DIR 200000` writes them with these SHA-256 digests.
 
 | Corpus | SHA-256 |
 | --- | --- |
@@ -66,12 +73,12 @@ Instructions / cycles per packet, ordered by the instructions on
 
 | Row | fixed64 random | fixed64 sorted | mix128 random | mix128 sorted |
 | --- | ---: | ---: | ---: | ---: |
-| wire.ocaml selected outputs, unboxed batch, OxCaml | 64.2 / 26.6 | 64.2 / 20.4 | 62.9 / 27.0 | 63.1 / 16.1 |
-| wire.ocaml selected outputs, batch, OxCaml | 65.0 / 26.4 | 65.0 / 20.0 | 63.8 / 27.6 | 64.0 / 15.2 |
-| wire.ocaml fused stack, unboxed batch, OxCaml | 65.8 / 26.3 | 66.0 / 20.0 | 65.1 / 28.0 | 65.1 / 16.2 |
-| wire.ocaml fused stack, batch, OxCaml | 66.8 / 26.3 | 66.7 / 21.1 | 65.5 / 27.5 | 65.7 / 16.0 |
-| wire.rust, linked headers | 68.6 / 24.5 | 68.9 / 19.4 | 66.8 / 25.2 | 66.8 / 14.9 |
-| wire.rust selected outputs | 73.7 / 24.6 | 73.6 / 19.2 | 72.1 / 25.3 | 71.8 / 16.4 |
+| wire.ocaml selected outputs, unboxed batch, OxCaml | 65.4 / 24.9 | 65.3 / 18.4 | 64.5 / 25.6 | 64.2 / 14.2 |
+| wire.ocaml selected outputs, batch, OxCaml | 66.7 / 24.2 | 66.7 / 18.1 | 65.5 / 24.9 | 65.5 / 14.2 |
+| wire.rust, linked headers | 68.6 / 24.4 | 68.6 / 18.8 | 67.0 / 25.2 | 66.7 / 14.9 |
+| wire.ocaml fused stack, unboxed batch, OxCaml | 70.0 / 25.3 | 70.1 / 19.4 | 68.8 / 26.1 | 68.8 / 15.3 |
+| wire.ocaml fused stack, batch, OxCaml | 71.4 / 25.2 | 71.4 / 19.1 | 70.2 / 25.6 | 70.0 / 15.3 |
+| wire.rust selected outputs | 73.5 / 24.3 | 73.5 / 19.1 | 72.0 / 25.4 | 71.8 / 14.9 |
 | wire.rust fused stack | 80.6 / 26.4 | 80.5 / 21.2 | 78.4 / 26.8 | 78.4 / 16.0 |
 | smoltcp 0.14 | 82.3 / 30.6 | 82.2 / 24.2 | 80.5 / 30.6 | 80.6 / 17.7 |
 | wire.ocaml selected outputs, batch, OCaml flambda | 87.0 / 32.3 | 86.8 / 26.9 | 85.8 / 34.0 | 85.9 / 23.1 |
