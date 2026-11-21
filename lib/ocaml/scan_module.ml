@@ -272,9 +272,11 @@ let read_aheads s ~need =
    frame's [ahead] fields, before the walk of its first frame. The guard
    [stride <= len / unroll] keeps [off + len - unroll * stride] from
    overflowing or falling below [off]. *)
-let pp_frames_loop ?cuts ?step ?(ahead = []) s ~name ~names ~unboxed ~invalid
-    ~valid ~known ~unrolled =
-  let ppf = s.ppf and read, assign, stride = frames_vars s in
+(* The walk of one frame of a loop of [fold_frames], with the read-ahead
+   [ahead] fields bound as variables: the expression of the next
+   accumulator. *)
+let frames_body ?cuts ?step ~ahead s ~name ~names ~unboxed ~invalid ~valid
+    ~known =
   let body = Buffer.create 4096 in
   let bppf = Format.formatter_of_buffer body in
   let m = { s.m with ahead = Sset.of_list (List.map fst ahead) } in
@@ -284,62 +286,82 @@ let pp_frames_loop ?cuts ?step ?(ahead = []) s ~name ~names ~unboxed ~invalid
     ~reject:(invalid ^ " current")
     ~accept:(call ~step:(Option.is_some step) s ~unboxed (valid ^ " current"));
   Format.pp_print_flush bppf ();
-  let body = Buffer.contents body in
+  Buffer.contents body
+
+(* A frame at [base] binds each read-ahead [v] of [used] to [loaded v], the
+   variable its iteration bound, or else to its value at [base]. *)
+let pp_frame ?loaded s ~body ~used base =
+  let ppf = s.ppf and read, assign, stride = frames_vars s in
+  if mentions "base" body || (used <> [] && Option.is_none loaded) then
+    Fmt.pf ppf "let base = %s in@\n" base;
+  List.iter
+    (fun (v, value) ->
+      Fmt.pf ppf "let %s = %s in@\n" v
+        (match loaded with Some l -> l v | None -> value "base"))
+    used;
+  Fmt.pf ppf "let current = %sacc in@\nlet next = (@\n" read;
+  if mentions "stop" body then Fmt.pf ppf "let stop = %s in@\n" stride;
+  Fmt.pf ppf "%s) in@\nacc %s next;@\n" body assign
+
+(* The loop that walks [unroll] frames per iteration, guarded by
+   [stride <= len / unroll]. *)
+let pp_frames_unrolled s ~body ~used =
+  let ppf = s.ppf and read, assign, stride = frames_vars s in
   (* A position is an [int] where values are [int64]. *)
   let num = pos_num s.m.num in
-  let used = List.filter (fun (v, _) -> mentions v body) ahead in
-  (* A frame at [base] binds each read-ahead [v] to [loaded v], the variable
-     its iteration bound, or else to its value at [base]. *)
-  let frame ?loaded base =
-    if mentions "base" body || (used <> [] && Option.is_none loaded) then
-      Fmt.pf ppf "let base = %s in@\n" base;
-    List.iter
-      (fun (v, value) ->
-        Fmt.pf ppf "let %s = %s in@\n" v
-          (match loaded with Some l -> l v | None -> value "base"))
-      used;
-    Fmt.pf ppf "let current = %sacc in@\nlet next = (@\n" read;
-    if mentions "stop" body then Fmt.pf ppf "let stop = %s in@\n" stride;
-    Fmt.pf ppf "%s) in@\nacc %s next;@\n" body assign
+  let int n = if num = Unboxed then Fmt.str "U.of_int (%s)" n else n in
+  Fmt.pf ppf "if stride <= len / %d then (@\nlet last_%d = %s in@\n" unroll
+    unroll
+    (Fmt.kstr int "off + len - (%d * stride)" unroll);
+  for j = 2 to unroll do
+    Fmt.pf ppf "let stride_%d = %s in@\n" j (Fmt.kstr int "%d * stride" j)
+  done;
+  Fmt.pf ppf "while %s do@\n" (frames_while ~last:(Fmt.str "last_%d" unroll) s);
+  let start j =
+    if j = 0 then read ^ "cursor"
+    else
+      binop num "+" (read ^ "cursor")
+        (if j = 1 then stride else Fmt.str "stride_%d" j)
   in
-  if unrolled && Option.is_some cuts then begin
-    let int n = if num = Unboxed then Fmt.str "U.of_int (%s)" n else n in
-    Fmt.pf ppf "if stride <= len / %d then (@\nlet last_%d = %s in@\n" unroll
-      unroll
-      (Fmt.kstr int "off + len - (%d * stride)" unroll);
-    for j = 2 to unroll do
-      Fmt.pf ppf "let stride_%d = %s in@\n" j (Fmt.kstr int "%d * stride" j)
-    done;
-    Fmt.pf ppf "while %s do@\n"
-      (frames_while ~last:(Fmt.str "last_%d" unroll) s);
-    let start j =
-      if j = 0 then read ^ "cursor"
-      else
-        binop num "+" (read ^ "cursor")
-          (if j = 1 then stride else Fmt.str "stride_%d" j)
-    in
-    let frames = List.init unroll Fun.id in
-    List.iter
-      (fun j -> if j > 0 then Fmt.pf ppf "let base_%d = %s in@\n" j (start j))
-      frames;
-    let at j = if j = 0 then read ^ "cursor" else Fmt.str "base_%d" j in
-    List.iter
-      (fun j ->
-        List.iter
-          (fun (v, value) ->
-            Fmt.pf ppf "let %s_%d = %s in@\n" v j (value (at j)))
-          used)
-      frames;
-    List.iter
-      (fun j -> frame ~loaded:(fun v -> Fmt.str "%s_%d" v j) (at j))
-      frames;
-    Fmt.pf ppf "cursor %s %s@\ndone);@\n" assign
-      (binop num "+" (read ^ "cursor") (Fmt.str "stride_%d" unroll))
-  end;
-  Fmt.pf ppf "while %s do@\n" (frames_while s);
-  frame (read ^ "cursor");
-  Fmt.pf ppf "cursor %s %s@\ndone" assign
-    (binop num "+" (read ^ "cursor") stride)
+  let frames = List.init unroll Fun.id in
+  List.iter
+    (fun j -> if j > 0 then Fmt.pf ppf "let base_%d = %s in@\n" j (start j))
+    frames;
+  let at j = if j = 0 then read ^ "cursor" else Fmt.str "base_%d" j in
+  List.iter
+    (fun j ->
+      List.iter
+        (fun (v, value) -> Fmt.pf ppf "let %s_%d = %s in@\n" v j (value (at j)))
+        used)
+    frames;
+  List.iter
+    (fun j ->
+      pp_frame s ~body ~used ~loaded:(fun v -> Fmt.str "%s_%d" v j) (at j))
+    frames;
+  Fmt.pf ppf "cursor %s %s@\ndone);@\n" assign
+    (binop num "+" (read ^ "cursor") (Fmt.str "stride_%d" unroll))
+
+(* The loop of [fold_frames] over frames walked with [known] bytes of each
+   known to be there. A walk that knows all its bounds may not read [stop].
+   With [unrolled], and when the walk of a frame is a function of its own,
+   the loop first walks [unroll] frames per iteration, then the rest one by
+   one. An iteration computes the start of each of its frames, and loads each
+   frame's [ahead] fields, before the walk of its first frame. The guard
+   [stride <= len / unroll] keeps [off + len - unroll * stride] from
+   overflowing or falling below [off]. *)
+let pp_frames_loop ?cuts ?step ?(ahead = []) s ~name ~names ~unboxed ~invalid
+    ~valid ~known ~unrolled =
+  let read, assign, stride = frames_vars s in
+  let body =
+    frames_body ?cuts ?step ~ahead s ~name ~names ~unboxed ~invalid ~valid
+      ~known
+  in
+  let used = List.filter (fun (v, _) -> mentions v body) ahead in
+  if unrolled && Option.is_some cuts then pp_frames_unrolled s ~body ~used;
+  Fmt.pf s.ppf "while %s do@\n" (frames_while s);
+  pp_frame s ~body ~used (read ^ "cursor");
+  Fmt.pf s.ppf "cursor %s %s@\ndone" assign
+    (binop (pos_num s.m.num) "+" (read ^ "cursor") stride)
 
 (* A batch of frames too short for the bounds a frame loop leaves out goes
    through the walk of one frame, already written, rather than a second copy
