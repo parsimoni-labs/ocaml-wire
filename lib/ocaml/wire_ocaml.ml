@@ -142,6 +142,7 @@ module Plan = struct
         at : pos;
         window : string;
         cases : int;
+        conditions : bool T.expr list;
         choice : choice;
         join : join;
         hoisted : int T.expr option;

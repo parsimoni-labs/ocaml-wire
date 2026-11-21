@@ -45,6 +45,7 @@ type t =
       at : pos;
       window : string;
       cases : int;
+      conditions : bool T.expr list;
       choice : choice;
       join : join;
       hoisted : int T.expr option;
@@ -111,7 +112,7 @@ let pp ppf = function
   | Word_range { at; window; first; second; lo; hi } ->
       Fmt.pf ppf "word range at %a in %s: %s and %s in [%d, %d]" pp_pos at
         window first second lo hi
-  | Dispatch { at; window; cases; choice; join; hoisted } ->
+  | Dispatch { at; window; cases; conditions = _; choice; join; hoisted } ->
       Fmt.pf ppf "dispatch at %a in %s: %d case%s, %s%a: %a" pp_pos at window
         cases (plural cases)
         (match join with Joined -> "joined" | Copied -> "copied")

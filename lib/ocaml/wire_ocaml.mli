@@ -390,6 +390,8 @@ module Plan : sig
         at : pos;
         window : string;
         cases : int;
+        conditions : bool Wire.Private.Types.expr list;
+            (** The condition of each case, in order. *)
         choice : choice;
         join : join;
         hoisted : int Wire.Private.Types.expr option;

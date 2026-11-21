@@ -280,3 +280,12 @@ let rec ahead_at (lead:list (var & (nat & nat))) (ah:list (var & (nat & nat))) :
    bytes the loop knows. *)
 let ahead_justified (need:nat) (l:list node) (ah:list (var & (nat & nat))) : bool =
   ahead_at (lead_fields 0 l) ah && ahead_in need (map snd ah)
+
+(* {1 Dispatch trees} *)
+
+(* A dispatch's tree is justified when it runs the first case whose
+   condition holds, testing each atom at most once on a path
+   (Plan.Tree.tree_first, tested_once), and runs a case on every path when
+   the emitter hoists a bound before it (always_runs). *)
+let dispatch_justified (cs:list Plan.Tree.formula) (t:Plan.Tree.choice) (hoists:bool) : bool =
+  Plan.Tree.tree_ok [] cs t && (not hoists || not (Plan.Tree.runs_none t))

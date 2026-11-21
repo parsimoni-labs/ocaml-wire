@@ -1890,6 +1890,7 @@ and dispatch w gates tree p ~copy k =
            at = p;
            window = w.limit;
            cases = List.length gates;
+           conditions = List.map (fun (c, _, _, _) -> c) gates;
            choice = choice tree;
            join = (if copy then Copied else Joined);
            hoisted = hoisted gates tree;

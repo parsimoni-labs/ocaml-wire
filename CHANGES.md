@@ -85,9 +85,10 @@
 
 - `Wire_ocaml.Plan.decisions`: the decisions a scanner takes beyond its
   plan, as data: which bounds it tests and which it leaves to a later
-  check, the words it loads once, how it dispatches on optional fields and
-  how its frame loop runs, for a tool that audits or proves the checks a
-  generated scanner performs (#513, @samoht)
+  check, the words it loads once, the conditions it dispatches on, and how
+  its frame loop runs and where it reads ahead, for a tool that audits or
+  proves the checks a generated scanner performs (#513, #519,
+  @samoht)
 
 - A scanner generated with `~step` has `fold_index_step buf ~offs ~lens
   ~init`, which folds `fold_step` over frames of any length, such as the

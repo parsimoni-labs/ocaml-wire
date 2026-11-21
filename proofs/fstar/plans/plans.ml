@@ -278,6 +278,38 @@ let pp_kind ppf = function
         (if neg then "" else ", no negative test")
         (if c then ", cancelled" else "")
 
+(* {1 Dispatch trees}
+
+   A condition as Plan.Tree reads it: [&&], [||] and [not] over atoms, each
+   atom numbered by its text, as Dispatch_tree.decide tests them. *)
+
+module Tr = Plan_Tree
+
+let atoms : (string, int) Hashtbl.t = Hashtbl.create 16
+
+let atom e =
+  let k = key e in
+  match Hashtbl.find_opt atoms k with
+  | Some a -> a
+  | None ->
+      let a = Hashtbl.length atoms in
+      Hashtbl.replace atoms k a;
+      a
+
+let rec formula (e : bool T.expr) : Tr.formula =
+  match e with
+  | T.Bool true -> Tr.FTrue
+  | T.Bool false -> Tr.FFalse
+  | T.And (a, b) -> Tr.FAnd (formula a, formula b)
+  | T.Or (a, b) -> Tr.FOr (formula a, formula b)
+  | T.Not a -> Tr.FNot (formula a)
+  | e -> Tr.FAtom (z (atom e))
+
+let rec tree (c : P.choice) : Tr.choice =
+  match c with
+  | P.Run i -> Tr.Run (Option.map z i)
+  | P.If (e, yes, no) -> Tr.If (z (atom e), tree yes, tree no)
+
 let plans = ref []
 let refused = ref []
 
@@ -298,6 +330,9 @@ let checks = Array.make 5 0
 (* The frame loops, those of four frames an iteration, and the fields they
    load ahead. *)
 let loops = Array.make 3 0
+
+(* The dispatch trees checked. *)
+let trees = ref 0
 
 (* The emitter's decisions for a codec the model does not justify. *)
 let findings = ref []
@@ -480,6 +515,30 @@ let add : type a. string -> a Wire.Codec.t -> unit =
                Fmt.(option ~none:(any "nothing") pp_value)
                g.ghoisted))
         (D.gates_unjustified (D.gates_of events) gates);
+      (* Each dispatch's tree against the conditions it decided, as
+         Plan.Tree reads them; the control swaps every test's branches. *)
+      List.iter
+        (function
+          | P.Dispatch g ->
+              let rec swap = function
+                | P.If (e, yes, no) -> P.If (e, swap no, swap yes)
+                | P.Run _ as r -> r
+              in
+              let choice = if !fabricate then swap g.choice else g.choice in
+              trees := !trees + 1;
+              if
+                g.cases <> List.length g.conditions
+                || not
+                     (D.dispatch_justified
+                        (List.map formula g.conditions)
+                        (tree choice) (Option.is_some g.hoisted))
+              then
+                found
+                  (Fmt.str "a tree that runs a case its conditions do not: %a"
+                     P.pp_decision
+                     (P.Dispatch { g with choice }))
+          | _ -> ())
+        all;
       (* A frame loop as Plan.Loop.frame_walks models it: the frames shorter
          than its [need] bytes walked by [fold] or by a walk of its own that
          knows none, the others by a walk that knows [need], and the fields
@@ -806,6 +865,7 @@ let () =
     (List.length !check_findings);
   Fmt.epr "loops: %d frame loops, %d of four frames, %d fields read ahead@."
     loops.(0) loops.(1) loops.(2);
+  Fmt.epr "trees: %d dispatch trees, %d atoms@." !trees (Hashtbl.length atoms);
   Fmt.epr
     "words: %d shared words, %d held over from a prefix before, %d plans with \
      one the model does not justify, %d held across windows@."

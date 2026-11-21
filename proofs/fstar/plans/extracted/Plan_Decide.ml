@@ -306,3 +306,6 @@ let ahead_justified (need : Prims.int) (l : (Plan_Scan.node) list) (ah : ((Prims
     | (u__1, u__2) -> u__2
   )) ah)))
 
+let dispatch_justified (cs : (Plan_Tree.formula) list) (t : Plan_Tree.choice) (hoists : bool) : bool =
+  ((Plan_Tree.tree_ok [] cs t) && ((not hoists) || (not (Plan_Tree.runs_none t))))
+

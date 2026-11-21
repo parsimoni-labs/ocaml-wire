@@ -59,6 +59,14 @@ of the OxCaml scanner, and checks three things of each.
   (`ahead`), only four frames an iteration, is one of the model's
   `lead_fields`, at the offset and of the width the walk reads it at,
   inside the bytes the loop knows (`Plan.Decide.ahead_justified`).
+- Every dispatch's tree (`Dispatch.choice`), read over the atoms of the
+  conditions it reports it decided (`conditions`), runs the first case whose
+  condition the tests on its path decide holds, after those that decide every
+  condition before it fails, tests no atom twice on a path, and runs a case
+  on every path where the dispatch hoists a bound
+  (`Plan.Decide.dispatch_justified`). An atom is any test other than `&&`,
+  `||` and `not`, numbered by its text, so two atoms the planner knows to
+  depend on each other (`f = 6`, `f = 17`) are independent here.
 
 The control claims every bound is left to the next check, moves every word
 one byte on and every tested run untested, which the model must refuse for
@@ -123,6 +131,14 @@ built-in integer `*`, so an older one no longer checks them.
   loaded in the loop over short frames, and each one loaded lies in the
   bytes the loop knows (`ahead_in`). `frame_walks_frames`: both branches
   walk the frames the counted loop did.
+- `Plan.Tree.tree_first`: a tree `tree_ok` accepts runs, for every value
+  of its atoms, the case the codec's walk of the conditions in order runs
+  first, so a case exactly where its condition holds and none before it
+  does, and no case exactly where no condition holds (`first_none`);
+  `tested_once`: it evaluates each atom at most once; `always_runs`: one
+  with no leaf that runs none always runs a case, the premise of the
+  bound a dispatch hoists and of the model's reading of a run whose last
+  case is its default.
 - `Spec.Ipv4.scanner_is_3d` (M3): for a plan of the IPv4 header's first
   four bytes and checks, the generated walk accepts exactly the inputs the
   LowParse parser EverParse builds for the same 3D accepts.
@@ -183,6 +199,11 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   bound instead of loading it: `make plans` checks the loop loads the field
   from the bytes the model's walk reads it at, but `exec` is not run with
   the field bound beforehand.
+- That the conditions of a dispatch exclude each other
+  (`Dispatch_tree.exclusive`): the tree runs the first that holds, the codec
+  each that holds, and they agree only where at most one does; nor that an
+  atom the tree leaves untested, which the codec evaluates, does not
+  overflow there.
 - Cuts into functions, the `bounded` key's textual form, OxCaml's unboxed
   integers, bitfield views other than `word_range`, the Rust backend.
 - In `make plans`, expressions the model cannot write (division, masks,
@@ -200,10 +221,6 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 `Wire_ocaml.Plan.decisions` hands out decisions the model has no notion of
 yet; each is the next thing to model and check against the plans.
 
-- The tree of a dispatch (`Dispatch.choice`): that each atom is tested at
-  most once on a path, that a case runs exactly where its condition and
-  none before it holds, and that `Run None` is reachable exactly where the
-  model reads a run as running no case.
 - The join (`Joined` or `Copied`): the model copies the code after a
   dispatch into each case; a join's state forgets the case's facts and
   makes the position a variable, which the prefix check above only accepts
@@ -280,6 +297,12 @@ walked knowing the two its prefix needs faults reading its field at 1; a
 field at 1 is loaded ahead of a frame of one byte at 0. Run against an
 emitter mutated to load each field eleven bytes past its offset, `make
 plans` reports the read-ahead of the packet stack and of two scan cases.
+
+The mutants `tree-retest` and `tree-case-first` weaken the check of a
+dispatch's tree: a path may test an atom again, and a leaf may run a case
+without the path deciding the conditions before it fail. The first makes
+`tested_once` fail, the second `tree_first`, whose witness is a tree that
+runs the second of two cases where the first holds.
 
 The mutants `o1-drop-negative`, `o1-drop-wrap` and `o1-drop-unchecked`
 remove one premise each of the O1 rule that leaves a span's bound to the

@@ -3,3 +3,4 @@ Plan_Decide.ml
 Plan_Expr.ml
 Plan_Scan.ml
 Plan_Sum.ml
+Plan_Tree.ml
