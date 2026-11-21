@@ -67,6 +67,12 @@ of the OxCaml scanner, and checks three things of each.
   (`Plan.Decide.dispatch_justified`). An atom is any test other than `&&`,
   `||` and `not`, numbered by its text, so two atoms the planner knows to
   depend on each other (`f = 6`, `f = 17`) are independent here.
+- Every range of two bitfields a walk tests as one (`Word_range`) is of
+  two fields of one word, the first its top bits and the second the bits
+  right below, each with a single check `f = c` and `g >= d`, and its
+  bounds are `c * 2^shift + d * 2^shift'` and `(c + 1) * 2^shift - 1`
+  (`Plan.Decide.range_justified`), which `Plan.Range.range_correct` proves
+  test exactly the two checks.
 
 The control claims every bound is left to the next check, moves every word
 one byte on and every tested run untested, which the model must refuse for
@@ -131,6 +137,9 @@ built-in integer `*`, so an older one no longer checks them.
   loaded in the loop over short frames, and each one loaded lies in the
   bytes the loop knows (`ahead_in`). `frame_walks_frames`: both branches
   walk the frames the counted loop did.
+- `Plan.Range.range_correct`: for every word of `bits` bits, bounds that
+  `range_ok` accepts hold exactly where the two checks do
+  (`Plan.Word.word_range`, here for the bounds the plans use).
 - `Plan.Tree.tree_first`: a tree `tree_ok` accepts runs, for every value
   of its atoms, the case the codec's walk of the conditions in order runs
   first, so a case exactly where its condition holds and none before it
@@ -227,9 +236,6 @@ yet; each is the next thing to model and check against the plans.
   where it tests.
 - Cuts (`Cut`): a function cut out of a walk keeps its window and the
   bytes known there; the model has no functions.
-- Ranges of bitfields (`Word_range`): `Plan.Word.word_range` proves the
-  test of one range equals the two checks; the bounds the plans use are
-  not checked against it.
 - How values are held (`Walk.values`): the model's integers are
   mathematical and its ranges the 63-bit int's; `int64` and `int64_u`
   arithmetic, and the masking of signed fields and bitfields read raw from
@@ -303,6 +309,10 @@ dispatch's tree: a path may test an atom again, and a leaf may run a case
 without the path deciding the conditions before it fail. The first makes
 `tested_once` fail, the second `tree_first`, whose witness is a tree that
 runs the second of two cases where the first holds.
+
+The mutant `range-top-bits` accepts a range of two fields below the top
+bits of their word, which makes `range_correct` fail; its witness is a byte
+whose checks hold outside the bounds, the bits above the fields set.
 
 The mutants `o1-drop-negative`, `o1-drop-wrap` and `o1-drop-unchecked`
 remove one premise each of the O1 rule that leaves a span's bound to the

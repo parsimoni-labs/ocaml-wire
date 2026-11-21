@@ -289,3 +289,10 @@ let ahead_justified (need:nat) (l:list node) (ah:list (var & (nat & nat))) : boo
    the emitter hoists a bound before it (always_runs). *)
 let dispatch_justified (cs:list Plan.Tree.formula) (t:Plan.Tree.choice) (hoists:bool) : bool =
   Plan.Tree.tree_ok [] cs t && (not hoists || not (Plan.Tree.runs_none t))
+
+(* {1 Ranges of bitfields} *)
+
+(* The bounds of a range of two bitfields are those of their checks
+   (Plan.Range.range_correct). *)
+let range_justified (bits shift width shift' width' c d lo hi:nat) : bool =
+  Plan.Range.range_ok bits shift width shift' width' c d lo hi

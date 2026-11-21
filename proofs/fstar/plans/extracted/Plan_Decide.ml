@@ -309,3 +309,6 @@ let ahead_justified (need : Prims.int) (l : (Plan_Scan.node) list) (ah : ((Prims
 let dispatch_justified (cs : (Plan_Tree.formula) list) (t : Plan_Tree.choice) (hoists : bool) : bool =
   ((Plan_Tree.tree_ok [] cs t) && ((not hoists) || (not (Plan_Tree.runs_none t))))
 
+let range_justified (bits : Prims.int) (shift : Prims.int) (width : Prims.int) (shift' : Prims.int) (width' : Prims.int) (c : Prims.int) (d : Prims.int) (lo : Prims.int) (hi : Prims.int) : bool =
+  (Plan_Range.range_ok bits shift width shift' width' c d lo hi)
+

@@ -310,6 +310,38 @@ let rec tree (c : P.choice) : Tr.choice =
   | P.Run i -> Tr.Run (Option.map z i)
   | P.If (e, yes, no) -> Tr.If (z (atom e), tree yes, tree no)
 
+(* {1 Ranges of bitfields} *)
+
+let rec plan_fields = function
+  | [] -> []
+  | P.Prefix (fs, _) :: r -> fs @ plan_fields r
+  | (P.Gate (_, _, _, b) | P.Region (_, _, b)) :: r ->
+      plan_fields b @ plan_fields r
+  | (P.Span _ | P.Test _) :: r -> plan_fields r
+
+(* A Word_range of the fields [first] and [second] of the plan [p], as
+   Plan.Decide.range_justified reads it: their layout in their word and
+   the constants of their one check each. *)
+let range_justified p ~first ~second ~lo ~hi =
+  let fields = plan_fields (P.nodes p) in
+  let find id = List.find_opt (fun (f : P.field) -> f.id = id) fields in
+  let bits = function T.U8 -> 8 | T.U16 _ -> 16 | T.U32 _ -> 32 in
+  match (find first, find second) with
+  | Some f, Some g -> (
+      match (f.store, g.store, f.checks, g.checks) with
+      | ( L.Bits { base; shift; width },
+          L.Bits { base = base'; shift = shift'; width = width' },
+          [ { cond = T.Eq (T.Ref (T.I, x), T.Int c); _ } ],
+          [ { cond = T.Ge (T.Ref (T.I, y), T.Int d); _ } ] )
+        when base = base' && f.offset = g.offset && x = f.id && y = g.id
+             && c >= 0 && d >= 0 && lo >= 0 && hi >= 0 ->
+          D.range_justified
+            (z (bits base))
+            (z shift) (z width) (z shift') (z width') (z c) (z d) (z lo) (z hi)
+      | _ -> false)
+  | _ -> false
+
+let ranges = ref 0
 let plans = ref []
 let refused = ref []
 
@@ -515,6 +547,21 @@ let add : type a. string -> a Wire.Codec.t -> unit =
                Fmt.(option ~none:(any "nothing") pp_value)
                g.ghoisted))
         (D.gates_unjustified (D.gates_of events) gates);
+      List.iter
+        (function
+          | P.Word_range r ->
+              incr ranges;
+              let hi = if !fabricate then r.hi + 1 else r.hi in
+              if
+                not
+                  (range_justified p ~first:r.first ~second:r.second ~lo:r.lo
+                     ~hi)
+              then
+                found
+                  (Fmt.str "the range [%d, %d] of %s and %s" r.lo hi r.first
+                     r.second)
+          | _ -> ())
+        all;
       (* Each dispatch's tree against the conditions it decided, as
          Plan.Tree reads them; the control swaps every test's branches. *)
       List.iter
@@ -866,6 +913,7 @@ let () =
   Fmt.epr "loops: %d frame loops, %d of four frames, %d fields read ahead@."
     loops.(0) loops.(1) loops.(2);
   Fmt.epr "trees: %d dispatch trees, %d atoms@." !trees (Hashtbl.length atoms);
+  Fmt.epr "ranges: %d ranges of bitfields@." !ranges;
   Fmt.epr
     "words: %d shared words, %d held over from a prefix before, %d plans with \
      one the model does not justify, %d held across windows@."
