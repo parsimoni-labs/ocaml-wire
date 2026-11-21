@@ -6,8 +6,8 @@
 make build              # dune build
 make test               # dune runtest
 make test-wasm          # test/wasm under node via wasm_of_ocaml (needs wasm_of_ocaml, node)
-make 3d                 # validate all schemas with 3d.exe (needs 3d.exe)
-make bench              # EverParse C vs OCaml (needs 3d.exe)
+make 3d                 # validate all schemas with EverParse (needs everparse-3d.exe)
+make bench              # EverParse C vs OCaml (needs everparse-3d.exe)
 make bench-routing      # APID demux throughput
 make bench-gateway      # TM frame reassembly
 make bench-clcw         # CLCW polling loop
@@ -20,7 +20,8 @@ make cppcheck           # static analysis of the hand-written C (skips if cppche
 make clean              # dune clean
 ```
 
-`make bench` requires EverParse (`3d.exe` in PATH or `~/.local/everparse/bin/`).
+`make bench` requires EverParse (`everparse-3d.exe`, or `3d.exe` before
+v2026.10, in PATH or `~/.local/everparse/bin/`).
 All bench/prof/memtrace targets use `--profile=bench`: the release profile
 with `-O3` on every unit, the libraries a benchmark links included
 (`dune-workspace`).
@@ -30,7 +31,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 ## Project structure
 
 - `lib/` -- core `wire` library: DSL types, Everparse codegen, Codec (parse/encode)
-- `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run 3d.exe, generate C tests)
+- `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run everparse-3d.exe, generate C tests)
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
 - `lib/ocaml/` -- `wire.ocaml` sublibrary: a fixed-size codec written out as OCaml (or OxCaml)
 - `lib/rust/` -- `wire.rust` sublibrary: the same codec written out as dependency-free Rust

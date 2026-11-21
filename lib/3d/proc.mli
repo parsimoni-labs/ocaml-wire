@@ -16,10 +16,19 @@ val locate_3d_exe :
   getenv:(string -> string option) ->
   executable:(string -> bool) ->
   string option
-(** [locate_3d_exe ~win32 ~getenv ~executable] is the first [3d.exe] that
-    [executable] accepts: in a directory of [PATH], split on [';'] when [win32]
-    and on [':'] otherwise, then in [.local/everparse/bin] under [HOME] and
-    under [USERPROFILE]. A variable [getenv] does not know is skipped. *)
+(** [locate_3d_exe ~win32 ~getenv ~executable] is the first of EverParse's 3D
+    compilers that [executable] accepts, [everparse-3d.exe] (its name since
+    v2026.10) before [3d.exe] in each directory: in a directory of [PATH], split
+    on [';'] when [win32] and on [':'] otherwise, then in [.local/everparse/bin]
+    under [HOME] and under [USERPROFILE]. A variable [getenv] does not know is
+    skipped. *)
+
+val names_3d_exe : string list
+(** [names_3d_exe] is the names {!locate_3d_exe} looks for, the newest first. *)
+
+val not_found_3d_exe : string
+(** [not_found_3d_exe] is the message of a failure to find EverParse's 3D
+    compiler. *)
 
 (** Where a child's standard output and error go. *)
 type process_output = Inherit | Dev_null | File of string

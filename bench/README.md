@@ -45,7 +45,7 @@ Per-field read/write performance across all Wire DSL constructs:
 - Real protocols: CLCW (CCSDS), TCP/IP
 
 ```
-make bench-demo           # requires EverParse (3d.exe in PATH)
+make bench-demo           # requires EverParse (everparse-3d.exe in PATH)
 ```
 
 ## Application benchmarks
@@ -442,5 +442,5 @@ make memtrace             # allocation hotspots via memtrace
 `make bench` triggers the EverParse code generation pipeline:
 
 1. `gen_stubs.exe` generates `.3d` files from Wire DSL definitions
-2. EverParse (`3d.exe`) compiles `.3d` to verified C validators
+2. EverParse (`everparse-3d.exe`) compiles `.3d` to verified C validators
 3. `Wire_stubs` generates C/OCaml FFI stubs

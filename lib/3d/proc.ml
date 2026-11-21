@@ -30,22 +30,33 @@ let path_dirs ~win32 path =
     String.split_on_char ':' path
     |> List.map (fun dir -> if dir = "" then "." else dir)
 
+(* The names of EverParse's 3D compiler: [everparse-3d.exe] since v2026.10,
+   [3d.exe] before. *)
+let names_3d_exe = [ "everparse-3d.exe"; "3d.exe" ]
+
+let not_found_3d_exe =
+  "EverParse's everparse-3d.exe (or 3d.exe) not found in PATH or \
+   ~/.local/everparse/bin/"
+
 let locate_3d_exe ~win32 ~getenv ~executable =
-  let found candidate = if executable candidate then Some candidate else None in
+  let found dir =
+    List.find_map
+      (fun name ->
+        let candidate = Filename.concat dir name in
+        if executable candidate then Some candidate else None)
+      names_3d_exe
+  in
   let on_path dir =
-    let candidate = Filename.concat dir "3d.exe" in
     found
-      (if is_relative ~win32 candidate then
-         Filename.concat (Sys.getcwd ()) candidate
-       else candidate)
+      (if is_relative ~win32 dir then Filename.concat (Sys.getcwd ()) dir
+       else dir)
   in
   let in_home var =
     match getenv var with
     | None | Some "" -> None
     | Some home ->
         found
-          (List.fold_left Filename.concat home
-             [ ".local"; "everparse"; "bin"; "3d.exe" ])
+          (List.fold_left Filename.concat home [ ".local"; "everparse"; "bin" ])
   in
   match
     getenv "PATH" |> Option.to_list

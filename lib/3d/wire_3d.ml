@@ -254,7 +254,7 @@ let check_provenance ~outdir three_d_files =
 let everparse_dir () =
   match locate_3d_exe () with
   | Some exe -> Filename.dirname exe |> Filename.dirname
-  | None -> failwith "3d.exe not found"
+  | None -> failwith not_found_3d_exe
 
 (* A freestanding endianness branch for EverParseEndianness.h. The shipped
    header keys byte order off an OS (<endian.h> on Linux, OSSwap on macOS, ...)
@@ -470,26 +470,40 @@ let emit_setter_case ppf logical f =
         Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx member
           f.c_type
 
+(* EverParse renames some setter symbols when emitting [.c] (for example,
+   uppercase runs after a digit are lowercased, and a snake-case schema name is
+   CamelCased, as [everparse_name] does). Read the actual symbol names from the
+   just-generated [_ExternalAPI.h] rather than re-deriving them. EverParse
+   changes only their case and underscores, and since v2026.10 it does not keep
+   the declaration order, so each setter takes the name equal to its own up to
+   case and underscores; the suffixes that tell one schema's setters apart have
+   neither. A header this cannot read yields a setter with no name, and leaving
+   it out would emit a [_Fields.c] missing setters the validator calls; say
+   which file came up short instead. *)
+let setter_key name =
+  String.lowercase_ascii (String.concat "" (String.split_on_char '_' name))
+
+let physical_setter_names ~outdir s setters =
+  let declared = read_extern_names ~outdir s in
+  List.map
+    (fun (logical, _) ->
+      let key = setter_key logical in
+      match List.find_opt (fun p -> setter_key p = key) declared with
+      | Some p -> p
+      | None ->
+          Fmt.invalid_arg
+            "Wire_3d: codec %S declares the extern setter %s but %s does not; \
+             the generated header is not in a layout this understands"
+            s.name logical
+            (extern_api_path ~outdir s))
+    setters
+
 let write_fields_impl ~outdir s =
   let fields = Wire.Everparse.plug_fields s in
   let setters = Wire.Everparse.plug_setters s in
   let base = file_base s in
   let ident = c_ident s in
-  (* EverParse renames some setter symbols when emitting [.c] (for example,
-     uppercase runs after a digit are lowercased). Read the actual symbol
-     names from the just-generated [_ExternalAPI.h] rather than re-deriving
-     them. Order matches the declaration order of the extern functions,
-     which matches [plug_setters]. A header this cannot read yields too few
-     names, and pairing them off silently would emit a [_Fields.c] missing
-     setters the validator calls; say which file came up short instead. *)
-  let physical_names = read_extern_names ~outdir s in
-  if List.compare_lengths setters physical_names <> 0 then
-    Fmt.invalid_arg
-      "Wire_3d: codec %S declares %d extern setter(s) but %d were read from \
-       %s; the generated header is not in a layout this understands"
-      s.name (List.length setters)
-      (List.length physical_names)
-      (extern_api_path ~outdir s);
+  let physical_names = physical_setter_names ~outdir s setters in
   let path = Filename.concat outdir (base ^ "_Fields.c") in
   let oc = open_out path in
   let ppf = Format.formatter_of_out_channel oc in
@@ -570,8 +584,81 @@ let run_3d_spawned ?output ~outdir exe flags file =
   in
   spawn ?output exe (flags @ [ "--odir"; outdir; Filename.concat outdir file ])
 
+(* Workaround for an EverParse regression, <<TODO: everparse issue>>. Since
+   v2026.10, F* extracts the validators through Custard, which gives up on a
+   flat record of 16 fields (Error 365, "Custard exceeded
+   --custard_norm_budget") that earlier releases compiled. 3d.exe passes no
+   flag of ours to F*, so it runs F* through a script that adds a larger
+   budget. *)
+let custard_norm_budget = 50_000_000
+
+(* Whether [version], as [3d.exe --version] prints it ("EverParse/3d
+   v2026.10.27"), names a release that extracts through Custard. *)
+let has_custard version =
+  let release word =
+    match String.split_on_char '.' word with
+    | year :: month :: _ when String.length year > 1 && year.[0] = 'v' -> (
+        let year = String.sub year 1 (String.length year - 1) in
+        match (int_of_string_opt year, int_of_string_opt month) with
+        | Some y, Some m -> Some (y, m)
+        | _ -> None)
+    | _ -> None
+  in
+  match List.find_map release (String.split_on_char ' ' version) with
+  | Some r -> r >= (2026, 10)
+  | None -> false
+
+(* The script that runs [fstar] with the larger budget. It lives in the
+   temporary directory under a name derived from its contents, so every run
+   and every forked job shares one copy, written once by rename. *)
+let fstar_wrapper fstar =
+  let script =
+    Fmt.str "#!/bin/sh\nexec %s \"$@\" --custard_norm_budget %d\n"
+      (Filename.quote fstar) custard_norm_budget
+  in
+  let path =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      ("wire-fstar-" ^ Digest.to_hex (Digest.string script) ^ ".sh")
+  in
+  if not (Sys.file_exists path) then begin
+    let tmp =
+      Filename.temp_file ~temp_dir:(Filename.dirname path) "wire-fstar" ".sh"
+    in
+    Out_channel.with_open_bin tmp (fun oc -> output_string oc script);
+    Unix.chmod tmp 0o755;
+    Sys.rename tmp path
+  end;
+  path
+
+(* The flags that make [exe] run F* with the larger budget: none on Windows,
+   where the script cannot run, and none for a release without Custard or a
+   3d.exe whose version does not read. *)
+let fstar_flags =
+  let known = Hashtbl.create 1 in
+  fun exe ->
+    match Hashtbl.find_opt known exe with
+    | Some flags -> flags
+    | None ->
+        let flags =
+          if Sys.win32 then []
+          else
+            match everparse_version exe with
+            | version when has_custard version ->
+                let fstar =
+                  Filename.concat (Filename.dirname exe) "fstar.exe"
+                in
+                let fstar = if executable fstar then fstar else "fstar.exe" in
+                [ "--fstar"; fstar_wrapper fstar ]
+            | _ -> []
+            | exception (Failure _ | Unix.Unix_error _) -> []
+        in
+        Hashtbl.replace known exe flags;
+        flags
+
 (* Run 3d.exe with [flags] on [file], a name in [outdir], writing there. *)
 let run_3d ?output ~outdir exe flags file =
+  let flags = fstar_flags exe @ flags in
   if Sys.win32 then run_3d_spawned ?output ~outdir exe flags file
   else run_process ?output ~cwd:outdir exe (flags @ [ file ])
 
@@ -579,7 +666,7 @@ let run_everparse_files ?(quiet = true) ~outdir files =
   let exe =
     match locate_3d_exe () with
     | Some e -> e
-    | None -> failwith "3d.exe not found in PATH or ~/.local/everparse/bin/"
+    | None -> failwith not_found_3d_exe
   in
   let version = everparse_version exe in
   List.iter
@@ -602,7 +689,7 @@ let parse_3d ?(batch = false) ~outdir file =
   let exe =
     match locate_3d_exe () with
     | Some e -> e
-    | None -> failwith "3d.exe not found in PATH or ~/.local/everparse/bin/"
+    | None -> failwith not_found_3d_exe
   in
   let log_path = Filename.temp_file "wire_parse_3d" ".log" in
   (* 3d.exe emits diagnostics to stdout, so capture both streams. *)
@@ -812,7 +899,7 @@ let fork_pool = fork_pool
 let batch_check ?max_jobs ~outdir schemas =
   check_name_collisions schemas;
   match (locate_3d_exe (), schemas) with
-  | None, _ -> Error "3d.exe not found in PATH or ~/.local/everparse/bin/"
+  | None, _ -> Error not_found_3d_exe
   | Some _, [] -> Ok ()
   | Some exe, _ -> (
       ensure_dir outdir;
@@ -862,9 +949,7 @@ let generate_c ?(quiet = true) ~outdir schemas =
     write_fields ~outdir schemas;
     generate_test ~outdir schemas
   end
-  else
-    failwith
-      "3d.exe not found in PATH. Install EverParse to regenerate C files."
+  else failwith (not_found_3d_exe ^ ". Install EverParse to regenerate C files.")
 
 let run ?(quiet = true) ~outdir schemas =
   generate_3d ~outdir schemas;
@@ -1590,9 +1675,7 @@ let generate_c_standalone ?(quiet = true) ?name ~outdir ~package () =
   if has_3d_exe () then
     run_everparse_files ~quiet ~outdir
       [ standalone_base ?name ~package () ^ ".3d" ]
-  else
-    failwith
-      "3d.exe not found in PATH. Install EverParse to regenerate C files."
+  else failwith (not_found_3d_exe ^ ". Install EverParse to regenerate C files.")
 
 let generate_standalone ?(quiet = true) ?name ~outdir ~package codecs =
   generate_3d_standalone ?name ~outdir ~package codecs;
@@ -1871,4 +1954,5 @@ module Private = struct
 
   let pool_in_process = pool_in_process
   let locate_3d_exe = Proc.locate_3d_exe
+  let has_custard = has_custard
 end

@@ -1511,14 +1511,15 @@ let test_uses_wire_ctx () =
    [~/.local/everparse/bin] fallback -- resolved here independently of
    [Wire_3d]'s own lookup. *)
 let test_has_3d_exe () =
-  let on_path = Sys.command "command -v 3d.exe > /dev/null 2>&1" = 0 in
-  let fallback =
-    Sys.file_exists
-      (Filename.concat (Sys.getenv "HOME") ".local/everparse/bin/3d.exe")
+  let found name =
+    Fmt.kstr Sys.command "command -v %s > /dev/null 2>&1" name = 0
+    || Sys.file_exists
+         (Filename.concat (Sys.getenv "HOME") (".local/everparse/bin/" ^ name))
   in
   Alcotest.(check bool)
     "has_3d_exe agrees with PATH plus the ~/.local/everparse fallback"
-    (on_path || fallback) (Wire_3d.has_3d_exe ())
+    (found "everparse-3d.exe" || found "3d.exe")
+    (Wire_3d.has_3d_exe ())
 
 let test_main_exists () =
   (* main dispatches on Sys.argv; calling it in tests would exit, so we only
