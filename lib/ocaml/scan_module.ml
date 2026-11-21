@@ -59,6 +59,7 @@ let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
     live = live plan ~outputs:(ids selected);
     exported = Sset.of_list (ids selected);
     slots = Sset.of_list (ids (slots plan selected));
+    ahead = Sset.empty;
     fail = (fun _ -> "");
     overflowed = (fun _ _ -> "");
     decide;
@@ -228,26 +229,75 @@ let frames_while ?(last = "last") s =
    amortises one poll over [unroll] frames. *)
 let unroll = 4
 
+(* The fields at constant offsets in the bytes {!fixed_need} counts that an
+   optional field holds, each with its offset in the frame. *)
+let rec gated_fields ~gated at = function
+  | Prefix (fields, n) :: rest ->
+      (if gated then
+         List.map (fun (f : field) -> (f, extent at f.offset)) fields
+       else [])
+      @ gated_fields ~gated (extent at n) rest
+  | Gate (_, _, _, inner) :: _ -> gated_fields ~gated:true at inner
+  | _ -> []
+
+(* The variables the conditions of the optional fields of [nodes] read. *)
+let rec tested = function
+  | [] -> []
+  | Gate (e, _, _, body) :: rest -> T.collect_refs e @ tested body @ tested rest
+  | Region (_, _, body) :: rest -> tested body @ tested rest
+  | (Prefix _ | Span _ | Test _) :: rest -> tested rest
+
+(* The fields an unrolled frame loop reads for every frame of an iteration
+   before the walk of its first frame: those the walk tests to choose an
+   optional field, in the [need] bytes every frame has, and inside an optional
+   field itself, which the walk reaches after checks of its own (it loads the
+   leading fields first anyway). Each is a variable and its value at a frame
+   start. A frame's walk then dispatches on a value loaded before the previous
+   frames' branches, so a mispredicted branch of one frame does not delay the
+   next frame's choice by a load. *)
+let read_aheads s ~need =
+  let tested = tested s.plan.nodes in
+  List.filter_map
+    (fun ((f : field), k) ->
+      if Sset.mem f.id s.m.live && List.mem f.id tested then
+        Option.map (fun ahead -> (f.id, ahead)) (read_ahead s.m ~size:need ~k f)
+      else None)
+    (gated_fields ~gated:false 0 s.plan.nodes)
+
 (* The loop of [fold_frames] over frames walked with [known] bytes of each
    known to be there. A walk that knows all its bounds may not read [stop].
    With [unrolled], and when the walk of a frame is a function of its own,
    the loop first walks [unroll] frames per iteration, then the rest one by
-   one. The guard [stride <= len / unroll] keeps
-   [off + len - unroll * stride] from overflowing or falling below [off]. *)
-let pp_frames_loop ?cuts ?step s ~name ~names ~unboxed ~invalid ~valid ~known
-    ~unrolled =
+   one. An iteration computes the start of each of its frames, and loads each
+   frame's [ahead] fields, before the walk of its first frame. The guard
+   [stride <= len / unroll] keeps [off + len - unroll * stride] from
+   overflowing or falling below [off]. *)
+let pp_frames_loop ?cuts ?step ?(ahead = []) s ~name ~names ~unboxed ~invalid
+    ~valid ~known ~unrolled =
   let ppf = s.ppf and read, assign, stride = frames_vars s in
   let body = Buffer.create 4096 in
   let bppf = Format.formatter_of_buffer body in
-  pp_scan ?cuts ~known ~name ~scope:(scope s names) { s with ppf = bppf }
+  let m = { s.m with ahead = Sset.of_list (List.map fst ahead) } in
+  let typ = if s.m.num = Unboxed then Some "int64_u" else None in
+  let names = names @ List.map (fun (v, _) -> (v, typ)) ahead in
+  pp_scan ?cuts ~known ~name ~scope:(scope s names) { s with ppf = bppf; m }
     ~reject:(invalid ^ " current")
     ~accept:(call ~step:(Option.is_some step) s ~unboxed (valid ^ " current"));
   Format.pp_print_flush bppf ();
   let body = Buffer.contents body in
   (* A position is an [int] where values are [int64]. *)
   let num = pos_num s.m.num in
-  let frame base =
-    if mentions "base" body then Fmt.pf ppf "let base = %s in@\n" base;
+  let used = List.filter (fun (v, _) -> mentions v body) ahead in
+  (* A frame at [base] binds each read-ahead [v] to [loaded v], the variable
+     its iteration bound, or else to its value at [base]. *)
+  let frame ?loaded base =
+    if mentions "base" body || (used <> [] && Option.is_none loaded) then
+      Fmt.pf ppf "let base = %s in@\n" base;
+    List.iter
+      (fun (v, value) ->
+        Fmt.pf ppf "let %s = %s in@\n" v
+          (match loaded with Some l -> l v | None -> value "base"))
+      used;
     Fmt.pf ppf "let current = %sacc in@\nlet next = (@\n" read;
     if mentions "stop" body then Fmt.pf ppf "let stop = %s in@\n" stride;
     Fmt.pf ppf "%s) in@\nacc %s next;@\n" body assign
@@ -262,11 +312,27 @@ let pp_frames_loop ?cuts ?step s ~name ~names ~unboxed ~invalid ~valid ~known
     done;
     Fmt.pf ppf "while %s do@\n"
       (frames_while ~last:(Fmt.str "last_%d" unroll) s);
-    frame (read ^ "cursor");
-    frame (binop num "+" (read ^ "cursor") stride);
-    for j = 2 to unroll - 1 do
-      frame (binop num "+" (read ^ "cursor") (Fmt.str "stride_%d" j))
-    done;
+    let start j =
+      if j = 0 then read ^ "cursor"
+      else
+        binop num "+" (read ^ "cursor")
+          (if j = 1 then stride else Fmt.str "stride_%d" j)
+    in
+    let frames = List.init unroll Fun.id in
+    List.iter
+      (fun j -> if j > 0 then Fmt.pf ppf "let base_%d = %s in@\n" j (start j))
+      frames;
+    let at j = if j = 0 then read ^ "cursor" else Fmt.str "base_%d" j in
+    List.iter
+      (fun j ->
+        List.iter
+          (fun (v, value) ->
+            Fmt.pf ppf "let %s_%d = %s in@\n" v j (value (at j)))
+          used)
+      frames;
+    List.iter
+      (fun j -> frame ~loaded:(fun v -> Fmt.str "%s_%d" v j) (at j))
+      frames;
     Fmt.pf ppf "cursor %s %s@\ndone);@\n" assign
       (binop num "+" (read ^ "cursor") (Fmt.str "stride_%d" unroll))
   end;
@@ -359,16 +425,18 @@ let pp_frames_head s ~name ~unboxed ~callbacks =
    with slots is not cut, so its loop is not unrolled. *)
 let frame_loop s ~name ~need ~apart ~unboxed =
   let native = s.m.num = Unboxed in
+  let frames = if native && Sset.is_empty s.m.slots then unroll else 1 in
   Decision.Frame_loop
     {
       name;
       need;
-      frames = (if native && Sset.is_empty s.m.slots then unroll else 1);
+      frames;
       short =
         (if need = 0 then None
          else if Option.is_some apart then Some Decision.Apart
          else if unboxed then Some Decision.Walked
          else Some Decision.Inline);
+      ahead = (if frames > 1 then List.map fst (read_aheads s ~need) else []);
     }
 
 (* [fold_frames], or with [step] [fold_frames_step], which calls the module
@@ -398,8 +466,13 @@ let pp_frames ?step s ~unboxed =
       let ppf = s.ppf in
       pp_frames_head s ~name ~unboxed ~callbacks;
       let loop ~unrolled known =
-        pp_frames_loop ?cuts ?step s ~name ~names ~unboxed ~invalid ~valid
-          ~known ~unrolled
+        let ahead =
+          if unrolled && Option.is_some cuts then
+            List.map snd (read_aheads s ~need:known)
+          else []
+        in
+        pp_frames_loop ?cuts ?step ~ahead s ~name ~names ~unboxed ~invalid
+          ~valid ~known ~unrolled
       in
       (* The loop over frames that hold the leading prefixes comes last,
          where the compiler closes it with one conditional branch. On the

@@ -55,6 +55,7 @@ type t =
       need : int;
       frames : int;
       short : short_frames option;
+      ahead : string list;
     }
 
 let pp_pos ppf p =
@@ -118,8 +119,12 @@ let pp ppf = function
         hoisted pp_choice choice
   | Cut { name; window; known } ->
       Fmt.pf ppf "cut %s in %s: %d bytes known" name window known
-  | Frame_loop { name; need; frames; short } ->
-      Fmt.pf ppf "frame loop %s: %d frame%s an iteration, %d bytes known%a" name
-        frames (plural frames) need
+  | Frame_loop { name; need; frames; short; ahead } ->
+      Fmt.pf ppf "frame loop %s: %d frame%s an iteration, %d bytes known%a%a"
+        name frames (plural frames) need
         Fmt.(option (any ", " ++ pp_short))
         short
+        Fmt.(
+          if ahead = [] then nop
+          else any ", reads ahead " ++ list ~sep:(any ", ") string)
+        ahead
