@@ -402,10 +402,15 @@ module Plan : sig
         need : int;
         frames : int;
         short : short_frames option;
+        ahead : string list;
       }
         (** The loop [name] over frames walks [frames] frames an iteration, each
             with the [need] bytes of its leading fields known once its stride
-            is; [short] walks the frames shorter than that. *)
+            is; [short] walks the frames shorter than that. An iteration of
+            several frames loads the fields [ahead] of each of them before the
+            first frame's checks: the fields its optional fields are chosen on,
+            so that a mispredicted branch of one frame does not hold back the
+            next frame's choice by a load. *)
 
   val pp_decision : Format.formatter -> decision -> unit
   (** [pp_decision ppf d] prints [d] on one line, its tests as

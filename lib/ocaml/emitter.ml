@@ -122,6 +122,9 @@ type mode = {
   live : Sset.t; (* The variables the walk binds. *)
   exported : Sset.t; (* The outputs the walk hands out. *)
   slots : Sset.t; (* Those of them that are slots. *)
+  ahead : Sset.t;
+      (* The variables of fields the caller loaded before the walk, which the
+         walk reads instead of loading them. *)
   fail : failure -> string;
   overflowed : failure -> string -> string;
       (* What a cold walk raises for an overflow, given the exception. *)
@@ -1167,6 +1170,30 @@ let checks w f =
   in
   refine w (List.map (fun c -> c.cond) f.checks)
 
+(* An unsigned big-endian field of [width] bits at [k] from [o], with
+   integers held unboxed, as the variable [id_le] holding its bytes read
+   little-endian: a test against a constant swaps the constant instead. *)
+let raw_le m ~o ~k id width =
+  let v =
+    match width with
+    | 16 -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes:2 ~endian:T.Little)
+    | _ -> Fmt.str "(U.of_int32_u %s)" (load m ~o ~k ~bytes:4 ~endian:T.Little)
+  in
+  (id ^ "_le", v)
+
+(* The variable {!field} binds for [f], at [k] from a frame start in a prefix
+   known to hold [size] bytes, and its value at the start [o], when a caller
+   may load it before the walk instead: a byte, or an unsigned big-endian field
+   of 16 or 32 bits held unboxed. *)
+let read_ahead m ~size ~k f =
+  match f.store with
+  | Int { width = (16 | 32) as width; signed = false; endian = T.Big }
+    when m.num = Unboxed ->
+      Some (f.id ^ "_le", fun o -> snd (raw_le m ~o ~k f.id width))
+  | Int { width = 8; _ } ->
+      Some (f.id, fun o -> value m ~size ~o ~words:[] ~k:0 { f with offset = k })
+  | _ -> None
+
 (* A field of a prefix at [o + k]: bound when live, then checked. *)
 let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
   let m = w.m in
@@ -1179,7 +1206,7 @@ let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
       w
     end
     else begin
-      pf w "let %s = %s in@\n" f.id v;
+      if not (Sset.mem f.id m.ahead) then pf w "let %s = %s in@\n" f.id v;
       bind ?ty:typed w f.id
     end
   in
@@ -1209,17 +1236,8 @@ let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
             bind ?ty:typed w f.id
           end
         in
-        let raw = f.id ^ "_le" in
-        let v =
-          match width with
-          | 16 ->
-              Fmt.str "(U.of_int %s)"
-                (load m ~o ~k:shifted.offset ~bytes:2 ~endian:T.Little)
-          | _ ->
-              Fmt.str "(U.of_int32_u %s)"
-                (load m ~o ~k:shifted.offset ~bytes:4 ~endian:T.Little)
-        in
-        pf w "let %s = %s in@\n" raw v;
+        let raw, v = raw_le m ~o ~k:shifted.offset f.id width in
+        if not (Sset.mem raw m.ahead) then pf w "let %s = %s in@\n" raw v;
         { (bind_num w raw) with raws = (f.id, (raw, width)) :: w.raws }
     | _ -> bind_field w (value m ~size:(k + size) ~o ~words ~k:0 shifted)
   in
