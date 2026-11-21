@@ -104,11 +104,12 @@
 - `Wire_ocaml.scanner`: generate a scanner that checks a record with nested
   codecs, optional fields and variable sizes, and hands out the fields chosen
   with `~fields` without building a value. It skips a bound check that a
-  later check already covers, and tests two adjacent bitfields with one
-  comparison. On OxCaml, `fold_frames` walks four frames per loop iteration.
-  `fold_step` and `fold_frames_step` pass integer outputs to the consumer as
-  `int64`, which OCaml keeps in registers. `Wire_ocaml.Plan` gives its plan
-  to other backends (#447, #473, #501, #504, #509, #510, @samoht)
+  later check, a region's constant start or the range of a region's size
+  already covers, and tests two adjacent bitfields with one comparison. On
+  OxCaml, `fold_frames` walks four frames per loop iteration. `fold_step`
+  and `fold_frames_step` pass integer outputs to the consumer as `int64`,
+  which OCaml keeps in registers. `Wire_ocaml.Plan` gives its plan to other
+  backends (#447, #473, #501, #504, #509, #510, #517, @samoht)
 
 - On OxCaml, generated code takes buffers allocated on the stack, is
   `portable`, allocates nothing (`[@zero_alloc]` is checked) and keeps 32-bit

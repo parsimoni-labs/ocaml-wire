@@ -1714,6 +1714,37 @@ let test_constant_region () =
     "a sized region's end is tested" true
     (contains (Wire_ocaml.scanner ~codec:"c" sized) "<> n1)")
 
+(* A region whose contents load no byte leaves its bound to the check after
+   it, which covers its bytes; one whose contents are read checks its own. *)
+let test_region_left_to_next () =
+  let open Wire_ocaml.Plan in
+  let size = Field.v "size" uint8 in
+  let c =
+    Codec.v "Exact"
+      (fun size value tail -> (size, value, tail))
+      Codec.
+        [
+          (size $ fun (x, _, _) -> x);
+          ( Field.v "value" (nested ~size:(Field.ref size) uint16be)
+          $ fun (_, x, _) -> x );
+          (Field.v "tail" uint8 $ fun (_, _, x) -> x);
+        ]
+  in
+  let region bound = function
+    | Span_bound { size_var = "n1"; bound = b; _ } -> bound b
+    | _ -> false
+  in
+  Alcotest.(check bool)
+    "left to the next check when its contents are not read" true
+    (List.exists
+       (region (function Next -> true | _ -> false))
+       (decisions ~fields:[ "tail" ] c));
+  Alcotest.(check bool)
+    "checked when its contents are read" true
+    (List.exists
+       (region (function Checked _ -> true | _ -> false))
+       (decisions c))
+
 (* The structured cases' corpora, and the EverParse C validator when built. *)
 let test_scanners () =
   List.iter
@@ -1848,6 +1879,8 @@ let suite =
       Alcotest.test_case "the scanner's decisions" `Quick test_decisions;
       Alcotest.test_case "the entry's bounds" `Quick test_entry_bounds;
       Alcotest.test_case "a region of constant size" `Quick test_constant_region;
+      Alcotest.test_case "a region left to the next check" `Quick
+        test_region_left_to_next;
       Alcotest.test_case "ipv4" `Quick test_ipv4;
       Alcotest.test_case "ipv4 record" `Quick test_ipv4_record;
       Alcotest.test_case "constraints, enum, where" `Quick test_checked;

@@ -1778,6 +1778,32 @@ let region_start w p =
             (s, w.disp + c + p.at)
       | _ -> whole)
 
+(* [true] when the walk of [nodes] loads no byte: its prefixes hold no field
+   it binds. *)
+let reads_nothing m nodes =
+  List.for_all
+    (function
+      | Prefix (fields, _) ->
+          List.for_all (fun f -> not (Sset.mem f.id m.live)) fields
+      | Test _ -> true
+      | Span _ | Gate _ | Region _ -> false)
+    nodes
+
+(* Rejects a region whose contents, walked by [w''] up to [cp], did not end
+   on its size [n], unless the region is [at_most] or the range [lo, hi] of
+   [n] proves the end. [w] is the walk outside the region. *)
+let close_region w ~at_most ~lo ~hi n w'' cp =
+  if at_most || (cp.var = None && lo = cp.at && hi = cp.at) then w''
+  else begin
+    pf w'' "if %s then %s else@\n"
+      (let at = pos_expr w.m.num cp in
+       if w.m.num = Boxed then
+         relation Boxed "<>" (Fmt.str "(Int64.of_int %s)" at) n
+       else relation w.m.num "<>" at n)
+      (w.m.fail Bounds);
+    { w'' with depth = w''.depth + 1 }
+  end
+
 let rec walk w nodes p k =
   match nodes with
   | [] -> k w p
@@ -1798,7 +1824,9 @@ and step w nodes p k =
       let w = check w Where cond in
       walk (refine w [ cond ]) rest p k
   | Region (size, at_most, body) :: rest ->
-      let w', n, stop = span w size p in
+      let w', n, stop =
+        span ~implied:(reads_nothing w.m body && checks_next w rest) w size p
+      in
       (* The window holds at least the bytes the range of its size proves. *)
       let lo, hi =
         Option.value ~default:(0, max_int) (Smap.find_opt n w'.ranges)
@@ -1819,18 +1847,7 @@ and step w nodes p k =
         }
         body { var = None; at = 0 }
         (fun w'' cp ->
-          let w'' =
-            if at_most || (cp.var = None && lo = cp.at && hi = cp.at) then w''
-            else begin
-              pf w'' "if %s then %s else@\n"
-                (let at = pos_expr w.m.num cp in
-                 if w.m.num = Boxed then
-                   relation Boxed "<>" (Fmt.str "(Int64.of_int %s)" at) n
-                 else relation w.m.num "<>" at n)
-                (w.m.fail Bounds);
-              { w'' with depth = w''.depth + 1 }
-            end
-          in
+          let w'' = close_region w ~at_most ~lo ~hi n w'' cp in
           walk
             {
               w'' with

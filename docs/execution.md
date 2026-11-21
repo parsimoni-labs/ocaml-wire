@@ -117,11 +117,11 @@ The invariants above hold for the generated code as follows.
   holds at least the bytes the range of its size proves, so a region of
   constant size checks no bound for the prefixes it holds, nor, when it is
   exact and they fill that size, where they end.
-  A span's check is dropped when the next check, which runs before any read,
-  covers the span's bytes too. This needs ranges to prove the span's size not
-  negative and its end inside the native int. A bound is compared with the
-  terms shared by its position and its size cancelled, so the IPv4 payload
-  check is `total_length <= stop - 14`.
+  A span's check, or that of a region whose contents load no byte, is dropped
+  when the next check, which runs before any read, covers its bytes too. This
+  needs ranges to prove the size not negative and its end inside the native
+  int. A bound is compared with the terms shared by its position and its size
+  cancelled, so the IPv4 payload check is `total_length <= stop - 14`.
   Positions are relative to the window, so adding the window's offset to
   reach a byte cannot overflow, and a short frame in `fold_frames` cannot
   borrow bytes from the next. The generator adds the codec's constant
