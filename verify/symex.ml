@@ -490,9 +490,19 @@ let ref_prims =
     { pname = ":="; arity = Some 2; run = set };
   ]
 
+let conversion_prims =
+  [
+    unary "Int32.to_int" (fun loc a -> Int (Smt.sign_extend 31 (i32 loc a)));
+    unary "Int32.of_int" (fun loc a -> I32 (Smt.extract 31 0 (int loc a)));
+    (* An int64_u position narrowed to the offset of a load, which wraps
+       outside the build that checks it. *)
+    unary "Wire_runtime.Target.offset" (fun loc a ->
+        Int (Smt.extract 62 0 (i64 loc a)));
+  ]
+
 let prims =
   let l =
-    step_continuations @ ref_prims
+    step_continuations @ ref_prims @ conversion_prims
     @ [
         int_op "+" Smt.add;
         int_op "-" Smt.sub;
@@ -523,8 +533,6 @@ let prims =
         raising "raise";
         length "Bytes.length";
         length "Wire_runtime.Unchecked.Bigstring.length";
-        unary "Int32.to_int" (fun loc a -> Int (Smt.sign_extend 31 (i32 loc a)));
-        unary "Int32.of_int" (fun loc a -> I32 (Smt.extract 31 0 (int loc a)));
       ]
     @ int64_prims "Int64"
     @ int64_prims "Wire_runtime.Target.Int64_u"
