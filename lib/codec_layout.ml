@@ -22,11 +22,8 @@ let span_end size buf off len cur =
   let sz = size buf off () () in
   if sz >= 0 && cur <= len - sz then cur + sz else -1
 
-(* The rest of the buffer, as the general extent measures it, which must be
-   within [len]. *)
-let rest_end buf len cur =
-  let e = Bytes.length buf in
-  if cur <= e && e <= len then e else -1
+(* The rest of the input, which ends at [len]. *)
+let rest_end len cur = if cur <= len then len else -1
 
 (* Whether a sub-codec of [n] bytes fits a region of [sz]. *)
 let fits ~sz ~at_most (n : int) = n <= sz && (at_most || n = sz)
@@ -77,7 +74,7 @@ let rec item_end item input_end buf off len cur =
   match item with
   | Fix k -> cur + k
   | Span size -> span_end size buf off len cur
-  | Rest -> rest_end buf len cur
+  | Rest -> rest_end len cur
   | Opt (present, item) ->
       if present buf off () () then item_end item input_end buf off len cur
       else cur
@@ -247,7 +244,8 @@ let rec layout_end items input_end buf off cur =
   | Fix k :: rest -> layout_end rest input_end buf off (checked_add cur k)
   | Span size :: rest ->
       layout_end rest input_end buf off (checked_add cur (size buf off () ()))
-  | Rest :: rest -> layout_end rest input_end buf off (Bytes.length buf)
+  | Rest :: rest ->
+      layout_end rest input_end buf off (Input_end.to_int input_end)
   | Opt (present, item) :: rest ->
       if present buf off () () then
         layout_end (item :: rest) input_end buf off cur
@@ -265,7 +263,8 @@ let rec extent_end items c input_end buf cur =
   | EFix k :: rest -> extent_end rest c input_end buf (checked_add cur k)
   | ESpan size :: rest ->
       extent_end rest c input_end buf (checked_add cur (size c))
-  | ERest :: rest -> extent_end rest c input_end buf (Bytes.length buf)
+  | ERest :: rest ->
+      extent_end rest c input_end buf (Input_end.to_int input_end)
   | EOpt (present, item) :: rest ->
       if present c then extent_end (item :: rest) c input_end buf cur
       else extent_end rest c input_end buf cur

@@ -1068,12 +1068,10 @@ let compile_var_size_fn : type a.
  fun ctx typ ~off_fn ->
   match typ with
   | All_bytes | All_zeros ->
-      (* Trailing "rest of buffer": size is whatever bytes remain past the
-         current offset. The OCaml decoder gets the buffer length via
-         [Bytes.length buf]; the 3D projection emits [all_bytes], which
-         3D handles natively. *)
+      (* The rest of the input: the bytes left before [input_end], the end of
+         the region the record sits in, as 3D's [consume-all] takes them. *)
       fun runtime input_end buf base ->
-        Bytes.length buf - (base + off_fn runtime input_end buf base)
+        Input_end.to_int input_end - (base + off_fn runtime input_end buf base)
   | Casetype _ ->
       (* Tag is decoded first; the case body's size is whatever the
          selected case's inner typ reports. *)
@@ -1084,7 +1082,8 @@ let compile_var_size_fn : type a.
       (* Consumed bytes = string length plus the one-byte NUL terminator. *)
       fun runtime input_end buf base ->
         let first = base + off_fn runtime input_end buf base in
-        zeroterm_nul_pos buf ~first ~limit:(Bytes.length buf) - first + 1
+        zeroterm_nul_pos buf ~first ~limit:(Input_end.to_int input_end)
+        - first + 1
   | _ ->
       let size_expr =
         match typ with

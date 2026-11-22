@@ -491,7 +491,9 @@ let rec read_elem : type a. a typ -> runtime -> Input_end.t -> bytes -> int -> a
   | Unit -> ()
   (* NUL-terminated string element: the bytes up to (not including) the NUL. *)
   | Zeroterm ->
-      let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
+      let nul =
+        zeroterm_nul_pos buf ~first:off ~limit:(Input_end.to_int input_end)
+      in
       Bytes.sub_string buf off (nul - off)
   (* Same, bounded to a fixed [n]-byte region (the element spans the whole
      region; the value is the bytes up to the NUL within it). *)
@@ -631,7 +633,9 @@ let rec elem_size_of : type a.
   | Where { inner; _ } -> elem_size_of inner runtime input_end buf off
   (* Bytes up to the NUL plus the one-byte terminator. *)
   | Zeroterm ->
-      let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
+      let nul =
+        zeroterm_nul_pos buf ~first:off ~limit:(Input_end.to_int input_end)
+      in
       nul - off + 1
   (* A bounded NUL-terminated string spans its whole fixed [n]-byte region. *)
   | Zeroterm_at_most { size = Int n } -> n

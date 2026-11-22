@@ -187,6 +187,11 @@
   got 9998514`. A nested record too short for its region now fails on its
   own size, before its length fields are read (#522, @samoht)
 
+- A sub-codec ending in `all_bytes`, `all_zeros` or `zeroterm` inside a
+  region takes the rest of the region, as 3D does. It took the rest of the
+  buffer, so `decode` and `validate` refused it in a region shorter than the
+  buffer (#522, @samoht)
+
 - On wasm_of_ocaml, `validate` and `check` refused a negative value of a
   signed field whose constraint is an interval, in a record of interval
   checks only. They now accept it, as `decode` does (#521, @samoht)
