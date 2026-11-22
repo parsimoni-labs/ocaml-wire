@@ -14,6 +14,16 @@ exclude = ["E005"]
 files = "verify/dune"
 exclude = ["E912"]
 
+# Checks the planner's plans against the F* model: a tool beside lib/ and test/.
+[[rules]]
+files = "proofs/fstar/plans/dune"
+exclude = ["E912"]
+
+# The model as F* extracts it, which proofs/fstar/plans runs.
+[[rules]]
+files = "proofs/fstar/plans/extracted/dune"
+exclude = ["E912"]
+
 # Extracted by F* from the model: make -C proofs/fstar check-extract diffs it.
 [[rules]]
 files = "proofs/fstar/plans/extracted/*.ml"
