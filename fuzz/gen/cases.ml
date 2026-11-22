@@ -25,6 +25,7 @@ let check_positive_stream ~validate label a g (sample, (other, other_bs))
   check_frame_isolation label "positive" ?env a g bs other_bs;
   check_fast_general label "positive" ?env a g bs;
   check_staged_intervals label "positive" g bs;
+  check_mutated_fast_general label ?env a g noise bs;
   check_cold_warm label "positive" ?env a g bs;
   check_encode_paths label "positive" ?env a g value;
   if Option.is_none g.env then check_set_paths label a other bs
@@ -248,6 +249,7 @@ let check_nested_positive label noise
     check_read_purity label "positive" ?env a g bs;
     check_fast_general label "positive" ?env a g bs;
     check_staged_intervals label "positive" g bs;
+    check_mutated_fast_general label ?env a g noise bs;
     check_cold_warm label "positive" ?env a g bs;
     check_encode_paths label "positive" ?env a g value;
     if Option.is_none g.env then check_set_paths label a other bs

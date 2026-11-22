@@ -1218,6 +1218,23 @@ let check_staged_intervals label kind g bs =
       ignore (agree (Fmt.str ", bit %d flipped" bit) buf : bool)
     done
 
+(* A positive with one byte changed, at a position and by a mask the noise
+   picks, two noise bytes a change. Random bytes rarely get past the outer
+   checks of a nested codec, so these are the inputs that reach a failure deep
+   inside one, where the fast path and the general path must still reject
+   with the same error. *)
+let check_mutated_fast_general label ?env a g noise bs =
+  let n = Bytes.length bs in
+  for i = 0 to (Bytes.length noise / 2) - 1 do
+    if n > 0 then begin
+      let b = Bytes.copy bs in
+      let at = Bytes.get_uint8 noise (2 * i) mod n in
+      let mask = 1 + (Bytes.get_uint8 noise ((2 * i) + 1) mod 255) in
+      Bytes.set_uint8 b at (Bytes.get_uint8 b at lxor mask);
+      check_fast_general_core label "mutated" ?env g a.ggeneral b
+    end
+  done
+
 (* Every entry point once on a codec not yet compiled, against the same entry
    point on the warm one. *)
 let check_cold_warm label kind ?env a g bs =
