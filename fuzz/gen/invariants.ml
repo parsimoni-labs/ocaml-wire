@@ -489,6 +489,16 @@ let check_path_coverage () =
       Alcobar.failf "no codec the fuzzer draws selects the fast paths: %s"
         (String.concat ", " missing)
 
+(* The staged word tests are compared with the interval scan only on a
+   registry codec whose check pass stages them, so one must. *)
+let check_staged_coverage () =
+  let staged (_, Pack g) =
+    let buf = Bytes.make (Wire.Codec.min_wire_size g.codec) '\000' in
+    Option.is_some (Wire.Private.Testing.staged_intervals g.codec buf 0)
+  in
+  if Sys.int_size >= 63 && not (List.exists staged registry) then
+    Alcobar.failf "no registry codec stages its interval tests as words"
+
 (* A check with no random input. Alcobar runs a case's body on every
    iteration, each under its per-iteration timeout, so such a check only
    repeated itself, and a slow one could cross the timeout on a slow runner:
@@ -524,4 +534,5 @@ let invariant_cases label =
     const_case (label ^ " sampler nesting") check_sampler_nesting;
     const_case (label ^ " field access reach") check_field_reach;
     const_case (label ^ " fast path coverage") check_path_coverage;
+    const_case (label ^ " staged words coverage") check_staged_coverage;
   ]

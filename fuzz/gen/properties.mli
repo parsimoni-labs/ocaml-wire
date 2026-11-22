@@ -166,6 +166,11 @@ val check_fast_general :
 (** [check_fast_general label what ?env c g buf] checks that every entry point
     of the codec answers on [buf] what its general path answers. *)
 
+val check_staged_intervals : string -> string -> 'a t -> bytes -> unit
+(** [check_staged_intervals label what g buf] checks that the staged word tests
+    of the check pass of [g]'s codec answer on [buf], and on each one-bit flip
+    of its frame, what the interval scan they stand for answers. *)
+
 val check_cold_warm :
   string ->
   string ->

@@ -1778,6 +1778,17 @@ module Testing = struct
     let c = compiled t in
     c.paths @ if t.n_params = 0 then read_paths t c else []
 
+  let staged_intervals t buf off =
+    match (compiled t).plain_pass with
+    | Intervals { words = Some f; flat; tables; _ }
+      when off >= 0 && off <= Bytes.length buf - min_wire_size t ->
+        let scan =
+          Codec_intervals.scan_intervals flat tables buf off (Array.length flat)
+            0
+        in
+        Some (f buf off, scan < 0)
+    | _ -> None
+
   let all_paths : string list =
     [ "decode.fixed"; "decode.variable"; "decode.layout"; "decode.walk" ]
     @ List.concat_map

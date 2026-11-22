@@ -1197,6 +1197,27 @@ let check_fast_general label kind ?env a g bs =
     (Fmt.str "%s %s" label kind)
     ?env ~fast:a.acodec ~general:a.ageneral a.achecks bs
 
+(* The staged word tests of a check pass against the interval scan they stand
+   for, on [bs] and on each one-bit flip of it, so a test whose bounds sit next
+   to the sample's value is crossed both ways. *)
+let check_staged_intervals label kind g bs =
+  let agree at buf =
+    match Wire.Private.Testing.staged_intervals g.codec buf 0 with
+    | None -> false
+    | Some (staged, scan) ->
+        if staged <> scan then
+          Alcobar.failf "%s %s%s: the staged words answer %b, the scan %b" label
+            kind at staged scan;
+        true
+  in
+  if agree "" bs then
+    for bit = 0 to (8 * Wire.Codec.min_wire_size g.codec) - 1 do
+      let buf = Bytes.copy bs in
+      let i = bit / 8 in
+      Bytes.set_uint8 buf i (Bytes.get_uint8 buf i lxor (1 lsl (bit mod 8)));
+      ignore (agree (Fmt.str ", bit %d flipped" bit) buf : bool)
+    done
+
 (* Every entry point once on a codec not yet compiled, against the same entry
    point on the warm one. *)
 let check_cold_warm label kind ?env a g bs =

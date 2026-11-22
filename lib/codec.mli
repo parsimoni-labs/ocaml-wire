@@ -589,6 +589,13 @@ module Testing : sig
   (** [paths t] names the fast paths compiling [t] selected, from {!all_paths}.
   *)
 
+  val staged_intervals : 'r t -> bytes -> int -> (bool * bool) option
+  (** [staged_intervals t buf off] is the answer of the staged word tests of the
+      check pass of [t] on the record at [off] in [buf], paired with the answer
+      of the interval scan they stand for. [None] when the check pass of [t] has
+      no staged word tests or [buf] does not hold the record's frame at [off].
+  *)
+
   val all_paths : string list
   (** Every name {!paths} can return. *)
 end
