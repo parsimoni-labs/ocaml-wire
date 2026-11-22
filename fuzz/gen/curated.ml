@@ -458,7 +458,8 @@ let flat_gens =
         [
           bits_group ~limits:[ 9; 9 ] Wire.U8 [ 4; 4 ];
           range8_group ~lo:10 ~hi:200;
-          fixed_bytes_group ~slice:false 4;
+          range16s_group ~lo:(-300) ~hi:1000;
+          fixed_bytes_group ~slice:false 2;
           u16be_group;
           range8_group ~lo:1 ~hi:100;
         ] );

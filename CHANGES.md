@@ -178,6 +178,10 @@
 
 ### Fixed
 
+- On wasm_of_ocaml, `validate` and `check` refused a negative value of a
+  signed field whose constraint is an interval, in a record of interval
+  checks only. They now accept it, as `decode` does (#521, @samoht)
+
 - A record's minimum size includes the bytes its sub-codecs always hold. A
   buffer shorter than that fails at the record's start, where the error
   pointed at a later field before, and a codec too large for any buffer

@@ -69,8 +69,11 @@ let rec scan_intervals d tables buf off n i =
                (Array.unsafe_get tables (k - 10))
                (Unchecked.u8 buf q))
     in
+    (* A bitfield shifts a value read unsigned, so [asr] is [lsr] there; a
+       signed scalar shifts by 0, and wasm_of_ocaml takes [v lsr 0] for
+       non-negative, so it would compare a negative [v] unsigned. *)
     let v =
-      (v lsr Array.unsafe_get d (i + 2)) land Array.unsafe_get d (i + 3)
+      (v asr Array.unsafe_get d (i + 2)) land Array.unsafe_get d (i + 3)
     in
     let k = Array.unsafe_get d (i + 4) in
     if k = 1 then
