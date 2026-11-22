@@ -442,34 +442,58 @@ let stage : type mid result.
    before the walk of the record around it has finished checking: a
    constructor can see a record the walk then rejects. *)
 
-let walk_checks checks =
-  let within =
-    List.filter_map
-      (function Within (s, set) -> Some (s, set) | Holds _ -> None)
-      checks
-  and holds =
-    List.filter_map (function Holds f -> Some f | Within _ -> None) checks
-  in
-  let flat, tables = Codec_intervals.flatten_intervals (Array.of_list within) in
-  (flat, tables, Array.of_list holds)
-
 let rec holds_all holds c i =
   i >= Array.length holds
   || ((Array.unsafe_get holds i) c && holds_all holds c (i + 1))
 
+(* The walk tests the fixed-offset fields in the form the check pass picks:
+   one word test, the staged word tests, or the scan of the flat tests. The
+   frame check comes first, so the unchecked reads stay in the record. *)
 let record_walk ~min_size ~start checks body =
-  let flat, tables, holds = walk_checks checks in
-  let n = Array.length flat in
-  fun c ->
-    let base = c.wpos and stop = c.wend in
-    if base < 0 || base > Input_end.to_int stop - min_size then unwalked ();
-    let buf = c.wbuf in
-    if n > 0 && Codec_intervals.scan_intervals flat tables buf base n 0 >= 0
-    then unwalked ();
+  let within =
+    Array.of_list
+      (List.filter_map
+         (function Within (s, set) -> Some (s, set) | Holds _ -> None)
+         checks)
+  and holds =
+    Array.of_list
+      (List.filter_map (function Holds f -> Some f | Within _ -> None) checks)
+  in
+  let[@inline] frame c =
+    let base = c.wpos in
+    if base < 0 || base > Input_end.to_int c.wend - min_size then unwalked ();
+    base
+  in
+  let[@inline] rest c base =
     c.wbase <- base;
     if not (holds_all holds c 0) then unwalked ();
     c.wpos <- base + start;
     body c
+  in
+  match Codec_intervals.single ~size:min_size within with
+  | Some (q, l, r, m, lo, hi) ->
+      fun c ->
+        let base = frame c in
+        if not (Codec_intervals.within c.wbuf base q l r m lo hi) then
+          unwalked ();
+        rest c base
+  | None -> (
+      match Codec_intervals.staged ~size:min_size within with
+      | Some test ->
+          fun c ->
+            let base = frame c in
+            if not (test c.wbuf base) then unwalked ();
+            rest c base
+      | None ->
+          let flat, tables = Codec_intervals.flatten_intervals within in
+          let n = Array.length flat in
+          fun c ->
+            let base = frame c in
+            if
+              n > 0
+              && Codec_intervals.scan_intervals flat tables c.wbuf base n 0 >= 0
+            then unwalked ();
+            rest c base)
 
 (* The walk of a sealed record without parameters, while every field has one
    and its [where] clause reads only fixed-offset fields. *)

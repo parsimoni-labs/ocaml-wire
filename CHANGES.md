@@ -154,7 +154,8 @@
   `encode` into a buffer allocates nothing. `check` of a TCP header takes 95
   instructions, down from 118, and `check` of a record with several range
   constraints on one 8-byte word, such as an IPv4 header, loads that word
-  once (#435, #445, #496, #512, #521, @samoht)
+  once; `decode` uses the same word tests (#435, #445, #496, #512, #521,
+  @samoht)
 
 - The scanner's `fold_frames` (and its unboxed and step forms) reads the
   IPv4 protocol, or whatever field chooses a frame's nested optional fields,
