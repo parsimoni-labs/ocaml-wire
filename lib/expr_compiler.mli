@@ -21,9 +21,16 @@
     resolution can be a single non-polymorphic function. *)
 type packed_param = Pack_param : ('a, 'k) Types.param_handle -> packed_param
 
+(** How a field a native int cannot always hold reads at its full width: its 64
+    bits as an unsigned or a signed number. *)
+type wide = Unsigned | Signed
+
 type ('c1, 'c2, 'c3, 'c4) leaves = {
   ref_ : string -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
   i64 : string -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int64;
+  wide : string -> wide option;
+      (** [wide name] is how field [name] reads at full width, from {!i64}, when
+          a native int cannot always hold it. *)
   param_ref : packed_param -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
   sizeof_typ : Types.packed_typ -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
   sizeof_this : 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
@@ -46,7 +53,9 @@ val compile_int :
     partial application [compile_int l e], so a caller stages that once and
     calls the result per decode. Raises [Invalid_argument] for a shape with no
     compilable form, such as a non-constant [Lsr64] shift, and
-    {!Types.Parse_error} when evaluated arithmetic is invalid. *)
+    {!Types.Parse_error} when evaluated arithmetic is invalid. An expression
+    over a {!wide} field is evaluated on 64 bits and raises [Value_out_of_range]
+    when its value does not fit the native int. *)
 
 val compile_bool :
   ('c1, 'c2, 'c3, 'c4) leaves ->
@@ -57,5 +66,5 @@ val compile_bool :
   'c4 ->
   bool
 (** [compile_bool l e c1 c2 c3 c4] is {!compile_int} at [bool]. A comparison
-    takes its operand width from the operands themselves, and a 64-bit one
-    compares unsigned. *)
+    takes its operand width from the operands themselves: a 64-bit one compares
+    unsigned, and one over a {!wide} field compares the field's full value. *)

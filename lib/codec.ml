@@ -51,6 +51,7 @@ type validator_acc = {
   fixed_prefix : int ref;
   bf : bf_codec_state option;
   param_slots : (string, int) Hashtbl.t;
+  wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
 }
 
 let empty_validator_acc () =
@@ -66,6 +67,7 @@ let empty_validator_acc () =
     fixed_prefix = Stdlib.ref 0;
     bf = None;
     param_slots = Hashtbl.create 4;
+    wide_slots = Hashtbl.create 4;
   }
 
 let layout_ctx_of_validator_acc acc =
@@ -128,7 +130,7 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   let idx = build_idx cc_readers in
   let cc =
     mk_ctx ~sizeof_this:acc.fixed_prefix ~field_pos:acc.n_fields
-      ~param_slots:acc.param_slots idx
+      ~param_slots:acc.param_slots ~wide_slots:acc.wide_slots idx
   in
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
@@ -174,6 +176,7 @@ let rec apply_struct_field acc inner_struct =
     fixed_prefix = acc.fixed_prefix;
     bf = None;
     param_slots = acc.param_slots;
+    wide_slots = acc.wide_slots;
   }
 
 and apply_field_to_validator_acc acc (Types.Field f) =
@@ -194,6 +197,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
       in
       let layout = layout_ctx_of_validator_acc acc in
       let cf = compile_field layout codec_field in
+      note_wide acc.wide_slots acc.n_fields f.field_typ;
       let full, check_only, n_extra_vars =
         build_field_checks acc
           ~populate:(guarded_populate cf f.field_typ)
@@ -218,6 +222,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
         fixed_prefix = acc.fixed_prefix;
         bf = cf.bf_after;
         param_slots = acc.param_slots;
+        wide_slots = acc.wide_slots;
       }
 
 and validator_of_struct (s : Types.struct_) : validator =
@@ -236,7 +241,8 @@ and validator_of_struct (s : Types.struct_) : validator =
   fill_param_slots acc.param_slots param_base param_handles;
   let n_total = param_base + n_params in
   let compiled_where =
-    compile_where_clause acc.param_slots acc.field_readers s.where
+    compile_where_clause ~wide_slots:acc.wide_slots acc.param_slots
+      acc.field_readers s.where
   in
   let validate_arr, _populate, _validate, _clear, _ =
     build_validators

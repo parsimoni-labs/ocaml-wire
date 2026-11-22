@@ -183,6 +183,7 @@ let layout_items prefix layout =
           | Some (Ps s) -> fun buf off () () -> read_slot s buf off
           | None -> raise Exit);
       i64 = unplanned;
+      wide = (fun _ -> None);
       param_ref = unplanned;
       sizeof_typ =
         (fun (Pack_typ t) ->

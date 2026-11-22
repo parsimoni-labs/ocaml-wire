@@ -206,6 +206,7 @@ type compile_ctx = {
   sizeof_this : int ref;
   field_pos : int;
   param_slots : (string, int) Hashtbl.t;
+  wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
 }
 (** What compiling an expression onto the scratch resolves names against. *)
 
@@ -213,9 +214,19 @@ val mk_ctx :
   ?sizeof_this:int ref ->
   ?field_pos:int ->
   param_slots:(string, int) Hashtbl.t ->
+  wide_slots:(int, Expr_compiler.wide) Hashtbl.t ->
   idx ->
   compile_ctx
-(** [mk_ctx ~param_slots idx] is a compile context. *)
+(** [mk_ctx ~param_slots ~wide_slots idx] is a compile context. *)
+
+val wide_kind : 'a Types.typ -> Expr_compiler.wide option
+(** [wide_kind typ] is how a field of [typ] reads at full width when a native
+    int cannot hold all its values on this platform, [None] when it can. *)
+
+val note_wide :
+  (int, Expr_compiler.wide) Hashtbl.t -> int -> 'a Types.typ -> unit
+(** [note_wide wide_slots slot typ] records in [wide_slots] that the field of
+    [typ] at [slot] reads at full width, when {!wide_kind} says it does. *)
 
 (** A comparison operator. *)
 type cmp = Eq | Ne | Lt | Le | Gt | Ge
@@ -352,6 +363,7 @@ type ('f, 'r) record =
       doc : string option;
       field_readers : field_reader list;
       param_slots : (string, int) Hashtbl.t;
+      wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
     }
       -> ('f, 'r) record
 

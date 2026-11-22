@@ -198,6 +198,13 @@
   buffer, so `decode` and `validate` refused it in a region shorter than the
   buffer (#522, @samoht)
 
+- A constraint or `where` clause over a `uint64`, `int64` or `float64` field
+  reads the field's full 64 bits, as the generated C does. It used to drop the
+  top bit or read zero for a value above 2^62, so `decode`, `validate` and
+  `check` could accept bytes the C rejects, and the reverse. The same holds
+  for `uint32`, `int32`, `float32` and `uint` fields on js_of_ocaml and
+  wasm_of_ocaml (#524, @samoht)
+
 - On wasm_of_ocaml, `validate` and `check` refused a negative value of a
   signed field whose constraint is an interval, in a record of interval
   checks only. They now accept it, as `decode` does (#521, @samoht)

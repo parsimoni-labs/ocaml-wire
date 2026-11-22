@@ -38,13 +38,14 @@ val add_field : ('a -> 'f, 'r) record -> ('a, 'r) field -> ('f, 'r) record
 
 val compile_where_clause :
   ?used:(int, unit) Hashtbl.t ->
+  wide_slots:(int, Expr_compiler.wide) Hashtbl.t ->
   (string, int) Hashtbl.t ->
   (string option * 'a) list ->
   bool Types.expr option ->
   (slots -> bool) option
-(** [compile_where_clause ?used param_slots field_readers where] compiles a
-    record's [where] clause onto the scratch, noting in [used] the slots it
-    reads. *)
+(** [compile_where_clause ?used ~wide_slots param_slots field_readers where]
+    compiles a record's [where] clause onto the scratch, noting in [used] the
+    slots it reads. *)
 
 val build_validators :
   ?used:(int, 'a) Hashtbl.t ->

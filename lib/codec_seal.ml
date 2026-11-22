@@ -621,14 +621,15 @@ let field_check_ctx : type a f r.
   let idx = used_idx r.used_slots (build_idx cc_readers) in
   ( action_vanames,
     mk_ctx ~sizeof_this:r.fixed_prefix ~field_pos:r.n_fields
-      ~param_slots:r.param_slots idx )
+      ~param_slots:r.param_slots ~wide_slots:r.wide_slots idx )
 
 let apply_compiled : type a f r.
     (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
     =
  fun (Record r as record) fld cf ->
-  let action_vanames, cc = field_check_ctx record fld in
   let field_idx = r.n_fields in
+  note_wide r.wide_slots field_idx fld.typ;
+  let action_vanames, cc = field_check_ctx record fld in
   let check = compile_field_check cc fld in
   let act = compile_action cc fld.action in
   let check_only, full =
@@ -713,6 +714,7 @@ let apply_compiled : type a f r.
       where = r.where;
       doc = r.doc;
       param_slots = r.param_slots;
+      wide_slots = r.wide_slots;
     }
 
 let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record
@@ -900,14 +902,13 @@ let lookup_reader_idx rev_readers name =
   in
   find 0 rev_readers
 
-let compile_where_clause ?(used = Hashtbl.create 0) param_slots field_readers
-    where =
+let compile_where_clause ?(used = Hashtbl.create 0) ~wide_slots param_slots
+    field_readers where =
   match where with
   | None -> None
   | Some cond ->
-      let rev_readers = List.rev field_readers in
-      let idx = used_idx used (lookup_reader_idx rev_readers) in
-      let cc = mk_ctx ~param_slots idx in
+      let idx = used_idx used (lookup_reader_idx (List.rev field_readers)) in
+      let cc = mk_ctx ~param_slots ~wide_slots idx in
       Some (compile_bool_arr cc cond)
 
 (* A field whose size the data decides: its own bounds check refuses a size
@@ -1927,8 +1928,8 @@ let seal : type r.
   fill_param_slots r.param_slots param_base param_handles;
   let n_total = param_base + n_params in
   let compiled_where =
-    compile_where_clause ~used:r.used_slots r.param_slots r.field_readers
-      r.where
+    compile_where_clause ~used:r.used_slots ~wide_slots:r.wide_slots
+      r.param_slots r.field_readers r.where
   in
   let validate_arr, populate, validate_checks, clear, (steps, needs_arr) =
     build_validators ~used:r.used_slots validators (List.rev r.checkers_rev)

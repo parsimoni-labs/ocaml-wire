@@ -29,6 +29,7 @@ let leaves : (ints, i64s, int, int) Expr_compiler.leaves =
   {
     ref_ = (fun name ints _ _ _ -> List.assoc name ints);
     i64 = (fun name _ i64s _ _ -> List.assoc name i64s);
+    wide = (fun _ -> None);
     param_ref =
       (fun (Expr_compiler.Pack_param p) ints _ _ _ ->
         List.assoc p.Types.name ints);
@@ -265,6 +266,43 @@ let test_lsr64_shift_must_be_constant () =
       in
       ())
 
+(* A field a native int cannot always hold is read at full width from the
+   64-bit environment, so an int expression over it means what it means in 3D:
+   the top bits survive, an unsigned field orders as unsigned and a result the
+   native int cannot hold is [Value_out_of_range], never a truncated number. *)
+let test_wide_fields () =
+  let full : (ints, i64s, int, int) Expr_compiler.leaves =
+    {
+      leaves with
+      wide =
+        (function
+        | "wide" | "small" -> Some Expr_compiler.Unsigned
+        | "neg" -> Some Expr_compiler.Signed
+        | _ -> None);
+    }
+  in
+  let i64s = ("neg", -1L) :: i64s in
+  let eval_int e = Expr_compiler.compile_int full e ints i64s size pos in
+  let eval_bool e = Expr_compiler.compile_bool full e ints i64s size pos in
+  let out_of_range name e =
+    match eval_int e with
+    | n -> Alcotest.failf "%s: produced %d" name n
+    | exception Types.Parse_error { kind = Types.Value_out_of_range _; _ } -> ()
+  in
+  let w = Types.ref "wide" and neg = Types.ref "neg" in
+  Alcotest.(check bool) "wide <= 5" false (eval_bool (Types.Le (w, int 5)));
+  Alcotest.(check bool) "wide >= a" true (eval_bool (Types.Ge (w, a)));
+  Alcotest.(check bool)
+    "low byte" true
+    (eval_bool (Types.Eq (Types.Land (w, int 0xff), int 0xff)));
+  Alcotest.(check int) "top nibble" 15 (eval_int (Types.Lsr (w, int 60)));
+  Alcotest.(check int) "small" 8 (eval_int (Types.Add (Types.ref "small", b)));
+  Alcotest.(check bool) "signed" true (eval_bool (Types.Lt (neg, int 0)));
+  out_of_range "wide" w;
+  out_of_range "wide + 1" (Types.Add (w, int 1));
+  out_of_range "small - a" (Types.Sub (Types.ref "small", a));
+  out_of_range "unsigned with a negative operand" (Types.Add (w, int (-1)))
+
 (* The walk over the expression happens in the partial application, so a leaf
    resolves once when the codec is sealed and not again per decode. *)
 let test_leaf_resolution_is_staged () =
@@ -314,6 +352,8 @@ let suite =
       Alcotest.test_case "int64 ordering is unsigned" `Quick
         test_int64_comparisons_are_unsigned;
       Alcotest.test_case "int64 fallback" `Quick test_int64_fallback;
+      Alcotest.test_case "wide fields read at full width" `Quick
+        test_wide_fields;
       Alcotest.test_case "Lsr64 shift must be constant" `Quick
         test_lsr64_shift_must_be_constant;
       Alcotest.test_case "leaf resolution is staged" `Quick
