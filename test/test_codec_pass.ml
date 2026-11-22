@@ -248,6 +248,73 @@ let test_failure_value_is_this_frames () =
   ignore (failure c (frame 1001L));
   Alcotest.(check string) "after another frame" fresh (failure c (frame (-1L)))
 
+(* A constraint over a wide field sees the value EverParse sees: the field's
+   whole bit pattern as an unsigned number, never a native int that dropped its
+   top bits or read zero because the value did not fit. Each case is a value
+   whose truncation lands on the other side of the constraint. *)
+let test_wide_constraint () =
+  let frame n =
+    let b = Bytes.create 8 in
+    Bytes.set_int64_be b 0 n;
+    b
+  in
+  let outcomes c b =
+    let ok = function Ok _ -> true | Error _ -> false in
+    ( ok (Codec.decode c b 0),
+      ok (Codec.validate c b 0),
+      Codec.(ok (check c b 0)) )
+  in
+  let check name c n expected =
+    Alcotest.(check (triple bool bool bool))
+      name
+      (expected, expected, expected)
+      (outcomes c (frame n))
+  in
+  let one typ f =
+    Codec.v "Wide" Fun.id Codec.[ Field.v "v" ~self_constraint:f typ $ Fun.id ]
+  in
+  let le5 = one uint64be Expr.(fun s -> s <= int 5) in
+  check "uint64 2^63+3 <= 5" le5 0x8000_0000_0000_0003L false;
+  check "uint64 2^62+3 <= 5" le5 0x4000_0000_0000_0003L false;
+  check "uint64 3 <= 5" le5 3L true;
+  let ge5 = one uint64be Expr.(fun s -> s >= int 5) in
+  check "uint64 2^63 >= 5" ge5 Int64.min_int true;
+  let low = one uint64be Expr.(fun s -> s land int 0xff = int 3) in
+  check "uint64 low byte of 2^63+3" low 0x8000_0000_0000_0003L true;
+  let top = one uint64be Expr.(fun s -> s lsr int 60 = int 11) in
+  check "uint64 top nibble" top 0xB000_0000_0000_0000L true;
+  let eq5 = one int64be Expr.(fun s -> s = int 5) in
+  check "int64 2^63+5 = 5" eq5 0x8000_0000_0000_0005L false;
+  check "int64 5 = 5" eq5 5L true;
+  let ne5 = one int64be Expr.(fun s -> s <> int 5) in
+  check "int64 2^63+5 <> 5" ne5 0x8000_0000_0000_0005L true;
+  let bits5 = one float64be Expr.(fun s -> s = int 5) in
+  check "float64 bits 2^63+5 = 5" bits5 0x8000_0000_0000_0005L false;
+  let wide = Field.v "v" uint64be in
+  let cross =
+    Codec.v "Cross"
+      (fun v w -> (v, w))
+      Codec.
+        [
+          wide $ fst;
+          Field.v "w"
+            ~self_constraint:(fun s -> Expr.(Field.ref wide >= s))
+            uint8
+          $ snd;
+        ]
+  in
+  let b = Bytes.make 9 '\007' in
+  Bytes.set_int64_be b 0 Int64.min_int;
+  Alcotest.(check (triple bool bool bool))
+    "cross: uint64 2^63 >= 7" (true, true, true) (outcomes cross b);
+  let where =
+    Codec.v "Where"
+      ~where:Expr.(Field.ref wide >= int 5)
+      Fun.id
+      Codec.[ wide $ Fun.id ]
+  in
+  check "where: uint64 2^63 >= 5" where Int64.min_int true
+
 (* A fixed codec of plain fields encodes through one frame check and one write
    per field. Bitfield words start from zero whatever the buffer held, a value
    too wide for its bits and a buffer too short are refused, and a codec with
@@ -966,6 +1033,8 @@ let suite =
         test_constraint_intervals;
       Alcotest.test_case "check: a failure reports this frame's value" `Quick
         test_failure_value_is_this_frames;
+      Alcotest.test_case "check: a wide field's constraint is not truncated"
+        `Quick test_wide_constraint;
       Alcotest.test_case "encode: plain fields" `Quick test_plain_encode;
       Alcotest.test_case "valid: read agrees with get" `Quick test_valid_read;
       Alcotest.test_case "check: constraints sharing a byte" `Quick
