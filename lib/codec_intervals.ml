@@ -142,7 +142,8 @@ let flatten_intervals tests =
 
    A record of at least 8 bytes whose every test is one interval of a
    big-endian field or bitfield tests each field as bits of an 8-byte word of
-   the record, one load, shifts and two comparisons, in one closure per number
+   the record: one load per word, shared by the tests that read it, then a
+   shift, a subtraction and one comparison per test, in one closure per number
    of tests: no dispatch and no call per test. *)
 
 let word : type a. size:int -> a scalar -> Codec_words.word option =
@@ -177,31 +178,59 @@ let single ~size tests =
   if Sys.int_size < 63 || size < 8 || Array.length tests <> 1 then None
   else test ~size tests.(0)
 
+(* The field at bit [s] of the word [w], [m + 1] values wide, passes when its
+   distance above [lo] modulo [m + 1] is at most [span]. [word_test] clips the
+   interval to the field's values, so that distance is the field's own and one
+   comparison tests both bounds, signed or unsigned; an empty interval has
+   [span = -1]. The test reads the word of the test before it when it reads
+   the same one. *)
+let[@inline] holds w s m lo span =
+  (Int64.to_int (Int64.shift_right_logical w s) - lo) land m <= span
+
+let word_test ~size ~prev (Ps s, set) =
+  match (word ~size s, set) with
+  | Some { q; l; r; m; _ }, [| (lo, hi) |] ->
+      let w = 64 - r in
+      let least, most =
+        if m = -1 then (-(1 lsl (w - 1)), (1 lsl (w - 1)) - 1) else (0, m)
+      in
+      let lo = max lo least and hi = min hi most in
+      Some
+        (q = prev, q, r - l, (1 lsl w) - 1, lo, if lo > hi then -1 else hi - lo)
+  | _ -> None
+
+(* One closure per number of tests, in their order; a test on the word of the
+   test before reuses its load. *)
 let stage_tests tests =
   match tests with
   | [ t1 ] ->
-      let q1, l1, r1, m1, lo1, hi1 = t1 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1)
+      let _, q1, s1, m1, lo1, n1 = t1 in Some (fun buf off -> let x1 = Codec_words.load buf off q1 in holds x1 s1 m1 lo1 n1)
   | [ t1; t2 ] ->
-      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2)
+      let _, q1, s1, m1, lo1, n1 = t1 in let k2, q2, s2, m2, lo2, n2 = t2 in Some (fun buf off -> let x1 = Codec_words.load buf off q1 in holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else Codec_words.load buf off q2 in holds x2 s2 m2 lo2 n2)
   | [ t1; t2; t3 ] ->
-      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3)
+      let _, q1, s1, m1, lo1, n1 = t1 in let k2, q2, s2, m2, lo2, n2 = t2 in let k3, q3, s3, m3, lo3, n3 = t3 in Some (fun buf off -> let x1 = Codec_words.load buf off q1 in holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else Codec_words.load buf off q2 in holds x2 s2 m2 lo2 n2 && let x3 = if k3 then x2 else Codec_words.load buf off q3 in holds x3 s3 m3 lo3 n3)
   | [ t1; t2; t3; t4 ] ->
-      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4)
+      let _, q1, s1, m1, lo1, n1 = t1 in let k2, q2, s2, m2, lo2, n2 = t2 in let k3, q3, s3, m3, lo3, n3 = t3 in let k4, q4, s4, m4, lo4, n4 = t4 in Some (fun buf off -> let x1 = Codec_words.load buf off q1 in holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else Codec_words.load buf off q2 in holds x2 s2 m2 lo2 n2 && let x3 = if k3 then x2 else Codec_words.load buf off q3 in holds x3 s3 m3 lo3 n3 && let x4 = if k4 then x3 else Codec_words.load buf off q4 in holds x4 s4 m4 lo4 n4)
   | [ t1; t2; t3; t4; t5 ] ->
-      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in let q5, l5, r5, m5, lo5, hi5 = t5 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4 && within buf off q5 l5 r5 m5 lo5 hi5)
+      let _, q1, s1, m1, lo1, n1 = t1 in let k2, q2, s2, m2, lo2, n2 = t2 in let k3, q3, s3, m3, lo3, n3 = t3 in let k4, q4, s4, m4, lo4, n4 = t4 in let k5, q5, s5, m5, lo5, n5 = t5 in Some (fun buf off -> let x1 = Codec_words.load buf off q1 in holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else Codec_words.load buf off q2 in holds x2 s2 m2 lo2 n2 && let x3 = if k3 then x2 else Codec_words.load buf off q3 in holds x3 s3 m3 lo3 n3 && let x4 = if k4 then x3 else Codec_words.load buf off q4 in holds x4 s4 m4 lo4 n4 && let x5 = if k5 then x4 else Codec_words.load buf off q5 in holds x5 s5 m5 lo5 n5)
   | [ t1; t2; t3; t4; t5; t6 ] ->
-      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in let q5, l5, r5, m5, lo5, hi5 = t5 in let q6, l6, r6, m6, lo6, hi6 = t6 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4 && within buf off q5 l5 r5 m5 lo5 hi5 && within buf off q6 l6 r6 m6 lo6 hi6)
+      let _, q1, s1, m1, lo1, n1 = t1 in let k2, q2, s2, m2, lo2, n2 = t2 in let k3, q3, s3, m3, lo3, n3 = t3 in let k4, q4, s4, m4, lo4, n4 = t4 in let k5, q5, s5, m5, lo5, n5 = t5 in let k6, q6, s6, m6, lo6, n6 = t6 in Some (fun buf off -> let x1 = Codec_words.load buf off q1 in holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else Codec_words.load buf off q2 in holds x2 s2 m2 lo2 n2 && let x3 = if k3 then x2 else Codec_words.load buf off q3 in holds x3 s3 m3 lo3 n3 && let x4 = if k4 then x3 else Codec_words.load buf off q4 in holds x4 s4 m4 lo4 n4 && let x5 = if k5 then x4 else Codec_words.load buf off q5 in holds x5 s5 m5 lo5 n5 && let x6 = if k6 then x5 else Codec_words.load buf off q6 in holds x6 s6 m6 lo6 n6)
   | [ t1; t2; t3; t4; t5; t6; t7 ] ->
-      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in let q5, l5, r5, m5, lo5, hi5 = t5 in let q6, l6, r6, m6, lo6, hi6 = t6 in let q7, l7, r7, m7, lo7, hi7 = t7 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4 && within buf off q5 l5 r5 m5 lo5 hi5 && within buf off q6 l6 r6 m6 lo6 hi6 && within buf off q7 l7 r7 m7 lo7 hi7)
+      let _, q1, s1, m1, lo1, n1 = t1 in let k2, q2, s2, m2, lo2, n2 = t2 in let k3, q3, s3, m3, lo3, n3 = t3 in let k4, q4, s4, m4, lo4, n4 = t4 in let k5, q5, s5, m5, lo5, n5 = t5 in let k6, q6, s6, m6, lo6, n6 = t6 in let k7, q7, s7, m7, lo7, n7 = t7 in Some (fun buf off -> let x1 = Codec_words.load buf off q1 in holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else Codec_words.load buf off q2 in holds x2 s2 m2 lo2 n2 && let x3 = if k3 then x2 else Codec_words.load buf off q3 in holds x3 s3 m3 lo3 n3 && let x4 = if k4 then x3 else Codec_words.load buf off q4 in holds x4 s4 m4 lo4 n4 && let x5 = if k5 then x4 else Codec_words.load buf off q5 in holds x5 s5 m5 lo5 n5 && let x6 = if k6 then x5 else Codec_words.load buf off q6 in holds x6 s6 m6 lo6 n6 && let x7 = if k7 then x6 else Codec_words.load buf off q7 in holds x7 s7 m7 lo7 n7)
   | [ t1; t2; t3; t4; t5; t6; t7; t8 ] ->
-      let q1, l1, r1, m1, lo1, hi1 = t1 in let q2, l2, r2, m2, lo2, hi2 = t2 in let q3, l3, r3, m3, lo3, hi3 = t3 in let q4, l4, r4, m4, lo4, hi4 = t4 in let q5, l5, r5, m5, lo5, hi5 = t5 in let q6, l6, r6, m6, lo6, hi6 = t6 in let q7, l7, r7, m7, lo7, hi7 = t7 in let q8, l8, r8, m8, lo8, hi8 = t8 in Some (fun buf off -> within buf off q1 l1 r1 m1 lo1 hi1 && within buf off q2 l2 r2 m2 lo2 hi2 && within buf off q3 l3 r3 m3 lo3 hi3 && within buf off q4 l4 r4 m4 lo4 hi4 && within buf off q5 l5 r5 m5 lo5 hi5 && within buf off q6 l6 r6 m6 lo6 hi6 && within buf off q7 l7 r7 m7 lo7 hi7 && within buf off q8 l8 r8 m8 lo8 hi8)
+      let _, q1, s1, m1, lo1, n1 = t1 in let k2, q2, s2, m2, lo2, n2 = t2 in let k3, q3, s3, m3, lo3, n3 = t3 in let k4, q4, s4, m4, lo4, n4 = t4 in let k5, q5, s5, m5, lo5, n5 = t5 in let k6, q6, s6, m6, lo6, n6 = t6 in let k7, q7, s7, m7, lo7, n7 = t7 in let k8, q8, s8, m8, lo8, n8 = t8 in Some (fun buf off -> let x1 = Codec_words.load buf off q1 in holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else Codec_words.load buf off q2 in holds x2 s2 m2 lo2 n2 && let x3 = if k3 then x2 else Codec_words.load buf off q3 in holds x3 s3 m3 lo3 n3 && let x4 = if k4 then x3 else Codec_words.load buf off q4 in holds x4 s4 m4 lo4 n4 && let x5 = if k5 then x4 else Codec_words.load buf off q5 in holds x5 s5 m5 lo5 n5 && let x6 = if k6 then x5 else Codec_words.load buf off q6 in holds x6 s6 m6 lo6 n6 && let x7 = if k7 then x6 else Codec_words.load buf off q7 in holds x7 s7 m7 lo7 n7 && let x8 = if k8 then x7 else Codec_words.load buf off q8 in holds x8 s8 m8 lo8 n8)
   | _ -> None
 [@@ocamlformat "disable"]
 
 let staged ~size tests =
   if Sys.int_size < 63 || size < 8 || Array.length tests = 0 then None
   else
-    let tests = Array.to_list (Array.map (test ~size) tests) in
-    if List.for_all Option.is_some tests then
-      stage_tests (List.map Option.get tests)
-    else None
+    let rec words prev = function
+      | [] -> Some []
+      | t :: ts -> (
+          match word_test ~size ~prev t with
+          | None -> None
+          | Some ((_, q, _, _, _, _) as w) ->
+              Option.map (fun ws -> w :: ws) (words q ts))
+    in
+    Option.bind (words (-1) (Array.to_list tests)) stage_tests
