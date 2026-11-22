@@ -822,6 +822,39 @@ let spans_past_max_int () =
 let test_spans_past_max_int () =
   if Sys.int_size >= 63 then spans_past_max_int ()
 
+(* A record with two faults reports the first in check order, the same from
+   the walk [decode] runs and from the general path: its fields in order, each
+   against its own bounds, then its [where] clause. *)
+let test_error_order () =
+  let len = Field.v "len" uint8 in
+  let c =
+    Codec.v "TwoFaults"
+      ~where:Expr.(Field.ref len <> int 3)
+      (fun l d -> (l, d))
+      Codec.
+        [ len $ fst; Field.v "data" (byte_array ~size:(Field.ref len)) $ snd ]
+  in
+  let answer f =
+    match f () with
+    | () -> "ok"
+    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let answers c buf =
+    [
+      answer (fun () -> ignore (Codec.decode_exn c buf 0));
+      answer (fun () -> Codec.validate_exn c buf 0);
+    ]
+  in
+  let check name buf want =
+    Alcotest.(check (list string)) name [ want; want ] (answers c buf);
+    Alcotest.(check (list string))
+      (name ^ ", general") [ want; want ]
+      (answers (Private.Testing.general c) buf)
+  in
+  check "span past the end, where fails" (Bytes.of_string "\003a")
+    "@1: unexpected EOF: expected 3 bytes, got 1";
+  check "where fails" (Bytes.of_string "\003abc") "@0: where clause violated"
+
 let suite =
   ( "codec_variable",
     [
@@ -869,4 +902,6 @@ let suite =
       Alcotest.test_case "a sub-codec's fixed bytes count in min_size" `Quick
         test_sub_codec_min_size;
       Alcotest.test_case "spans past max_int" `Quick test_spans_past_max_int;
+      Alcotest.test_case "errors: fields in order, then where" `Quick
+        test_error_order;
     ] )
