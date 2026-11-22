@@ -141,14 +141,22 @@ let read_eth_payload =
 let read_ip_payload =
   Staged.unstage (Codec.get Net.ipv4_codec Net.bf_ip_payload)
 
-(* Zero-alloc offset readers for the nested-write benches below: replaces
-   [Slice.first (Codec.get c f buf base)] (which allocates a [Slice.t]
-   per call). *)
-let eth_payload_off =
-  Staged.unstage (Codec.slice_offset Net.ethernet_codec Net.bf_eth_payload)
+(* Where the TCP header of [buf] starts, read through checked views of the
+   Ethernet and IPv4 headers. *)
+module Eth_view = (val Codec.view Net.ethernet_codec)
+module Ip_view = (val Codec.view Net.ipv4_codec)
 
-let ip_payload_off =
-  Staged.unstage (Codec.slice_offset Net.ipv4_codec Net.bf_ip_payload)
+let eth_payload = Codec.reader Eth_view.view Net.bf_eth_payload
+let ip_payload = Codec.reader Ip_view.view Net.bf_ip_payload
+
+let nested_tcp_off buf =
+  match Buf.v buf with
+  | Buf.Any b ->
+      let len = Buf.length b in
+      let eth = Codec.valid (Codec.check Eth_view.view b len 0) in
+      let ip = Slice.first (Codec.read eth_payload b eth) in
+      let ip = Codec.valid (Codec.check Ip_view.view b len ip) in
+      Slice.first (Codec.read ip_payload b ip)
 
 let ip_off = Slice.first (read_eth_payload tcp_frame 0)
 let tcp_off = Slice.first (read_ip_payload tcp_frame ip_off)
@@ -621,11 +629,7 @@ let nested_tcp_dst_write_case =
   let value = Wire.UInt16.v 8080 in
   {
     label = "Eth->TCP.dst_port (3 layers)";
-    run =
-      (fun () ->
-        let ip = eth_payload_off tcp_frame 0 in
-        let tcp = ip_payload_off tcp_frame ip in
-        set tcp_frame tcp value);
+    run = (fun () -> set tcp_frame (nested_tcp_off tcp_frame) value);
     verify =
       verify_nested_write ~label:"Eth->TCP.dst_port (3 layers)" ~set ~get
         ~equal:Wire.UInt16.equal value;
@@ -649,11 +653,7 @@ let nested_tcp_syn_write_case =
   let value = true in
   {
     label = "Eth->TCP.syn (3 layers)";
-    run =
-      (fun () ->
-        let ip = eth_payload_off tcp_frame 0 in
-        let tcp = ip_payload_off tcp_frame ip in
-        set tcp_frame tcp value);
+    run = (fun () -> set tcp_frame (nested_tcp_off tcp_frame) value);
     verify =
       verify_nested_write ~label:"Eth->TCP.syn (3 layers)" ~set ~get
         ~equal:Bool.equal value;

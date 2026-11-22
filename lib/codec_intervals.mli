@@ -19,6 +19,11 @@ val flatten_intervals :
 (** [flatten_intervals tests] is the flat array and the byte tables of the tests
     [tests], each a field and the intervals its value must lie in. *)
 
+val word : size:int -> 'a Codec_repr.scalar -> Codec_words.word option
+(** [word ~size s] is the 8-byte word of a record of [size] bytes, at least 8,
+    that the big-endian scalar [s] reads as bits of, [None] for a little-endian
+    one. *)
+
 val within : bytes -> int -> int -> int -> int -> int -> int -> int -> bool
 (** [within buf off q l r m lo hi] is [true] when the field that the 8-byte
     big-endian word at [off + q] holds as {!Codec_words.bits} [l r m] lies

@@ -159,14 +159,17 @@ let check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo
   check_int "Codec.get bitfield lo" lo (get_lo buf base);
   check_string "Codec.get slice" payload_s
     (string_of_slice (get_payload buf base));
-  let slice_offset =
-    Wire.Codec.slice_offset codec bf_payload |> Wire.Staged.unstage
+  let module V =
+    (val Wire.Codec.view codec : Wire.Codec.VIEW with type r = api_access)
   in
-  let slice_length =
-    Wire.Codec.slice_length codec bf_payload |> Wire.Staged.unstage
-  in
-  check_int "Codec.slice_offset" (base + 2) (slice_offset buf base);
-  check_int "Codec.slice_length" 3 (slice_length buf base)
+  match Wire.Buf.v buf with
+  | Wire.Buf.Any b ->
+      let k = Wire.Codec.check V.view b (Wire.Buf.length b) base in
+      if not (Wire.Codec.ok k) then Alcobar.failf "Codec.check refused";
+      let p = Wire.Codec.valid k in
+      check_string "Codec.read slice" payload_s
+        (string_of_slice
+           (Wire.Codec.read (Wire.Codec.reader V.view bf_payload) b p))
 
 let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
   let bit_hi = Wire.Codec.bitfield codec bf_hi in

@@ -355,7 +355,7 @@ let check_where_refs scope where =
   let check name = if not (List.mem name scope) then unbound_where_ref name in
   Option.iter (iter_refs ~param:ignore ~field:check) where
 
-let view : type f r.
+let v : type f r.
     string -> ?where:bool expr -> ?doc:string -> f -> (f, r) fields -> r t =
  fun name ?where ?doc constructor flds ->
   let rec struct_fields : type g. (g, r) fields -> Types.field list = function
@@ -390,8 +390,6 @@ let view : type f r.
     compiled = Atomic.make None;
     compile;
   }
-
-let v = view
 
 (* Two domains may both compile a codec neither has used; the first to publish
    wins and the other's result is dropped. Compiling is pure, so the two are
@@ -1183,11 +1181,7 @@ let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
     in
     Staged.stage (set_writer ~name:codec.name ~n b ws)
 
-type 'r valid = { buf : bytes; off : int; codec : int }
-
-(* The proof of a check that failed: no codec has its id, so every reader
-   refuses it. *)
-let failed = { buf = Bytes.empty; off = 0; codec = -1 }
+(* {1 Checked views} *)
 
 (* A pass made of more than interval tests, answered without its error. *)
 let[@inline never] steps_pass pass input_end buf off =
@@ -1228,90 +1222,172 @@ let[@inline] accepts ?env (t : 'r t) buf off =
       | _ -> accepts_slow env t buf off)
   | _ -> accepts_slow env t buf off
 
-let check ?env t buf off =
-  if accepts ?env t buf off then { buf; off; codec = t.id } else failed
+(* A view holds what [accepts] decides on each call: [frame] is the fixed frame
+   of a codec checked by its plain pass alone, or [-1] for one [validate]
+   checks. Its name ['c] is a phantom. *)
+type 'r view_of = {
+  codec : 'r t;
+  env : Param.env option;
+  c : 'r compiled;
+  frame : int;
+  pass : pass;
+}
 
-let ok v = v.codec >= 0
+type ('c, 'r) view = 'r view_of
 
-let[@inline never] wrong_valid name =
-  Fmt.invalid_arg "Codec.read: the value was not validated by codec %S" name
+module type VIEW = sig
+  type c
+  type r
 
-(* One closure per kind, chosen when the reader is staged, so a read is the
-   codec check and one load. [wrong_valid] stays out of line: inlined, its
-   format call gives every reader a stack frame. *)
-let valid_reader : type a r. id:int -> name:string -> a scalar -> r valid -> a =
- fun ~id ~name s ->
-  match s with
-  | Byte o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else UInt8.unsafe_get v.buf (v.off + o)
-  | U16le o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else UInt16.unsafe_le v.buf (v.off + o)
-  | U16be o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else UInt16.unsafe_be v.buf (v.off + o)
-  | U32le o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else UInt32.unsafe_le v.buf (v.off + o)
-  | U32be o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else UInt32.unsafe_be v.buf (v.off + o)
-  | Sbyte o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else SInt8.unsafe_get v.buf (v.off + o)
-  | I16le o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else SInt16.unsafe_le v.buf (v.off + o)
-  | I16be o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else SInt16.unsafe_be v.buf (v.off + o)
-  | I32le o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else SInt32.unsafe_le v.buf (v.off + o)
-  | I32be o ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else SInt32.unsafe_be v.buf (v.off + o)
-  | Bits8 { off; shift; mask } ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else (Unchecked.u8 v.buf (v.off + off) lsr shift) land mask
-  | Bits16le { off; shift; mask } ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else (Unchecked.u16le v.buf (v.off + off) lsr shift) land mask
-  | Bits16be { off; shift; mask } ->
-      fun v ->
-        if v.codec <> id then wrong_valid name
-        else (Unchecked.u16be v.buf (v.off + off) lsr shift) land mask
+  val view : (c, r) view
+end
 
-let read (type a r) ?env (codec : r t) (f : (a, r) field) :
-    (r valid -> a) Staged.t =
-  let access = field_access ~op:"Codec.read" codec f in
-  let c = compiled codec in
+let view (type r) ?env (codec : r t) : (module VIEW with type r = r) =
+  require_env ~op:"view" codec env;
+  let compiled = compiled codec in
   let frame =
-    match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+    match env with
+    | None when codec.n_params = 0 -> compiled.fixed_frame
+    | _ -> -1
   in
-  let id = codec.id and name = codec.name in
-  match
-    if List.mem_assoc f.name c.field_actions then None
-    else field_scalar ~min_wire_size:frame access f.typ
-  with
-  | Some s -> Staged.stage (valid_reader ~id ~name s)
-  | None ->
-      let get = Staged.unstage (get ?env codec f) in
-      Staged.stage (fun v ->
-          if v.codec <> id then wrong_valid name else get v.buf v.off)
+  let v = { codec; env; c = compiled; frame; pass = compiled.plain_pass } in
+  (module struct
+    type c
+    type nonrec r = r
+
+    let view = v
+  end)
+
+type ('b, 'c) check = int
+type ('b, 'c) valid = int
+
+let[@inline never] check_slow v buf off =
+  if accepts_slow v.env v.codec buf off then off else -1
+
+let[@inline never] pass_slow pass buf off =
+  passes pass (Input_end.of_bytes buf) buf off
+
+(* The frame and a pass of one word test inline, a pass of word tests one
+   closure call, any other pass and any codec [validate] checks out of line. *)
+let[@inline] check v b len off =
+  let buf = (b : _ Buf.t :> bytes) and len = (len : _ Buf.length :> int) in
+  if v.frame < 0 then check_slow v buf off
+  else if off < 0 || off > len - v.frame then -1
+  else
+    match v.pass with
+    | No_checks -> off
+    | Word { q; l; r; m; lo; hi; _ } ->
+        if Codec_intervals.within buf off q l r m lo hi then off else -1
+    | Intervals { words = Some f; _ } -> if f buf off then off else -1
+    | pass -> if pass_slow pass buf off then off else -1
+
+let[@inline] ok k = k >= 0
+
+let[@inline never] refused () =
+  invalid_arg "Codec.valid: the check refused the record"
+
+let[@inline] valid k = if k < 0 then refused () else k
+
+(* A reader is data: an unsigned field of a word of the frame reads as [Word],
+   the 8-byte word at [q] shifted right by [s] and masked by [m], inline. Every
+   other reader is one direct call, so a read site holds one test and one
+   load: a byte slice of constant size in the frame ([Bytes]) is built only by
+   the reads of that field. *)
+type ('a, 'c) reader =
+  | Word : {
+      q : int;
+      s : int;
+      m : int;
+      eq : ('a, int) Type.eq;
+    }
+      -> ('a, 'c) reader
+  | Bytes : { off : int; length : int } -> (Slice.t, 'c) reader
+  | Scalar : 'a scalar -> ('a, 'c) reader
+  | Get : (bytes -> int -> 'a) -> ('a, 'c) reader
+
+let scalar_read : type a. a scalar -> bytes -> int -> a =
+ fun s buf off ->
+  match s with
+  | Byte o -> UInt8.unsafe_get buf (off + o)
+  | U16le o -> UInt16.unsafe_le buf (off + o)
+  | U16be o -> UInt16.unsafe_be buf (off + o)
+  | U32le o -> UInt32.unsafe_le buf (off + o)
+  | U32be o -> UInt32.unsafe_be buf (off + o)
+  | Sbyte o -> SInt8.unsafe_get buf (off + o)
+  | I16le o -> SInt16.unsafe_le buf (off + o)
+  | I16be o -> SInt16.unsafe_be buf (off + o)
+  | I32le o -> SInt32.unsafe_le buf (off + o)
+  | I32be o -> SInt32.unsafe_be buf (off + o)
+  | Bits8 { off = o; shift; mask } ->
+      (Unchecked.u8 buf (off + o) lsr shift) land mask
+  | Bits16le { off = o; shift; mask } ->
+      (Unchecked.u16le buf (off + o) lsr shift) land mask
+  | Bits16be { off = o; shift; mask } ->
+      (Unchecked.u16be buf (off + o) lsr shift) land mask
+
+let[@inline] word_read buf p q s m =
+  Int64.to_int (Int64.shift_right_logical (Codec_words.load buf p q) s) land m
+
+let[@inline] bytes_read buf p off length =
+  if Int.equal length 0 then Slice.eod
+  else Slice.make buf ~first:(p + off) ~length
+
+let[@inline never] read_other : type a c. (a, c) reader -> bytes -> int -> a =
+ fun r buf off ->
+  match r with
+  | Word { q; s; m; eq = Type.Equal } -> word_read buf off q s m
+  | Bytes { off = o; length } -> bytes_read buf off o length
+  | Scalar s -> scalar_read s buf off
+  | Get get -> get buf off
+
+let[@inline] read (type a) (r : (a, _) reader) b p : a =
+  let buf = (b : _ Buf.t :> bytes) in
+  match r with
+  | Word { q; s; m; eq = Type.Equal } -> word_read buf p q s m
+  | r -> read_other r buf p
+
+(* The proof that an [int] holds every value of an unsigned big-endian
+   scalar. *)
+let int_eq : type a. a scalar -> (a, int) Type.eq option = function
+  | Byte _ -> Some UInt8.int_eq
+  | U16be _ -> Some UInt16.int_eq
+  | U32be _ -> UInt32.int_eq
+  | Bits8 _ -> Some Type.Equal
+  | Bits16be _ -> Some Type.Equal
+  | Sbyte _ | I16be _ | I32be _ | U16le _ | U32le _ | I16le _ | I32le _
+  | Bits16le _ ->
+      None
+
+(* The word a scalar of an [int] reads from in a frame of [size] bytes, on a
+   target whose [int] holds 63 bits. *)
+let word_of_scalar ~size s =
+  if Sys.int_size < 63 || size < 8 then None
+  else
+    match (int_eq s, Codec_intervals.word ~size s) with
+    | Some eq, Some w -> Some (w, eq)
+    | _ -> None
+
+let frame_of (c : _ compiled) =
+  match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+
+let reader (type a r) (v : (_, r) view) (f : (a, r) field) : (a, _) reader =
+  let access = field_access ~op:"Codec.reader" v.codec f in
+  let size = frame_of v.c in
+  let scalar =
+    if List.mem_assoc f.name v.c.field_actions then None
+    else field_scalar ~min_wire_size:size access f.typ
+  in
+  match (scalar, f.typ, access) with
+  | Some s, _, _ -> (
+      match word_of_scalar ~size s with
+      | Some ({ q; l; r; m; _ }, eq) -> Word { q; s = r - l; m; eq }
+      | None -> Scalar s)
+  | None, Byte_slice { size = Int length }, Fixed off
+    when (not (List.mem_assoc f.name v.c.field_actions))
+         && off >= 0 && length >= 0
+         && off <= size - length ->
+      Bytes { off; length }
+  | None, _, _ -> Get (Staged.unstage (get ?env:v.env v.codec f))
 
 let name (t : _ t) = t.name
 
@@ -1332,60 +1408,6 @@ let field_readers t =
     (field_readers_ctx t)
 
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
-
-(* -- Slice navigation: zero-copy access to the offset/length of a
-      [Byte_slice] field. Used to descend into a nested codec without
-      allocating a [Slice.t]. The type signature constrains the field's
-      payload type to [Slice.t], so passing a non-slice field is a
-      compile-time error. -- *)
-
-(* All access flavours produce an absolute byte offset for a slice field:
-   - [Fixed off]: byte_slice with static size (and no preceding variable
-     fields) -- offset is [base + off].
-   - [Dynamic fn]: byte_slice with static size after a variable field --
-     offset is [base + fn buf base].
-   - [Variable { off; _ }]: byte_slice with variable size, statically
-     positioned -- offset is [base + off].
-   - [Variable_dynamic { off_fn; _ }]: variable size, dynamic position. *)
-let[@inline] slice_offset (type r) ?env (codec : r t) (f : (Slice.t, r) field) :
-    (bytes -> int -> int) Staged.t =
-  require_env ~op:"slice_offset" codec env;
-  let rt = runtime ?env () in
-  match field_access ~op:"Codec.slice_offset" codec f with
-  | Fixed off -> Staged.stage (fun _buf base -> base + off)
-  | Dynamic fn ->
-      Staged.stage (fun buf base ->
-          base + fn rt (Input_end.of_bytes buf) buf base)
-  | Variable { off; _ } -> Staged.stage (fun _buf base -> base + off)
-  | Variable_dynamic { off_fn; _ } ->
-      Staged.stage (fun buf base ->
-          base + off_fn rt (Input_end.of_bytes buf) buf base)
-  | Bitfield _ ->
-      Fmt.invalid_arg
-        "Codec.slice_offset: field %S is a bitfield, not a byte slice" f.name
-
-let[@inline] slice_length (type r) ?env (codec : r t) (f : (Slice.t, r) field) :
-    (bytes -> int -> int) Staged.t =
-  require_env ~op:"slice_length" codec env;
-  let rt = runtime ?env () in
-  match (f.typ, field_access ~op:"Codec.slice_length" codec f) with
-  | Byte_slice { size }, Fixed _ | Byte_slice { size }, Dynamic _ -> (
-      (* Static-size byte_slice: size is a constant expression. *)
-      match size with
-      | Int n -> Staged.stage (fun _buf _base -> n)
-      | _ ->
-          Fmt.invalid_arg
-            "Codec.slice_length: field %S has dynamic size in a static access \
-             -- internal inconsistency"
-            f.name)
-  | _, Variable { size_fn; _ } | _, Variable_dynamic { size_fn; _ } ->
-      Staged.stage (fun buf base ->
-          size_fn rt (Input_end.of_bytes buf) buf base)
-  | _, (Fixed _ | Dynamic _) ->
-      Fmt.invalid_arg "Codec.slice_length: field %S is not a byte slice" f.name
-  | _, Bitfield _ ->
-      Fmt.invalid_arg
-        "Codec.slice_length: field %S is a bitfield, not a byte slice" f.name
 
 (* -- Bitfield batch access -- *)
 
@@ -1481,7 +1503,7 @@ let word_size ~op (codec : _ t) =
 type 'r word_reader = 'r Codec_run.reader
 
 let word_reader (codec : 'r t) : 'r word_reader =
-  reader (word_size ~op:"Codec.word_reader" codec)
+  Codec_run.reader (word_size ~op:"Codec.word_reader" codec)
 
 let read_word = Codec_run.read_word
 

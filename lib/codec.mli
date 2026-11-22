@@ -266,26 +266,125 @@ val writer : 'r t -> 'r -> ('f, 'r) args -> (bytes -> int -> 'f) Staged.t
     field cannot represent; the bytes from the offset on are then scrap, as
     after a failed {!encode}. *)
 
-type 'r valid
-(** The answer of {!check} on a buffer and offset: a proof that it accepted a
-    ['r] there, which {!ok} tells, or that it did not. A buffer's length never
-    changes, so a field read through {!read} from a proof {!ok} holds of stays
-    inside the buffer whatever the bytes become later. *)
+(** {2:views Checked views}
 
-val check : ?env:Param.env -> 'r t -> bytes -> int -> 'r valid
-(** [check ?env c buf off] checks the record at [off] as {!validate} does,
-    without raising on bytes it refuses or on an offset outside [buf]. Raises
-    [Invalid_argument] on the misuse {!validate} raises it on. *)
+    A view checks a record once and then reads its fields with no check of their
+    own, as the [View] of the module [Wire_ocaml] generates does. The buffer is
+    named by a type ({!Wire_runtime.Buf}), so a proof made on one buffer reads
+    no other. The view is named by a type of its own, fresh at each
+    [(val (view c))], so a reader of one view takes no proof of another. A check
+    and a proof are [int]s and a reader is data: {!check} and {!read} allocate
+    nothing, and reading an unsigned big-endian scalar inside the record's frame
+    makes no call.
 
-val ok : 'r valid -> bool
-(** [ok v] is [true] when the {!check} that gave [v] accepted the record. *)
+    {[
+    open Wire
 
-val read : ?env:Param.env -> 'r t -> ('a, 'r) field -> ('r valid -> 'a) Staged.t
-(** [read ?env c f] is a staged reader of field [f] from a proof {!ok} holds of.
-    A scalar at a fixed offset is one load with no bounds check; any other field
-    reads as {!get} does. Raises [Invalid_argument] on the same terms as {!get},
-    and when the staged reader is given a proof of another codec or of a check
-    that failed. *)
+    type h = { version : int; ttl : UInt8.t }
+
+    let version =
+      Field.v "version"
+        ~self_constraint:Expr.(fun v -> v = int 4)
+        (bits ~width:4 U8)
+
+    let ttl = Codec.(Field.v "ttl" uint8 $ fun h -> h.ttl)
+
+    let codec =
+      Codec.v "H"
+        (fun version ttl -> { version; ttl })
+        Codec.[ (version $ fun h -> h.version); ttl ]
+
+    module H = (val Codec.view codec)
+
+    let read_ttl = Codec.reader H.view ttl
+
+    let ttl_of bytes =
+      match Wire_runtime.Buf.v bytes with
+      | Wire_runtime.Buf.Any b ->
+          let k = Codec.check H.view b (Wire_runtime.Buf.length b) 0 in
+          if Codec.ok k then Some (Codec.read read_ttl b (Codec.valid k))
+          else None
+
+    let () =
+      assert (ttl_of (Bytes.of_string "\x40\x07") = Some (UInt8.v 7));
+      assert (ttl_of (Bytes.of_string "\x50\x07") = None);
+      assert (ttl_of (Bytes.of_string "\x40") = None)
+    ]} *)
+
+type ('c, 'r) view
+(** The type for the views named ['c] of a codec of ['r]: its frame, its checks
+    and the layout of its fields. *)
+
+(** A view under a name of its own. *)
+module type VIEW = sig
+  type c
+  (** The name of {!view}. *)
+
+  type r
+  (** The type of the records {!view} checks. *)
+
+  val view : (c, r) view
+  (** The view. *)
+end
+
+val view : ?env:Param.env -> 'r t -> (module VIEW with type r = 'r)
+(** [view ~env c] is [c] as a view, under a name no other view has. [env]
+    supplies the input parameters of [c], with the ownership and binding
+    requirements of {!get}, and the view reads their current values on each
+    check and read. Two unpackings of one codec are two views whose readers and
+    proofs do not mix.
+
+    Raises [Invalid_argument] on the misuse {!validate} raises it on: [env] made
+    for another codec, or an input parameter of [c] left unbound. *)
+
+type ('b, 'c) check = private int
+(** The type for the answers of {!check} on the buffer named ['b] for the view
+    named ['c]: the record's offset when the check accepted it, else a negative
+    [int]. *)
+
+val check :
+  ('c, 'r) view ->
+  'b Wire_runtime.Buf.t ->
+  'b Wire_runtime.Buf.length ->
+  int ->
+  ('b, 'c) check
+(** [check v b len off] runs on the record at [off] in [b] every check
+    {!validate} runs: the frame against [len], the field constraints, the
+    [~where] clauses, the enums and the field actions. It accepts exactly what
+    {!validate} accepts and never raises: a negative [off] or a buffer too short
+    for the record is an answer {!ok} refuses. [len] is
+    [Wire_runtime.Buf.length b], read once per buffer. *)
+
+val ok : ('b, 'c) check -> bool
+(** [ok k] is [true] iff the {!check} that answered [k] accepted the record. *)
+
+type ('b, 'c) valid = private int
+(** The type for the records of the view named ['c] that the buffer named ['b]
+    holds and that passed their checks. *)
+
+val valid : ('b, 'c) check -> ('b, 'c) valid
+(** [valid k] is the proof [k] gives.
+
+    Raises [Invalid_argument] unless [ok k]. *)
+
+type ('a, 'c) reader
+(** The type for the readers of a field of type ['a] of the view named ['c]. *)
+
+val reader : ('c, 'r) view -> ('a, 'r) field -> ('a, 'c) reader
+(** [reader v f] reads the field [f] of the records [v] checks, as {!get} does.
+    A scalar at a constant offset inside the record's frame is one load with no
+    bounds check, and a byte slice of constant size there is the slice of its
+    bytes, {!Bytesrw.Bytes.Slice.eod} when the size is [0]. Any other field
+    (after a variable-size field, with an action, under a map) reads as {!get}
+    does.
+
+    Raises [Invalid_argument] if [f] was not bound from a source {!Field.t} of
+    the view's codec. *)
+
+val read : ('a, 'c) reader -> 'b Wire_runtime.Buf.t -> ('b, 'c) valid -> 'a
+(** [read r b p] is the field [r] reads of the record [p] proves in [b]. If the
+    bytes of [b] change after the check, the value may break a check of the
+    codec, but the read stays inside [b]. *)
 
 val set :
   ?env:Param.env ->
@@ -410,37 +509,6 @@ val pp : Format.formatter -> 'r t -> unit
 
 val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)
-
-val slice_offset :
-  ?env:Param.env ->
-  'r t ->
-  (Bytesrw.Bytes.Slice.t, 'r) field ->
-  (bytes -> int -> int) Staged.t
-(** [slice_offset c f] is a staged reader that returns the absolute byte offset
-    of slice field [f] within the buffer (i.e. [base + relative_off]).
-
-    The naive [Slice.first (Codec.get c f buf base)] pattern allocates a fresh
-    [Slice.t] (4 words) inside [Codec.get] only to discard it after extracting
-    one int. [slice_offset] skips the make and returns the int directly: stage
-    once with [Codec.slice_offset c f |> Staged.unstage], then call the
-    resulting [buf -> base -> int] reader on the hot path.
-
-    [env] supplies input parameters, with the same ownership and binding
-    requirements as {!get}.
-
-    Type-restricted to [Slice.t] fields, so passing a non-slice field is a
-    compile-time error. Raises [Invalid_argument] if [f] was not bound from the
-    source {!Field.t} used in [c]. *)
-
-val slice_length :
-  ?env:Param.env ->
-  'r t ->
-  (Bytesrw.Bytes.Slice.t, 'r) field ->
-  (bytes -> int -> int) Staged.t
-(** [slice_length c f] is a staged reader returning the byte length of slice
-    field [f]. [env] supplies input parameters, with the same ownership and
-    binding requirements as {!get}. Raises [Invalid_argument] if [f] was not
-    bound from the source {!Field.t} used in [c]. *)
 
 type validator
 (** A struct validator without a constructor. The same int-array validation

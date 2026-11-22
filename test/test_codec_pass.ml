@@ -258,11 +258,13 @@ let test_wide_constraint () =
     Bytes.set_int64_be b 0 n;
     b
   in
-  let outcomes c b =
+  let outcomes (type r) (c : r Codec.t) b =
     let ok = function Ok _ -> true | Error _ -> false in
+    let module V = (val Codec.view c) in
+    let (Buf.Any v) = Buf.v b in
     ( ok (Codec.decode c b 0),
       ok (Codec.validate c b 0),
-      Codec.(ok (check c b 0)) )
+      Codec.ok (Codec.check V.view v (Buf.length v) 0) )
   in
   let check name c n expected =
     Alcotest.(check (triple bool bool bool))
@@ -355,38 +357,49 @@ let test_plain_encode () =
   refused "short buffer" (fun () -> Codec.encode c v buf 1);
   refused "constraint" (fun () -> Codec.encode c (0, 0, 0, 0, 1001, 0l) buf 0)
 
-(* A value [valid] accepted reads every field as [get] does. A reader refuses a
-   value validated by another codec of the same type, and [valid] refuses what
-   [validate] refuses. *)
-let test_valid_read () =
+(* A record [check] accepts reads every field as [get] does. [check] refuses a
+   short buffer and a negative offset without raising, [valid] raises on what
+   it refuses, and [reader] refuses a field of the same name and type that the
+   codec was not built from. *)
+let test_view_read () =
   let a = Codec.(Field.v "a" uint8 $ fun (a, _, _) -> a) in
   let b = Codec.(Field.v "b" (bits ~width:4 U16be) $ fun (_, b, _) -> b) in
   let s = Codec.(Field.v "s" (byte_array ~size:(int 3)) $ fun (_, _, s) -> s) in
-  let make () = Codec.v "Valid" (fun a b s -> (a, b, s)) [ a; b; s ] in
-  let c = make () and other = make () in
+  let c = Codec.v "Valid" (fun a b s -> (a, b, s)) [ a; b; s ] in
+  let module V = (val Codec.view c) in
   let buf = Bytes.of_string "\x07\xa0\x00xyz" in
-  let v = Codec.check c buf 0 in
-  Alcotest.(check bool) "accepted" true (Codec.ok v);
-  let read f = Staged.unstage (Codec.read c f) v in
+  let check buf off =
+    match Buf.v buf with
+    | Buf.Any b -> Codec.ok (Codec.check V.view b (Buf.length b) off)
+  in
+  let read f =
+    match Buf.v buf with
+    | Buf.Any b ->
+        let k = Codec.check V.view b (Buf.length b) 0 in
+        Codec.read (Codec.reader V.view f) b (Codec.valid k)
+  in
   let get f = Staged.unstage (Codec.get c f) buf 0 in
+  Alcotest.(check bool) "accepted" true (check buf 0);
   Alcotest.(check bool) "uint8" true (read a = get a);
   Alcotest.(check int) "bits" (get b) (read b);
   Alcotest.(check string) "byte_array" (get s) (read s);
   let raises f =
     match f () with _ -> false | exception Invalid_argument _ -> true
   in
+  let short = Bytes.make 3 '\x00' in
+  Alcotest.(check bool) "short buffer" false (check short 0);
+  Alcotest.(check bool) "negative offset" false (check buf (-1));
+  Alcotest.(check bool) "offset past the end" false (check buf 7);
   Alcotest.(check bool)
-    "another codec's value" true
+    "valid of a failed check" true
     (raises (fun () ->
-         Staged.unstage (Codec.read c a) (Codec.check other buf 0)));
-  let short = Codec.check c (Bytes.make 3 '\x00') 0 in
-  Alcotest.(check bool) "short buffer" false (Codec.ok short);
+         match Buf.v short with
+         | Buf.Any b ->
+             ignore (Codec.valid (Codec.check V.view b (Buf.length b) 0))));
+  let lookalike = Codec.(Field.v "a" uint8 $ fun (a, _, _) -> a) in
   Alcotest.(check bool)
-    "a read of a failed check" true
-    (raises (fun () -> Staged.unstage (Codec.read c a) short));
-  Alcotest.(check bool)
-    "negative offset" false
-    (Codec.ok (Codec.check c buf (-1)))
+    "a lookalike field" true
+    (raises (fun () -> Codec.reader V.view lookalike))
 
 (* Constraints on fields that share a byte are checked together, and a failure
    still names the first field, in declaration order, whose constraint fails. *)
@@ -691,7 +704,9 @@ let test_layout_size_overflow () =
   Alcotest.(check bool) "validate agrees with decode" decoded validated;
   Alcotest.(check bool)
     "no proof for a record decode refuses" false
-    (Codec.ok (Codec.check c buf 0))
+    (let module V = (val Codec.view c) in
+     match Buf.v buf with
+     | Buf.Any b -> Codec.ok (Codec.check V.view b (Buf.length b) 0))
 
 (* A negative offset is refused by name on every encode path, the general one
    included: a codec with a [where] clause does not take the plain one. *)
@@ -1036,7 +1051,7 @@ let suite =
       Alcotest.test_case "check: a wide field's constraint is not truncated"
         `Quick test_wide_constraint;
       Alcotest.test_case "encode: plain fields" `Quick test_plain_encode;
-      Alcotest.test_case "valid: read agrees with get" `Quick test_valid_read;
+      Alcotest.test_case "view: read agrees with get" `Quick test_view_read;
       Alcotest.test_case "check: constraints sharing a byte" `Quick
         test_shared_byte_constraints;
       Alcotest.test_case "check: mapped and disjunctive constraints" `Quick

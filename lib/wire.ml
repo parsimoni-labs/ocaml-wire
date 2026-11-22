@@ -1145,6 +1145,7 @@ module SInt32 = SInt32
 module SInt8 = SInt8
 module SInt16 = SInt16
 module UInt8 = UInt8
+module Buf = Buf
 module UInt16 = UInt16
 module Ascii = Ascii
 

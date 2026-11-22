@@ -685,15 +685,9 @@ let test_slice_navigation_requires_parameters () =
     Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ Fun.id)
   in
   let codec = Codec.v "ParamSlice" Fun.id [ field ] in
-  List.iter
-    (fun stage ->
-      match stage () with
-      | _ -> Alcotest.fail "staged slice navigation without its input parameter"
-      | exception Invalid_argument _ -> ())
-    [
-      (fun () -> Codec.slice_offset codec field);
-      (fun () -> Codec.slice_length codec field);
-    ]
+  match Codec.view codec with
+  | _ -> Alcotest.fail "a view without its input parameter"
+  | exception Invalid_argument _ -> ()
 
 let test_slice_navigation_with_parameters () =
   let size = Param.input "size" uint8 in
@@ -708,28 +702,25 @@ let test_slice_navigation_with_parameters () =
   in
   let buf = Bytes.of_string "_abcDEF" in
   let env = Codec.env codec |> Param.bind size (UInt8.v 3) in
-  let offset = Staged.unstage (Codec.slice_offset ~env codec body) in
-  let length = Staged.unstage (Codec.slice_length ~env codec body) in
+  let module V = (val Codec.view ~env codec) in
   let slice = (Staged.unstage (Codec.get ~env codec body)) buf 1 in
-  Alcotest.(check int)
-    "absolute offset"
-    (Bytesrw.Bytes.Slice.first slice)
-    (offset buf 1);
-  Alcotest.(check int)
-    "length"
-    (Bytesrw.Bytes.Slice.length slice)
-    (length buf 1);
+  (match Buf.v buf with
+  | Buf.Any b ->
+      let p = Codec.valid (Codec.check V.view b (Buf.length b) 1) in
+      let read = Codec.read (Codec.reader V.view body) b p in
+      Alcotest.(check int)
+        "absolute offset"
+        (Bytesrw.Bytes.Slice.first slice)
+        (Bytesrw.Bytes.Slice.first read);
+      Alcotest.(check int)
+        "length"
+        (Bytesrw.Bytes.Slice.length slice)
+        (Bytesrw.Bytes.Slice.length read));
   List.iter
     (fun env ->
-      List.iter
-        (fun stage ->
-          match stage env with
-          | _ -> Alcotest.fail "accepted an invalid slice environment"
-          | exception Invalid_argument _ -> ())
-        [
-          (fun env -> Codec.slice_offset ~env codec body);
-          (fun env -> Codec.slice_length ~env codec body);
-        ])
+      match Codec.view ~env codec with
+      | _ -> Alcotest.fail "accepted an invalid slice environment"
+      | exception Invalid_argument _ -> ())
     [ Codec.env codec; Codec.env (Codec.v "Other" () []) ]
 
 (* -- Suite -- *)
