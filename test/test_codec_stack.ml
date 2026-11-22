@@ -481,6 +481,40 @@ let test_walk_shared_gates () =
         [ 0; 1; 2 ])
     [ 0; 1; 2 ]
 
+(* A frame is checked against its own region, whatever the buffer holds after
+   it: each input, as a frame of its own length, answers the same at the end of
+   its buffer, where the region and the buffer end together, as in front of
+   more packets. *)
+let test_region_bounds_nested () =
+  let trailer = Bytes.concat Bytes.empty stack_seeds in
+  let answer frame buf =
+    let decode () = Codec.decode_exn frame buf 0 in
+    let validate () = Codec.validate_exn frame buf 0 in
+    [ stack_answer show_stack decode; stack_answer (fun () -> "") validate ]
+    |> String.concat " / "
+  in
+  List.iter
+    (fun input ->
+      let n = Bytes.length input in
+      let frame = stack_frame (int n) "StackRegionFrame" in
+      Alcotest.(check string)
+        (Fmt.str "frame of %d bytes" n)
+        (answer frame input)
+        (answer frame (Bytes.cat input trailer)))
+    stack_inputs;
+  (* TCP without options in an IPv4 payload of 10 bytes: the TCP header counts
+     the 10 bytes of its region, not the 30 left in the frame. *)
+  let short = Bytes.copy (List.nth stack_seeds 4) in
+  Bytes.set_uint16_be short 16 30;
+  let expected =
+    Fmt.str "error %a" pp_parse_error
+      (eof ~at:34 ~field:[ "packet"; "ipv4"; "tcp" ] ~expected:20 ~got:10 ())
+  in
+  Alcotest.(check string)
+    "short TCP region"
+    (String.concat " / " [ expected; expected ])
+    (answer (stack_frame (int 64) "StackRegionFrame") short)
+
 let suite =
   ( "codec_stack",
     [
@@ -492,4 +526,6 @@ let suite =
         test_stack_walks;
       Alcotest.test_case "stack: every entry point's answers are pinned" `Quick
         test_stack_answers_pinned;
+      Alcotest.test_case "stack: a nested header is bounded by its region"
+        `Quick test_region_bounds_nested;
     ] )
