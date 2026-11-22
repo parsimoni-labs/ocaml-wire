@@ -417,8 +417,8 @@ let test_codec_embed_tail () =
   in
   check 3
     [
-      "error @0: unexpected EOF: expected 4 bytes, got 3";
-      "error @0: unexpected EOF: expected 4 bytes, got 3";
+      "error t@0: unexpected EOF: expected 4 bytes, got 3";
+      "error t@0: unexpected EOF: expected 4 bytes, got 3";
       "ok 2 \"\\003\"";
       "ok ";
     ];

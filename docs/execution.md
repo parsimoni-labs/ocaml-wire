@@ -11,17 +11,20 @@ are checked and why the others cannot go wrong.
 `decode c buf off` runs three phases in order, and the other operations run
 a prefix of them.
 
-1. **Frame.** Check `0 <= off` and `off + min_size <= Bytes.length buf`,
-   where `min_size` is the sum of the bytes each field always holds. A
-   fixed-size field counts for its size and a sub-codec for its own
-   `min_size`; an optional field and a span sized by the input count for
-   nothing. A variable-size record then reads its length fields, with
-   checked reads, and
-   checks that its end lies inside the input. After the frame, every byte at
-   a fixed offset below `min_size` is in the buffer.
-2. **Check.** Evaluate the field constraints, the `where` clause, closed enum
-   membership and `map` refusals, in field order. The first failure is the
-   one reported. A scalar inside the frame is read into its slot only when a
+1. **Frame.** Check `0 <= off` and `off + min_size <= input_end`, where
+   `min_size` is the sum of the bytes each field always holds and
+   `input_end` is the end of the buffer at the top level, and the end of the
+   region that holds a nested record. A fixed-size field counts for its size
+   and a sub-codec for its own `min_size`; an optional field and a span sized
+   by the input count for nothing. After the frame, every byte at a fixed
+   offset below `min_size` is in the input.
+2. **Check.** Evaluate each field in field order: its bounds (a span, a
+   region and a sub-codec, each against `input_end`, a sub-codec against its
+   own frame first), its constraints, closed enum membership and `map`
+   refusals; then the `where` clause. The first failure is the one reported.
+   A variable-size record last checks that its end, from its length fields,
+   lies inside the input, which only fails for a field the checks do not
+   read. A scalar inside the frame is read into its slot only when a
    constraint, an action or the `where` clause uses it, and a comparison of a
    field with a literal or another field is tested directly. Any other field
    runs its general validator, so the choice is made field by field.
@@ -64,7 +67,11 @@ codec is built, so no input can break it.
   `Invalid_argument` is for misuse of the API (a negative offset, a missing
   `env`).
 - **Field order.** Reads and checks run in declaration order, so the error
-  names the first bad field.
+  names the first bad field. The walk `decode` runs on a record without
+  parameters reports the same error as the check pass: it checks the frame,
+  then the fields in order, then the `where` clause, and leaves a failed
+  constraint of a fixed-offset field to the record's check pass, which names
+  the first one.
 - **One answer.** `decode` fails exactly when `validate` does, and both agree
   with the EverParse C validator; the differential fuzzer checks this.
 

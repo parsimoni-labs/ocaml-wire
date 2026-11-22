@@ -3,9 +3,8 @@
     One pass over a record's fields that checks and reads each once, in field
     order, with a cursor ({!Types.cursor}) that a sub-codec leaves at its end.
     Sizes, gates and conditions are closures of the cursor alone, each one
-    direct call. A walk raises {!Types.Unwalked} where it does not accept, and
-    the decode then takes the general path for its answer. Internal to {!Codec}.
-*)
+    direct call. A walk that does not accept raises the error the check pass
+    raises, in the same order. Internal to {!Codec}. *)
 
 open Codec_repr
 
@@ -48,7 +47,8 @@ type _ span =
   | String_span : string span
 
 val span : 'a span -> (Types.cursor -> int) -> Types.cursor -> 'a
-(** [span kind size c] reads the span of [size c] bytes at [c]. *)
+(** [span kind size c] reads the span of [size c] bytes at [c]. Raises
+    [Parse_error] when it does not fit before the cursor's [wend]. *)
 
 val gated :
   (Types.cursor -> bool) -> (Types.cursor -> 'a) -> Types.cursor -> 'a option
@@ -57,20 +57,26 @@ val gated :
 
 val region :
   at_most:bool ->
+  name:string option ->
   (Types.cursor -> int) ->
   (Types.cursor -> 'a) ->
   Types.cursor ->
   'a
-(** [region ~at_most size sub c] walks the sub-codec [sub] in the region of
-    [size c] bytes at [c]: it must end at the region's end, or before it when
-    [at_most]. [c] goes on at the region's end. *)
+(** [region ~at_most ~name size sub c] walks the sub-codec [sub] in the region
+    of [size c] bytes at [c], against the region's end: it must end there, or
+    before it when [at_most]. [c] goes on at the region's end. With
+    [name = Some n], an error under it carries [n] in its field path when the
+    cursor's [wnamed] asks for names; {!val-sub} and {!val-fixed_sub} name
+    theirs alike. *)
 
-val sub : (Types.cursor -> 'a) -> Types.cursor -> 'a
-(** [sub w c] walks the sub-codec [w] at [c], which it leaves at its end. *)
+val sub : name:string option -> (Types.cursor -> 'a) -> Types.cursor -> 'a
+(** [sub ~name w c] walks the sub-codec [w] at [c], which it leaves at its end.
+*)
 
-val fixed_sub : int -> (Types.cursor -> 'a) -> Types.cursor -> 'a
-(** [fixed_sub off w c] walks the fixed-size sub-codec [w] at offset [off] of
-    the record at [c], leaving [c] where it was. *)
+val fixed_sub :
+  name:string option -> int -> (Types.cursor -> 'a) -> Types.cursor -> 'a
+(** [fixed_sub ~name off w c] walks the fixed-size sub-codec [w] at offset [off]
+    of the record at [c], leaving [c] where it was. *)
 
 (** How the walk reads each field of a record, in field order. *)
 type (_, _) readers =
@@ -92,16 +98,20 @@ val record :
   min_size:int ->
   prefix:(string * packed_scalar) list ->
   where:bool Types.expr option ->
+  fail:(Input_end.t -> bytes -> int -> unit) ->
   'full ->
   ('full, 'r) walk option ->
   (Types.cursor -> 'r) option
-(** [record ~n_params ~min_size ~prefix ~where make w] is the walk of a sealed
-    record of at least [min_size] bytes, built by [make] from the fields [w]
-    reads: its frame, then the checks of its fixed-offset fields and of its
-    [where] clause, then each field in order. [None] when the record has
-    parameters, no walk, more than 32 fields, or a [where] clause reading
-    anything but the fields [prefix] names. *)
+(** [record ~n_params ~min_size ~prefix ~where ~fail make w] is the walk of a
+    sealed record of at least [min_size] bytes, built by [make] from the fields
+    [w] reads: its frame, the checks of its fixed-offset fields, each field in
+    order, then its [where] clause. When a check of a fixed-offset field fails,
+    or an expression raises, [fail input_end buf off], the record's check pass,
+    raises the error. [None] when the record has parameters, no walk, more than
+    32 fields, or a [where] clause reading anything but the fields [prefix]
+    names. *)
 
 val decode : (Types.cursor -> 'r) -> (bytes -> int -> 'r) -> bytes -> int -> 'r
 (** [decode walk general buf off] is the record [walk] reads at [off], or
-    [general buf off] when [walk] does not accept it. *)
+    [general buf off] when [walk] raises {!Types.Unwalked}. A walk that fails is
+    walked again with names on, for the field path of its error. *)

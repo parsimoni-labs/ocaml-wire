@@ -853,7 +853,26 @@ let test_error_order () =
   in
   check "span past the end, where fails" (Bytes.of_string "\003a")
     "@1: unexpected EOF: expected 3 bytes, got 1";
-  check "where fails" (Bytes.of_string "\003abc") "@0: where clause violated"
+  check "where fails" (Bytes.of_string "\003abc") "@0: where clause violated";
+  (* A scalar in a region too short for it is measured before it is read: its
+     read has no bounds check of its own. *)
+  let len = Field.v "len" uint8 in
+  let c =
+    Codec.v "ShortScalarRegion"
+      (fun l v -> (l, v))
+      Codec.
+        [
+          len $ fst;
+          Field.v "v" (nested_at_most ~size:(Field.ref len) uint16be) $ snd;
+        ]
+  in
+  Alcotest.(check (list string))
+    "scalar past its region"
+    [
+      "@2: unexpected EOF: expected 1 bytes, got 2";
+      "@2: unexpected EOF: expected 1 bytes, got 2";
+    ]
+    (answers c (Bytes.of_string "\001\255"))
 
 let suite =
   ( "codec_variable",

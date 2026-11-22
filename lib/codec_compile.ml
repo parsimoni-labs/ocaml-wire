@@ -910,16 +910,6 @@ let span_populate : type a.
    decode fails; what is left out is the sequence, the nested region's value
    and the case body's record. [None] leaves the field to the generic
    [build_populate]. *)
-(* The check of a region's element the region walk has just measured: a
-   sub-codec takes the end the walk found rather than measuring itself again,
-   which costs as much as the walk. *)
-let sized_check : type a.
-    a typ -> runtime -> Input_end.t -> bytes -> int -> int -> unit = function
-  | Codec { codec_validate_sized; _ } -> codec_validate_sized
-  | typ ->
-      let check = elem_check typ in
-      fun runtime input_end buf off _end_off -> check runtime input_end buf off
-
 let container_populate : type a.
     a typ ->
     off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
@@ -936,13 +926,17 @@ let container_populate : type a.
           check_span_bounds input_end ~first ~sz;
           check runtime (Input_end.narrow input_end (first + sz)) buf first)
   | Single_elem { elem; at_most; _ } ->
-      let check = sized_check elem in
+      let check = elem_check elem in
       (* A sub-codec that measures and checks itself in one walk answers first;
-         when it cannot tell, the measure and the check below answer. *)
-      let check_end =
+         when it cannot tell, the check and the measure below answer. A
+         sub-codec checks its own bytes against the region's end, so it is
+         checked before it is measured, as the walk finds the error of a
+         region: the contents, then whether they fill it. Any other element
+         reads its bytes unchecked, so it is measured to fit first. *)
+      let check_end, self_bounded =
         match elem with
-        | Codec { codec_check_end; _ } -> codec_check_end
-        | _ -> fun _ _ _ -> -2
+        | Codec { codec_check_end; _ } -> (codec_check_end, true)
+        | _ -> ((fun _ _ _ -> -2), false)
       in
       Some
         (fun _slots runtime input_end buf base ->
@@ -961,10 +955,11 @@ let container_populate : type a.
             (* A walk that did not accept ([-1]) has been tried: the general
                passes do not try it again. *)
             let runtime = if e = -1 then fallback_runtime else runtime in
+            if self_bounded then check runtime region_end buf first;
             let consumed = elem_size_of elem runtime region_end buf first in
             if consumed > sz || ((not at_most) && consumed <> sz) then
               raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-            check runtime region_end buf first (first + consumed)
+            if not self_bounded then check runtime region_end buf first
           end)
   | _ -> None
 
@@ -1116,27 +1111,6 @@ let prepend_field_check name f arr runtime input_end buf base =
   with Types.Parse_error e ->
     raise (Types.Parse_error { e with field = name :: e.field })
 
-(* Some extents are resolved by walking the field's own bytes, and the record's
-   bounds check does that walk before any field reader runs, so the failure
-   surfaces from the size walk rather than from the wrapped reader: a casetype
-   dispatching on an unknown tag, a zero-terminated string with no terminator.
-   Name the field there too, or the failure reaches the caller with no path at
-   all. Every other extent is arithmetic over fields already read and raises
-   nothing of its own. *)
-let attribute_size_errors : type a.
-    a typ ->
-    string ->
-    (runtime -> Input_end.t -> bytes -> int -> int) ->
-    runtime ->
-    Input_end.t ->
-    bytes ->
-    int ->
-    int =
- fun typ name size_fn ->
-  match typ with
-  | Casetype _ | Zeroterm -> prepend_field name size_fn
-  | _ -> size_fn
-
 let compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
@@ -1144,7 +1118,6 @@ let compile_var_bytes : type a r.
   let off_fn = off_fn_of ctx in
   let validator_off = validator_off_of ctx in
   let size_fn = compile_var_size_fn ctx typ ~off_fn in
-  let size_fn = attribute_size_errors typ fld.name size_fn in
   let field_access : field_access =
     match ctx.next_off with
     | Static n -> Variable { off = n; size_fn }

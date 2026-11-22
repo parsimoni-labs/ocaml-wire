@@ -179,6 +179,12 @@
   releases fail to build its C validator (project-everest/everparse#321)
   (#514, @samoht)
 
+- `Wire.Codec.decode` rejects a malformed packet faster: it reports the
+  check that fails where it finds it, rather than checking the packet again.
+  The error of a packet with several faults may now name another field or
+  position: the first field to fail in field order, each against its own
+  bounds, with the `where` clause last (#522, @samoht)
+
 ### Fixed
 
 - `decode` and `validate` check a nested record against the region that

@@ -34,6 +34,7 @@ type env = {
   known : (bool expr * int) list;
       (* The gates of the record evaluated before, each with its bit of
          [wgates]. *)
+  mutable checked : bool;  (** Whether an operation can raise. *)
 }
 
 let field env name =
@@ -56,12 +57,15 @@ let rec int_expr env (e : int expr) : cursor -> int =
       fun _ -> n
   | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> raise Exit
   | Add (a, Int k) ->
+      env.checked <- true;
       let fa = rec_ a in
       fun c -> checked_add (fa c) k
   | Sub (a, Int k) ->
+      env.checked <- true;
       let fa = rec_ a in
       fun c -> checked_sub (fa c) k
   | Mul (a, Int k) ->
+      env.checked <- true;
       let fa = rec_ a in
       fun c -> checked_mul (fa c) k
   | Land (a, Int k) ->
@@ -74,18 +78,23 @@ let rec int_expr env (e : int expr) : cursor -> int =
       let fa = rec_ a in
       fun c -> fa c lsr k
   | Add (a, b) ->
+      env.checked <- true;
       let fa = rec_ a and fb = rec_ b in
       fun c -> checked_add (fa c) (fb c)
   | Sub (a, b) ->
+      env.checked <- true;
       let fa = rec_ a and fb = rec_ b in
       fun c -> checked_sub (fa c) (fb c)
   | Mul (a, b) ->
+      env.checked <- true;
       let fa = rec_ a and fb = rec_ b in
       fun c -> checked_mul (fa c) (fb c)
   | Div (a, b) ->
+      env.checked <- true;
       let fa = rec_ a and fb = rec_ b in
       fun c -> checked_div (fa c) (fb c)
   | Mod (a, b) ->
+      env.checked <- true;
       let fa = rec_ a and fb = rec_ b in
       fun c -> checked_mod (fa c) (fb c)
   | Land (a, b) ->
@@ -227,8 +236,17 @@ and bool_cases env (e : bool expr) : cursor -> bool =
       fun c -> not (fa c)
   | Ref _ -> .
 
-let size prefix e = int_expr { prefix; sizeof = true; known = [] } e
-let cond prefix e = bool_expr { prefix; sizeof = false; known = [] } e
+let size prefix e =
+  int_expr { prefix; sizeof = true; known = []; checked = false } e
+
+(* A condition that raises leaves the record to the general path, whose check
+   pass names its error at the field it constrains; a size that raises names
+   its own, rebased to the record by [decode]. *)
+let cond prefix e =
+  let env = { prefix; sizeof = false; known = []; checked = false } in
+  let f = bool_expr env e in
+  if not env.checked then f
+  else fun c -> match f c with b -> b | exception Parse_error _ -> unwalked ()
 
 (* The gates a record has evaluated so far, each the bit of [wgates] that holds
    its answer, while there are bits. *)
@@ -237,7 +255,13 @@ type gates = (bool expr * int) list
 let no_gates = []
 
 let gate ~gates prefix e =
-  let g = bool_expr { prefix; sizeof = true; known = gates } e in
+  let env = { prefix; sizeof = true; known = gates; checked = false } in
+  let g = bool_expr env e in
+  let g =
+    if not env.checked then g
+    else fun c ->
+      match g c with b -> b | exception Parse_error _ -> unwalked ()
+  in
   let i = List.length gates in
   if List.memq e (List.map fst gates) || i >= Sys.int_size - 1 then (g, gates)
   else
@@ -259,7 +283,8 @@ type _ span = Slice_span : Slice.t span | String_span : string span
 let span (type a) (kind : a span) size : cursor -> a =
  fun c ->
   let cur = c.wpos and sz = size c in
-  if sz < 0 || cur > Input_end.to_int c.wend - sz then unwalked ();
+  if sz < 0 || cur > Input_end.to_int c.wend - sz then
+    Codec_leaf.check_span_bounds c.wend ~first:cur ~sz;
   c.wpos <- cur + sz;
   match kind with
   | Slice_span -> Slice.make_or_eod c.wbuf ~first:cur ~length:sz
@@ -269,42 +294,76 @@ let span (type a) (kind : a span) size : cursor -> a =
 let gated present (item : cursor -> 'a) : cursor -> 'a option =
  fun c -> if present c then Some (item c) else None
 
-(* A sub-codec in a region of [size] bytes, which it must not pass, nor fall
-   short of unless [at_most]; the cursor goes on at the region's end. *)
-let region ~at_most size (sub : cursor -> 'a) : cursor -> 'a =
- fun c ->
+let with_name name (e : parse_error) =
+  Parse_error { e with field = name :: e.field }
+
+(* A sub-codec in a region of [size] bytes, checked against the region's end,
+   which it must reach unless [at_most]; the cursor goes on at the region's
+   end. *)
+let[@inline] in_region ~at_most size (sub : cursor -> 'a) c =
   let cur = c.wpos and sz = size c and stop = c.wend and base = c.wbase in
   let gates = c.wgates in
-  if sz < 0 || cur > Input_end.to_int stop - sz then unwalked ();
+  if sz < 0 || cur > Input_end.to_int stop - sz then
+    Codec_leaf.check_span_bounds stop ~first:cur ~sz;
   c.wend <- Input_end.narrow stop (cur + sz);
   let v = sub c in
   let n = c.wpos - cur in
-  if n > sz || ((not at_most) && n <> sz) then unwalked ();
+  if n > sz || ((not at_most) && n <> sz) then
+    raise_eof ~at:(cur + min n sz) ~expected:sz ~got:n;
   c.wbase <- base;
   c.wgates <- gates;
   c.wend <- stop;
   c.wpos <- cur + sz;
   v
 
+(* Each field the cursor moves over names the errors under it with [name],
+   as the check pass does, when the cursor asks for names. A walk asks for
+   them only once it has failed, so the walk that accepts sets up no handler. *)
+let region ~at_most ~name size (sub : cursor -> 'a) : cursor -> 'a =
+  match name with
+  | None -> fun c -> in_region ~at_most size sub c
+  | Some name -> (
+      fun c ->
+        if not c.wnamed then in_region ~at_most size sub c
+        else
+          try in_region ~at_most size sub c
+          with Parse_error e -> raise (with_name name e))
+
 (* A sub-codec measuring itself. *)
-let sub (sub : cursor -> 'a) : cursor -> 'a =
- fun c ->
+let[@inline] in_sub (sub : cursor -> 'a) c =
   let base = c.wbase and gates = c.wgates in
   let v = sub c in
   c.wbase <- base;
   c.wgates <- gates;
   v
 
+let sub ~name (sub : cursor -> 'a) : cursor -> 'a =
+  match name with
+  | None -> fun c -> in_sub sub c
+  | Some name -> (
+      fun c ->
+        if not c.wnamed then in_sub sub c
+        else try in_sub sub c with Parse_error e -> raise (with_name name e))
+
 (* A fixed-size sub-codec at offset [off] of the record: the cursor stays
    where it was. *)
-let fixed_sub off (sub : cursor -> 'a) : cursor -> 'a =
- fun c ->
+let[@inline] in_fixed_sub off (sub : cursor -> 'a) c =
   let base = c.wbase and pos = c.wpos in
   c.wpos <- base + off;
   let v = sub c in
   c.wbase <- base;
   c.wpos <- pos;
   v
+
+let fixed_sub ~name off (sub : cursor -> 'a) : cursor -> 'a =
+  match name with
+  | None -> fun c -> in_fixed_sub off sub c
+  | Some name -> (
+      fun c ->
+        if not c.wnamed then in_fixed_sub off sub c
+        else
+          try in_fixed_sub off sub c
+          with Parse_error e -> raise (with_name name e))
 
 (* {1 The record}
 
@@ -436,20 +495,34 @@ let stage : type mid result.
 
    The frame, then the checks of the fixed-offset fields, then each field read
    in order: in place, or by moving the cursor over it, which checks it as the
-   layout pass would. So the walk accepts what the layout pass and the check
-   pass it leaves accept, and reads each field where the read pass would, with
-   each size and gate evaluated once. A sub-codec's walk builds its record
-   before the walk of the record around it has finished checking: a
-   constructor can see a record the walk then rejects. *)
+   layout pass would, then the [where] clause. So the walk accepts what the
+   layout pass and the check pass it leaves accept, and reads each field where
+   the read pass would, with each size and gate evaluated once. A sub-codec's
+   walk builds its record before the walk of the record around it has finished
+   checking: a constructor can see a record the walk then rejects.
+
+   A walk that does not accept raises the error the check pass raises, in the
+   same order: the frame against the input the record is given, its fields in
+   order, which all fixed-offset ones precede, and its [where] clause last. The
+   frame, a span, a region and the [where] clause raise their own; a check of a
+   fixed-offset field that fails leaves the error to the record's check pass
+   ([fail]), which finds the first field to fail, and a condition that raises
+   leaves the record to the general path. *)
 
 let rec holds_all holds c i =
   i >= Array.length holds
   || ((Array.unsafe_get holds i) c && holds_all holds c (i + 1))
 
+(* The error of the record at [base], which the walk did not accept, from its
+   check pass; [Unwalked] if that pass accepts it. *)
+let settle fail c base =
+  fail c.wend c.wbuf base;
+  unwalked ()
+
 (* The walk tests the fixed-offset fields in the form the check pass picks:
    one word test, the staged word tests, or the scan of the flat tests. The
    frame check comes first, so the unchecked reads stay in the record. *)
-let record_walk ~min_size ~start checks body =
+let record_walk ~min_size ~start ~fail ~where checks body =
   let within =
     Array.of_list
       (List.filter_map
@@ -459,30 +532,35 @@ let record_walk ~min_size ~start checks body =
     Array.of_list
       (List.filter_map (function Holds f -> Some f | Within _ -> None) checks)
   in
+  let has_holds = Array.length holds > 0 and has_where = Option.is_some where in
+  let where = Option.value where ~default:(fun _ -> true) in
   let[@inline] frame c =
-    let base = c.wpos in
-    if base < 0 || base > Input_end.to_int c.wend - min_size then unwalked ();
+    let base = c.wpos and stop = c.wend in
+    if base < 0 || base > Input_end.to_int stop - min_size then
+      Codec_leaf.check_min_bounds min_size stop base;
     base
   in
   let[@inline] rest c base =
     c.wbase <- base;
-    if not (holds_all holds c 0) then unwalked ();
+    if has_holds && not (holds_all holds c 0) then settle fail c base;
     c.wpos <- base + start;
-    body c
+    let v = body c in
+    if has_where && not (where c) then raise_constraint ~at:base ~which:Where ();
+    v
   in
   match Codec_intervals.single ~size:min_size within with
   | Some (q, l, r, m, lo, hi) ->
       fun c ->
         let base = frame c in
         if not (Codec_intervals.within c.wbuf base q l r m lo hi) then
-          unwalked ();
+          settle fail c base;
         rest c base
   | None -> (
       match Codec_intervals.staged ~size:min_size within with
       | Some test ->
           fun c ->
             let base = frame c in
-            if not (test c.wbuf base) then unwalked ();
+            if not (test c.wbuf base) then settle fail c base;
             rest c base
       | None ->
           let flat, tables = Codec_intervals.flatten_intervals within in
@@ -492,37 +570,49 @@ let record_walk ~min_size ~start checks body =
             if
               n > 0
               && Codec_intervals.scan_intervals flat tables c.wbuf base n 0 >= 0
-            then unwalked ();
+            then settle fail c base;
             rest c base)
 
 (* The walk of a sealed record without parameters, while every field has one
    and its [where] clause reads only fixed-offset fields. *)
-let record ~n_params ~min_size ~prefix ~where make = function
+let record ~n_params ~min_size ~prefix ~where ~fail make = function
   | Some w when n_params = 0 -> (
       match Option.map (cond prefix) where with
       | exception Exit -> None
       | where ->
-          let checks =
-            Option.fold ~none:[] ~some:(fun f -> [ Holds f ]) where
-            @ List.rev w.wchecks_rev
-          in
           let start = Option.value ~default:min_size w.wstart in
           Option.map
-            (record_walk ~min_size ~start checks)
+            (record_walk ~min_size ~start ~fail ~where (List.rev w.wchecks_rev))
             (stage make (readers w.wreaders)))
   | Some _ | None -> None
 
-(* A decode through [walk], or [general] when the walk does not accept. *)
-let decode walk general buf off =
-  let c =
-    {
-      wbuf = buf;
-      wbase = off;
-      wpos = off;
-      wend = Input_end.of_bytes buf;
-      wgates = 0;
-    }
-  in
+let cursor ~named buf off =
+  {
+    wbuf = buf;
+    wbase = off;
+    wpos = off;
+    wend = Input_end.of_bytes buf;
+    wgates = 0;
+    wnamed = named;
+  }
+
+(* The error of a walk that failed, from the same walk with names on. A size
+   that does not evaluate is reported at the record it sizes, the one the
+   cursor is in, as the check pass reports it. *)
+let named_error walk general buf off =
+  let c = cursor ~named:true buf off in
   match walk c with
   | v -> v
-  | exception (Types.Unwalked | Types.Parse_error _) -> general buf off
+  | exception Types.Unwalked -> general buf off
+  | exception
+      Parse_error
+        ({ kind = Value_out_of_range _ | Zero_divisor; at = 0; _ } as e) ->
+      raise (Parse_error { e with at = c.wbase })
+
+(* A decode through [walk], or [general] when the walk can neither accept nor
+   name an error. *)
+let decode walk general buf off =
+  match walk (cursor ~named:false buf off) with
+  | v -> v
+  | exception Types.Unwalked -> general buf off
+  | exception Parse_error _ -> named_error walk general buf off

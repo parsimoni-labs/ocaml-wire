@@ -370,7 +370,7 @@ let test_stack_answers_pinned () =
   Alcotest.(check int) "answers" 19250 (List.length lines);
   Alcotest.(check int) "accepted" 15088 oks;
   Alcotest.(check string)
-    "digest" "21147b6b2b72be24a87f4d5f748b3434"
+    "digest" "b557ec2608c1718266231d53acf697e8"
     (Digest.to_hex (Digest.string (String.concat "\n" lines)))
 
 (* The stack, and a frame around it, decode through the walk, so the answers

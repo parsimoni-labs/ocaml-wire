@@ -611,7 +611,7 @@ let decode_params consume e t (c : _ compiled) buf off =
         | Fixed n -> n
         | Variable { min_size; _ } -> min_size
       in
-      check_decode_bounds c.wire_size min_size runtime input_end buf off;
+      check_min_bounds min_size input_end off;
       let arr = c.decode_scratch () in
       c.clear_scratch arr;
       (match e with
@@ -619,6 +619,7 @@ let decode_params consume e t (c : _ compiled) buf off =
           Array.blit e.slots 0 arr.ints c.param_base t.n_params
       | _ -> ());
       c.validate_arr arr (slots_runtime t c arr) input_end buf off;
+      check_extent c.wire_size min_size runtime input_end buf off;
       Some arr
     end
   in

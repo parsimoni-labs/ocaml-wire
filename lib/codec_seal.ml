@@ -70,8 +70,11 @@ let rec field_reader_validates : type a. a Types.typ -> bool = function
    escaping any of them carries the field in its path; [attributable = false] (a
    plain scalar) leaves them untouched, keeping the hot read path free of an
    exception frame. *)
+let names_errors ~validates ~check ~act =
+  Option.is_some check || Option.is_some act || validates
+
 let wrap_field_errors ~validates ~check ~act name raw_reader full check_only =
-  if Option.is_some check || Option.is_some act || validates then
+  if names_errors ~validates ~check ~act then
     ( prepend_field name raw_reader,
       prepend_field_check name full,
       prepend_field_check name check_only )
@@ -511,17 +514,18 @@ let field_put : type a r.
 
 (* A field the cursor moves over: a byte span, a sub-codec in a region, or one
    measuring itself, each with a walk of its own. *)
-let moving : type a. (string * packed_scalar) list -> a typ -> Types.cursor -> a
+let moving : type a.
+    name:string option -> (string * packed_scalar) list -> a typ -> cursor -> a
     =
- fun prefix typ ->
+ fun ~name prefix typ ->
   match typ with
   | Byte_slice { size } ->
       Codec_walk.span Slice_span (Codec_walk.size prefix size)
   | Byte_array { size } ->
       Codec_walk.span String_span (Codec_walk.size prefix size)
   | Single_elem { size; elem = Codec { codec_walk = Some w; _ }; at_most } ->
-      Codec_walk.region ~at_most (Codec_walk.size prefix size) w
-  | Codec { codec_walk = Some w; _ } -> Codec_walk.sub w
+      Codec_walk.region ~at_most ~name (Codec_walk.size prefix size) w
+  | Codec { codec_walk = Some w; _ } -> Codec_walk.sub ~name w
   | _ -> raise Exit
 
 (* The checks of a field at a fixed offset, its value read from the buffer:
@@ -556,7 +560,8 @@ let fixed_checks prefix ~min_wire_size (cf : (_, _) compiled_field)
 (* How the walk reads [fld] and what it checks first, or [Exit] when it cannot
    walk it: an action, a read that is neither in place nor a span or a
    sub-codec with a walk, a fixed-size field after a variable-size one, or a
-   condition on a field the cursor moves over. *)
+   condition on a field the cursor moves over. Its errors carry its name when
+   [named], as the check pass names them. *)
 let field_walk : type a f r.
     (a -> f, r) record ->
     (a, r) field ->
@@ -564,9 +569,11 @@ let field_walk : type a f r.
     a field_read ->
     min_wire_size:int ->
     gates:Codec_walk.gates ->
+    named:bool ->
     a walk_read * walk_check list * Codec_walk.gates =
- fun (Record r) fld cf read ~min_wire_size ~gates ->
+ fun (Record r) fld cf read ~min_wire_size ~gates ~named ->
   if Option.is_some fld.action then raise Exit;
+  let name = if named then Some fld.name else None in
   match (r.next_off, cf.next_off) with
   | Static _, Static _ -> (
       let prefix = field_prefix r.prefix ~min_wire_size cf fld in
@@ -581,14 +588,16 @@ let field_walk : type a f r.
           Fixed off,
           Codec { codec_walk = Some w; codec_fixed_size = Some _; _ } )
         when field_conds fld = [] ->
-          (Walk (Codec_walk.fixed_sub off w), [], gates)
+          (Walk (Codec_walk.fixed_sub ~name off w), [], gates)
       | _ -> raise Exit)
   | _, Dynamic _ when field_conds fld = [] -> (
       match fld.typ with
       | Optional { present; inner } ->
           let present, gates = Codec_walk.gate ~gates r.prefix present in
-          (Walk (Codec_walk.gated present (moving r.prefix inner)), [], gates)
-      | typ -> (Walk (moving r.prefix typ), [], gates))
+          ( Walk (Codec_walk.gated present (moving ~name r.prefix inner)),
+            [],
+            gates )
+      | typ -> (Walk (moving ~name r.prefix typ), [], gates))
   | _ -> raise Exit
 
 (* The variables [fld]'s action assigns, and the context its constraint and
@@ -646,7 +655,10 @@ let apply_compiled : type a f r.
   let walk =
     match (r.walk, layout_rev) with
     | Some w, Some _ -> (
-        match field_walk record fld cf read ~min_wire_size ~gates:w.wgates with
+        match
+          field_walk record fld cf read ~min_wire_size ~gates:w.wgates
+            ~named:(names_errors ~validates ~check ~act)
+        with
         | wr, checks, wgates ->
             Some
               {
@@ -1134,15 +1146,14 @@ let staged_words ~size f fwd =
       (words ~size ~prev:(-1) fwd)
       (Codec_words.stage ~short:min_bounds_error ~size f)
 
-let check_decode_bounds wire_size_info min_size runtime input_end buf off =
-  check_min_bounds min_size input_end off;
+(* The extent of a variable-size record ends before [input_end]. It is checked
+   after the record's checks, which check each field's own bytes in field
+   order, so it names an error only for bytes no check covers: a field at a
+   fixed size after a variable-size one, which the check pass does not read. *)
+let check_extent wire_size_info min_size runtime input_end buf off =
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
-      (* [compute] reads the length fields the codec's span depends on. Those
-         reads bound-check themselves ([expr_reader]), so a buffer too short to
-         hold them already surfaces as end-of-input here; anything else they
-         raise is a real error and propagates. *)
       check_end_bounds min_size input_end off
         (compute runtime input_end buf off)
 
@@ -1235,18 +1246,20 @@ let plain_pass ~size ~has_checks ~needs_arr ~scratch ~clear steps where =
 (* Frame, check, read: the three phases of docs/execution.md, for a codec
    without parameters. *)
 (* The frame and check pass of a variable-size record: the layout pass and the
-   checks it leaves when it accepts, else the general bounds check and every
-   check, the span checks included. *)
-let variable_frame ~layout wire_size_info min_size input_end buf off =
+   checks it leaves when it accepts, else the frame, every check, the span
+   checks included, and the extent. *)
+let variable_frame ~layout wire_size_info min_size pass input_end buf off =
   match layout with
   | Some (walk, fast, _) when walk input_end buf off >= 0 ->
       run_plain_pass fast input_end buf off
-  | Some _ | None -> (
-      check_decode_bounds wire_size_info min_size no_runtime input_end buf off;
-      match layout with
-      | Some (_, _, full) ->
-          run_plain_pass ~runtime:fallback_runtime full input_end buf off
-      | None -> ())
+  | Some (_, _, full) ->
+      check_min_bounds min_size input_end off;
+      run_plain_pass ~runtime:fallback_runtime full input_end buf off;
+      check_extent wire_size_info min_size no_runtime input_end buf off
+  | None ->
+      check_min_bounds min_size input_end off;
+      run_plain_pass pass input_end buf off;
+      check_extent wire_size_info min_size no_runtime input_end buf off
 
 let build_plain_decode ~layout ~walk make fwd wire_size_info min_size pass =
   match (wire_size_info, pass) with
@@ -1284,24 +1297,24 @@ let build_plain_decode ~layout ~walk make fwd wire_size_info min_size pass =
       | None ->
           fun buf off ->
             let input_end = Input_end.of_bytes buf in
-            variable_frame ~layout wire_size_info min_size input_end buf off;
-            if Option.is_none layout then run_plain_pass pass input_end buf off;
+            variable_frame ~layout wire_size_info min_size pass input_end buf
+              off;
             apply_fwd make fwd checked_runtime input_end buf off
       | Some w ->
           (* The walk makes the checks the layout pass and the check pass it
-             leaves make, so a record it rejects goes straight to the general
-             checks, which the layout pass would have left it to. *)
+             leaves make, and names the error of a record it rejects. *)
           Codec_walk.decode w (fun buf off ->
               let input_end = Input_end.of_bytes buf in
-              check_decode_bounds wire_size_info min_size no_runtime input_end
+              variable_frame ~layout:None wire_size_info min_size pass input_end
                 buf off;
-              run_plain_pass ~runtime:fallback_runtime pass input_end buf off;
               apply_fwd make fwd checked_runtime input_end buf off))
 
 let build_checked_decode raw_decode wire_size_info min_size =
  fun runtime input_end buf off ->
-  check_decode_bounds wire_size_info min_size runtime input_end buf off;
-  raw_decode runtime input_end buf off
+  check_min_bounds min_size input_end off;
+  let v = raw_decode runtime input_end buf off in
+  check_extent wire_size_info min_size runtime input_end buf off;
+  v
 
 (* [Codec.validate_exn] is the safety gate before a batch of zero-copy [get] calls on
    untrusted input, so it must run decode's structural bounds check even for a
@@ -1319,9 +1332,10 @@ let validate_with_bounds wire_size_info min_size param_slots param_base
             | Some idx -> slots.(idx - param_base)
             | None -> 0)
   in
-  check_decode_bounds wire_size_info min_size runtime (Input_end.of_bytes buf)
-    buf off;
-  validate_checks ?env_slots buf off
+  let input_end = Input_end.of_bytes buf in
+  check_min_bounds min_size input_end off;
+  validate_checks ?env_slots buf off;
+  check_extent wire_size_info min_size runtime input_end buf off
 
 let build_size_of_value size_funcs =
   let n = Array.length size_funcs in
@@ -1436,8 +1450,9 @@ let build_decoders : type r.
     apply_fwd r.make checked runtime input_end buf off
   in
   let walk =
-    Codec_walk.record ~n_params ~min_size ~prefix:r.prefix ~where:r.where r.make
-      r.walk
+    Codec_walk.record ~n_params ~min_size ~prefix:r.prefix ~where:r.where
+      ~fail:(run_plain_pass ~runtime:fallback_runtime check)
+      r.make r.walk
   in
   ( build_checked_decode read wire_size_info min_size,
     read,
@@ -1465,8 +1480,7 @@ let plain_validate ~layout wire_size_info min_size pass =
   | Variable _, pass ->
       fun buf off ->
         let input_end = Input_end.of_bytes buf in
-        variable_frame ~layout wire_size_info min_size input_end buf off;
-        if Option.is_none layout then run_plain_pass pass input_end buf off
+        variable_frame ~layout wire_size_info min_size pass input_end buf off
 
 let encode_too_short name size buf off =
   Errors.encode_too_short ~name ~size ~len:(Bytes.length buf) off
@@ -1714,8 +1728,9 @@ let record_encoder name writers wire_size_info size_of_value check =
 (* [run] is the record's check pass with its params bound from the caller's
    context ([validate_runtime_of]). *)
 let validate_ctx wire_size_info min_size run runtime input_end buf off =
-  check_decode_bounds wire_size_info min_size runtime input_end buf off;
-  run runtime input_end buf off
+  check_min_bounds min_size input_end off;
+  run runtime input_end buf off;
+  check_extent wire_size_info min_size runtime input_end buf off
 
 (* The check pass of a record without parameters, its own or its sub-codecs':
    no parameter is read through the context, so a nested use runs the plain
@@ -1735,12 +1750,13 @@ let nested_validate ~layout wire_size_info min_size pass =
         if (not (is_fallback runtime)) && walk input_end buf off >= 0 then
           run_plain_pass fast input_end buf off
         else begin
-          check_decode_bounds wire_size_info min_size runtime input_end buf off;
-          run_plain_pass ~runtime:fallback_runtime pass input_end buf off
+          check_min_bounds min_size input_end off;
+          run_plain_pass ~runtime:fallback_runtime pass input_end buf off;
+          check_extent wire_size_info min_size runtime input_end buf off
         end
 
-(* [validate_ctx] with the record's end already measured: [check_decode_bounds]
-   on that end. *)
+(* [validate_ctx] with the record's end already measured, checked before the
+   record's checks. *)
 let validate_sized wire_size_info min_size run runtime input_end buf off end_off
     =
   check_min_bounds min_size input_end off;

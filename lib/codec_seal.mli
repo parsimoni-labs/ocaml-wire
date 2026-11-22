@@ -106,12 +106,12 @@ val typ_where_conds : 'a Types.typ -> bool Types.expr list
 (** [typ_where_conds t] is the conditions of the [where] wrappers of [t],
     outermost first. *)
 
-val check_decode_bounds :
+val check_extent :
   wire_size_info -> int -> runtime -> Input_end.t -> bytes -> int -> unit
-(** [check_decode_bounds size min_size runtime input_end buf off] checks that
-    the record at [off] lies inside [buf]: [min_size] bytes, then the span
-    [size] computes from the data when it is variable. Raises [Parse_error] on a
-    short buffer. *)
+(** [check_extent size min_size runtime input_end buf off] checks that the
+    record at [off], of the extent [size] computes from the data when it is
+    variable, ends before [input_end]. Raises [Parse_error] otherwise. It runs
+    after the record's checks. *)
 
 val run_plain_pass :
   ?runtime:Types.eval_ctx -> pass -> Input_end.t -> bytes -> int -> unit

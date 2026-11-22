@@ -50,6 +50,9 @@ type cursor = {
   mutable wgates : int;
       (** The answers of the gates the record being walked has evaluated, one
           bit each. *)
+  wnamed : bool;
+      (** Whether the fields the walk moves over name the errors under them, as
+          the check pass names them. *)
 }
 (** The state of a walk, the one-pass decode of a record without parameters:
     each field is checked and read once, in order, and a sub-codec hands back
