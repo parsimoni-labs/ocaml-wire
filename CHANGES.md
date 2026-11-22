@@ -181,6 +181,12 @@
 
 ### Fixed
 
+- `decode` and `validate` check a nested record against the region that
+  holds it, so an error inside one counts the bytes of that region. A packet
+  in a frame of a large buffer reported `unexpected EOF: expected 20 bytes,
+  got 9998514`. A nested record too short for its region now fails on its
+  own size, before its length fields are read (#522, @samoht)
+
 - On wasm_of_ocaml, `validate` and `check` refused a negative value of a
   signed field whose constraint is an interval, in a record of interval
   checks only. They now accept it, as `decode` does (#521, @samoht)

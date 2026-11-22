@@ -534,9 +534,13 @@ let embed_walk (t : 'r t) = (compiled t).walk
 let wire_size_info_ctx (t : _ t) =
   match (compiled t).wire_size with
   | Fixed n -> `Fixed n
-  | Variable { compute; _ } ->
+  | Variable { min_size; compute } ->
+      (* A record measured inside another is framed first, as its check frames
+         it: one that does not fit before [input_end] fails on its frame, not
+         on the first length field the measure reads past it. *)
       `Variable
         (fun runtime input_end buf off ->
+          check_min_bounds min_size input_end off;
           compute runtime input_end buf off - off)
 
 let wire_size_info (t : _ t) =

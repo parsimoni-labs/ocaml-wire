@@ -25,6 +25,54 @@ let[@inline] bytes_from input_end off =
   let stop = Input_end.to_int input_end in
   if off < 0 || off > stop then 0 else stop - off
 
+(* A record of [min_size] bytes at [off] does not fit before [input_end]. *)
+let frame_error min_size input_end off =
+  if off < 0 then Errors.negative_offset off;
+  raise_eof ~at:off ~expected:min_size ~got:(bytes_from input_end off)
+
+let min_bounds_error min_size buf off =
+  frame_error min_size (Input_end.of_bytes buf) off
+
+(* The structural bounds check decode runs before reading any field: the buffer
+   must hold at least [min_size] bytes, and the codec's resolved wire size must
+   fit. Shared with [validate] so a constraint-free codec is still bounds-checked
+   before a zero-copy [get] reads its fields. [decode] then reads the fixed
+   fields with no check of their own, so the test cannot overflow, and its one
+   call is on the error path, where nothing is live after it. *)
+let check_min_bounds min_size input_end off =
+  if off < 0 || off > Input_end.to_int input_end - min_size then
+    frame_error min_size input_end off
+
+(* The record ending at [end_off] holds [min_size] bytes and ends before
+   [input_end]. *)
+let check_end_bounds min_size input_end off end_off =
+  if end_off < off + min_size then
+    raise_eof ~at:off ~expected:min_size ~got:(bytes_from input_end off);
+  if end_off > Input_end.to_int input_end then
+    raise_eof ~at:off ~expected:(end_off - off) ~got:(bytes_from input_end off)
+
+(* [expected] is a byte count, so a span whose offset overran the buffer cannot
+   report its size: that size comes out negative, and every consumer does
+   arithmetic on the count (the streaming reader's retry target, the corpus
+   seeder's growth target), which a negative turns into a position behind what
+   is already buffered. Report the bytes missing before the read could start
+   instead, and keep the size for the ordinary case of a span that simply
+   reaches too far. *)
+let missing_before ~first ~sz ~len =
+  if sz < 0 || first < 0 then max 0 (first - len) else sz
+
+(* The span [first, first + sz) must end before [input_end]. Both ends derive
+   from length fields, i.e. untrusted input: a span sized past the input, or a
+   negative size from an overrun offset, would crash the read with a raw
+   [Invalid_argument] that escapes the decode result. Report the missing bytes
+   as end-of-input instead. *)
+let[@inline] check_span_bounds input_end ~first ~sz =
+  let len = Input_end.to_int input_end in
+  if sz < 0 || first < 0 || first > len - sz then
+    raise_eof ~at:first
+      ~expected:(missing_before ~first ~sz ~len)
+      ~got:(bytes_from input_end first)
+
 (* A read of [width] bytes at [at] that must stay inside the bytes the parse
    was handed. Reads whose position was itself computed from the buffer can
    land past the end on truncated input; reporting the span here keeps the

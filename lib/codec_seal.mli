@@ -113,10 +113,6 @@ val check_decode_bounds :
     [size] computes from the data when it is variable. Raises [Parse_error] on a
     short buffer. *)
 
-val min_bounds_error : int -> bytes -> int -> 'a
-(** [min_bounds_error min_size buf off] raises the [Parse_error] of a record of
-    [min_size] bytes that does not fit [buf] at [off]. *)
-
 val run_plain_pass :
   ?runtime:Types.eval_ctx -> pass -> Input_end.t -> bytes -> int -> unit
 (** [run_plain_pass ?runtime pass input_end buf off] runs the check pass of a

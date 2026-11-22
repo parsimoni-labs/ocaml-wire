@@ -1090,11 +1090,6 @@ let fill_param_slots tbl param_base handles =
     (fun i (Param.Pack p) -> Hashtbl.replace tbl p.Types.name (param_base + i))
     handles
 
-let min_bounds_error min_size buf off =
-  if off < 0 then Errors.negative_offset off;
-  raise_eof ~at:off ~expected:min_size
-    ~got:(bytes_from (Input_end.of_bytes buf) off)
-
 let word_of : type a.
     size:int -> a fread -> (Codec_words.word * (a, int) Type.eq) option =
  fun ~size r ->
@@ -1139,27 +1134,8 @@ let staged_words ~size f fwd =
       (words ~size ~prev:(-1) fwd)
       (Codec_words.stage ~short:min_bounds_error ~size f)
 
-(* The structural bounds check decode runs before reading any field: the buffer
-   must hold at least [min_size] bytes, and the codec's resolved wire size must
-   fit. Shared with [validate] so a constraint-free codec is still bounds-checked
-   before a zero-copy [get] reads its fields. [decode] then reads the fixed
-   fields with no check of their own, so the test cannot overflow, and its one
-   call is on the error path, where nothing is live after it. *)
-let check_min_bounds min_size buf off =
-  if off < 0 || off > Bytes.length buf - min_size then
-    min_bounds_error min_size buf off
-
-(* The record ending at [end_off] holds [min_size] bytes and fits the buffer. *)
-let check_end_bounds min_size buf off end_off =
-  if end_off < off + min_size then
-    raise_eof ~at:off ~expected:min_size
-      ~got:(bytes_from (Input_end.of_bytes buf) off);
-  if end_off > Bytes.length buf then
-    raise_eof ~at:off ~expected:(end_off - off)
-      ~got:(bytes_from (Input_end.of_bytes buf) off)
-
 let check_decode_bounds wire_size_info min_size runtime input_end buf off =
-  check_min_bounds min_size buf off;
+  check_min_bounds min_size input_end off;
   match wire_size_info with
   | Fixed _ -> ()
   | Variable { compute; _ } ->
@@ -1167,7 +1143,8 @@ let check_decode_bounds wire_size_info min_size runtime input_end buf off =
          reads bound-check themselves ([expr_reader]), so a buffer too short to
          hold them already surfaces as end-of-input here; anything else they
          raise is a real error and propagates. *)
-      check_end_bounds min_size buf off (compute runtime input_end buf off)
+      check_end_bounds min_size input_end off
+        (compute runtime input_end buf off)
 
 let no_slots = { ints = [||]; int64s = [||] }
 
@@ -1766,10 +1743,10 @@ let nested_validate ~layout wire_size_info min_size pass =
    on that end. *)
 let validate_sized wire_size_info min_size run runtime input_end buf off end_off
     =
-  check_min_bounds min_size buf off;
+  check_min_bounds min_size input_end off;
   (match wire_size_info with
   | Fixed _ -> ()
-  | Variable _ -> check_end_bounds min_size buf off end_off);
+  | Variable _ -> check_end_bounds min_size input_end off end_off);
   run runtime input_end buf off
 
 (* Where a record without parameters ends when its layout walk and the checks
@@ -1796,8 +1773,8 @@ let nested_validate_sized ~layout wire_size_info min_size pass =
   | None -> validate_sized wire_size_info min_size (plain_run pass)
   | Some (walk, fast, _) ->
       fun runtime input_end buf off end_off ->
-        check_min_bounds min_size buf off;
-        check_end_bounds min_size buf off end_off;
+        check_min_bounds min_size input_end off;
+        check_end_bounds min_size input_end off end_off;
         if (not (is_fallback runtime)) && walk input_end buf off >= 0 then
           run_plain_pass fast input_end buf off
         else run_plain_pass ~runtime:fallback_runtime pass input_end buf off

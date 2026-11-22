@@ -23,6 +23,27 @@ val bytes_from : Input_end.t -> int -> int
 (** [bytes_from input_end off] is the number of input bytes from [off] on, the
     [got] of an end-of-input error; [0] outside the input. *)
 
+val min_bounds_error : int -> bytes -> int -> 'a
+(** [min_bounds_error min_size buf off] raises the [Parse_error] of a record of
+    [min_size] bytes that does not fit [buf] at [off]. *)
+
+val check_min_bounds : int -> Input_end.t -> int -> unit
+(** [check_min_bounds min_size input_end off] raises the [Parse_error] of a
+    record of [min_size] bytes at [off] unless it ends before [input_end]. *)
+
+val check_end_bounds : int -> Input_end.t -> int -> int -> unit
+(** [check_end_bounds min_size input_end off end_off] raises a [Parse_error]
+    unless the record at [off] ending at [end_off] holds [min_size] bytes and
+    ends before [input_end]. *)
+
+val missing_before : first:int -> sz:int -> len:int -> int
+(** [missing_before ~first ~sz ~len] is the [expected] of the end-of-input error
+    of a span of [sz] bytes at [first] in an input of [len] bytes. *)
+
+val check_span_bounds : Input_end.t -> first:int -> sz:int -> unit
+(** [check_span_bounds input_end ~first ~sz] raises an end-of-input
+    {!Types.Parse_error} unless the [sz] bytes at [first] are in the input. *)
+
 val check_read_bounds : Input_end.t -> at:int -> width:int -> unit
 (** [check_read_bounds input_end ~at ~width] raises an end-of-input
     {!Types.Parse_error} unless the [width] bytes at [at] are in the input. *)
