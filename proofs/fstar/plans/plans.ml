@@ -457,6 +457,7 @@ let shared_words name ~all events =
                 D.edepth = z (depth all r.window);
                 econst = r.constant;
                 eat = z r.at;
+                elo = z r.lo;
                 efields = List.map (fun (o, w) -> (z o, z w)) r.fields;
                 ewords =
                   List.map

@@ -8,4 +8,4 @@
 # of the same size at the same offset inside then skips its check. The
 # witness runs the plan of the counterexample codec: outer region of 4 bytes
 # at 2, inner region of 4 bytes at 2 inside it.
-s|known = 0; bounded = \[\]; held = \[\] } in|known = 0; held = [] } in|
+s|known = lo; bounded = \[\]; held = \[\] } in|known = lo; held = [] } in|

@@ -6,4 +6,4 @@
 # at constant offsets of the window around answer for the same offsets of
 # the region, which count from its own start. A field at offset 0 of a
 # region at 8 is taken from the byte at 0 of the buffer.
-s|known = 0; bounded = \[\]; held = \[\] } in|known = 0; bounded = [] } in|
+s|known = lo; bounded = \[\]; held = \[\] } in|known = lo; bounded = [] } in|

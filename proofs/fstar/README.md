@@ -4,8 +4,9 @@ An F* model of the part of a `Wire_ocaml` plan that bounds care about,
 with proofs that the code the emitter writes reads only inside its window
 and accepts exactly what the codec accepts, with and without the O1
 rewrites (bf2c2866: cancel common terms in a bound, leave a span's bound
-to the next check) and the words the int64 step scanner shares between
-prefixes (057ff551). It uses the F*, Z3 and LowParse that ship with
+to the next check), the words the int64 step scanner shares between
+prefixes (057ff551) and the region rules of the scan chains (b633f225,
+bd97743d, 95f307ce). It uses the F*, Z3 and LowParse that ship with
 EverParse and is outside the dune build.
 
 ```
@@ -37,7 +38,12 @@ of the OxCaml scanner, and checks three things of each.
   a prefix of the step scanner loads is one `Plan.Scan.choose` may keep for
   one of the prefix's fields, between the bounds the model's walk gives the same prefix
   (`Plan.Decide.words_justified`), from a window start of no known bytes or
-  of the bytes the frame loop's `stride` test ensures (`fixed_need`). And a
+  of the bytes the frame loop's `stride` test ensures (`fixed_need`). The
+  emitter counts a word's offset from the base it gives the window, the
+  displacement `Plan.Scan.region_start` takes out of a region's start
+  before it (b633f225); the check takes the model's displacement off the
+  emitter's offsets, and a prefix at a constant offset must report that
+  displacement as its first byte. And a
   prefix at a constant offset reads only words the prefixes before it in
   the same window, in the same walk, loaded: none crosses into a region or
   out of it.
@@ -99,7 +105,20 @@ built-in integer `*`, so an older one no longer checks them.
   It holds for every combination of the two rewrites (`opts`).
 - Regions: a region's size is checked against the window around it, its
   contents read in a window of exactly that size, and an exact region checks
-  its contents used all of it. `frames_ok` in the invariant keeps every
+  its contents used all of it. The window is known to hold the low end of
+  its size's range from its start (`region_range`, 95f307ce), so a region
+  of constant size checks no bound for the prefixes it holds; an exact
+  region whose contents end at a constant offset that the range pins at
+  both ends (`ends_exact`) skips the test of its end, which `frames_ok`
+  justifies by keeping the window's length in that range.
+- `Plan.Proof.region_start_ok` (b633f225): a region's start split into the
+  term of its position's sum and a constant (`Plan.Scan.region_start`)
+  gives a base and a displacement that add up to the region's window, so
+  each load at the displacement plus `k` from that base reads byte `k` of
+  the window, the byte `exec` reads.
+- `Plan.Proof.negative_rejects` (bd97743d): a walk that starts with the
+  check of a prefix of some bytes rejects a negative window length before
+  it reads, so the entry of a scan need not test `len < 0`. `frames_ok` in the invariant keeps every
   window inside the one around it and ending where the code after it
   resumes, so contents cannot borrow bytes from beyond their region, as a
   frame of `fold_frames` cannot from the next frame.
@@ -195,6 +214,7 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 | `cancelled`, `pos_sum` | `Emitter.cancelled`, `Emitter.pos_sum` |
 | `checks_next`, `hoisted`, the `Gate` case | `Emitter.checks_next`, `Emitter.hoisted`, `Emitter.hoist_bound` |
 | `end_range`, `size_range`, `bind_span` | `Emitter.end_range`, `Emitter.bind_span` |
+| `region_range`, `ends_exact`, `region_start` | the `lo, hi` of `Emitter.step`'s `Region` case, `Emitter.close_region`, `Emitter.region_start` |
 | `nonnegative`, `refine`, `range` | `Planner.nonnegative_in`, `Planner.refined`, `Planner.range` / `corners` |
 | `Plan.Sum` | `Planner.sum_*` |
 | `ev` | `Wire_runtime.Arith` (checked); plain code where `fits` |
@@ -247,6 +267,13 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   each that holds, and they agree only where at most one does; nor that an
   atom the tree leaves untested, which the codec evaluates, does not
   overflow there.
+- A region whose contents load no byte, whose bound f0bd4b6b leaves to the
+  check after it: the model reads every field of a prefix and has no notion
+  of a field the walk does not bind, so its region always checks its size.
+  No plan `make plans` takes has one; a decision for one would be refused.
+- `off > Bytes.length buf`, which bd97743d leaves to the first check: the
+  model assumes the top window lies in the buffer (above), which holds once
+  that check passes with a length that is not negative.
 - Cuts into functions, the `bounded` key's textual form, OxCaml's unboxed
   integers, bitfield views other than `word_range`, the Rust backend.
 - In `make plans`, expressions the model cannot write (division, masks,
@@ -355,6 +382,12 @@ cases knew, though the join's position is where a case ended; it makes
 The mutant `sign-shift` writes the int64 sign extension with the shift of
 a 63-bit int, which leaves a field's sign bit below the word's: it makes
 `sign_extend` fail.
+
+The mutants `region-known-high`, `region-end-unpinned` and
+`region-start-off` weaken the region rules: the window known to hold the
+high end of its size's range, the end of an exact region left untested
+where only the low end pins it, and a region's displacement without its
+position's constant. Each makes `Plan.Proof` fail.
 
 The mutants `o1-drop-negative`, `o1-drop-wrap` and `o1-drop-unchecked`
 remove one premise each of the O1 rule that leaves a span's bound to the

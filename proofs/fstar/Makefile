@@ -44,7 +44,8 @@ MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
   prefix-wrap region-bounded-leak region-unchecked region-inexact \
   short-known ahead-short tree-retest tree-case-first \
   range-top-bits join-known sign-shift \
-  word-past-check word-before-window held-leak
+  word-past-check word-before-window held-leak \
+  region-known-high region-end-unpinned region-start-off
 
 .PHONY: verify defects plans extract check-extract clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 

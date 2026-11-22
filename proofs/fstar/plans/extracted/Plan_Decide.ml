@@ -30,6 +30,7 @@ type around = {
   alim : Prims.int;
   ap : Plan_Scan.pos;
   abounded : ((Plan_Expr.expr * Plan_Scan.pos)) list;
+  adisp : Prims.int;
 }
 
 type decision = {
@@ -53,6 +54,7 @@ type wdecision = {
   whi : Prims.int;
   wneed : Prims.int;
   wtested : bool;
+  wdisp : Prims.int;
 }
 
 type gdecision = {
@@ -67,13 +69,13 @@ type event =
   | EGate of gdecision
 
 
-let rec walk_cases (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) list) (cs : ((Prims.int * (Plan_Scan.node) list)) list) (r : (Plan_Scan.node) list) : (event) list =
+let rec walk_cases (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (disp : Prims.int) (fr : (around) list) (cs : ((Prims.int * (Plan_Scan.node) list)) list) (r : (Plan_Scan.node) list) : (event) list =
   (match cs with
     | [] -> []
-    | ((tmp, b) :: cs') -> (FStar_List_Tot_Base.op_At (walk fuel w lim fr (FStar_List_Tot_Base.op_At b (Plan_Scan.Join :: r))) (walk_cases fuel w lim fr cs' r))
+    | ((tmp, b) :: cs') -> (FStar_List_Tot_Base.op_At (walk fuel w lim disp fr (FStar_List_Tot_Base.op_At b (Plan_Scan.Join :: r))) (walk_cases fuel w lim disp fr cs' r))
   )
 
-and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) list) (l : (Plan_Scan.node) list) : (event) list =
+and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (disp : Prims.int) (fr : (around) list) (l : (Plan_Scan.node) list) : (event) list =
   (if ((=) fuel Prims.int_zero) then [] else (let fuel1 = (Prims.op_Minus fuel Prims.int_one) in
   (match l with
     | [] -> []
@@ -90,7 +92,8 @@ and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) 
         wlo = (if constant then Prims.int_zero else ((w).Plan_Scan.p).Plan_Scan.at);
         whi = (Plan_Expr.extent ((w).Plan_Scan.p).Plan_Scan.at (if (Prims.op_Less k Prims.int_zero) then Prims.int_zero else k));
         wneed = need;
-        wtested = (Prims.op_Less (w).Plan_Scan.known need) })) :: (walk fuel1 { Plan_Scan.sc = (w').Plan_Scan.sc;
+        wtested = (Prims.op_Less (w).Plan_Scan.known need);
+        wdisp = disp })) :: (walk fuel1 { Plan_Scan.sc = (w').Plan_Scan.sc;
         rg = (w').Plan_Scan.rg;
         facts = (w').Plan_Scan.facts;
         sums = (w').Plan_Scan.sums;
@@ -99,12 +102,12 @@ and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) 
         p = (let tmp = (w).Plan_Scan.p in
         { Plan_Scan.pv = (tmp).Plan_Scan.pv;
           at = (Prims.op_Plus ((w).Plan_Scan.p).Plan_Scan.at size) });
-        held = (w').Plan_Scan.held } lim fr r)))
+        held = (w').Plan_Scan.held } lim disp fr r)))
     | ((Plan_Scan.Span (n, e, s)) :: r) -> (let tmp = (span_decision w lim s r true) in
       (match tmp with
-        | (d, implied, ends) -> ((ESpan ((decide s d fr (w).Plan_Scan.p))) :: (walk fuel1 (Plan_Scan.bind_span w implied n e s ends) lim fr r))
+        | (d, implied, ends) -> ((ESpan ((decide s d fr (w).Plan_Scan.p))) :: (walk fuel1 (Plan_Scan.bind_span w implied n e s ends) lim disp fr r))
       ))
-    | ((Plan_Scan.Test (c)) :: r) -> (walk fuel1 (Plan_Scan.refine w c) lim fr r)
+    | ((Plan_Scan.Test (c)) :: r) -> (walk fuel1 (Plan_Scan.refine w c) lim disp fr r)
     | ((Plan_Scan.Gate (sel, cs, d)) :: r) -> (let hoist = (match (Plan_Scan.hoisted cs d) with
           | (Some (s)) -> (if (FStar_List_Tot_Base.mem (s, (w).Plan_Scan.p) (w).Plan_Scan.bounded) then ([], w) else (let tmp = (span_decision w lim s [] false) in
             (match tmp with
@@ -124,29 +127,34 @@ and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) 
               gat = (at_const (w).Plan_Scan.p);
               ghoisted = (Plan_Scan.hoisted cs d) })) in
           let rest = (match d with
-              | (Some (b)) -> (walk fuel1 w1 lim fr (FStar_List_Tot_Base.op_At b (Plan_Scan.Join :: r)))
-              | None -> (walk fuel1 w1 lim fr (Plan_Scan.Join :: r))
+              | (Some (b)) -> (walk fuel1 w1 lim disp fr (FStar_List_Tot_Base.op_At b (Plan_Scan.Join :: r)))
+              | None -> (walk fuel1 w1 lim disp fr (Plan_Scan.Join :: r))
             ) in
-          (FStar_List_Tot_Base.op_At ds (FStar_List_Tot_Base.op_At (gate :: (walk_cases fuel1 w1 lim fr cs r)) rest)))
+          (FStar_List_Tot_Base.op_At ds (FStar_List_Tot_Base.op_At (gate :: (walk_cases fuel1 w1 lim disp fr cs r)) rest)))
       ))
-    | (Plan_Scan.Join :: r) -> (walk fuel1 w lim fr r)
+    | (Plan_Scan.Join :: r) -> (walk fuel1 w lim disp fr r)
     | ((Plan_Scan.Region (n, e, s, am, b)) :: r) -> (let tmp = (span_decision w lim s [] false) in
       (match tmp with
         | (d, tmp1, ends) -> (let w1 = (Plan_Scan.bind_span w false n e s ends) in
           let a = { alim = lim;
               ap = (w1).Plan_Scan.p;
-              abounded = (w1).Plan_Scan.bounded } in
+              abounded = (w1).Plan_Scan.bounded;
+              adisp = disp } in
           ((ESpan ((decide s d fr (w).Plan_Scan.p))) :: (walk fuel1 { Plan_Scan.sc = (w1).Plan_Scan.sc;
             rg = (w1).Plan_Scan.rg;
             facts = (w1).Plan_Scan.facts;
             sums = (w1).Plan_Scan.sums;
             bounded = [];
-            known = Prims.int_zero;
+            known = (match (Plan_Scan.region_range w1 n) with
+              | (u__1, u__2) -> u__1
+            );
             p = { Plan_Scan.pv = None; at = Prims.int_zero };
-            held = (w1).Plan_Scan.held } n (a :: fr) (FStar_List_Tot_Base.op_At b ((Plan_Scan.Close (am)) :: r)))))
+            held = (w1).Plan_Scan.held } n (Prims.op_Plus disp (match (Plan_Scan.region_start w (w).Plan_Scan.p) with
+            | (u__1, u__2) -> u__2
+          )) (a :: fr) (FStar_List_Tot_Base.op_At b ((Plan_Scan.Close (am)) :: r)))))
       ))
     | ((Plan_Scan.Close (tmp)) :: r) -> (match fr with
-        | [] -> (walk fuel1 w lim [] r)
+        | [] -> (walk fuel1 w lim disp [] r)
         | (a :: fs) -> (walk fuel1 { Plan_Scan.sc = (w).Plan_Scan.sc;
             rg = (w).Plan_Scan.rg;
             facts = (w).Plan_Scan.facts;
@@ -154,7 +162,7 @@ and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (fr : (around) 
             bounded = (a).abounded;
             known = Prims.int_zero;
             p = (a).ap;
-            held = (w).Plan_Scan.held } (a).alim fs r)
+            held = (w).Plan_Scan.held } (a).alim (a).adisp fs r)
       )
   )))
 
@@ -167,7 +175,7 @@ let events (lim : Prims.int) (known : Prims.int) (l : (Plan_Scan.node) list) : (
       known = known;
       p = { Plan_Scan.pv = None; at = Prims.int_zero };
       held = [] } in
-  (walk (Prims.of_int (100000)) w lim [] l))
+  (walk (Prims.of_int (100000)) w lim Prims.int_zero [] l))
 
 let rec spans_of (es : (event) list) : (decision) list =
   (match es with
@@ -219,6 +227,7 @@ type wrecord = {
   edepth : Prims.int;
   econst : bool;
   eat : Prims.int;
+  elo : Prims.int;
   efields : ((Prims.int * Prims.int)) list;
   ewords : (Prims.int) list;
 }
@@ -227,11 +236,18 @@ let words_justified (ms : (wdecision) list) (e : wrecord) : bool =
   ((match (e).ewords with
     | [] -> true
     | tmp -> false
-  ) || (FStar_List_Tot_Base.existsb (fun m -> (((((=) (m).wdepth (e).edepth) && ((=) (m).wat (e).eat)) && ((m).wconst || (not (e).econst))) && (let lo = (if (e).econst then (m).wlo else (if (Prims.op_Less (m).wlo (e).eat) then (e).eat else (m).wlo)) in
-  (FStar_List_Tot_Base.for_all (fun a -> (match (Plan_Scan.choose (fun a' tmp tmp1 -> ((=) a' a)) lo (m).whi (e).efields) with
+  ) || (FStar_List_Tot_Base.existsb (fun m -> (let d = (m).wdisp in
+  let at = (Prims.op_Minus (e).eat d) in
+  ((((((=) (m).wdepth (e).edepth) && ((=) (m).wat at)) && ((m).wconst || (not (e).econst))) && ((=) (e).elo (if (e).econst then (Prims.op_Plus (m).wlo d) else (e).eat))) && (let lo = (if (e).econst then (m).wlo else (if (Prims.op_Less (m).wlo at) then at else (m).wlo)) in
+  let fs = (FStar_List_Tot_Base.map (fun f -> ((Prims.op_Minus (match f with
+      | (u__1, u__2) -> u__1
+    ) d), (match f with
+      | (u__1, u__2) -> u__2
+    ))) (e).efields) in
+  (FStar_List_Tot_Base.for_all (fun a -> (match (Plan_Scan.choose (fun a' tmp tmp1 -> ((=) a' (Prims.op_Minus a d))) lo (m).whi fs) with
     | (hd :: tl) -> true
     | tmp -> false
-  )) (e).ewords)))) ms))
+  )) (e).ewords))))) ms))
 
 let rec words_unjustified (ms : (wdecision) list) (es : (wrecord) list) : (wrecord) list =
   (match es with

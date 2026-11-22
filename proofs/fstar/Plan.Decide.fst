@@ -32,7 +32,7 @@ let span_decision (w:st) (lim:var) (s:expr) (next:list node) (may_drop:bool)
   else if mem (s, w.p) w.bounded then (KHoisted, false, ends)
   else (KChecked (not nonneg) (Some? (if ov then None else cancelled w lim s w.p)), false, ends)
 
-noeq type around = { alim : var; ap : pos; abounded : list (expr & pos) }
+noeq type around = { alim : var; ap : pos; abounded : list (expr & pos); adisp : int }
 
 (* A decision, with where it is taken: how many regions deep, and the
    position when it is a constant of the window. *)
@@ -46,9 +46,11 @@ let decide (s:expr) (k:kind) (fr:list around) (p:pos) : decision =
 (* Where a prefix may load its shared words (057ff551): how many regions
    deep, whether its position is a constant of the window, that position's
    constant part, and the bytes [wlo] to [whi] from its address the words
-   must lie in. *)
+   must lie in; [wdisp], the bytes from the emitter's base to the window
+   (Plan.Scan.region_start, b633f225), which the emitter adds to the
+   offsets it reports. *)
 type wdecision = { wdepth : nat; wconst : bool; wat : int; wlo : int; whi : int;
-                   wneed : int; wtested : bool }
+                   wneed : int; wtested : bool; wdisp : int }
 
 (* A dispatch: where it is, and the size of the span every case starts with
    when its bound is checked once before it. *)
@@ -61,7 +63,7 @@ type event =
 
 (* The walk takes fuel rather than a measure, so evaluating it calls no
    lemma about the sizes of the lists it builds. *)
-let rec walk (fuel:nat) (w:st) (lim:var) (fr:list around) (l:list node)
+let rec walk (fuel:nat) (w:st) (lim:var) (disp:int) (fr:list around) (l:list node)
   : Tot (list event) (decreases %[fuel; 0; 0]) =
   if fuel = 0 then [] else
   let fuel = fuel - 1 in
@@ -74,12 +76,12 @@ let rec walk (fuel:nat) (w:st) (lim:var) (fr:list around) (l:list node)
     let constant = None? w.p.pv in
     EWords ({ wdepth = length fr; wconst = constant; wat = w.p.at;
               wlo = (if constant then 0 else w.p.at); whi = extent w.p.at (if k < 0 then 0 else k);
-              wneed = need; wtested = w.known < need }) ::
-    walk fuel ({ w' with known = k - size; p = { w.p with at = w.p.at + size } }) lim fr r
+              wneed = need; wtested = w.known < need; wdisp = disp }) ::
+    walk fuel ({ w' with known = k - size; p = { w.p with at = w.p.at + size } }) lim disp fr r
   | Span n e s :: r ->
     let (d, implied, ends) = span_decision w lim s r true in
-    ESpan (decide s d fr w.p) :: walk fuel (bind_span w implied n e s ends) lim fr r
-  | Test c :: r -> walk fuel (refine w c) lim fr r
+    ESpan (decide s d fr w.p) :: walk fuel (bind_span w implied n e s ends) lim disp fr r
+  | Test c :: r -> walk fuel (refine w c) lim disp fr r
   | Gate sel cs d :: r ->
     let hoist : list event & st =
       match hoisted cs d with
@@ -92,25 +94,26 @@ let rec walk (fuel:nat) (w:st) (lim:var) (fr:list around) (l:list node)
     let gate = EGate ({ gdepth = length fr; gat = at_const w.p; ghoisted = hoisted cs d }) in
     let rest : list event =
       match d with
-      | Some b -> walk fuel w1 lim fr (b @ (Join :: r))
-      | None -> walk fuel w1 lim fr (Join :: r) in
-    ds @ gate :: walk_cases fuel w1 lim fr cs r @ rest
-  | Join :: r -> walk fuel w lim fr r
+      | Some b -> walk fuel w1 lim disp fr (b @ (Join :: r))
+      | None -> walk fuel w1 lim disp fr (Join :: r) in
+    ds @ gate :: walk_cases fuel w1 lim disp fr cs r @ rest
+  | Join :: r -> walk fuel w lim disp fr r
   | Region n e s am b :: r ->
     let (d, _, ends) = span_decision w lim s [] false in
     let w1 = bind_span w false n e s ends in
-    let a = { alim = lim; ap = w1.p; abounded = w1.bounded } in
-    ESpan (decide s d fr w.p) :: walk fuel ({ w1 with p = { pv = None; at = 0 }; known = 0; bounded = [] }) n (a :: fr)
-                (b @ (Close am :: r))
+    let a = { alim = lim; ap = w1.p; abounded = w1.bounded; adisp = disp } in
+    ESpan (decide s d fr w.p) ::
+    walk fuel ({ w1 with p = { pv = None; at = 0 }; known = fst (region_range w1 n); bounded = [] }) n
+      (disp + snd (region_start w w.p)) (a :: fr) (b @ (Close am :: r))
   | Close _ :: r ->
     (match fr with
-     | [] -> walk fuel w lim [] r
-     | a :: fs -> walk fuel ({ w with known = 0; p = a.ap; bounded = a.abounded }) a.alim fs r)
-and walk_cases (fuel:nat) (w:st) (lim:var) (fr:list around) (cs:list (int & list node)) (r:list node)
+     | [] -> walk fuel w lim disp [] r
+     | a :: fs -> walk fuel ({ w with known = 0; p = a.ap; bounded = a.abounded }) a.alim a.adisp fs r)
+and walk_cases (fuel:nat) (w:st) (lim:var) (disp:int) (fr:list around) (cs:list (int & list node)) (r:list node)
   : Tot (list event) (decreases %[fuel; 1; cs]) =
   match cs with
   | [] -> []
-  | (_, b) :: cs' -> walk fuel w lim fr (b @ (Join :: r)) @ walk_cases fuel w lim fr cs' r
+  | (_, b) :: cs' -> walk fuel w lim disp fr (b @ (Join :: r)) @ walk_cases fuel w lim disp fr cs' r
 
 (* The model's decisions for a plan, from the start of a window whose length
    variable [lim] holds. *)
@@ -125,7 +128,7 @@ let events (lim:var) (known:nat) (l:list node) : list event =
     p = { pv = None; at = 0 };
     held = [];
   } in
-  walk 100000 w lim [] l
+  walk 100000 w lim 0 [] l
 
 let rec spans_of (es:list event) : list decision =
   match es with
@@ -178,20 +181,31 @@ let rec unjustified (ms:list decision) (es:list decision) : list decision =
   | e :: r -> if justified ms e then unjustified ms r else e :: unjustified ms r
 
 (* The shared words an emitter's prefix loads, [ewords], with the fields
-   of its prefix, [efields], at offsets from its address. *)
-noeq type wrecord = { edepth : nat; econst : bool; eat : int; efields : list (int & nat); ewords : list int }
+   of its prefix, [efields], at offsets from its address, and the first
+   byte [elo] they may start at. The emitter counts these offsets, and the
+   prefix's [eat], from its base, the displacement [wdisp] before the
+   window (Plan.Proof.region_start_ok). *)
+noeq type wrecord = { edepth : nat; econst : bool; eat : int; elo : int;
+                      efields : list (int & nat); ewords : list int }
 
 (* [m] justifies the words of [e]: the same prefix, and each word one
    Plan.Scan.choose may keep for one of its fields, so between [m]'s bounds
-   and holding the field. A prefix at a position the emitter only knows at
-   run time, such as a frame's in the step scanner, loads no word before
-   its address. A prefix that loads no word needs no justification. *)
+   and holding the field, once the window's displacement is taken off the
+   emitter's offsets; the emitter's first byte is the window's start for a
+   prefix at a constant offset, the prefix's address otherwise. A prefix at a
+   position the emitter only knows at run time, such as a frame's in the
+   step scanner, loads no word before its address. A prefix that loads no
+   word needs no justification. *)
 let words_justified (ms:list wdecision) (e:wrecord) : bool =
   Nil? e.ewords ||
   existsb (fun (m:wdecision) ->
-    m.wdepth = e.edepth && m.wat = e.eat && (m.wconst || not e.econst) &&
-    (let lo = if e.econst then m.wlo else (if m.wlo < e.eat then e.eat else m.wlo) in
-     for_all (fun (a:int) -> Cons? (choose (fun a' _ _ -> a' = a) lo m.whi e.efields)) e.ewords)) ms
+    let d = m.wdisp in
+    let at = e.eat - d in
+    m.wdepth = e.edepth && m.wat = at && (m.wconst || not e.econst) &&
+    e.elo = (if e.econst then m.wlo + d else e.eat) &&
+    (let lo = if e.econst then m.wlo else (if m.wlo < at then at else m.wlo) in
+     let fs = map (fun (f:int & nat) -> ((fst f - d <: int), snd f)) e.efields in
+     for_all (fun (a:int) -> Cons? (choose (fun a' _ _ -> a' = a - d) lo m.whi fs)) e.ewords)) ms
 
 let rec words_unjustified (ms:list wdecision) (es:list wrecord) : list wrecord =
   match es with

@@ -320,6 +320,33 @@ let bind_span (w:st) (implied:bool) (n e:var) (s:expr) (ends:option (int & int))
     known = 0;
     p = { pv = Some e; at = 0 } }
 
+(* {2 Regions} *)
+
+(* The range of a region's size once its span binds it to [n]: the bytes
+   its window holds at least and at most (Emitter.step's [lo, hi]). *)
+let region_range (w:st) (n:var) : int & int =
+  match w.rg n with Some r -> r | None -> (0, max_int)
+
+(* A region's contents end on its size without a test when they end at a
+   constant offset that the range [r] of its size pins (95f307ce). *)
+let ends_exact (r:int & int) (p:pos) : bool = None? p.pv && r = (p.at, p.at)
+
+(* Emitter.region_start: where a region at [p] starts, as an expression and
+   a constant. A position one term plus a positive constant from a span's
+   end is the term, and the constant goes into the region's loads
+   (b633f225). *)
+let region_start (w:st) (p:pos) : expr & int =
+  match p.pv with
+  | None -> (pos_expr p, 0)
+  | Some v ->
+    (match w.sums v with
+     | Some s ->
+       (match s.terms with
+        | [ (e, c1) ] ->
+          if c1 = 1 && s.const + p.at > 0 && fits w.rg e then (e, s.const + p.at) else (pos_expr p, 0)
+        | _ -> (pos_expr p, 0))
+     | None -> (pos_expr p, 0))
+
 let bind_field (w:st) (f:field) : st =
   { w with sc = extend w.sc f.id;
            rg = (fun v -> if v = f.id then Some (0, pow2 (8 * f.width) - 1) else w.rg v) }
@@ -412,10 +439,12 @@ let rec reads_w (wb len:int) (rd:reader) (ws:list (int & nat)) (en:env) (p:int) 
       else reads_w wb len rd ws (upd en f.id (rd (wb + p + f.off) f.width)) p r
 
 (* A window around the current one: its base and length, the variable that
-   holds its length, where the code after the region resumes, and the bounds
-   checked and words held in it. *)
+   holds its length, where the code after the region resumes, the bounds
+   checked and words held in it, and the range of the current window's
+   length, the region's size, as the region opened. *)
 noeq type frame = {
-  fwb : int; flen : int; flim : var; fp : pos; fbounded : list (expr & pos); fheld : list (int & nat)
+  fwb : int; flen : int; flim : var; fp : pos; fbounded : list (expr & pos); fheld : list (int & nat);
+  frg : int & int
 }
 
 (* The current window: [len] bytes at [wb] in the buffer, the length in
@@ -538,17 +567,21 @@ let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
          | None -> Fault
          | Some y ->
            let w1 = bind_span w false n e s ends in
-           let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held } in
+           let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held;
+                     frg = region_range w1 n } in
            let x' = { wb = x.wb + posval en w.p; len = k; lim = n; frames = f :: x.frames } in
-           (* The bounds checked in the window around do not hold in this one. *)
-           let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = []; held = [] } in
+           (* The bounds checked in the window around do not hold in this
+              one; the window holds the bytes its size's range proves. *)
+           let lo = fst (region_range w1 n) in
+           let w' = { w1 with p = { pv = None; at = 0 }; known = lo; bounded = []; held = [] } in
            exec o rd x' w' (upd (upd en n k) e y) (b @ (Close am :: r)))
   | Close am :: r ->
     (match x.frames with
      | [] -> Reject
      | f :: fs ->
-       (* [if cp <> n then fail]: a region read exactly. *)
-       match (if am then Some false else
+       (* [if cp <> n then fail]: a region read exactly, unless its size's
+          range pins where its contents end. *)
+       match (if am || ends_exact f.frg w.p then Some false else
               match ev en (pos_expr w.p) with Some c -> Some (c <> len) | None -> None) with
        | None -> Fault
        | Some true -> Reject

@@ -221,6 +221,30 @@ let refine (w : st) (c : cond) : st =
     | (Eq (tmp, tmp1)) -> w
   )
 
+let region_range (w : st) (n : Prims.int) : (Prims.int * Prims.int) =
+  (match ((w).rg n) with
+    | (Some (r)) -> r
+    | None -> (Prims.int_zero, Plan_Expr.max_int)
+  )
+
+let pos_expr (p : pos) : Plan_Expr.expr =
+  (match (p).pv with
+    | None -> (Plan_Expr.Lit ((p).at))
+    | (Some (v)) -> (if ((=) (p).at Prims.int_zero) then (Plan_Expr.V (v)) else (Plan_Expr.Add ((Plan_Expr.V (v)), (Plan_Expr.Lit ((p).at)))))
+  )
+
+let region_start (w : st) (p : pos) : (Plan_Expr.expr * Prims.int) =
+  (match (p).pv with
+    | None -> ((pos_expr p), Prims.int_zero)
+    | (Some (v)) -> (match ((w).sums v) with
+        | (Some (s)) -> (match (s).Plan_Sum.terms with
+            | ((e, c1) :: []) -> (if ((((=) c1 Prims.int_one) && (Prims.op_Greater (Prims.op_Plus (s).Plan_Sum.const (p).at) Prims.int_zero)) && (Plan_Expr.fits (w).rg e)) then (e, (Prims.op_Plus (s).Plan_Sum.const (p).at)) else ((pos_expr p), Prims.int_zero))
+            | tmp -> ((pos_expr p), Prims.int_zero)
+          )
+        | None -> ((pos_expr p), Prims.int_zero)
+      )
+  )
+
 let imax (a : Prims.int) (b : Prims.int) : Prims.int =
   (if (Prims.op_Less a b) then b else a)
 

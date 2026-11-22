@@ -156,6 +156,9 @@ let rec frames_ok (sc:scope) (en:env) (wb len:int) (fs:list frame) : Tot prop (d
        the region resumes: a region cannot borrow bytes from beyond it. *)
     0 <= posval en f.fp - len /\ posval en f.fp <= f.flen /\
     wb == f.fwb + (posval en f.fp - len) /\
+    (* The current window's length lies in the range its region opened
+       with. *)
+    fst f.frg <= len /\ len <= snd f.frg /\
     bounded_ok sc f.flen en f.fbounded /\
     frames_ok sc en f.fwb f.flen r
 
@@ -416,12 +419,44 @@ let pos_expr_ev (len:nat) (lim:var) (w:st) (en:env)
   = max_string_length_small ()
 #pop-options
 
-(* The window a region opens: the contents start at its offset 0, with
-   nothing known and no bound checked in it. *)
+(* The window a region opens: the contents start at its offset 0, with the
+   bytes its size's range proves known (95f307ce) and no bound checked in
+   it. *)
 let region_inv (len:nat) (lim:var) (w1:st) (en1:env) (k:nat) (n:var)
-  : Lemma (requires inv len lim w1 en1 false /\ w1.sc n /\ en1 n == k /\ k <= len)
-          (ensures inv k n ({ w1 with p = { pv = None; at = 0 }; known = 0; bounded = []; held = [] }) en1 false)
-  = ()
+  : Lemma (requires inv len lim w1 en1 false /\ w1.sc n /\ en1 n == k /\ k <= len /\
+                    0 <= fst (region_range w1 n))
+          (ensures (let r = region_range w1 n in
+                    fst r <= k /\ k <= snd r /\
+                    inv k n ({ w1 with p = { pv = None; at = 0 }; known = fst r; bounded = []; held = [] }) en1 false))
+  = assert (match w1.rg n with Some (lo, hi) -> lo <= en1 n /\ en1 n <= hi | None -> True)
+
+(* b633f225: the base the emitter gives a region, the base of the window
+   around plus the start's expression, and its displacement, that of the
+   window around plus the start's constant, add up to the region's window,
+   so a load at the displacement plus [k] from that base reads the byte at
+   [k] of the window, as [exec] does. *)
+#push-options "--fuel 3"
+let region_start_ok (len:nat) (lim:var) (w:st) (en:env) (pending:bool) (base disp:int)
+  : Lemma (requires inv len lim w en pending /\ in_int (posval en w.p))
+          (ensures (let (e, d) = region_start w w.p in
+                    match ev en e with
+                    | Some s -> (base + s) + (disp + d) == (base + disp) + posval en w.p
+                    | None -> False))
+  = match w.p.pv with
+    | None -> ()
+    | Some v ->
+      assert (0 <= en v /\ en v <= max_int);
+      match w.sums v with
+      | Some s ->
+        (match s.terms with
+         | [ (e, c1) ] ->
+           if c1 = 1 && s.const + w.p.at > 0 && fits w.rg e then begin
+             assert (eval_sum en s == en v);
+             fits_ev w.rg en e
+           end
+         | _ -> ())
+      | None -> ()
+#pop-options
 
 (* The window around once the contents are read: the code resumes after the
    region, with the bounds checked in that window. *)
@@ -669,17 +704,20 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
         : Lemma (requires ev en s == Some k /\ k >= 0 /\ pv + k <= len /\ span_size w en s == Some k /\ pv >= 0)
                 (ensures (let w1 = bind_span w false n e s ends in
                           let en1 = upd (upd en n k) e (pv + k) in
-                          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held } in
+                          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held;
+                                    frg = region_range w1 n } in
                           let x' = { wb = x.wb + pv; len = k; lim = n; frames = f :: x.frames } in
-                          let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = []; held = [] } in
+                          let w' = { w1 with p = { pv = None; at = 0 }; known = fst (region_range w1 n); bounded = []; held = [] } in
                           exec o rd x' w' en1 (b @ (Close am :: r)) ==
                           spec rd (x.wb + pv) k ((x.wb, len, pv + k) :: fr) en1 0 (b @ (Close am :: r))))
         = let w1 = bind_span w false n e s ends in
           let en1 = upd (upd en n k) e (pv + k) in
           bind_span_ok len lim w en pending false n e s k;
-          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held } in
+          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held;
+                    frg = region_range w1 n } in
           let x' = { wb = x.wb + pv; len = k; lim = n; frames = f :: x.frames } in
-          let w' = { w1 with p = { pv = None; at = 0 }; known = 0; bounded = []; held = [] } in
+          let w' = { w1 with p = { pv = None; at = 0 }; known = fst (region_range w1 n); bounded = []; held = [] } in
+          assert (w1.rg n == Some (size_range w s));
           region_inv len lim w1 en1 k n;
           frames_agree w.sc w1.sc en en1 x.wb len x.frames;
           assert (frames_ok w'.sc en1 x'.wb k x'.frames);
@@ -707,6 +745,8 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
        | [] -> ()
        | f :: fs ->
          if not am then pos_expr_ev len lim w en;
+         (* A range that pins the end pins the window's length there. *)
+         assert (ends_exact f.frg w.p ==> posval en w.p == len);
          close_inv len lim w en f fs x.wb;
          exec_spec o rd ({ wb = f.fwb; len = f.flen; lim = f.flim; frames = fs })
            ({ w with known = 0; p = f.fp; bounded = f.fbounded; held = f.fheld }) en false r)
@@ -774,6 +814,14 @@ let scanner_correct (o:opts) (len:nat) (lim:var) (rd:reader) (en:env) (l:list no
   = max_string_length_small ();
     exec_spec o rd (top len lim) (start lim) en false l;
     spec_no_fault rd 0 len [] en 0 l
+
+(* bd97743d: a walk that starts with the check of a prefix of some bytes
+   rejects a negative length before it reads a byte, so the entry of a scan
+   need not test it. *)
+let negative_rejects (o:opts) (rd:reader) (len:int) (lim:var) (en:env) (fs:list field) (size:nat) (r:list node)
+  : Lemma (requires len < 0 /\ in_int len /\ en lim == len /\ size > 0)
+          (ensures exec o rd ({ wb = 0; len = len; lim = lim; frames = [] }) (start lim) en (Prefix fs size :: r) == Reject)
+  = ()
 
 let plain : opts = { cancel = false; drop = false; words = false; keep = (fun _ _ _ -> true) }
 
