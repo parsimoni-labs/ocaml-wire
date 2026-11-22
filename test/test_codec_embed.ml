@@ -366,10 +366,10 @@ let test_codec_crossref_field_bitfield () =
   Alcotest.(check int) "flags" 0xA r.hdr.flags;
   Alcotest.(check string) "data" "XYZ" r.data
 
-(* A sub-codec whose last field is the rest of the buffer, in a region shorter
-   than the buffer and behind a gate: its extent runs to the end of the
-   buffer, not the region's, so the region refuses it once the buffer is
-   longer. *)
+(* A sub-codec whose last field is the rest of its input, in a region shorter
+   than the buffer and behind a gate: in the region it takes the rest of the
+   region, as 3D's [consume-all] does, and behind the gate the rest of the
+   buffer. *)
 let tail =
   Codec.v "Tail"
     (fun a b -> (a, b))
@@ -425,8 +425,8 @@ let test_codec_embed_tail () =
   check 4 [ "ok 1 \"\\002\\003\\004\""; "ok "; "ok 2 \"\\003\\004\""; "ok " ];
   check 8
     [
-      "error t@4: unexpected EOF: expected 4 bytes, got 8";
-      "error t@4: unexpected EOF: expected 4 bytes, got 8";
+      "ok 1 \"\\002\\003\\004\"";
+      "ok ";
       "ok 2 \"\\003\\004\\005\\006\\007\\b\"";
       "ok ";
     ]
