@@ -287,7 +287,7 @@ pick for exactly this work:
 | Row | Implementation | API |
 |---|---|---|
 | `Wire.Codec stack decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of one bounded stack codec |
-| `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | `Codec.check` and `Codec.ok` per header, then a staged `Codec.read` per field; the harness links the layers |
+| `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | a `Codec.view` per header codec; `Codec.check`/`Codec.ok` per header, then a `Codec.read` of a `Codec.reader` per field; the harness links the layers |
 | `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the scanner of the stack: `decode`, `fold` and `fold_frames` (batch), on OxCaml also their unboxed forms; `selected outputs` hands out only the checksum's fields |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `View.check`/`View.ok` per header, then a `view_<field>` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
 | `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.scanner` of the stack | `scan` per frame; `selected outputs` hands out only the checksum's fields |

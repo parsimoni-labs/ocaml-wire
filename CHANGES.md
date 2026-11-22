@@ -24,9 +24,13 @@
   the constraint on the wire value, and turn a map `decode` that raises into
   a constraint or a `Wire.lookup` (#435, @samoht)
 
-- `Wire.Codec.slice_offset` and `slice_length` gave wrong results on a codec
-  with input parameters. They now take `?env` and raise `Invalid_argument`
-  without it. Pass `~env`, as to `get` (#465, @samoht)
+- `Wire.Codec.slice_offset` and `slice_length` are removed. Read a byte
+  field through a view instead: make it once with
+  `module V = (val Wire.Codec.view c)`, then `check` the record, take its
+  proof with `valid` and `read` the field's `reader`, which gives the slice.
+  A record that fails its check gives no proof to read from. Reading the
+  Ethernet, IPv4 and TCP headers of a packet this way takes about 545
+  instructions instead of 660, and allocates nothing (#465, @samoht)
 
 - Generated names escape every keyword of the target language (`effect` is
   `effect_`, `end_` is `end__`), so a field named after a keyword compiles.
@@ -54,18 +58,20 @@
 - `wire.diff-gen` (`Wire_diff_gen`) is removed: its runner passed every input
   without comparing anything. Use `Wire_diff.harness` (#472, @samoht)
 
-- `Wire.Codec` gains `check`, `ok`, `read`, `writer`, `decoder` and `encoder`,
-  which shadow local values of those names under `Wire.Codec.( ... )` or
-  `open Wire.Codec`. Rename the local value or qualify it (#435, #496,
-  @samoht)
+- `Wire.Codec` gains `view`, `check`, `ok`, `valid`, `reader`, `read`,
+  `writer`, `decoder` and `encoder`, which shadow local values of those names
+  under `Wire.Codec.( ... )` or `open Wire.Codec`. Rename the local value or
+  qualify it (#435, #496, @samoht)
 
 ### Added
 
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an
   earlier integer field (#414, #450, @samoht)
 
-- `Wire.Codec.check`, `ok` and `read`: check a record once, without raising,
-  then read its fields with no further bounds check (#435, #496, @samoht)
+- `Wire.Codec.view`, `check`, `ok`, `valid`, `reader` and `read`: check a
+  record once, without raising, then read its fields with no further bounds
+  check. The buffer and the view are named by types, so a proof cannot be
+  read with another buffer or another codec's reader (#435, #496, @samoht)
 
 - `Wire.Codec.decoder` and `Wire.Codec.encoder`: decode and encode prepared
   once, for a loop over many records (#496, @samoht)
