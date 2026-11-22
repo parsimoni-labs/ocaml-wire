@@ -245,9 +245,8 @@
 ; out in turn, and the code without it must read in bounds (or the check is
 ; needed for safety) and answer as the code with it, which the equivalence
 ; lane proves equal to the specification (or the check is needed for
-; semantics). The entry check len < 0 of fold is implied by the check
-; len > Bytes.length buf - off and fold_record's stop < 14, and the IPv4
-; header check is needed for safety.
+; semantics). The first check of fold, off < 0, and the IPv4 header check
+; are needed for safety.
 
 (rule
  (alias runtest)
@@ -264,9 +263,9 @@
     --only
     fold
     --check
-    "len < 0"
+    "off < 0"
     --expect
-    redundant
+    safety
     .
     %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128)
    (run
