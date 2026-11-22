@@ -1616,14 +1616,15 @@ let test_decisions () =
   has ocaml "the payload's bound hoisted in a case" (function
     | Span_bound { bound = Hoisted; window = "stop"; _ } -> true
     | _ -> false);
-  has ocaml "the frame loop" (function
+  has ocaml "four frames an iteration, their dispatch fields read ahead"
+    (function
     | Frame_loop
         {
           name = "fold_frames";
           need = 34;
-          frames = 1;
+          frames = 4;
           short = Some Apart;
-          ahead = [];
+          ahead = [ ("f14_ipv4_protocol", 23, 1) ];
         } ->
         true
     | _ -> false);

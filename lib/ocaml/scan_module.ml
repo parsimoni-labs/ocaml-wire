@@ -464,8 +464,7 @@ let pp_frames_head s ~name ~unboxed ~callbacks =
 (* The frame loop [name] as a decision: [pp_frames] below writes it. A walk
    with slots is not cut, so its loop is not unrolled. *)
 let frame_loop s ~name ~need ~apart ~unboxed =
-  let native = s.m.num = Unboxed in
-  let frames = if native && Sset.is_empty s.m.slots then unroll else 1 in
+  let frames = if Sset.is_empty s.m.slots then unroll else 1 in
   Decision.Frame_loop
     {
       name;
@@ -515,9 +514,7 @@ let pp_frames ?step s ~unboxed =
           ~valid ~known ~unrolled
       in
       (* The loop over frames that hold the leading prefixes comes last,
-         where the compiler closes it with one conditional branch. On the
-         stock compiler it walks one frame per iteration: four inlined walks
-         cost more in spilled registers than the polls they save. *)
+         where the compiler closes it with one conditional branch. *)
       if need > 0 then begin
         Fmt.pf ppf "if stride < %d then (@\n" need;
         (* [fold_unboxed] is not polymorphic in the layout of its answer, so
@@ -527,10 +524,10 @@ let pp_frames ?step s ~unboxed =
         | None ->
             if unboxed then loop ~unrolled:false 0 else pp_frames_short ?step s);
         Fmt.pf ppf ")@\nelse (@\n";
-        loop ~unrolled:native need;
+        loop ~unrolled:true need;
         Fmt.pf ppf ")"
       end
-      else loop ~unrolled:native 0;
+      else loop ~unrolled:true 0;
       Fmt.pf ppf ";@\n%sacc@\n@\n" read)
 
 (* [fold], or [fold_unboxed], whose consumer takes the outputs unboxed. *)

@@ -88,20 +88,18 @@ rejects a frame with no closure of its own, and the step functions call
 their consumer by name, with no closure call. They allocate nothing per
 frame where the compiler inlines the consumer and the runtime's loads.
 
-On OxCaml their loop over frames is unrolled four times, then walks the
-remaining frames one by one. OCaml polls for signals and other domains once
-per loop iteration, so the unrolled loop polls once per four frames. An
-iteration computes where its four frames start and loads, for each, the
-fields in its leading bytes that choose a nested optional field (the IPv4
-protocol of a packet stack), before the first frame's checks: on input whose
-kind varies from frame to frame, the branch on that field mispredicts often,
-and the next frame's choice then waits for no load. On
-OCaml the loop walks one frame per iteration, because four inlined walks
-cost the stock compiler more in spilled registers than the polls they save.
-The loop over frames that hold the leading prefixes comes last in the
-function, where the compiler closes it with one branch. On OCaml the loop
-over frames too short for it is a function of its own, called once per
-batch, so that its variables take no register from the main loop.
+Their loop over frames is unrolled four times, then walks the remaining
+frames one by one. OCaml polls for signals and other domains once per loop
+iteration, so the unrolled loop polls once per four frames. An iteration
+computes where its four frames start and loads, for each, the fields in its
+leading bytes that choose a nested optional field (the IPv4 protocol of a
+packet stack), before the first frame's checks: on input whose kind varies
+from frame to frame, the branch on that field mispredicts often, and the
+next frame's choice then waits for no load. The loop over frames that hold
+the leading prefixes comes last in the function, where the compiler closes
+it with one branch. On OCaml the loop over frames too short for it is a
+function of its own, called once per batch, so that its variables take no
+register from the main loop.
 
 The invariants above hold for the generated code as follows.
 

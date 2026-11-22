@@ -325,13 +325,11 @@ slot and constructs its ordinary nested values. Byte fields are zero-copy
 slices.
 
 The frame loop of the batch rows (`fold_frames` and its unboxed and step
-forms) walks four frames per iteration on OxCaml only, so that it polls
-for signals once per four frames. Each iteration first computes where its
-four frames start and loads the field their transport header is chosen
-on, the IPv4 protocol, then walks the frames: a mispredicted branch of one
-frame does not hold back the next frame's dispatch by a load. On stock OCaml it walks one frame per
-iteration, because four inlined walks cost the stock compiler more in
-spilled registers than the polls they save. The generated Rust has no frame
+forms) walks four frames per iteration, so that it polls for signals once
+per four frames. Each iteration first computes where its four frames start
+and loads the field their transport header is chosen on, the IPv4
+protocol, then walks the frames: a mispredicted branch of one frame does
+not hold back the next frame's dispatch by a load. The generated Rust has no frame
 loop: its rows call `scan` once per slot.
 
 The `linked headers` rows, OCaml and Rust, use the

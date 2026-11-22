@@ -111,11 +111,11 @@
   codecs, optional fields and variable sizes, and hands out the fields chosen
   with `~fields` without building a value. It skips a bound check that a
   later check, a region's constant start or the range of a region's size
-  already covers, and tests two adjacent bitfields with one comparison. On
-  OxCaml, `fold_frames` walks four frames per loop iteration. `fold_step`
+  already covers, and tests two adjacent bitfields with one comparison.
+  `fold_frames` walks four frames per loop iteration. `fold_step`
   and `fold_frames_step` pass integer outputs to the consumer as `int64`,
   which OCaml keeps in registers. `Wire_ocaml.Plan` gives its plan to other
-  backends (#447, #473, #501, #504, #509, #510, #517, @samoht)
+  backends (#447, #473, #501, #504, #509, #510, #517, #520, @samoht)
 
 - On OxCaml, generated code takes buffers allocated on the stack, is
   `portable`, allocates nothing (`[@zero_alloc]` is checked) and keeps 32-bit
@@ -154,12 +154,12 @@
   `encode` into a buffer allocates nothing. `check` of a TCP header takes 95
   instructions, down from 118 (#435, #445, #496, #512, @samoht)
 
-- On OxCaml, the scanner's `fold_frames` (and its unboxed and step forms)
-  reads the IPv4 protocol, or whatever field chooses a frame's nested
-  optional fields, of all four frames of a loop iteration before checking
-  the first. On packets whose kind changes from one frame to the next, the
-  Ethernet/IPv4/TCP-or-UDP scan takes about 8% fewer cycles, as many as
-  wire.rust's (#516, @samoht)
+- The scanner's `fold_frames` (and its unboxed and step forms) reads the
+  IPv4 protocol, or whatever field chooses a frame's nested optional fields,
+  of all four frames of a loop iteration before checking the first. On
+  packets whose kind changes from one frame to the next, the
+  Ethernet/IPv4/TCP-or-UDP scan takes about 8% fewer cycles on OxCaml, as
+  many as wire.rust's, and about 6% fewer on OCaml (#516, #520, @samoht)
 
 - `Wire.Codec.get` and `set` of an integer or bitfield are faster: `set`
   writes a space packet header field in a third of the instructions (#496,

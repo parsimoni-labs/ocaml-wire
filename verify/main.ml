@@ -156,20 +156,21 @@ let loaded_ahead ctx ~record ~frames =
    frame and the fields loaded ahead of it. *)
 let frame_contract ~ox ~min_stride ahead =
   let holds = List.map (fun (x, e) -> Fmt.str " && %s = (%s)" x e) ahead in
-  let contract =
-    if ox then String.concat "" (frame_pre_ox min_stride :: holds)
-    else frame_pre min_stride
-  in
-  let record_pre =
-    String.concat ""
-      (frame_pre min_stride
-      :: List.map
-           (fun (x, e) ->
-             Fmt.str
-               " && Int64.of_int %s = (let base = Int64.of_int base in %s)" x e)
-           ahead)
-  in
-  (contract, record_pre)
+  if not ox then
+    let pre = String.concat "" (frame_pre min_stride :: holds) in
+    (pre, pre)
+  else
+    let record_pre =
+      String.concat ""
+        (frame_pre min_stride
+        :: List.map
+             (fun (x, e) ->
+               Fmt.str
+                 " && Int64.of_int %s = (let base = Int64.of_int base in %s)" x
+                 e)
+             ahead)
+    in
+    (String.concat "" (frame_pre_ox min_stride :: holds), record_pre)
 
 let valid_arguments =
   "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && len <= \
@@ -177,7 +178,7 @@ let valid_arguments =
 
 (* A scanner: its one-frame entry, the body of its frame loop for a stride
    the loop walks without frame checks, from what the loop establishes
-   (with, on OxCaml, the fields the loop loads ahead of the body), and the
+   (with the fields the loop loads ahead of the body), and the
    frame loop itself with valid and with any arguments, its calls to the
    body checked against that. [step] names the step scanner's entries,
    which answer through [Step.valid] and [Step.invalid]. *)
@@ -199,7 +200,7 @@ let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
         "fold_frames",
         "fold_frames buf off len ~stride ~init:0 ~invalid ~valid" )
   in
-  let ahead = if ox then loaded_ahead ctx ~record ~frames else [] in
+  let ahead = loaded_ahead ctx ~record ~frames in
   let contract, record_pre = frame_contract ~ox ~min_stride ahead in
   let record_args =
     String.concat " " (record_args :: List.map (fun (x, _) -> at x) ahead)
