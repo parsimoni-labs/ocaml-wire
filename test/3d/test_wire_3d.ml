@@ -565,54 +565,10 @@ let diff_param_codec =
     (fun len data -> (len, data))
     [ Codec.( $ ) f_length fst; Codec.( $ ) f_data snd ]
 
-(* Build the package's validator and [agree] once, then pass [f] a function that
-   runs [agree] on a corpus and returns its exit status and output. *)
-let with_agree ~name ~package codecs f =
-  let tmpdir = Filename.temp_dir ("wire_3d_diff_" ^ package) "" in
-  Fun.protect
-    ~finally:(fun () -> ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir))
-    (fun () ->
-      Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
-      let sh cmd =
-        let ic = Fmt.kstr Unix.open_process_in "cd %s && %s 2>&1" tmpdir cmd in
-        let output = In_channel.input_all ic in
-        (Unix.close_process_in ic, output)
-      in
-      let base = String.capitalize_ascii name in
-      let run corpus =
-        let oc = open_out (Filename.concat tmpdir "corpus") in
-        (match corpus with
-        | `Fuzz count ->
-            let ppf = Format.formatter_of_out_channel oc in
-            Wire_3d.generate_corpus ~count ppf codecs
-        | `Lines lines -> List.iter (fun l -> output_string oc (l ^ "\n")) lines);
-        close_out oc;
-        sh "./agree corpus"
-      in
-      match
-        Fmt.kstr sh
-          "cc %s %s -c %s.c %sWrapper.c && ar rcs lib.a %s.o %sWrapper.o && cc \
-           %s %s agree.c lib.a -o agree"
-          Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines base base base
-          base Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
-      with
-      | Unix.WEXITED 0, _ -> f run
-      | _, output ->
-          Alcotest.failf "agree for %s does not build:\n%s" name output)
-
-let differential_ok ~name ~package ~corpus codecs =
-  let status, output =
-    with_agree ~name ~package codecs (fun run -> run corpus)
-  in
-  match status with
-  | Unix.WEXITED 0 -> ()
-  | Unix.WEXITED n ->
-      Alcotest.failf "differential %s failed with exit %d:\n%s" name n output
-  | _ -> Alcotest.failf "differential %s terminated abnormally:\n%s" name output
-
 let test_doc_differential () =
   needs_3d_exe ();
-  differential_ok ~name:"protospec" ~package:"demo-doc" ~corpus:(`Fuzz 400)
+  Agree.differential_ok ~name:"protospec" ~package:"demo-doc"
+    ~corpus:(`Fuzz 400)
     [
       Wire_3d.pack diff_enum_codec;
       Wire_3d.pack diff_range_codec;
@@ -625,12 +581,13 @@ let test_doc_differential_no_params () =
      harness must not emit an unused [parse_params] helper (a -Werror under the
      strict flags) when no codec takes parameters. *)
   needs_3d_exe ();
-  differential_ok ~name:"plainspec" ~package:"plain-doc" ~corpus:(`Fuzz 100)
+  Agree.differential_ok ~name:"plainspec" ~package:"plain-doc"
+    ~corpus:(`Fuzz 100)
     [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
 let test_doc_differential_nested_regions () =
   needs_3d_exe ();
-  differential_ok ~name:"nestedspec" ~package:"nested-doc"
+  Agree.differential_ok ~name:"nestedspec" ~package:"nested-doc"
     ~corpus:
       (`Lines
          [
@@ -679,7 +636,7 @@ let diff_msb_array_codec =
 
 let test_doc_differential_msb_sub_codec () =
   needs_3d_exe ();
-  differential_ok ~name:"msbspec" ~package:"msb-doc"
+  Agree.differential_ok ~name:"msbspec" ~package:"msb-doc"
     ~corpus:
       (`Lines
          [
@@ -693,7 +650,7 @@ let test_doc_differential_msb_sub_codec () =
 
 let test_doc_differential_region_cardinality () =
   needs_3d_exe ();
-  differential_ok ~name:"invariantspec" ~package:"invariant-doc"
+  Agree.differential_ok ~name:"invariantspec" ~package:"invariant-doc"
     ~corpus:
       (`Lines
          [
@@ -748,26 +705,10 @@ let diff_opt_at_most_codec =
   diff_opt_region_codec "OptRegionAtMost" (fun ~size t ->
       Wire.nested_at_most ~size t)
 
-(* A corpus line for [hex], after checking that the codec gives [accepted]:
-   the record decodes and spans the whole input. *)
-let corpus_line name c hex accepted =
-  let buf =
-    Bytes.init
-      (String.length hex / 2)
-      (fun i -> Char.chr (int_of_string ("0x" ^ String.sub hex (2 * i) 2)))
-  in
-  let codec_accepts =
-    match Codec.decode c buf 0 with
-    | Error _ -> false
-    | Ok _ -> Codec.wire_size_at c buf 0 = Bytes.length buf
-  in
-  Alcotest.(check bool) (name ^ " " ^ hex) accepted codec_accepts;
-  Fmt.str "%s - %s %d" name hex (Bool.to_int accepted)
-
 let test_doc_differential_span_and_scalar_regions () =
   needs_3d_exe ();
   let lines name c cases =
-    List.map (fun (hex, ok) -> corpus_line name c hex ok) cases
+    List.map (fun (hex, ok) -> Agree.corpus_line name c hex ok) cases
   in
   let codecs =
     [
@@ -777,7 +718,7 @@ let test_doc_differential_span_and_scalar_regions () =
     ]
   in
   let fuzzed = Fmt.str "%a" (Wire_3d.generate_corpus ~count:128) codecs in
-  differential_ok ~name:"regionspec" ~package:"region-doc"
+  Agree.differential_ok ~name:"regionspec" ~package:"region-doc"
     ~corpus:
       (`Lines
          (lines "SpanSub" diff_span_sub_codec
@@ -886,7 +827,8 @@ let diff_signed_codec =
 
 let test_doc_differential_signed () =
   needs_3d_exe ();
-  differential_ok ~name:"signedspec" ~package:"signed-doc" ~corpus:(`Fuzz 256)
+  Agree.differential_ok ~name:"signedspec" ~package:"signed-doc"
+    ~corpus:(`Fuzz 256)
     [ Wire_3d.pack diff_signed_codec ]
 
 (* A union switches on an earlier field in both validators: a byte tag with a
@@ -940,7 +882,8 @@ let diff_union_bits_codec =
 
 let test_doc_differential_union () =
   needs_3d_exe ();
-  differential_ok ~name:"unionspec" ~package:"union-doc" ~corpus:(`Fuzz 400)
+  Agree.differential_ok ~name:"unionspec" ~package:"union-doc"
+    ~corpus:(`Fuzz 400)
     [ Wire_3d.pack diff_union_codec; Wire_3d.pack diff_union_bits_codec ]
 
 (* An 8192-byte payload makes each corpus line 16384 hex chars; the agree
@@ -954,7 +897,8 @@ let diff_large_payload_codec =
 
 let test_doc_differential_large_payload () =
   needs_3d_exe ();
-  differential_ok ~name:"sharedspec" ~package:"shared-doc" ~corpus:(`Fuzz 40)
+  Agree.differential_ok ~name:"sharedspec" ~package:"shared-doc"
+    ~corpus:(`Fuzz 40)
     [ Wire_3d.pack diff_large_payload_codec ]
 
 (* Interior consecutive caps: EverParse normalizes the validator symbol to
@@ -968,7 +912,8 @@ let diff_caps_name_codec =
 
 let test_doc_differential_caps_name () =
   needs_3d_exe ();
-  differential_ok ~name:"spacewire" ~package:"space-wire" ~corpus:(`Fuzz 40)
+  Agree.differential_ok ~name:"spacewire" ~package:"space-wire"
+    ~corpus:(`Fuzz 40)
     [ Wire_3d.pack diff_caps_name_codec ]
 
 (* A valid record followed by trailing bytes must be rejected. EverParse's
@@ -979,7 +924,7 @@ let test_doc_differential_caps_name () =
    both one byte over and one byte short. *)
 let test_doc_differential_trailing_bytes () =
   needs_3d_exe ();
-  differential_ok ~name:"trailspec" ~package:"trail-doc"
+  Agree.differential_ok ~name:"trailspec" ~package:"trail-doc"
     ~corpus:
       (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
     [ Wire_3d.pack diff_range_codec ]
@@ -990,7 +935,7 @@ let test_doc_differential_trailing_bytes () =
    with exit 2 instead of feeding a wrong byte to the validator. *)
 let test_doc_differential_hex () =
   needs_3d_exe ();
-  with_agree ~name:"hexspec" ~package:"hex-doc"
+  Agree.with_agree ~name:"hexspec" ~package:"hex-doc"
     [ Wire_3d.pack diff_range_codec ]
     (fun run ->
       (match
@@ -1034,7 +979,7 @@ let diff_wrapped_param_codec =
 
 let test_doc_differential_wrapped_param () =
   needs_3d_exe ();
-  differential_ok ~name:"limitspec" ~package:"limit-doc"
+  Agree.differential_ok ~name:"limitspec" ~package:"limit-doc"
     ~corpus:
       (`Lines
          [
@@ -1828,8 +1773,8 @@ let arith_codecs =
 let test_arith_differential () =
   needs_3d_exe ();
   let codecs, lines = arith_codecs in
-  differential_ok ~name:"arithspec" ~package:"arith-doc" ~corpus:(`Lines lines)
-    codecs
+  Agree.differential_ok ~name:"arithspec" ~package:"arith-doc"
+    ~corpus:(`Lines lines) codecs
 
 let suite =
   ( "wire_3d",

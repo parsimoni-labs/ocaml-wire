@@ -7,10 +7,12 @@
  (name test)
  (modules
   test
+  agree
   test_wire_3d
   test_wire_3d_corpus
   test_wire_3d_proc
-  test_wire_3d_shapes)
+  test_wire_3d_shapes
+  test_wire_3d_arith)
  (libraries wire wire.3d alcotest re unix threads.posix fmt))
 
 (rule

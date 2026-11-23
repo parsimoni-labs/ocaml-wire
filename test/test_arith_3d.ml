@@ -294,6 +294,62 @@ let test_arith_regions_and_actions () =
   check_refused "an assigned subtraction that can go below zero" true
     (act Expr.(fun a -> a - int 1))
 
+(* 3D stores a value only into an output of at least its type ("Expected type
+   UINT8"). A wider value that the conditions before it bound within the output
+   is narrowed with a cast 3d.exe verifies, any other is refused, and so is
+   [field_pos], which 3D reads only into a [var]. *)
+let test_arith_assignments () =
+  let out8 = Param.output "out" uint8 in
+  let out32 = Param.output "out" uint32be in
+  (* [x], then [y] whose action is [stmts x]. *)
+  let after x stmts () =
+    Codec.v "Assign"
+      (fun x y -> (x, y))
+      Codec.
+        [
+          x $ fst;
+          Field.v "y" uint8 ~action:(Action.on_success (stmts (Field.ref x)))
+          $ snd;
+        ]
+  in
+  let x16 = Field.v "x" uint16be in
+  let bounded =
+    Field.v "x" uint16be ~self_constraint:Expr.(fun x -> x <= int 200)
+  in
+  let x8 = Field.v "x" uint8 in
+  check_refused "a uint16 field into a uint8 output" true
+    (after x16 (fun x -> [ Action.assign out8 x ]));
+  projects_to "a bounded uint16 field into a uint8 output"
+    (after bounded (fun x -> [ Action.assign out8 x ]) ())
+    "*out = ((UINT8) x);";
+  check_refused "x + 1 over a uint8 into a uint8 output" true
+    (after x8 (fun x -> [ Action.assign out8 Expr.(x + int 1) ]));
+  projects_to "a guarded x + 1 into a uint8 output"
+    (after x8
+       (fun x ->
+         [
+           Action.if_
+             Expr.(x < int 255)
+             [ Action.assign out8 Expr.(x + int 1) ]
+             None;
+         ])
+       ())
+    "*out = (x + 1);";
+  check_refused "300 into a uint8 output" true
+    (after x8 (fun _ -> [ Action.assign out8 (int 300) ]));
+  check_refused "7 into a uint8 output" false
+    (after x8 (fun _ -> [ Action.assign out8 (int 7) ]));
+  check_refused "sizeof this into a uint8 output" true
+    (after x8 (fun _ -> [ Action.assign out8 sizeof_this ]));
+  projects_to "sizeof this into a uint32 output"
+    (after x8 (fun _ -> [ Action.assign out32 sizeof_this ]) ())
+    "*out = sizeof (this);";
+  check_refused "field_pos into a uint32 output" true
+    (after x8 (fun _ -> [ Action.assign out32 field_pos ]));
+  projects_to "a uint8 field into a uint32 output"
+    (after x8 (fun x -> [ Action.assign out32 x ]) ())
+    "*out = x;"
+
 let suite =
   ( "arith_3d",
     [
@@ -307,4 +363,5 @@ let suite =
         test_arith_wide;
       Alcotest.test_case "optional regions and actions" `Quick
         test_arith_regions_and_actions;
+      Alcotest.test_case "assignments to outputs" `Quick test_arith_assignments;
     ] )
