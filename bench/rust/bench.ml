@@ -477,15 +477,13 @@ let oxcaml = Stack_read.oxcaml
 
 (* The frame size comes from the corpus's framing, while all protocol
    dispatch, header lengths and parent-region bounds come from Packet_stack. *)
-let frame_codec stride =
-  Codec.v "BenchmarkFrame"
-    (fun p -> p)
-    Codec.
-      [
-        Field.v "packet"
-          (nested_at_most ~size:(int stride) (codec Packet_stack.codec))
-        $ Fun.id;
-      ]
+let frame_field stride =
+  Codec.(
+    Field.v "packet"
+      (nested_at_most ~size:(int stride) (codec Packet_stack.codec))
+    $ Fun.id)
+
+let frame_codec packet = Codec.v "BenchmarkFrame" (fun p -> p) [ packet ]
 
 let codec ~stride frame_codec buf =
   let acc = ref 0 in
@@ -496,7 +494,91 @@ let codec ~stride frame_codec buf =
   done;
   !acc
 
+(* {2 Wire.Codec: the stack checked once, each layer entered}
+
+   [V.check] of the frame makes every check [decode] makes, building nothing;
+   [V.enter] then finds each layer the check accepted, testing only that its
+   frame lies in the buffer, and refuses an absent one, and [V.read] reads its
+   fields as in the linked rows. *)
+
+module P = Packet_stack
+module Pe = (val V.codec P.codec)
+module Pip = (val V.codec P.ipv4)
+module Ptcp = (val V.codec P.tcp)
+module Pudp = (val V.codec P.udp)
+
+let in_ip = V.sub_option Pe.codec Pip.codec P.eth_ipv4
+let in_tcp = V.sub_option Pip.codec Ptcp.codec P.ipv4_tcp
+let in_udp = V.sub_option Pip.codec Pudp.codec P.ipv4_udp
+let p_type = V.field Pe.codec P.eth_ether_type
+let p_len = V.field Pip.codec P.ipv4_total_length
+let p_ttl = V.field Pip.codec P.ipv4_ttl
+let p_proto = V.field Pip.codec P.ipv4_protocol
+let p_src = V.field Pip.codec P.ipv4_src
+let p_dst = V.field Pip.codec P.ipv4_dst
+let p_tcp_sp = V.field Ptcp.codec P.tcp_src_port
+let p_tcp_dp = V.field Ptcp.codec P.tcp_dst_port
+let p_tcp_seq = V.field Ptcp.codec P.tcp_seq
+let p_tcp_ack = V.field Ptcp.codec P.tcp_ack
+let p_tcp_off = V.field Ptcp.codec P.tcp_data_offset
+let p_tcp_flags = V.field Ptcp.codec P.tcp_flags
+let p_tcp_win = V.field Ptcp.codec P.tcp_window
+let p_udp_sp = V.field Pudp.codec P.udp_src_port
+let p_udp_dp = V.field Pudp.codec P.udp_dst_port
+let p_udp_len = V.field Pudp.codec P.udp_length_field
+
+let stack_transport acc b len ip =
+  let t = V.enter in_tcp b len ip in
+  if V.ok t then
+    let t = V.get t in
+    tcp_fields acc
+      ~sp:(UInt16.to_int (V.read p_tcp_sp b t))
+      ~dp:(UInt16.to_int (V.read p_tcp_dp b t))
+      ~seq:(UInt32.to_int (V.read p_tcp_seq b t))
+      ~ack:(UInt32.to_int (V.read p_tcp_ack b t))
+      ~win:(UInt16.to_int (V.read p_tcp_win b t))
+      ~flags:(V.read p_tcp_flags b t) ~off:(V.read p_tcp_off b t)
+  else
+    let u = V.enter in_udp b len ip in
+    if V.ok u then
+      let u = V.get u in
+      udp_fields acc
+        ~sp:(UInt16.to_int (V.read p_udp_sp b u))
+        ~dp:(UInt16.to_int (V.read p_udp_dp b u))
+        ~len:(UInt16.to_int (V.read p_udp_len b u))
+    else acc
+
+let stack_packet acc b len e =
+  let acc = acc + UInt16.to_int (V.read p_type b e) in
+  let ip = V.enter in_ip b len e in
+  if not (V.ok ip) then acc
+  else
+    let ip = V.get ip in
+    let acc =
+      ip_fields acc
+        ~src:(UInt32.to_int (V.read p_src b ip))
+        ~dst:(UInt32.to_int (V.read p_dst b ip))
+        ~ttl:(UInt8.to_int (V.read p_ttl b ip))
+        ~proto:(UInt8.to_int (V.read p_proto b ip))
+        ~len:(UInt16.to_int (V.read p_len b ip))
+    in
+    stack_transport acc b len ip
+
 (* Each loop names the function it calls on every frame. *)
+
+let codec_stack_view ~stride (type f) (frame : f Codec.t) packet buf =
+  let module F = (val V.codec frame) in
+  let in_frame = V.sub F.codec Pe.codec packet in
+  let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    let k = V.check F.codec b len (i * stride) in
+    if V.ok k then
+      let e = V.enter in_frame b len (V.get k) in
+      if V.ok e then acc := stack_packet !acc b len (V.get e)
+  done;
+  !acc
 
 let codec_linked ~stride buf =
   let (Buf.Any b) = Buf.v buf in
@@ -548,9 +630,12 @@ let generated_selected ~stride buf =
 let target = if oxcaml then ", OxCaml target" else ""
 
 let rows stride =
-  let frame_codec = frame_codec stride in
+  let packet = frame_field stride in
+  let frame_codec = frame_codec packet in
   [
     ("Wire.Codec stack decode", fun buf -> codec ~stride frame_codec buf);
+    ( "Wire.Codec stack check/enter/read",
+      codec_stack_view ~stride frame_codec packet );
     ("Wire.Codec check/read, linked headers", codec_linked ~stride);
     ("wire.ocaml View.check/view, linked headers" ^ target, view_linked ~stride);
     ("wire.ocaml fused stack" ^ target, generated ~stride);
