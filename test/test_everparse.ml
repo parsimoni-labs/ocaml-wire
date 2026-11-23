@@ -1157,39 +1157,8 @@ let test_3d_negative_literal_rejected () =
   Alcotest.(check bool)
     "negative literal rejected by projection" true (projects_or_raises codec)
 
-let test_3d_field_sub_mul_rejected () =
-  (* A [Sub] / [Mul] over a field in a constraint has no sound narrow-width 3D
-     projection (3d.exe refuses to verify the under/overflow), so it is rejected
-     at projection. A constant [Sub] / [Mul] folds and an additive field
-     constraint still projects. *)
-  let f = Field.v "a" uint8 in
-  let mul =
-    Codec.v "MulC"
-      (fun a b -> (a, b))
-      Codec.
-        [
-          f $ fst;
-          Field.v "b" uint8 ~self_constraint:(fun b ->
-              Expr.(Field.int f * b = int 0))
-          $ snd;
-        ]
-  in
-  let sub =
-    Codec.v "SubC"
-      (fun a b -> (a, b))
-      Codec.
-        [
-          f $ fst;
-          Field.v "b" uint8 ~self_constraint:(fun b ->
-              Expr.(Field.int f - b >= int 5))
-          $ snd;
-        ]
-  in
-  Alcotest.(check bool)
-    "field multiplication rejected" true (projects_or_raises mul);
-  Alcotest.(check bool)
-    "field subtraction rejected" true (projects_or_raises sub);
-  (* A constant arithmetic bound still projects. *)
+let test_3d_constant_arith_projects () =
+  (* A [Sub] / [Mul] of constants folds, so the constraint projects. *)
   let constc =
     Codec.v "ConstC"
       (fun a -> a)
@@ -1251,13 +1220,13 @@ let test_schema_authoritative () =
      a consumer of [schema] gets an honest answer. *)
   let f = Field.v "a" uint8 in
   let bad =
-    Codec.v "SchemaSub"
+    Codec.v "SchemaNeg"
       (fun a b -> (a, b))
       Codec.
         [
           f $ fst;
           Field.v "b" uint8 ~self_constraint:(fun b ->
-              Expr.(Field.int f - b >= int 5))
+              Expr.(Field.int f + b <> int (-1)))
           $ snd;
         ]
   in
@@ -1908,8 +1877,8 @@ let suite =
         test_3d_signed_float_setters;
       Alcotest.test_case "3d: arithmetic constraint widens operands" `Quick
         test_3d_arith_constraint_widens;
-      Alcotest.test_case "3d: field sub/mul constraint rejected" `Quick
-        test_3d_field_sub_mul_rejected;
+      Alcotest.test_case "3d: constant sub/mul constraint projects" `Quick
+        test_3d_constant_arith_projects;
       Alcotest.test_case "3d: certain byte-size multiplication overflow" `Quick
         test_3d_byte_size_mul_bound_rejected;
       Alcotest.test_case "3d: schema is the projectability gate" `Quick

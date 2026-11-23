@@ -107,11 +107,6 @@ val width64 : 'a typ -> bool
 (** [width64 t] is [true] when [t] is a 64-bit scalar, seen through the
     transparent wrappers. *)
 
-val project_field_arith : string -> string list -> 'a expr -> 'a expr
-(** [project_field_arith name widenable cond] rejects a field subtraction or
-    multiplication in [cond] (no sound narrow-width projection), then widens
-    each [Add] operand that names a field of [widenable]. *)
-
 val lower_where_to_field_constraint :
   bool expr option -> field list -> bool expr option * field list
 (** [lower_where_to_field_constraint where fields] moves a struct-level [where]
@@ -132,17 +127,19 @@ val arith : field list -> arith
 val project_constraint :
   name:string -> arith:arith -> 'a typ -> bool expr -> bool expr
 (** [project_constraint ~name ~arith t cond] is the refinement 3D checks for
-    [cond] on the field [name] of type [t]: {!project_refinement}, then the
-    widening of {!project_field_arith}. Raises [Invalid_argument] for a shape
-    with no faithful projection, among them an addition over a 64-bit field. *)
+    [cond] on the field [name] of type [t]: {!project_refinement}, then each
+    [Add] operand naming an unsigned field of at most 32 bits widened to 64
+    bits. Raises [Invalid_argument] for a shape with no faithful projection,
+    among them a field subtraction or multiplication and an addition over a
+    64-bit field. *)
 
 val check_constraints : bool expr option -> field list -> unit
 (** [check_constraints where fields] raises [Invalid_argument] where
     {!project_constraint} does when the struct is projected, before it widens
     the arithmetic: for a comparison {!project_refinement} refuses, of the
-    constrained field or of any signed field of [fields], or an addition over a
-    64-bit field, in a constraint of [fields] or a [where] that names them. A
-    field subtraction or multiplication is still refused at projection only. *)
+    constrained field or of any signed field of [fields], a field subtraction or
+    multiplication, or an addition over a 64-bit field, in a constraint of
+    [fields] or a [where] that names them. *)
 
 val collect_refs : 'a expr -> string list
 (** Field-reference names occurring in an expression, including nested terms. *)

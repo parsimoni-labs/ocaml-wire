@@ -161,8 +161,16 @@ let test_scanner () =
   validation " == 6i64) {";
   validation " == 17i64) {"
 
-let one t self =
-  Codec.v "One" Fun.id Codec.[ Field.v "x" t ~self_constraint:self $ Fun.id ]
+(* A field subtraction or multiplication has no 3D projection in a
+   constraint, so the products below gate an optional byte instead. *)
+let gated t present =
+  let x = Field.v "x" t in
+  Codec.v "Gated"
+    (fun x y -> (x, y))
+    Codec.
+      [
+        x $ fst; Field.optional "y" ~present:(present (Field.ref x)) uint8 $ snd;
+      ]
 
 (* Arithmetic is plain where the ranges the plan knows, narrowed by the
    checks passed, keep it in the 63-bit int, and checked otherwise: a checked
@@ -173,9 +181,9 @@ let one t self =
 let test_scanner_arithmetic () =
   let src c = Wire_rust.scanner ~codec:"c" c in
   has "u8 squared"
-    (src (one uint8 (fun x -> Expr.(x * x >= int 0))))
+    (src (gated uint8 (fun x -> Expr.(x * x >= int 0))))
     "(f1_x * f1_x)";
-  let u32 = src (one uint32be (fun x -> Expr.(x * x >= int 0))) in
+  let u32 = src (gated uint32be (fun x -> Expr.(x * x >= int 0))) in
   has "u32 squared" u32 "mul(f1_x, f1_x)?";
   has "u32 squared" u32 "fn mul(a: i64, b: i64) -> Option<i64>";
   let x =
@@ -187,8 +195,9 @@ let test_scanner_arithmetic () =
       Codec.
         [
           x $ fst;
-          Field.v "m" uint8
-            ~constraint_:Expr.(Field.ref x * Field.ref x * Field.ref x > int 0)
+          Field.optional "m"
+            ~present:Expr.(Field.ref x * Field.ref x * Field.ref x > int 0)
+            uint8
           $ snd;
         ]
   in
@@ -197,7 +206,6 @@ let test_scanner_arithmetic () =
   let near_max = Fmt.str "%di64" (max_int - 5) in
   has "overflow" overflow (Fmt.str "add(f1_a, %s)?" near_max);
   has "overflow" overflow (Fmt.str "add(f3_lo, %s)?" near_max);
-  has "overflow" overflow "mul(f4_b, f5_c)?";
   let sized = src Schemas.sized in
   has "sized" sized "if (mul(f1_n, f1_n)? != 1i64) {";
   has "sized" sized "sub(mul(f1_n, f1_n)?, 1i64)?";

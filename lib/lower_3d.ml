@@ -1393,12 +1393,6 @@ let rec reject_field_sub_mul : type a. string -> a expr -> unit =
   | Field_pos ->
       ()
 
-(* The narrow-width arithmetic a projected field constraint needs: reject a field
-   [Sub] / [Mul] (no sound projection), then widen each [Add] operand. *)
-let project_field_arith name widenable cond =
-  reject_field_sub_mul name cond;
-  widen_add widenable cond
-
 (* A 64-bit field, seen through the transparent wrappers. *)
 let rec width64 : type a. a typ -> bool = function
   | Uint64 _ | Int64 _ | Float64 _ -> true
@@ -1496,11 +1490,12 @@ let refinement ~name ~arith typ cond =
         else project_refinement ~name:other ~kind:(`Signed width) cond)
       cond arith.signed
   in
+  reject_field_sub_mul name cond;
   reject_wide_add name arith.wide cond;
   cond
 
 let project_constraint ~name ~arith typ cond =
-  project_field_arith name arith.widenable (refinement ~name ~arith typ cond)
+  widen_add arith.widenable (refinement ~name ~arith typ cond)
 
 (* Collect every [Ref name] occurring in an expression. Used to detect
    field references in struct-level [where] clauses, which 3D's grammar

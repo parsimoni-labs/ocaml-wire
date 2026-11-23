@@ -495,25 +495,20 @@ let finite_float64 =
     adversarial_value = None;
   }
 
-(* Codec whose constraint exercises every integer Expr operator
-   (arithmetic, bitwise, comparison, logical, casts). Positives satisfy
-   the chained predicate. The selected arithmetic operation uses input values
-   at the native-integer boundaries, so adversarials reach every checked
-   overflow and zero-divisor path. *)
+(* Codec whose constraint exercises every integer Expr operator a constraint
+   takes (arithmetic, bitwise, comparison, logical, casts); a field subtraction
+   or multiplication has no 3D projection, so [Codec.v] refuses it. Positives
+   satisfy the chained predicate. The selected arithmetic operation uses input
+   values at the native-integer boundaries, so adversarials reach the checked
+   overflow of an addition and every zero-divisor path. *)
 let build_expr_ops_pred a b =
   let module E = Wire.Expr in
   let selector = E.(a land Wire.int 7) in
   let arith =
     E.if_then_else
       E.(selector = Wire.int 0)
-      E.(Wire.int max_int - a + b)
-      (E.if_then_else
-         E.(selector = Wire.int 1)
-         E.(Wire.int min_int + a - b)
-         (E.if_then_else
-            E.(selector = Wire.int 2)
-            E.((a - b) * Wire.int max_int)
-            (E.if_then_else E.(selector = Wire.int 3) E.(a / b) E.(a mod b))))
+      E.(Wire.int max_int + (b / (a + Wire.int 1)))
+      (E.if_then_else E.(selector = Wire.int 3) E.(a / b) E.(a mod b))
   in
   let bw = E.(a land Wire.int 0xFF lor (a lxor a)) in
   let shifted = E.((a lsl Wire.int 0) lsr Wire.int 0) in
@@ -561,10 +556,6 @@ let expr_ops =
          [
            [ 0; 1 ];
            (* addition overflow *)
-           [ 1; 2 ];
-           (* subtraction underflow *)
-           [ 10; 1 ];
-           (* multiplication overflow *)
            [ 3; 0 ];
            (* division by zero *)
            [ 4; 0 ];

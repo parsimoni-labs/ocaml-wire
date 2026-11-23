@@ -64,7 +64,7 @@ let checked =
   let ihl = Field.v "IHL" (bits ~width:4 U8) in
   let len = Field.v "Length" uint16be in
   Codec.v "Checked"
-    ~where:Expr.(Field.ref len >= Field.ref ihl * int 4)
+    ~where:Expr.(Field.ref len >= Field.ref ihl lsl int 2)
     checked_make
     Codec.
       [
@@ -283,15 +283,13 @@ type overflow = UInt32.t * int * int * UInt32.t * UInt32.t
 let overflow_make a hi lo b c = (a, hi, lo, b, c)
 
 (* Arithmetic that leaves the native int: the sums for any [A] or [Lo] above
-   5, the product for large [B] and [C]. *)
+   5. *)
 let overflow =
   let near_max = max_int - 5 in
   let overflows self = Expr.(self + int near_max <> int 0) in
   let b = Field.v "B" uint32be in
   let c = Field.v "C" uint32be in
-  Codec.v "Overflow"
-    ~where:Expr.(Field.ref b * Field.ref c >= int 0)
-    overflow_make
+  Codec.v "Overflow" overflow_make
     Codec.
       [
         ( Field.v "A" uint32be ~self_constraint:overflows

@@ -447,15 +447,7 @@ let test_overflow () =
         (u32 9l, 0, 0, u32 1l, u32 1l);
         (u32 1l, 0, 9, u32 1l, u32 1l);
         (u32 1l, 0, 0, u32 Int32.min_int, u32 Int32.min_int);
-      ]);
-  let wrapped =
-    Bytes.of_string "\000\000\000\001\000\128\000\000\000\128\000\000\000"
-  in
-  Alcotest.(check bool)
-    "a wrapped product is rejected" true
-    (match G_overflow.decode_exn wrapped 0 with
-    | _ -> false
-    | exception Parse_error { kind = Value_out_of_range _; _ } -> true)
+      ])
 
 let test_refused () =
   let refused ~maps name =
@@ -1485,16 +1477,17 @@ let test_portable () =
     Codec.v "One" Fun.id
       Codec.
         [
-          Field.v "x" t ~self_constraint:(fun x -> Expr.(x * x >= int 0))
+          Field.v "x" t ~self_constraint:(fun x ->
+              Expr.(x + int 0x3FFF_FF00 >= int 0))
           $ Fun.id;
         ]
   in
   let guarded src = contains src "Sys.int_size <= 32" in
   Alcotest.(check bool)
-    "u8 squared" false
+    "u8 plus 2^30 - 256" false
     (guarded (Wire_ocaml.ml ~codec:"c" (one uint8)));
   Alcotest.(check bool)
-    "u16 squared" true
+    "u16 plus 2^30 - 256" true
     (guarded (Wire_ocaml.ml ~codec:"c" (one uint16be)));
   Alcotest.(check bool)
     "u8 scanner" false

@@ -359,7 +359,7 @@ let test_where_arithmetic_overflow_offset () =
   let f_b = Field.v "b" uint8 in
   let codec =
     Codec.v "WhereOverflow"
-      ~where:Expr.(int max_int - Field.ref f_a + Field.ref f_b >= int 0)
+      ~where:Expr.(int max_int + Field.ref f_b + Field.ref f_a >= int 0)
       (fun a b -> (a, b))
       Codec.[ f_a $ fst; f_b $ snd ]
   in

@@ -1130,8 +1130,9 @@ val check_constraints : bool expr option -> field list -> unit
 (** [check_constraints where fields] raises [Invalid_argument], as {!to_3d} does
     when it renders the struct, for a comparison with no faithful 3D projection
     (a float or signed 64-bit ordering, or a signed field compared with anything
-    but an integer literal), or an addition over a 64-bit field, in a constraint
-    of [fields] or a [where] that names them. *)
+    but an integer literal), a field subtraction or multiplication, or an
+    addition over a 64-bit field, in a constraint of [fields] or a [where] that
+    names them. *)
 
 val escape_3d : string -> string
 (** [escape_3d name] is [name] as a 3D identifier: a word 3D or F* reserves,

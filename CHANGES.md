@@ -83,6 +83,13 @@
   such a field, which only picks between the branches of an `if_then_else`,
   is still accepted (#526, @samoht)
 
+- `Wire.Codec.v` refuses a constraint or `where` clause that subtracts or
+  multiplies a field, such as `Field.ref len - int 4` or `Field.ref ihl * int
+  4`. 3D computes it at the field's own width and 3d.exe cannot prove it free
+  of under/overflow; it used to fail only in `Everparse.project`. Constant
+  arithmetic and additions over fields of at most 32 bits still project
+  (#526, @samoht)
+
 ### Added
 
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an
