@@ -431,6 +431,51 @@ let test_codec_embed_tail () =
       "ok ";
     ]
 
+(* 3D does not see a sub-codec's fields from the struct that embeds it: an
+   expression of the enclosing codec naming one, in a constraint, an action,
+   a size, a presence condition or the [where] clause, has no projection
+   (3d.exe: "Variable x8 not found"), so the codec is refused when it is
+   built. A field of the codec's own that shadows the name still builds. *)
+let test_sub_codec_field_out_of_scope () =
+  let x8 = Field.v "x8" uint8 in
+  let sub = Codec.v "SubX8" Fun.id Codec.[ x8 $ Fun.id ] in
+  let mid = Codec.v "MidX8" Fun.id Codec.[ Field.v "s" (codec sub) $ Fun.id ] in
+  let with_sub ?where sub last =
+    Codec.v "Outer" ?where
+      (fun h y -> (h, y))
+      Codec.[ Field.v "h" (codec sub) $ fst; last $ snd ]
+  in
+  let refused what f =
+    match f () with
+    | _ -> Alcotest.failf "%s: built" what
+    | exception Invalid_argument msg ->
+        if not (contains ~sub:"sub-codec" msg) then
+          Alcotest.failf "%s: refused for another reason: %s" what msg
+  in
+  refused "constraint" (fun () ->
+      with_sub sub
+        (Field.v "y" uint8 ~self_constraint:(fun y -> Expr.(Field.ref x8 = y))));
+  refused "size" (fun () ->
+      with_sub sub (Field.v "y" (byte_array ~size:(Field.ref x8))));
+  refused "present" (fun () ->
+      with_sub sub
+        (Field.optional "y" ~present:Expr.(Field.ref x8 = int 1) uint8));
+  refused "where" (fun () ->
+      with_sub sub ~where:Expr.(Field.ref x8 = int 5) (Field.v "y" uint8));
+  refused "two levels" (fun () ->
+      with_sub mid (Field.v "y" (byte_array ~size:(Field.ref x8))));
+  let own = Field.v "x8" uint8 in
+  ignore
+    (Codec.v "OwnX8"
+       (fun h x d -> (h, x, d))
+       Codec.
+         [
+           (Field.v "h" (codec sub) $ fun (h, _, _) -> h);
+           (own $ fun (_, x, _) -> x);
+           (Field.v "d" (byte_array ~size:(Field.ref own)) $ fun (_, _, d) -> d);
+         ]
+      : _ Codec.t)
+
 let suite =
   ( "codec_embed",
     [
@@ -460,4 +505,6 @@ let suite =
         test_codec_crossref_field_bitfield;
       Alcotest.test_case "embed: rest of the buffer in a region" `Quick
         test_codec_embed_tail;
+      Alcotest.test_case "embed: a sub-codec's field is out of scope" `Quick
+        test_sub_codec_field_out_of_scope;
     ] )
