@@ -1403,9 +1403,10 @@ module Codec : sig
       {!exception-Parse_error} on failure. *)
 
   (** [Make (C)] is [C.codec] as a {!S}: the same record module [Wire_ocaml]
-      generates from [C.codec], interpreted. Its [View] is {!View} on [C.codec],
-      and [(field f).view] is {!View.read} of [View.field] [f]. Use it to run
-      code written against {!S} on a codec before generating it; use {!View}
+      generates from [C.codec], interpreted. Its checks are
+      {!module-View.val-check} on [C.codec], and [(field f).view] is
+      {!module-View.read} of {!module-View.val-field} [f]. Use it to run code
+      written against {!S} on a codec before generating it; use {!module-View}
       directly otherwise. *)
   module Make (C : sig
     type r
