@@ -21,8 +21,15 @@ type eval_ctx
 val unbound_eval_ctx : eval_ctx
 (** The context with no parameter bindings. Internal use. *)
 
-val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
-(** A context with explicit parameter lookup. Internal use. *)
+val eval_ctx :
+  ?set_param:(string -> int -> unit) ->
+  ?param64:(string -> int64) ->
+  ?set_param64:(string -> int64 -> unit) ->
+  (string -> int) ->
+  eval_ctx
+(** A context with explicit parameter lookup. [param64] and [set_param64] read
+    and write the 64 bits of a parameter whose type a native int cannot hold.
+    Internal use. *)
 
 val checked_eval_ctx : eval_ctx -> eval_ctx
 (** [checked_eval_ctx ctx] is [ctx] for reading bytes a check pass has already
@@ -39,6 +46,14 @@ val eval_param : eval_ctx -> string -> int
 val eval_set_param : eval_ctx -> string -> int -> unit
 (** Update a bound output parameter, if the context accepts writes. Internal
     use. *)
+
+val eval_param64 : eval_ctx -> string -> int64
+(** {!eval_param} for a parameter whose type a native int cannot hold: its 64
+    bits. Internal use. *)
+
+val eval_set_param64 : eval_ctx -> string -> int64 -> unit
+(** {!eval_set_param} for a parameter whose type a native int cannot hold.
+    Internal use. *)
 
 type cursor = {
   wbuf : bytes;
@@ -460,6 +475,12 @@ type param_env = {
   bound : bool array;
       (** Parallel to {!field-slots}; set by [Param.bind] so consumers can
           detect unbound input params. *)
+  wide : bool array;
+      (** Parallel to {!field-slots}: the params whose type a native int cannot
+          hold on this platform. *)
+  wides : int64 array;
+      (** Parallel to {!field-slots}: the 64 bits of a {!field-wide} param,
+          which its int slot cannot always hold. *)
 }
 
 (** {1 Expression Constructors} *)
@@ -743,6 +764,10 @@ val of_int : 'a typ -> int -> 'a
 (** [of_int typ n] is the value [typ] carries for the integer [n]. Raises
     [Invalid_argument] when [n] is outside what the type's field can hold, or
     when the type has no integer view. *)
+
+val of_int64 : 'a typ -> int64 -> 'a
+(** [of_int64 typ n] is the value [typ] carries for the 64-bit pattern [n]: the
+    low 32 bits for a 32-bit type, all of them for a 64-bit one. *)
 
 val is_int_representable : 'a typ -> bool
 (** [is_int_representable typ] is [true] when {!int_of_exn} and {!of_int} have a

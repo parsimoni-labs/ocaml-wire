@@ -262,6 +262,11 @@
   buffer, so `decode` and `validate` refused it in a region shorter than the
   buffer (#522, @samoht)
 
+- An output parameter holds every bit of a 64-bit value, and of a 32-bit one
+  on js_of_ocaml and wasm_of_ocaml. `Wire.Codec.decode` rejected a record
+  whose action stored a `uint64` of 2^62 or more, which the generated C
+  accepts and stores whole (@samoht)
+
 - An action that stores a value wider than its output projects with a
   narrowing cast when the refinements and `if` conditions before it bound the
   value within the output (`*out = ((UINT8) x)` after `x <= int 200`), and

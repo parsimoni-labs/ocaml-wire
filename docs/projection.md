@@ -121,7 +121,9 @@ narrowed (`*out = ((UINT8) x)` after `x <= 200`), and any other is refused:
 `Wire.Codec.v` bounds only by its `UINT32` type, into a narrower one. No
 expression reads an output, which 3D holds as a pointer, nor `field_pos`,
 which 3D reads only into a `var`. A 3D `if` ends its action, so the
-statements after it are written into both of its branches.
+statements after it are written into both of its branches. An output whose
+type a native int cannot hold (a `uint64`, or a `uint32` on a 32-bit target)
+receives the 64 bits the C stores.
 
 ## The FFI plug
 

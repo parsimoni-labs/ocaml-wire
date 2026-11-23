@@ -25,7 +25,13 @@ type ('elt, 'seq) seq_map =
 (* Param handles -- defined here so expr and action_stmt can reference them *)
 type param_input
 type param_output
-type bindings = { param : string -> int; set_param : string -> int -> unit }
+
+type bindings = {
+  param : string -> int;
+  set_param : string -> int -> unit;
+  param64 : string -> int64;
+  set_param64 : string -> int64 -> unit;
+}
 
 (* The buffer travels as its own argument rather than inside the context, so
    the parameter-free hot path is the constant constructor [Unbound]. Being a
@@ -36,7 +42,11 @@ type bindings = { param : string -> int; set_param : string -> int -> unit }
 type eval_ctx = Unbound | Bound of bindings | Checked of eval_ctx
 
 let unbound_eval_ctx = Unbound
-let eval_ctx ?(set_param = fun _ _ -> ()) param = Bound { param; set_param }
+
+let eval_ctx ?(set_param = fun _ _ -> ()) ?(param64 = fun _ -> 0L)
+    ?(set_param64 = fun _ _ -> ()) param =
+  Bound { param; set_param; param64; set_param64 }
+
 let checked_unbound = Checked Unbound
 
 let checked_eval_ctx = function
@@ -75,6 +85,18 @@ let rec eval_set_param ctx name value =
   | Unbound -> ()
   | Bound b -> b.set_param name value
   | Checked ctx -> eval_set_param ctx name value
+
+let rec eval_param64 ctx name =
+  match ctx with
+  | Unbound -> 0L
+  | Bound b -> b.param64 name
+  | Checked ctx -> eval_param64 ctx name
+
+let rec eval_set_param64 ctx name value =
+  match ctx with
+  | Unbound -> ()
+  | Bound b -> b.set_param64 name value
+  | Checked ctx -> eval_set_param64 ctx name value
 
 (* Parse errors, defined before [typ] so [typ]'s own [Where] / [Field]
    constructors win type-directed disambiguation everywhere below; the
@@ -436,6 +458,10 @@ type param_env = {
       (* Parallel to [slots]: one bit per slot, set by [Param.bind] so
          encoders can reject envs that left an input param at its
          default-zero value. *)
+  wide : bool array;
+      (* Parallel to [slots]: the params whose type a native int cannot hold
+         on this platform, which keep their value in [wides]. *)
+  wides : int64 array;
 }
 
 (* Expression constructors *)
@@ -828,6 +854,22 @@ let rec of_int : type a. a typ -> int -> a =
   | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
   | Optional_or _ | Repeat _ ->
       not_an_integer ()
+
+(* The value [typ] carries for the 64-bit pattern [n], for a type a native int
+   cannot always hold. *)
+let rec of_int64 : type a. a typ -> int64 -> a =
+ fun typ n ->
+  match typ with
+  | Uint64 _ -> UInt64.of_int64 n
+  | Int64 _ -> n
+  | Uint32 _ -> UInt32.of_int32 (Int64.to_int32 n)
+  | Int32 _ -> SInt32.of_int32 (Int64.to_int32 n)
+  | Enum { base; _ } -> of_int64 base n
+  | Where { inner; _ } -> of_int64 inner n
+  | Single_elem { elem; _ } -> of_int64 elem n
+  | Apply { typ; _ } -> of_int64 typ n
+  | Map { inner; decode; _ } -> decode (of_int64 inner n)
+  | _ -> of_int typ (Int64.to_int n)
 
 (* The types [int_of_exn] and [of_int] have a conversion for. Checked at
    construction by every combinator that needs one, so an unusable base fails

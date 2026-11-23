@@ -342,6 +342,8 @@ let env (t : _ t) : Param.env =
         (List.map (fun (Param.Pack p) -> p.Types.name) t.param_handles);
     slots = Array.make t.n_params 0;
     bound = Array.make t.n_params false;
+    wide = params_wide t.param_handles;
+    wides = Array.make t.n_params 0L;
   }
 
 (* The params of a check pass, held in its slots as [validate] holds them:
@@ -359,6 +361,14 @@ let slots_runtime (t : _ t) (c : _ compiled) arr =
       ~set_param:(fun name value ->
         match find name with
         | Some i -> arr.ints.(c.param_base + i) <- value
+        | None -> ())
+      ~param64:(fun name ->
+        match find name with
+        | Some i -> arr.int64s.(c.param_base + i)
+        | None -> 0L)
+      ~set_param64:(fun name value ->
+        match find name with
+        | Some i -> arr.int64s.(c.param_base + i) <- value
         | None -> ())
       (fun name ->
         match find name with Some i -> arr.ints.(c.param_base + i) | None -> 0)
@@ -399,7 +409,8 @@ let decode_params consume e t (c : _ compiled) buf off =
       c.clear_scratch arr;
       (match e with
       | Some (e : Param.env) when t.n_params > 0 ->
-          Array.blit e.slots 0 arr.ints c.param_base t.n_params
+          Array.blit e.slots 0 arr.ints c.param_base t.n_params;
+          Array.blit e.wides 0 arr.int64s c.param_base t.n_params
       | _ -> ());
       c.validate_arr arr (slots_runtime t c arr) input_end buf off;
       check_extent c.wire_size min_size runtime input_end buf off;
@@ -427,11 +438,8 @@ let decode_params consume e t (c : _ compiled) buf off =
   | Some (e : Param.env), Some arr ->
       (* Array slot of [param_handles.(i)] is [param_base + i]; its env slot is
          [i]. Write decoded output params back into the environment. *)
-      List.iteri
-        (fun i (Param.Pack _p) ->
-          let v = arr.ints.(c.param_base + i) in
-          e.slots.(i) <- v)
-        t.param_handles
+      Array.blit arr.ints c.param_base e.slots 0 t.n_params;
+      Array.blit arr.int64s c.param_base e.wides 0 t.n_params
   | _ -> ());
   v
 
@@ -862,17 +870,15 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
         match env with
         | None -> ((fun _arr -> ()), fun _arr -> ())
         | Some (e : Param.env) ->
-            let param_handles = codec.param_handles in
             let param_base = c.param_base in
             ( (fun arr ->
-                List.iteri
-                  (fun i (Param.Pack _p) ->
-                    let v = arr.ints.(param_base + i) in
-                    e.slots.(i) <- v)
-                  param_handles),
+                Array.blit arr.ints param_base e.slots 0 n_params;
+                Array.blit arr.int64s param_base e.wides 0 n_params),
               fun arr ->
-                if n_params > 0 then
-                  Array.blit e.slots 0 arr.ints param_base n_params )
+                if n_params > 0 then begin
+                  Array.blit e.slots 0 arr.ints param_base n_params;
+                  Array.blit e.wides 0 arr.int64s param_base n_params
+                end )
       in
       Staged.stage (fun buf off ->
           let input_end = Input_end.of_bytes buf in

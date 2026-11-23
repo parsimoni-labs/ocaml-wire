@@ -92,7 +92,7 @@ val validate_runtime_of :
   unit
 (** [validate_runtime_of] runs [validate_arr] on a scratch cleared by [clear]
     and seeded with the context's parameters, then writes the output parameters
-    back. *)
+    back, on 64 bits for those {!Codec_repr.params_wide} marks. *)
 
 val seal :
   struct_fields:Types.field list ->

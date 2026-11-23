@@ -478,3 +478,10 @@ and compile_bool_narrow : type c1 c2 c3 c4.
       let fe = bool_rec e in
       fun c1 c2 c3 c4 -> not (fe c1 c2 c3 c4)
   | Ref _ -> .
+
+let compile_bits l e =
+  match width l e with
+  | Some w -> compile_wide l w e
+  | None ->
+      let f = compile_narrow l e in
+      fun c1 c2 c3 c4 -> Int64.of_int (f c1 c2 c3 c4)

@@ -60,6 +60,18 @@ val compile_int :
     over a {!wide} field is evaluated on 64 bits and raises [Value_out_of_range]
     when its value does not fit the native int. *)
 
+val compile_bits :
+  ('c1, 'c2, 'c3, 'c4) leaves ->
+  int Types.expr ->
+  'c1 ->
+  'c2 ->
+  'c3 ->
+  'c4 ->
+  int64
+(** [compile_bits l e c1 c2 c3 c4] is {!compile_int} as the 64 bits 3D computes
+    [e] on: an expression over a {!wide} field, or whose value can leave the
+    native int, keeps its full width instead of raising [Value_out_of_range]. *)
+
 val compile_bool :
   ('c1, 'c2, 'c3, 'c4) leaves ->
   bool Types.expr ->

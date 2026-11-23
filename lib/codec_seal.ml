@@ -895,6 +895,14 @@ let validation_runtime param_slots arr =
         match Hashtbl.find_opt param_slots name with
         | Some idx -> arr.ints.(idx) <- value
         | None -> ())
+      ~param64:(fun name ->
+        match Hashtbl.find_opt param_slots name with
+        | Some idx -> arr.int64s.(idx)
+        | None -> 0L)
+      ~set_param64:(fun name value ->
+        match Hashtbl.find_opt param_slots name with
+        | Some idx -> arr.int64s.(idx) <- value
+        | None -> ())
       (fun name ->
         match Hashtbl.find_opt param_slots name with
         | Some idx -> arr.ints.(idx)
@@ -1312,51 +1320,36 @@ let has_encode_checks struct_fields where =
          Option.fold ~none:false ~some:is_real_cond f.constraint_)
        struct_fields
 
-(* Bind the codec's formals from the caller's context, and write the mutable
-   ones back after the pass. Written as loops taking everything as arguments
-   rather than as [List.iteri] over a closure: this runs once per sub-codec per
-   element of an enclosing repeat, where the element count is the sender's to
-   choose, and a closure capturing the slots and the context is two heap blocks
-   a validator has no business turning over. *)
-let rec seed_params arr runtime param_base i = function
-  | [] -> ()
-  | Param.Pack p :: rest ->
-      arr.ints.(param_base + i) <- Types.eval_param runtime p.Types.name;
-      seed_params arr runtime param_base (i + 1) rest
-
-let rec writeback_params arr runtime param_base i = function
-  | [] -> ()
-  | Param.Pack p :: rest ->
-      if p.Types.mutable_ then
-        Types.eval_set_param runtime p.Types.name arr.ints.(param_base + i);
-      writeback_params arr runtime param_base (i + 1) rest
-
 (* Replay the decode-side check pass over the record encode just assembled, so a
    cond that reads sibling fields is enforced on both halves. Field actions are
    deliberately excluded: [populate] runs the check-only validators, so encoding
    never fires an [~action]'s side effects. *)
 let encode_checker ~scratch ~n_total ~param_base ~param_handles ~populate
-    ~compiled_where runtime buf off =
-  let arr = scratch () in
-  clear_slots arr n_total;
-  seed_params arr runtime param_base 0 param_handles;
-  populate arr runtime (Input_end.of_bytes buf) buf off;
-  match compiled_where with
-  | Some f when not (eval_arr_at ~at:off f arr) ->
-      raise_constraint ~at:off ~which:Where ()
-  | _ -> ()
+    ~compiled_where =
+  let wide = params_wide param_handles in
+  fun runtime buf off ->
+    let arr = scratch () in
+    clear_slots arr n_total;
+    seed_params arr runtime ~wide param_base 0 param_handles;
+    populate arr runtime (Input_end.of_bytes buf) buf off;
+    match compiled_where with
+    | Some f when not (eval_arr_at ~at:off f arr) ->
+        raise_constraint ~at:off ~which:Where ()
+    | _ -> ()
 
 (* The check pass over one codec's fields at [off], with its parameters bound
    from the caller's context. Taken apart from [validate_runtime] so [seal] can
    build the same pass into the sub-codec entry point a use site calls, and the
    two cannot drift. *)
 let validate_runtime_of ~scratch ~clear ~param_base ~param_handles ~validate_arr
-    runtime input_end buf off =
-  let arr = scratch () in
-  clear arr;
-  seed_params arr runtime param_base 0 param_handles;
-  validate_arr arr runtime input_end buf off;
-  writeback_params arr runtime param_base 0 param_handles
+    =
+  let wide = params_wide param_handles in
+  fun runtime input_end buf off ->
+    let arr = scratch () in
+    clear arr;
+    seed_params arr runtime ~wide param_base 0 param_handles;
+    validate_arr arr runtime input_end buf off;
+    writeback_params arr runtime ~wide param_base 0 param_handles
 
 let build_record_encoder name writers size_of_value ~check =
   let n = Array.length writers in

@@ -136,6 +136,38 @@ let rec wide_of : type a. a typ -> (Expr_compiler.wide * (a -> int64)) option =
 
 let wide_kind typ = Option.map fst (wide_of typ)
 
+(* For each parameter, whether a native int cannot hold all its values: such a
+   parameter keeps its 64 bits in the [int64s] slot. *)
+let params_wide handles =
+  Array.of_list
+    (List.map
+       (fun (Param.Pack p) -> Option.is_some (wide_of p.Types.typ))
+       handles)
+
+(* Bind the codec's formals from the caller's context, and write the mutable
+   ones back after the pass. Written as loops taking everything as arguments
+   rather than as [List.iteri] over a closure: this runs once per sub-codec per
+   element of an enclosing repeat, where the element count is the sender's to
+   choose, and a closure capturing the slots and the context is two heap blocks
+   a validator has no business turning over. *)
+let rec seed_params arr runtime ~wide param_base i = function
+  | [] -> ()
+  | Param.Pack p :: rest ->
+      arr.ints.(param_base + i) <- Types.eval_param runtime p.Types.name;
+      if wide.(i) then
+        arr.int64s.(param_base + i) <- Types.eval_param64 runtime p.Types.name;
+      seed_params arr runtime ~wide param_base (i + 1) rest
+
+let rec writeback_params arr runtime ~wide param_base i = function
+  | [] -> ()
+  | Param.Pack p :: rest ->
+      if p.Types.mutable_ then
+        if wide.(i) then
+          Types.eval_set_param64 runtime p.Types.name
+            arr.int64s.(param_base + i)
+        else Types.eval_set_param runtime p.Types.name arr.ints.(param_base + i);
+      writeback_params arr runtime ~wide param_base (i + 1) rest
+
 type typed_reader =
   string
   * packed_typ
@@ -353,6 +385,12 @@ let runtime ?env () =
         ~set_param:(fun name value ->
           let i = find name 0 in
           if i >= 0 then env.slots.(i) <- value)
+        ~param64:(fun name ->
+          let i = find name 0 in
+          if i < 0 then 0L else env.wides.(i))
+        ~set_param64:(fun name value ->
+          let i = find name 0 in
+          if i >= 0 then env.wides.(i) <- value)
         (fun name ->
           let i = find name 0 in
           if i < 0 then 0 else env.slots.(i))
@@ -782,6 +820,12 @@ let compile_int_arr cc e =
   let f = Expr_compiler.compile_int (array_leaves cc) e in
   fun arr -> f arr () () ()
 
+(* [e]'s value as the 64 bits 3D computes it on: at full width when its range
+   passes the native int, else its native value. *)
+let compile_int64_arr cc e =
+  let f = Expr_compiler.compile_bits (array_leaves cc) e in
+  fun arr -> f arr () () ()
+
 type cmp = Eq | Ne | Lt | Le | Gt | Ge
 
 let flip = function
@@ -862,6 +906,14 @@ exception Return_true
 let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
     compiled_action =
   match s with
+  | Assign (p, e) when Option.is_some (wide_of p.Types.typ) -> (
+      (* An output a native int cannot hold keeps all 64 bits the C stores. *)
+      let fe = compile_int64_arr cc e in
+      fun arr ->
+        let v = fe arr in
+        match Hashtbl.find_opt cc.param_slots p.Types.name with
+        | Some slot -> set_int64_slot arr slot v
+        | None -> Fmt.invalid_arg "Codec: unbound parameter %S" p.Types.name)
   | Assign (p, e) -> (
       let fe = compile_int_arr cc e in
       fun arr ->

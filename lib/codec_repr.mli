@@ -240,6 +240,33 @@ val mk_ctx :
   compile_ctx
 (** [mk_ctx ~param_slots ~slot_typs idx] is a compile context. *)
 
+val params_wide : Param.packed list -> bool array
+(** [params_wide handles] is, for each parameter, whether a native int cannot
+    hold all its values, so that it keeps its 64 bits in an {!field-int64s}
+    slot. *)
+
+val seed_params :
+  slots ->
+  Types.eval_ctx ->
+  wide:bool array ->
+  int ->
+  int ->
+  Param.packed list ->
+  unit
+(** [seed_params arr ctx ~wide base i handles] binds each parameter of
+    [handles], the [i]th on, to its value in [ctx], at slot [base + i]. *)
+
+val writeback_params :
+  slots ->
+  Types.eval_ctx ->
+  wide:bool array ->
+  int ->
+  int ->
+  Param.packed list ->
+  unit
+(** [writeback_params arr ctx ~wide base i handles] writes each output of
+    [handles], the [i]th on, back to [ctx] from slot [base + i]. *)
+
 val wide_kind : 'a Types.typ -> Expr_compiler.wide option
 (** [wide_kind typ] is how a field of [typ] reads at full width when a native
     int cannot hold all its values on this platform, [None] when it can. *)
