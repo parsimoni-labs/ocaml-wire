@@ -71,6 +71,12 @@
   field of the codec itself, or check the value inside the sub-codec
   (#526, @samoht)
 
+- `Wire.Codec.v` refuses a constraint or `where` clause that 3D cannot check
+  as written: an addition over a `uint64`, `int64` or `float64` field, which
+  3d.exe cannot prove free of overflow, and an ordering on an `int64` or float
+  field. They used to fail only in `Everparse.project` or in 3d.exe
+  (#526, @samoht)
+
 ### Added
 
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an

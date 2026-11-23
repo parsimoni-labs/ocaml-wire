@@ -673,11 +673,11 @@ let lookup_bound_cond raw_name field_typ =
    then accepted bodies the codec rejects. *)
 let render_typ_at : type a.
     name:string ->
-    widenable:string list ->
+    arith:arith ->
     own:bool expr option ->
     a typ ->
     (Format.formatter -> unit) * field_suffix * bool expr option =
- fun ~name ~widenable ~own field_typ ->
+ fun ~name ~arith ~own field_typ ->
   (* Extract Where constraints from the type so they appear as field
      constraints in the 3D output, not inline in the type. *)
   let where_cond, typ = extract_where_constraint field_typ in
@@ -704,14 +704,8 @@ let render_typ_at : type a.
       (combine_constraints (combine_constraints own where_cond) bound_cond)
       enum_cond
   in
-  (* Rewrite a signed field's ordering refinement to its two's-complement
-     unsigned form (the field projects to an unsigned type), and reject a float
-     ordering refinement, which has no faithful unsigned projection. *)
   let constraint_ =
-    Option.map (project_refinement ~name ~kind:(scalar_kind typ)) constraint_
-  in
-  let constraint_ =
-    Option.map (project_field_arith name widenable) constraint_
+    Option.map (project_constraint ~name ~arith typ) constraint_
   in
   let suffix, pp_base = field_suffix typ in
   let pp_base =
@@ -732,7 +726,7 @@ let rec fresh_anon_name () =
   incr anon_counter;
   if List.mem s !named_fields_3d then fresh_anon_name () else s
 
-let pp_field widenable ppf (Field f) =
+let pp_field arith ppf (Field f) =
   let raw_name, name =
     match f.field_name with
     | Some name -> (name, escape_3d name)
@@ -741,7 +735,7 @@ let pp_field widenable ppf (Field f) =
         (s, s)
   in
   let pp_base, suffix, constraint_ =
-    render_typ_at ~name:raw_name ~widenable ~own:f.constraint_ f.field_typ
+    render_typ_at ~name:raw_name ~arith ~own:f.constraint_ f.field_typ
   in
   Option.iter (pp_field_doc ppf) f.field_doc;
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
@@ -1010,18 +1004,11 @@ let pp_struct ppf (s : struct_) =
   let fields = reorder_bit_groups_for_3d s.fields in
   let where, fields = lower_where_to_field_constraint s.where fields in
   let fields = guard_subtraction_sizes fields in
-  let widenable =
-    List.filter_map
-      (fun (Field f) ->
-        match f.field_name with
-        | Some n when widenable_unsigned f.field_typ -> Some n
-        | _ -> None)
-      fields
-  in
+  let arith = arith fields in
   Fmt.pf ppf "typedef struct %s%a" tag (pp_params ?as_enum:None) s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
-  List.iter (pp_field widenable ppf) fields;
+  List.iter (pp_field arith ppf) fields;
   Fmt.pf ppf "@]@,} %s" name
 
 (* The integer type an enum declaration names. A [where] on the enum's base is
@@ -1075,7 +1062,7 @@ let pp_casetype_cases : type k.
     (fun i (tag_opt, Pack_typ typ) ->
       let field_name = Fmt.str "v%d" i in
       let pp_base, suffix, constraint_ =
-        render_typ_at ~name:field_name ~widenable:[] ~own:None typ
+        render_typ_at ~name:field_name ~arith:no_arith ~own:None typ
       in
       let pp_body ppf () =
         Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix;

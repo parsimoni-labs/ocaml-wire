@@ -1324,13 +1324,15 @@ let test_signed_equality_twos_complement () =
 
 let test_float_ordering_rejected () =
   (* IEEE bit patterns do not order as unsigned, so a float field ordering
-     constraint has no faithful 3D projection and is rejected at projection. *)
+     constraint has no faithful 3D projection and is rejected when the codec is
+     built. *)
   let f =
     Field.v "f" float32 ~self_constraint:(fun self -> Expr.(self < int 100))
   in
-  let codec = Codec.v "Flt" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
   Alcotest.(check bool)
-    "float ordering rejected by projection" true (projects_or_raises codec)
+    "float ordering rejected at build" true
+    (raises_invalid (fun () ->
+         Codec.v "Flt" (fun v -> v) Codec.[ (f $ fun v -> v) ]))
 
 let test_if_then_else_projects () =
   (* Expr.if_then_else projects to a 3D conditional, e.g. a size where a 0 field

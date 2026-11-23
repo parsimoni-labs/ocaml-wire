@@ -13,7 +13,9 @@
     slots, no sealed codec, which is why they can run before any of that exists.
 *)
 
-val reject_invalid_codec_shape : string -> Types.field list -> unit
-(** [reject_invalid_codec_shape name fields] runs every check against the fields
-    of the codec called [name]. Raises [Invalid_argument] on the first one that
-    fails. *)
+val reject_invalid_codec_shape :
+  ?where:bool Types.expr -> string -> Types.field list -> unit
+(** [reject_invalid_codec_shape ?where name fields] runs every check against the
+    fields of the codec called [name] and its [where] clause, among them the
+    constraints 3D refuses ({!Types.check_constraints}). Raises
+    [Invalid_argument] on the first one that fails. *)

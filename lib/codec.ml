@@ -406,7 +406,7 @@ let v : type f r.
      The compile waits for the first operation that needs it. *)
   let scope = check_field_refs name flds in
   let struct_fields = struct_fields flds in
-  Shape.reject_invalid_codec_shape name struct_fields;
+  Shape.reject_invalid_codec_shape ?where name struct_fields;
   let param_handles = collect_param_handles name struct_fields where in
   check_where_refs name scope where;
   let compile name =

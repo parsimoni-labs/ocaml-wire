@@ -113,6 +113,32 @@ val lower_where_to_field_constraint :
     that references fields onto the last field it references, since 3D's [where]
     sees only parameters. *)
 
+type arith
+(** What the arithmetic of a struct's constraints projects over: the fields an
+    [Add] widens to 64 bits, and the 64-bit fields, over which an [Add] has no
+    projection. *)
+
+val no_arith : arith
+(** [no_arith] is the arithmetic of a body that names no field. *)
+
+val arith : field list -> arith
+(** [arith fields] is the arithmetic of a struct of [fields]. *)
+
+val project_constraint :
+  name:string -> arith:arith -> 'a typ -> bool expr -> bool expr
+(** [project_constraint ~name ~arith t cond] is the refinement 3D checks for
+    [cond] on the field [name] of type [t]: {!project_refinement}, then the
+    widening of {!project_field_arith}. Raises [Invalid_argument] for a shape
+    with no faithful projection, among them an addition over a 64-bit field. *)
+
+val check_constraints : bool expr option -> field list -> unit
+(** [check_constraints where fields] raises [Invalid_argument] where
+    {!project_constraint} does when the struct is projected, before it widens
+    the arithmetic: for a float or signed ordering {!project_refinement}
+    refuses, or an addition over a 64-bit field, in a constraint of [fields] or
+    a [where] that names them. A field subtraction or multiplication is still
+    refused at projection only. *)
+
 val collect_refs : 'a expr -> string list
 (** Field-reference names occurring in an expression, including nested terms. *)
 

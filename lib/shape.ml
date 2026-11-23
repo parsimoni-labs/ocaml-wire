@@ -298,10 +298,12 @@ let reject_duplicate_field_names name fields =
       | Some field -> Hashtbl.add seen field ())
     fields
 
-let reject_invalid_codec_shape name fields =
+let reject_invalid_codec_shape ?where name fields =
   reject_duplicate_field_names name fields;
   reject_greedy_not_last name fields;
   reject_zeroterm_with_sibling name fields;
   reject_nested_where name fields;
   reject_refined_non_scalar name fields;
-  reject_certain_byte_size_mul name fields
+  reject_certain_byte_size_mul name fields;
+  try check_constraints where fields
+  with Invalid_argument msg -> Fmt.invalid_arg "Codec.v %S: %s" name msg

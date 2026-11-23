@@ -1365,6 +1365,90 @@ let project_field_arith name widenable cond =
   reject_field_sub_mul name cond;
   widen_add widenable cond
 
+(* A 64-bit field, seen through the transparent wrappers. *)
+let rec width64 : type a. a typ -> bool = function
+  | Uint64 _ | Int64 _ | Float64 _ -> true
+  | Map { inner; _ } -> width64 inner
+  | Enum { base; _ } -> width64 base
+  | Where { inner; _ } -> width64 inner
+  | _ -> false
+
+(* 3D computes an [Add] at the width of its operands and must prove it does not
+   overflow; with a 64-bit field among them nothing wider is left, so 3d.exe
+   fails to verify it ([v + 1] over a [UINT64BE]), and no widening keeps the
+   decoder's value. *)
+let rec reject_wide_add : type a. string -> string list -> a expr -> unit =
+ fun name wide e ->
+  let both : type x. x expr -> x expr -> unit =
+   fun a b ->
+    reject_wide_add name wide a;
+    reject_wide_add name wide b
+  in
+  match e with
+  | Add (a, b) -> (
+      match List.find_opt (fun n -> List.mem n wide) (collect_refs e) with
+      | Some field ->
+          Fmt.invalid_arg
+            "Wire: field %S has a constraint whose addition over the 64-bit \
+             field %S has no 3D projection (3D cannot prove it does not \
+             overflow 64 bits)"
+            name field
+      | None -> both a b)
+  | Sub (a, b)
+  | Mul (a, b)
+  | Div (a, b)
+  | Mod (a, b)
+  | Land (a, b)
+  | Lor (a, b)
+  | Lxor (a, b)
+  | Lsl (a, b)
+  | Lsr (a, b) ->
+      both a b
+  | Land64 (a, b) -> both a b
+  | Lsr64 (a, b) ->
+      reject_wide_add name wide a;
+      reject_wide_add name wide b
+  | Eq (a, b) -> both a b
+  | Ne (a, b) -> both a b
+  | Lt (a, b) -> both a b
+  | Le (a, b) -> both a b
+  | Gt (a, b) -> both a b
+  | Ge (a, b) -> both a b
+  | And (a, b) | Or (a, b) -> both a b
+  | Lnot a -> reject_wide_add name wide a
+  | Not a -> reject_wide_add name wide a
+  | Cast (_, a) -> reject_wide_add name wide a
+  | If_then_else (c, a, b) ->
+      reject_wide_add name wide c;
+      both a b
+  | Int _ | Int64 _ | Bool _ | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this
+  | Field_pos ->
+      ()
+
+type arith = { widenable : string list; wide : string list }
+
+let no_arith = { widenable = []; wide = [] }
+
+let arith fields =
+  List.fold_right
+    (fun (Field f) acc ->
+      match f.field_name with
+      | Some n when widenable_unsigned f.field_typ ->
+          { acc with widenable = n :: acc.widenable }
+      | Some n when width64 f.field_typ -> { acc with wide = n :: acc.wide }
+      | _ -> acc)
+    fields no_arith
+
+(* The refinement 3D checks for [cond], before the widening of its additions;
+   what [Codec.v] refuses when the codec is built. *)
+let refinement ~name ~arith typ cond =
+  let cond = project_refinement ~name ~kind:(scalar_kind typ) cond in
+  reject_wide_add name arith.wide cond;
+  cond
+
+let project_constraint ~name ~arith typ cond =
+  project_field_arith name arith.widenable (refinement ~name ~arith typ cond)
+
 (* Collect every [Ref name] occurring in an expression. Used to detect
    field references in struct-level [where] clauses, which 3D's grammar
    does not allow (the [where] there sees only parameters). *)
@@ -1408,3 +1492,17 @@ let lower_where_to_field_constraint where fields =
           | None -> List.hd (List.rev referenced)
         in
         (None, attach_where_to_target w target fields)
+
+let check_constraints where fields =
+  let _, fields = lower_where_to_field_constraint where fields in
+  let arith = arith fields in
+  List.iter
+    (fun (Field f) ->
+      match f.field_name with
+      | None -> ()
+      | Some name -> (
+          let where_cond, typ = extract_where_constraint f.field_typ in
+          match combine_constraints f.constraint_ where_cond with
+          | None -> ()
+          | Some cond -> ignore (refinement ~name ~arith typ cond)))
+    fields

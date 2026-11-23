@@ -1122,6 +1122,12 @@ val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
 (** [to_3d_file path m] writes module [m] to a [.3d] file at [path]. See
     {!to_3d} for [enum_as_type]. *)
 
+val check_constraints : bool expr option -> field list -> unit
+(** [check_constraints where fields] raises [Invalid_argument], as {!to_3d} does
+    when it renders the struct, for a float or signed ordering with no faithful
+    3D projection, or an addition over a 64-bit field, in a constraint of
+    [fields] or a [where] that names them. *)
+
 val escape_3d : string -> string
 (** [escape_3d name] is [name] as a 3D identifier: a word 3D or F* reserves,
     followed by any underscores, takes one more ([end_], [end__] for [end_]);
