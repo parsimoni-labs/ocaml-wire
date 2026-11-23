@@ -317,6 +317,52 @@ let test_wide_constraint () =
   in
   check "where: uint64 2^63 >= 5" where Int64.min_int true
 
+(* A presence condition over a wide field reads it at full width too, as the
+   generated C does: with [n >= 5] the byte after [n] is present for every
+   large [n], so the record needs nine bytes and nine bytes are enough. *)
+let test_wide_presence () =
+  let n = Field.v "n" uint64be in
+  let c =
+    Codec.v "WidePresent"
+      (fun n d -> (n, d))
+      Codec.
+        [
+          n $ fst;
+          Field.optional "d" ~present:Expr.(Field.ref n >= int 5) uint8 $ snd;
+        ]
+  in
+  let frame len v =
+    let b = Bytes.make len '\xaa' in
+    Bytes.set_int64_be b 0 v;
+    b
+  in
+  let module V = (val Codec.View.codec c) in
+  let outcomes b =
+    let ok = function Ok _ -> true | Error _ -> false in
+    let (Buf.Any v) = Buf.v b in
+    ( ok (Codec.decode c b 0),
+      ok (Codec.validate c b 0),
+      Codec.View.(ok (check V.codec v (Buf.length v) 0)) )
+  in
+  let check name v ~short ~full =
+    Alcotest.(check (triple bool bool bool))
+      (name ^ ", 8 bytes") (short, short, short)
+      (outcomes (frame 8 v));
+    Alcotest.(check (triple bool bool bool))
+      (name ^ ", 9 bytes") (full, full, full)
+      (outcomes (frame 9 v))
+  in
+  check "4" 4L ~short:true ~full:true;
+  check "5" 5L ~short:false ~full:true;
+  check "2^62 - 1" 0x3FFF_FFFF_FFFF_FFFFL ~short:false ~full:true;
+  check "2^62" 0x4000_0000_0000_0000L ~short:false ~full:true;
+  check "2^63" Int64.min_int ~short:false ~full:true;
+  check "2^64 - 1" (-1L) ~short:false ~full:true;
+  match Codec.decode c (frame 9 Int64.min_int) 0 with
+  | Ok (_, Some d) -> Alcotest.(check int) "2^63: d" 0xaa (UInt8.to_int d)
+  | Ok (_, None) -> Alcotest.fail "2^63: d absent"
+  | Error e -> Alcotest.failf "2^63: %a" pp_parse_error e
+
 (* A fixed codec of plain fields encodes through one frame check and one write
    per field. Bitfield words start from zero whatever the buffer held, a value
    too wide for its bits and a buffer too short are refused, and a codec with
@@ -1106,6 +1152,8 @@ let suite =
         test_failure_value_is_this_frames;
       Alcotest.test_case "check: a wide field's constraint is not truncated"
         `Quick test_wide_constraint;
+      Alcotest.test_case "check: a wide field's presence is not truncated"
+        `Quick test_wide_presence;
       Alcotest.test_case "encode: plain fields" `Quick test_plain_encode;
       Alcotest.test_case "view: read agrees with get" `Quick test_view_read;
       Alcotest.test_case "view: short frames read as get" `Quick
