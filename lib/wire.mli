@@ -1402,9 +1402,11 @@ module Codec : sig
       another codec or leaves an input parameter unbound, and
       {!exception-Parse_error} on failure. *)
 
-  (** [Make (C)] is [C.codec] as a {!S}, so code written against that signature
-      runs on the interpreted codec or on the module [Wire_ocaml] generates from
-      it, by changing one line. A handle is built once from a codec field. *)
+  (** [Make (C)] is [C.codec] as a {!S}: the same record module [Wire_ocaml]
+      generates from [C.codec], interpreted. Its [View] is {!View} on [C.codec],
+      and [(field f).view] is {!View.read} of [View.field] [f]. Use it to run
+      code written against {!S} on a codec before generating it; use {!View}
+      directly otherwise. *)
   module Make (C : sig
     type r
 
@@ -1413,7 +1415,8 @@ module Codec : sig
     include S with type t = C.r
 
     val field : ('a, C.r) field -> 'a Field.t
-    (** [field f] is the handle of [f], whose getter is staged once. *)
+    (** [field f] is the handle of [f]: its getter is {!get} of [f] staged once,
+        its view reads [f] as {!View.read} does. *)
   end
 
   val get :

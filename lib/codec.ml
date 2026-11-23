@@ -1866,26 +1866,21 @@ struct
      where [validate] raises [Invalid_argument]. *)
   let is_valid buf off = accepts C.codec buf off
 
+  module Checked = View
+
+  let v = Checked.named C.codec
+
   module View = struct
     type 'b t = int
     type 'b check = int
 
-    let check b len off =
-      let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-      if off < 0 || off > (len : _ Wire_runtime.Buf.length :> int) - min_size
-      then -1
-      else if is_valid buf off then off
-      else -1
+    let check b len off = Checked.check v b len off
+    let ok = Checked.ok
+    let get = Checked.get
 
     let at b _ off =
       validate_exn (b : _ Wire_runtime.Buf.t :> bytes) off;
       off
-
-    let ok c = c >= 0
-
-    let get c =
-      if c < 0 then invalid_arg (name C.codec ^ ".View.get: the check failed")
-      else c
   end
 
   module Field = struct
@@ -1896,9 +1891,6 @@ struct
   end
 
   let field f =
-    let read = Staged.unstage (get C.codec f) in
-    {
-      Field.get = read;
-      view = (fun b v -> read (b : _ Wire_runtime.Buf.t :> bytes) (v : int));
-    }
+    let read = Staged.unstage (get C.codec f) and r = Checked.field v f in
+    { Field.get = read; view = (fun b p -> Checked.read r b p) }
 end
