@@ -103,7 +103,7 @@ let full_packet_codec =
         $ fun (p : full_packet) -> p.data );
       ]
 
-(* -- 2. CLCW: 4 bytes of bitfields -- *)
+(* -- 2. CLCW: 4 bytes of bitfields, as CCSDS 232.0-B-4 lays them out -- *)
 
 type clcw = {
   type_ : int;
@@ -118,6 +118,7 @@ type clcw = {
   wait : int;
   retransmit : int;
   farmb : int;
+  spare2 : int;
   report : int;
 }
 
@@ -135,7 +136,7 @@ let bf_cw_report = Codec.(cw_report $ fun (c : clcw) -> c.report)
 let clcw_codec =
   Codec.v "CLCW"
     (fun type_ version status cop vcid spare no_rf no_bitlock lockout wait
-         retransmit farmb report ->
+         retransmit farmb spare2 report ->
       ({
          type_;
          version;
@@ -149,6 +150,7 @@ let clcw_codec =
          wait;
          retransmit;
          farmb;
+         spare2;
          report;
        }
         : clcw))
@@ -162,7 +164,7 @@ let clcw_codec =
           c.status );
         (Field.v "COPInEffect" (bits ~width:2 U32be) $ fun (c : clcw) -> c.cop);
         (Field.v "VCID" (bits ~width:6 U32be) $ fun (c : clcw) -> c.vcid);
-        (Field.v "Spare" (bits ~width:3 U32be) $ fun (c : clcw) -> c.spare);
+        (Field.v "Spare" (bits ~width:2 U32be) $ fun (c : clcw) -> c.spare);
         (Field.v "NoRF" (bits ~width:1 U32be) $ fun (c : clcw) -> c.no_rf);
         ( Field.v "NoBitlock" (bits ~width:1 U32be) $ fun (c : clcw) ->
           c.no_bitlock );
@@ -171,6 +173,7 @@ let clcw_codec =
         bf_cw_retransmit;
         ( Field.v "FARMBCounter" (bits ~width:2 U32be) $ fun (c : clcw) ->
           c.farmb );
+        (Field.v "Spare2" (bits ~width:1 U32be) $ fun (c : clcw) -> c.spare2);
         bf_cw_report;
       ]
 
@@ -191,6 +194,7 @@ let clcw_default =
     wait = 0;
     retransmit = 0;
     farmb = 0;
+    spare2 = 0;
     report = 42;
   }
 
@@ -232,6 +236,14 @@ let f_tf_first_hdr = Field.v "FirstHdrPtr" (bits ~width:11 U16be)
 let bf_tf_vcid = Codec.(f_tf_vcid $ fun (f : tm_frame) -> f.vcid)
 let bf_tf_first_hdr = Codec.(f_tf_first_hdr $ fun (f : tm_frame) -> f.first_hdr)
 
+let bf_tf_mc_count =
+  Codec.(
+    Field.v "MCCount" (bits ~width:8 U16be) $ fun (f : tm_frame) -> f.mc_count)
+
+let bf_tf_vc_count =
+  Codec.(
+    Field.v "VCCount" (bits ~width:8 U16be) $ fun (f : tm_frame) -> f.vc_count)
+
 let tm_frame_codec =
   Codec.v "TMFrame"
     (fun version scid vcid ocf mc vc sec sync pkt seg hdr ->
@@ -257,10 +269,8 @@ let tm_frame_codec =
         bf_tf_vcid;
         ( Field.v "OCFFlag" (bits ~width:1 U16be) $ fun (f : tm_frame) ->
           f.ocf_flag );
-        ( Field.v "MCCount" (bits ~width:8 U16be) $ fun (f : tm_frame) ->
-          f.mc_count );
-        ( Field.v "VCCount" (bits ~width:8 U16be) $ fun (f : tm_frame) ->
-          f.vc_count );
+        bf_tf_mc_count;
+        bf_tf_vc_count;
         ( Field.v "SecHdrFlag" (bits ~width:1 U16be) $ fun (f : tm_frame) ->
           f.sec_hdr );
         (Field.v "SyncFlag" (bits ~width:1 U16be) $ fun (f : tm_frame) -> f.sync);

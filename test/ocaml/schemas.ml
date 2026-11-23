@@ -100,6 +100,8 @@ let mixed =
         mixed_h;
       ]
 
+type small = UInt8.t * UInt16.t
+
 let small_make a b = (a, b)
 
 let small =
@@ -109,6 +111,25 @@ let small =
         (Field.v "Type" uint8 $ fun (x, _) -> x);
         (Field.v "local_" uint16be $ fun (_, x) -> x);
       ]
+
+type lanes = int * int * UInt8.t * int * int * int * int
+
+let lanes_make a b c d e f g = (a, b, c, d, e, f, g)
+
+let lanes =
+  Codec.v "Lanes" lanes_make
+    Codec.
+      [
+        (Field.v "A" (bits ~width:4 U8) $ fun (x, _, _, _, _, _, _) -> x);
+        (Field.v "B" (bits ~width:4 U8) $ fun (_, x, _, _, _, _, _) -> x);
+        (Field.v "C" uint8 $ fun (_, _, x, _, _, _, _) -> x);
+        (Field.v "D" (bits ~width:3 U16be) $ fun (_, _, _, x, _, _, _) -> x);
+        (Field.v "E" (bits ~width:5 U16be) $ fun (_, _, _, _, x, _, _) -> x);
+        (Field.v "F" (bits ~width:6 U16be) $ fun (_, _, _, _, _, x, _) -> x);
+        (Field.v "G" (bits ~width:2 U16be) $ fun (_, _, _, _, _, _, x) -> x);
+      ]
+
+type eth = string * string * UInt16.t
 
 let eth_make dst src ty = (dst, src, ty)
 
@@ -190,6 +211,41 @@ let signed =
         Field.v "T" int16be ~self_constraint:(fun self ->
             Expr.(self <> int (-1)))
         $ snd;
+      ]
+
+type packed = {
+  a : SInt8.t;
+  b : UInt8.t;
+  c : SInt16.t;
+  d : UInt16.t;
+  e : int;
+  f : SInt32.t;
+  g : SInt8.t;
+  h : UInt8.t;
+  i : SInt16.t;
+  j : UInt16.t;
+  k : SInt8.t;
+  l : UInt8.t;
+}
+
+let packed_make a b c d e f g h i j k l = { a; b; c; d; e; f; g; h; i; j; k; l }
+
+let packed =
+  Codec.v "Packed" packed_make
+    Codec.
+      [
+        (Field.v "A" int8 $ fun r -> r.a);
+        (Field.v "B" uint8 $ fun r -> r.b);
+        (Field.v "C" int16 $ fun r -> r.c);
+        (Field.v "D" uint16 $ fun r -> r.d);
+        (Field.v "E" (bits ~width:9 U16) $ fun r -> r.e);
+        (Field.v "F" int32be $ fun r -> r.f);
+        (Field.v "G" int8 $ fun r -> r.g);
+        (Field.v "H" uint8 $ fun r -> r.h);
+        (Field.v "I" int16be $ fun r -> r.i);
+        (Field.v "J" uint16be $ fun r -> r.j);
+        (Field.v "K" int8 $ fun r -> r.k);
+        (Field.v "L" uint8 $ fun r -> r.l);
       ]
 
 type refined = int * int * UInt8.t * UInt8.t
@@ -282,6 +338,68 @@ let skipped =
         $ fun (_, _, _, b) -> b );
       ]
 
+type huge = UInt8.t * Bytesrw.Bytes.Slice.t * UInt8.t
+
+let huge =
+  let size = Sys.max_string_length - 8 in
+  Codec.v "Huge"
+    (fun flag body tail -> (flag, body, tail))
+    Codec.
+      [
+        (Field.v "Flag" uint8 $ fun (f, _, _) -> f);
+        (Field.v "Body" (byte_slice ~size:(int size)) $ fun (_, b, _) -> b);
+        (Field.v "Tail" uint8 $ fun (_, _, t) -> t);
+      ]
+
+type deep = { inner : deep option; big : Bytesrw.Bytes.Slice.t }
+type deep_top = { body : deep; tail : UInt8.t }
+
+let deep depth big =
+  let rec level k : deep Codec.t =
+    let slice = Field.v "big" (byte_slice ~size:(int big)) in
+    if k = 0 then
+      let len = Field.v "len" uint8 in
+      let data = Field.v "data" (byte_slice ~size:(Field.ref len)) in
+      Codec.v "L0"
+        (fun _ _ big -> { inner = None; big })
+        Codec.
+          [
+            (len $ fun _ -> UInt8.v 0);
+            (data $ fun r -> r.big);
+            (slice $ fun r -> r.big);
+          ]
+    else
+      let inner = Field.v "inner" (codec (level (k - 1))) in
+      Codec.v
+        ("L" ^ string_of_int k)
+        (fun inner big -> { inner = Some inner; big })
+        Codec.
+          [ (inner $ fun r -> Option.get r.inner); (slice $ fun r -> r.big) ]
+  in
+  let body = Field.v "body" (codec (level depth)) in
+  let tail = Field.v "tail" uint8 in
+  Codec.v "Top"
+    (fun body tail -> { body; tail })
+    Codec.[ (body $ fun r -> r.body); (tail $ fun r -> r.tail) ]
+
+type bigspan =
+  UInt8.t * UInt8.t * Bytesrw.Bytes.Slice.t * Bytesrw.Bytes.Slice.t * UInt8.t
+
+let bigspan =
+  let a = Field.v "A" uint8 and b = Field.v "B" uint8 in
+  let big = 1 lsl 61 in
+  let large f = Expr.(Field.ref f + int big) in
+  Codec.v "Bigspan"
+    (fun a b x y t -> (a, b, x, y, t))
+    Codec.
+      [
+        (a $ fun (a, _, _, _, _) -> a);
+        (b $ fun (_, b, _, _, _) -> b);
+        (Field.v "X" (byte_slice ~size:(large a)) $ fun (_, _, x, _, _) -> x);
+        (Field.v "Y" (byte_slice ~size:(large b)) $ fun (_, _, _, y, _) -> y);
+        (Field.v "T" uint8 $ fun (_, _, _, _, t) -> t);
+      ]
+
 let rec gated n =
   let tag = Field.v "tag" uint8 in
   let value =
@@ -339,4 +457,20 @@ let shared =
         (opt "x" Expr.(is a 1 && is b 1) $ fun r -> r.x);
         (opt "y" Expr.(is a 2 && is b 1) $ fun r -> r.y);
         (opt "z" Expr.(is c 1 && is b 2) $ fun r -> r.z);
+      ]
+
+type stacked = UInt16.t * UInt16.t * checked option
+
+let stacked =
+  let kind = Field.v "kind" uint16be in
+  Codec.v "Stacked"
+    (fun kind flags inner -> (kind, flags, inner))
+    Codec.
+      [
+        (kind $ fun (x, _, _) -> x);
+        (Field.v "flags" uint16be $ fun (_, x, _) -> x);
+        ( Field.optional "inner"
+            ~present:Expr.(Field.ref kind = int 0x0800)
+            (codec checked)
+        $ fun (_, _, x) -> x );
       ]

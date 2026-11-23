@@ -17,8 +17,9 @@
     EverParse C validator too when it is built; on scanned schemas of
     test/ocaml, whose arithmetic overflows the native int or whose decision tree
     shares a subtree; and on every sampled shape the OCaml scanner accepts, with
-    every output and every other one. Each must accept exactly what [Codec]
-    decodes on a frame and return the same scalar fields. *)
+    every output and every other one, with the EverParse C validators too when
+    they are built. Each must accept exactly what [Codec] decodes on a frame and
+    return the same scalar fields. *)
 
 let refused =
   List.map
@@ -55,7 +56,8 @@ let scans =
    near the largest int and the where clause multiplies two 32-bit fields.
    The codec rejects such a record, and so must the scanner, not test a
    wrapped value. In [shared], the decision tree of three optional fields
-   reaches a test from two paths. In [skipped], a condition the facts decide
+   reaches a test from two paths. In [bigspan], the ends of two spans sum past
+   the largest int. In [skipped], a condition the facts decide
    still overflows where the codec evaluates it. *)
 let reference label codec project =
   Diff_ocaml.Reference
@@ -138,6 +140,10 @@ let schemas =
           [ ("n", Wire.UInt32.to_int n); ("x", int8 x) ] @ opt "a" a @ opt "b" b),
       ops "skipped",
       skips );
+    ( reference "bigspan" Schemas.bigspan (fun _ (a, b, _, _, t) ->
+          [ ("a", int8 a); ("b", int8 b); ("t", int8 t) ]),
+      ops "bigspan",
+      sizes );
   ]
 
 let sampled =
@@ -146,6 +152,7 @@ let sampled =
       let p = List.assoc label Diff_ocaml.scan_codecs in
       ( "scan " ^ label,
         Diff_ocaml.check_scan
+          ?oracle:(Diff_driver.sampled_oracle label)
           (Diff_ocaml.of_sampled label p)
           (List.map Diff_rust.scan_ops scans) ))
     Rust_index.sampled_scanners
@@ -155,6 +162,7 @@ let sampled =
 let () =
   if not (Fuzz_gen.afl_mode ()) then begin
     if not (Diff_ocaml.report Rust_index.name refused) then exit 1;
+    Diff_driver.report_oracle Rust_index.name;
     List.iter
       (fun ((Diff_codecs.Scan c as case), ops) ->
         Diff_ocaml.scan_corpus ?oracle:(Diff_driver.oracle c.label) case ops)

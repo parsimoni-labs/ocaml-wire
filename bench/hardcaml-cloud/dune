@@ -1,0 +1,25 @@
+(executable
+ (name reference)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries
+  wire
+  wire.ocaml
+  fmt
+  diff_codecs
+  diff_ocaml
+  diff_driver
+  ocaml_index))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (deps
+  (source_tree wire_hardcaml_tools)
+  pyproject.toml
+  setup.cfg
+  tools.py
+  test_bundle.py)
+ (action
+  (run python3 -m unittest -v test_bundle.py)))

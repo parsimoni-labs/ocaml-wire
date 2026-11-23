@@ -97,18 +97,18 @@ val run_everparse :
     The executable, output directory, and schema filenames are passed directly
     to EverParse without shell interpretation.
 
-    Requires [3d.exe] in PATH. *)
+    Requires [everparse-3d.exe] in PATH. *)
 
 val check_provenance : outdir:string -> string list -> unit
 (** [check_provenance ~outdir three_d_files] recomputes the BLAKE2b-256 digest
     of each [.3d] in [outdir] and raises [Failure] if it differs from the digest
     recorded in the matching [<Name>.provenance] stamp, which means the
-    committed C came from a different spec. Needs no [3d.exe]. *)
+    committed C came from a different spec. Needs no [everparse-3d.exe]. *)
 
 val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
-(** [parse_3d ~outdir file] runs [3d.exe] on a single [.3d] file in [outdir].
-    Returns [Ok ()] when 3D accepts the file, or [Error stderr] with the
-    captured error message otherwise.
+(** [parse_3d ~outdir file] runs [everparse-3d.exe] on a single [.3d] file in
+    [outdir]. Returns [Ok ()] when 3D accepts the file, or [Error stderr] with
+    the captured error message otherwise.
 
     With [~batch:false] (the default) it stops after the 3D type-checker, before
     F* and KaRaMeL: fast, but it does not catch kind errors that only fail F*
@@ -119,15 +119,15 @@ val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
     projection coverage tests. The output directory and filename are passed
     without shell interpretation.
 
-    Requires [3d.exe] in PATH. *)
+    Requires [everparse-3d.exe] in PATH. *)
 
 val fork_pool : max_jobs:int -> (unit -> unit) array -> bool array
 (** [fork_pool ~max_jobs jobs] runs each job in its own process, at most
     [max_jobs] at a time, returning each job's success (exit 0 with no
     exception) in input order. Used to overlap the per-module EverParse runs,
-    whose cost is dominated by F* verification. Each job that invokes [3d.exe]
-    must use a private working directory, as concurrent runs race on EverParse's
-    shared intermediate files. *)
+    whose cost is dominated by F* verification. Each job that invokes
+    [everparse-3d.exe] must use a private working directory, as concurrent runs
+    race on EverParse's shared intermediate files. *)
 
 val rm_rf : string -> unit
 (** [rm_rf dir] removes [dir] and its files (a flat output directory), ignoring
@@ -145,11 +145,12 @@ val batch_check :
     (CPU-bound, several seconds each) with negligible startup, so the schemas
     are verified concurrently in a {!fork_pool} (at most [max_jobs] at once,
     default a small multiple of the cores) rather than serially in one
-    [3d.exe --batch]. Each run uses a private directory. Returns [Ok ()] iff
-    EverParse accepts every schema, else [Error] naming the offending schema(s)
-    with their captured diagnostics. Schemas must have distinct names (one [.3d]
-    module each; {!generate_3d} rejects a collision). Paths and filenames are
-    passed without shell interpretation. Requires [3d.exe] in PATH. *)
+    [everparse-3d.exe --batch]. Each run uses a private directory. Returns
+    [Ok ()] iff EverParse accepts every schema, else [Error] naming the
+    offending schema(s) with their captured diagnostics. Schemas must have
+    distinct names (one [.3d] module each; {!generate_3d} rejects a collision).
+    Paths and filenames are passed without shell interpretation. Requires
+    [everparse-3d.exe] in PATH. *)
 
 val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_external_typedefs ~outdir schemas] writes the default
@@ -160,9 +161,10 @@ val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 val check_plug_names : Wire.Everparse.t -> unit
 (** [check_plug_names s] raises [Invalid_argument] naming both fields when two
     of [s]'s fields would define one [_IDX_] macro or one struct member of its
-    default plug: the macro upper-cases the field name, and the member escapes
-    C's keywords ({!Wire.Everparse.plug_member}). It also refuses a field whose
-    name is not an identifier. {!write_fields} runs it first. *)
+    default plug: the macro upper-cases the field name ([X] and [x]); the
+    member's escape ({!Wire.Everparse.plug_member}) keeps names apart. It also
+    refuses a field whose name is not an identifier. {!write_fields} runs it
+    first. *)
 
 val write_fields : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_fields ~outdir schemas] writes the default [<Name>_Fields.{c,h}] plug
@@ -183,7 +185,7 @@ val generate_c : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
     If [quiet] is [true] (the default), EverParse output is suppressed. If
     [quiet] is [false], EverParse stdout/stderr are left visible.
 
-    Requires [3d.exe] (EverParse) in PATH. *)
+    Requires EverParse in PATH. *)
 
 val harden_wrapper_source : string -> string
 (** [harden_wrapper_source src] is the EverParse wrapper [src] with its success
@@ -220,13 +222,13 @@ val generate_standalone :
   unit
 (** [generate_standalone ?quiet ?name ~outdir ~package codecs] runs the
     documentation pipeline: project each codec in documentation mode, merge them
-    into one [<Name>.3d], and (when [3d.exe] is available) compile it to a
-    single validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file base
-    is [name] when given, else [package], normalised to a CamelCase identifier
-    (["my-pkg"] becomes [MyPkg]); [package] always names the opam package. The
-    generated [<Name>CheckWire<Codec>] wrappers validate the whole buffer,
-    rejecting trailing bytes (see {!generate_c}). Only the checked wrapper
-    header [<Name>Wrapper.h] is installed as the public C API; the raw
+    into one [<Name>.3d], and (when [everparse-3d.exe] is available) compile it
+    to a single validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file
+    base is [name] when given, else [package], normalised to a CamelCase
+    identifier (["my-pkg"] becomes [MyPkg]); [package] always names the opam
+    package. The generated [<Name>CheckWire<Codec>] wrappers validate the whole
+    buffer, rejecting trailing bytes (see {!generate_c}). Only the checked
+    wrapper header [<Name>Wrapper.h] is installed as the public C API; the raw
     [<Name>Validate*] entrypoints (which take an unguarded [StartPosition]) stay
     build-internal, linked into the archive but not shipped as a header. *)
 
@@ -249,8 +251,8 @@ val generate_dune_standalone :
     partial linker, and the binutils that compiler resolves), so a cross build
     produces and installs a target-native archive rather than the host's. Only
     the host-side steps are gated on [(= %{context_name} default)]: regenerating
-    the committed [.3d]/C from [3d.exe], and the [agree] differential test,
-    which runs a built validator on the build machine. *)
+    the committed [.3d]/C from [everparse-3d.exe], and the [agree] differential
+    test, which runs a built validator on the build machine. *)
 
 val wrapper_symbols : string -> packed list -> string list
 (** [wrapper_symbols base codecs] is the [<Base>CheckWire<Codec>] wrapper C
@@ -312,8 +314,8 @@ val generate_agree :
     [<hex>] that is not an even number of hex digits, in either case, stops it
     with ["bad hex"] and exit code 2. It names each [<Name>CheckWire<Codec>]
     helper the way EverParse does and includes the generated [<Name>Wrapper.h],
-    so {!generate_standalone} (or [3d.exe]) must have run before [agree.c] is
-    compiled. *)
+    so {!generate_standalone} (or [everparse-3d.exe]) must have run before
+    [agree.c] is compiled. *)
 
 val main :
   ?name:string ->
@@ -341,8 +343,9 @@ val main :
     codecs. *)
 
 val has_3d_exe : unit -> bool
-(** [has_3d_exe ()] returns [true] if [3d.exe] is available in PATH or
-    [~/.local/everparse/bin/]. *)
+(** [has_3d_exe ()] returns [true] if EverParse's 3D compiler,
+    [everparse-3d.exe] or, before EverParse v2026.10, [everparse-3d.exe], is
+    available in PATH or [~/.local/everparse/bin/]. *)
 
 val ensure_dir : string -> unit
 (** [ensure_dir path] creates the directory [path] if it does not exist. *)
@@ -361,9 +364,9 @@ val everparse_type_defines : string
 (** {1 Private}
 
     What {!parse_3d} and {!fork_pool} fall back to where [Unix.fork] is missing
-    (Windows), and the search for [3d.exe] with the environment as an argument,
-    exposed so the tests exercise them on every system. Not part of the stable
-    API. *)
+    (Windows), and the search for [everparse-3d.exe] with the environment as an
+    argument, exposed so the tests exercise them on every system. Not part of
+    the stable API. *)
 
 module Private : sig
   val run_3d_spawned :
@@ -383,9 +386,15 @@ module Private : sig
     getenv:(string -> string option) ->
     executable:(string -> bool) ->
     string option
-  (** [locate_3d_exe ~win32 ~getenv ~executable] is the [3d.exe] the library
+  (** [locate_3d_exe ~win32 ~getenv ~executable] is the 3D compiler the library
       runs, found with the given environment: the first that [executable]
       accepts in a directory of [PATH] (split on [';'] when [win32], on [':']
       otherwise), then in [.local/everparse/bin] under [HOME] and under
-      [USERPROFILE]. *)
+      [USERPROFILE], [everparse-3d.exe] before [3d.exe] in each. *)
+
+  val has_custard : string -> bool
+  (** [has_custard version] is [true] when [version], as [3d.exe --version]
+      prints it, names EverParse v2026.10 or later. Wire then runs F* from
+      3d.exe with a larger [--custard_norm_budget], working around a regression
+      that stops a flat record of 16 fields. *)
 end

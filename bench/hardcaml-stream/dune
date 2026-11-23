@@ -1,0 +1,11 @@
+(executable
+ (name gen)
+ (modules gen stream_properties)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries wire wire.ocaml wire_hardcaml hardcaml net fmt))
+
+(executable
+ (name corpus)
+ (modules corpus)
+ (libraries diff_codecs fmt))

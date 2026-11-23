@@ -14,6 +14,10 @@ val oracle : string -> Diff_codecs.c_oracle option
 (** [oracle label] is {!C_oracle.oracle} for the structured case [label] when
     the validators are built. *)
 
+val sampled_oracle : string -> Diff_codecs.c_oracle option
+(** [sampled_oracle label] is {!C_oracle.sampled} for the sampled shape [label]
+    when the validators are built. Fails when they are but [label] has none. *)
+
 val report_oracle : string -> unit
 (** [report_oracle name] says whether the C validators are compared, and fails
     when [BUILD_EVERPARSE=1] but they are not built. *)

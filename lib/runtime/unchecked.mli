@@ -6,13 +6,13 @@ val checked : bool
     function below then checks its bounds, and raises [Invalid_argument] outside
     the buffer. *)
 
-val u8 : bytes -> int -> int
+val [@zero_alloc] u8 : bytes -> int -> int
 (** [u8 buf off] is the byte at [off]. *)
 
-val u16le : bytes -> int -> int
+val [@zero_alloc] u16le : bytes -> int -> int
 (** [u16le buf off] is the little-endian 16-bit value at [off]. *)
 
-val u16be : bytes -> int -> int
+val [@zero_alloc] u16be : bytes -> int -> int
 (** [u16be buf off] is the big-endian 16-bit value at [off]. *)
 
 val i32le : bytes -> int -> int32
@@ -32,13 +32,13 @@ val i64be : bytes -> int -> int64
     With no bounds check either. A 16-bit write keeps the low 16 bits of the
     value. *)
 
-val set_u8 : bytes -> int -> int -> unit
+val [@zero_alloc] set_u8 : bytes -> int -> int -> unit
 (** [set_u8 buf off v] writes the low byte of [v] at [off]. *)
 
-val set_u16le : bytes -> int -> int -> unit
+val [@zero_alloc] set_u16le : bytes -> int -> int -> unit
 (** [set_u16le buf off v] writes [v] as a little-endian 16-bit value. *)
 
-val set_u16be : bytes -> int -> int -> unit
+val [@zero_alloc] set_u16be : bytes -> int -> int -> unit
 (** [set_u16be buf off v] writes [v] as a big-endian 16-bit value. *)
 
 val set_i32le : bytes -> int -> int32 -> unit
@@ -46,6 +46,12 @@ val set_i32le : bytes -> int -> int32 -> unit
 
 val set_i32be : bytes -> int -> int32 -> unit
 (** [set_i32be buf off v] writes [v] as a big-endian 32-bit value. *)
+
+val set_i64le : bytes -> int -> int64 -> unit
+(** [set_i64le buf off v] writes [v] as a little-endian 64-bit value. *)
+
+val set_i64be : bytes -> int -> int64 -> unit
+(** [set_i64be buf off v] writes [v] as a big-endian 64-bit value. *)
 
 val blit_string : string -> bytes -> int -> unit
 (** [blit_string s buf off] copies [s] into [buf] at [off]. *)
@@ -56,16 +62,16 @@ module Bigstring : sig
   type t =
     (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 
-  val length : t -> int
+  val [@zero_alloc] length : t -> int
   (** [length buf] is the number of bytes in [buf]. *)
 
-  val u8 : t -> int -> int
+  val [@zero_alloc] u8 : t -> int -> int
   (** [u8 buf off] is the byte at [off]. *)
 
-  val u16le : t -> int -> int
+  val [@zero_alloc] u16le : t -> int -> int
   (** [u16le buf off] is the little-endian 16-bit value at [off]. *)
 
-  val u16be : t -> int -> int
+  val [@zero_alloc] u16be : t -> int -> int
   (** [u16be buf off] is the big-endian 16-bit value at [off]. *)
 
   val i32le : t -> int -> int32
@@ -77,13 +83,13 @@ module Bigstring : sig
   val i64be : t -> int -> int64
   (** [i64be buf off] is the big-endian 64-bit value at [off]. *)
 
-  val set_u8 : t -> int -> int -> unit
+  val [@zero_alloc] set_u8 : t -> int -> int -> unit
   (** [set_u8 buf off v] writes the low byte of [v] at [off]. *)
 
-  val set_u16le : t -> int -> int -> unit
+  val [@zero_alloc] set_u16le : t -> int -> int -> unit
   (** [set_u16le buf off v] writes [v] as a little-endian 16-bit value. *)
 
-  val set_u16be : t -> int -> int -> unit
+  val [@zero_alloc] set_u16be : t -> int -> int -> unit
   (** [set_u16be buf off v] writes [v] as a big-endian 16-bit value. *)
 
   val set_i32le : t -> int -> int32 -> unit
@@ -91,6 +97,12 @@ module Bigstring : sig
 
   val set_i32be : t -> int -> int32 -> unit
   (** [set_i32be buf off v] writes [v] as a big-endian 32-bit value. *)
+
+  val set_i64le : t -> int -> int64 -> unit
+  (** [set_i64le buf off v] writes [v] as a little-endian 64-bit value. *)
+
+  val set_i64be : t -> int -> int64 -> unit
+  (** [set_i64be buf off v] writes [v] as a big-endian 64-bit value. *)
 
   val get_uint8 : t -> int -> int
   (** [get_uint8 buf off] is {!u8} after a bounds check that raises

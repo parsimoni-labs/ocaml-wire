@@ -1,13 +1,17 @@
 (* Writes the code generated for the benchmark.
 
    With [--ocaml] (or [--oxcaml], for the OxCaml target), in the current
-   directory: the scanner of [Packet_stack.codec] after the checksum module it
-   calls by name, g_stack.ml, and its checksum consumers, stack_read.ml; the same scanner handing out only the
-   fields the checksum reads, g_selected.ml and selected_read.ml; and the
-   record modules of the fixed header codecs of [Headers], g_eth.ml,
-   g_ipv4.ml, g_tcp.ml and g_udp.ml. The batch consumers take the corpus
-   stride, which the harness passes as a literal so it stays a constant after
-   inlining.
+   directory: stack_read.ml, the checksum module [Step] the scanner of
+   [Packet_stack.codec] calls by name, the scanner as the submodule [G_stack]
+   under its interface, then its checksum consumers;
+   selected_read.ml, the same with the scanner handing out only the fields the
+   checksum reads, as [G_selected]; and the record modules of the fixed header
+   codecs of [Headers], g_eth.ml, g_ipv4.ml, g_tcp.ml and g_udp.ml, with their
+   interfaces. A scanner shares its consumers' module so that the compiler
+   sees the fold and the consumer it inlines in one unit in every profile, and
+   so checks the batch consumers' [@zero_alloc] where the dev profile hides
+   other modules' code. The batch consumers take the corpus stride, which the
+   harness passes as a literal so it stays a constant after inlining.
 
    With [--rust DIR], in [DIR]: the Wire_rust modules of the fixed header
    codecs, eth.rs, ipv4.rs, tcp.rs and udp.rs; the scanner Wire_rust writes
@@ -42,7 +46,7 @@ let checksum_fields =
     "ipv4_udp_length";
   ]
 
-let checksum_contribution ~wide get =
+let checksum_contribution ~zero get =
   let ports p =
     "((" ^ get (p ^ "_src_port") ^ " lsl 16) lor " ^ get (p ^ "_dst_port") ^ ")"
   in
@@ -56,8 +60,7 @@ let checksum_contribution ~wide get =
   ^ get "ipv4_tcp_flags" ^ " in\n" ^ "(a + b) + (c + "
   ^ get "ipv4_tcp_data_offset" ^ ")\n" ^ "else if " ^ get "ipv4_udp_present"
   ^ " then " ^ ports "ipv4_udp" ^ " + " ^ get "ipv4_udp_length" ^ " else "
-  ^ (if wide then "#0L" else "0")
-  ^ " in\n" ^ "(ip0 + ip1) + (ip2 + transport)"
+  ^ zero ^ " in\n" ^ "(ip0 + ip1) + (ip2 + transport)"
 
 let reader_modes name =
   ( List.mem name [ "batch"; "batch_unboxed" ],
@@ -103,7 +106,8 @@ let reader_wrappers ~wide ~fold ~batch =
 
 (* The checksum consumer the scanner calls by name in [fold_step] and
    [fold_frames_step]: OCaml without flambda never inlines a function passed
-   as an argument. *)
+   as an argument. It takes the outputs as [int64] and folds them as such, as
+   the unboxed rows of OxCaml fold [int64_u]. *)
 let step ~fields =
   let args =
     List.map
@@ -112,10 +116,15 @@ let step ~fields =
       fields
   in
   "module Step = struct\n\
+   type t = int64\n\n\
+   external ( + ) : int64 -> int64 -> int64 = \"%int64_add\"\n\
+   external ( lxor ) : int64 -> int64 -> int64 = \"%int64_xor\"\n\
+   external ( lor ) : int64 -> int64 -> int64 = \"%int64_or\"\n\
+   external ( lsl ) : int64 -> int -> int64 = \"%int64_lsl\"\n\n\
    let[@inline always] invalid base = base\n\
    let[@inline always] valid base " ^ String.concat " " args
   ^ " =\nlet contribution = "
-  ^ checksum_contribution ~wide:false Fun.id
+  ^ checksum_contribution ~zero:"0L" Fun.id
   ^ " in\nbase + contribution\nend\n\n"
 
 let checksum_reader target ~core ~fields name decode access =
@@ -129,15 +138,18 @@ let checksum_reader target ~core ~fields name decode access =
   ^ " base buf off len =\n"
   ^
   if fold && not wide then
-    core
-    ^ (if batch then ".fold_frames_step buf off len ~stride"
-       else ".fold_step buf off len")
-    ^ " ~init:base\n"
+    let call =
+      core
+      ^
+      if batch then ".fold_frames_step buf off len ~stride"
+      else ".fold_step buf off len"
+    in
+    "Int64.to_int (" ^ call ^ " ~init:(Int64.of_int base))\n"
   else
     first
     ^ reader_invocation ~core ~fields ~decode ~fold ~batch ~wide get
     ^ inside ^ "let contribution = "
-    ^ checksum_contribution ~wide get
+    ^ checksum_contribution ~zero:(if wide then "#0L" else "0") get
     ^ " in\n" ^ base ^ " + contribution\n" ^ last
 
 let stack_reader target ~core ~fields =
@@ -180,24 +192,28 @@ let () =
       let selected =
         List.filter (fun (n, _) -> List.mem n checksum_fields) all
       in
-      write "g_stack.ml"
-        (step ~fields:all
-        ^ Wire_ocaml.scanner ~target ~step:"Step" ~codec:"Packet_stack.codec"
-            Packet_stack.codec);
-      write "stack_read.ml" (stack_reader target ~core:"G_stack" ~fields:all);
-      write "g_selected.ml"
-        (step ~fields:selected
-        ^ Wire_ocaml.scanner ~target ~fields:checksum_fields ~step:"Step"
-            ~codec:"Packet_stack.codec" Packet_stack.codec);
-      write "selected_read.ml"
-        (stack_reader target ~core:"G_selected" ~fields:selected);
+      let read file ~core ~fields ?selected () =
+        let codec = "Packet_stack.codec" and c = Packet_stack.codec in
+        let ml =
+          Wire_ocaml.scanner ~target ?fields:selected ~step:"Step" ~codec c
+        and mli =
+          Wire_ocaml.scanner_mli ~target ?fields:selected ~step:"Step" ~codec c
+        in
+        write file
+          (step ~fields ^ "module " ^ core ^ " : sig\n" ^ mli
+         ^ "\nend = struct\n" ^ ml ^ "\nend\n\n"
+          ^ stack_reader target ~core ~fields)
+      in
+      read "stack_read.ml" ~core:"G_stack" ~fields:all ();
+      read "selected_read.ml" ~core:"G_selected" ~fields:selected
+        ~selected:checksum_fields ();
       headers
         {
           g =
             (fun name c ->
-              write
-                ("g_" ^ name ^ ".ml")
-                (Wire_ocaml.ml ~target ~codec:("Headers." ^ name) c));
+              let codec = "Headers." ^ name in
+              write ("g_" ^ name ^ ".ml") (Wire_ocaml.ml ~target ~codec c);
+              write ("g_" ^ name ^ ".mli") (Wire_ocaml.mli ~target ~codec c));
         }
   | [ _; "--rust"; dir ] ->
       let codec = "Packet_stack.codec" in

@@ -1,0 +1,5 @@
+(library
+ (name wire_hardcaml)
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (libraries wire wire.ocaml hardcaml base))

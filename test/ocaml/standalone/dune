@@ -1,8 +1,8 @@
-; The generated code embedded without wire: each module compiles against
-; wire.runtime alone, the runner checks it decodes, encodes and fails as
-; documented, and that no generated source names [Wire]. node/ runs the same
-; modules under js_of_ocaml and wasm_of_ocaml, except those that read a 32-bit
-; field into an int; an OxCaml compiler builds the OxCaml output.
+; The generated code embedded without wire: each module and its interface
+; compile against wire.runtime alone, the runner checks it decodes, encodes
+; and fails as documented, and that no generated source names [Wire]. node/
+; runs the same modules under js_of_ocaml and wasm_of_ocaml, except those that
+; read a 32-bit field into an int; an OxCaml compiler builds the OxCaml output.
 
 (executable
  (name gen)
@@ -12,12 +12,21 @@
 (rule
  (targets
   s_ipv4.ml
+  s_ipv4.mli
   s_checked.ml
+  s_checked.mli
   s_mixed.ml
+  s_mixed.mli
   s_eth.ml
+  s_eth.mli
   s_wide.ml
+  s_wide.mli
   s_signed.ml
-  s_refined.ml)
+  s_signed.mli
+  s_refined.ml
+  s_refined.mli
+  s_stacked.ml
+  s_stacked.mli)
  (enabled_if
   (<> %{ocaml-config:ox} true))
  (action
@@ -26,12 +35,21 @@
 (rule
  (targets
   s_ipv4.ml
+  s_ipv4.mli
   s_checked.ml
+  s_checked.mli
   s_mixed.ml
+  s_mixed.mli
   s_eth.ml
+  s_eth.mli
   s_wide.ml
+  s_wide.mli
   s_signed.ml
-  s_refined.ml)
+  s_signed.mli
+  s_refined.ml
+  s_refined.mli
+  s_stacked.ml
+  s_stacked.mli)
  (enabled_if
   (= %{ocaml-config:ox} true))
  (action
@@ -40,44 +58,14 @@
 ; The generated modules link wire.runtime and nothing else; the checks that
 ; drive them sit in libraries of their own, which may use fmt.
 
-; As in test/ocaml-ox: the dev profile compiles libraries -opaque, so the
-; zero_alloc checks of the OxCaml output cannot pass there and are off in dev
-; only.
-
-(rule
- (enabled_if
-  (and
-   (= %{ocaml-config:ox} true)
-   (= %{profile} dev)))
- (action
-  (with-stdout-to
-   zero_alloc.sexp
-   (echo "(-zero-alloc-check none)"))))
-
-(rule
- (enabled_if
-  (or
-   (<> %{ocaml-config:ox} true)
-   (<> %{profile} dev)))
- (action
-  (with-stdout-to
-   zero_alloc.sexp
-   (echo "()"))))
-
 (library
  (name standalone_narrow)
- (ocamlopt_flags
-  (:standard
-   (:include zero_alloc.sexp)))
  (wrapped false)
- (modules s_checked s_eth s_signed s_refined)
+ (modules s_checked s_eth s_signed s_refined s_stacked)
  (libraries wire.runtime))
 
 (library
  (name standalone_wide)
- (ocamlopt_flags
-  (:standard
-   (:include zero_alloc.sexp)))
  (wrapped false)
  (modules s_ipv4 s_mixed s_wide)
  (libraries wire.runtime))

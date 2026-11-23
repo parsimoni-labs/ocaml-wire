@@ -2,12 +2,13 @@
 
    bench.exe corpus DIR N     writes the four corpora below, N packets each,
                               to DIR/<corpus>.bin
-   bench.exe run FILE STRIDE RUNS [FILTER]
-                              times the OCaml implementations whose name
-                              contains FILTER on the corpus FILE of STRIDE-byte
-                              slots, RUNS passes each, and prints the best,
-                              p10, median and p90 process CPU time and wall
-                              time per packet
+   bench.exe run FILE STRIDE RUNS [ROW | --list]
+                              times the OCaml implementations, or only the one
+                              named ROW, failing when there is none, on the
+                              corpus FILE of STRIDE-byte slots, RUNS passes
+                              each, and prints the best, p10, median and p90
+                              process CPU time and wall time per packet;
+                              --list prints the row names
    bench.exe report FILE...   prints the RESULT lines of each FILE as tables
 
    Every implementation does the same work on each packet, the work
@@ -254,20 +255,17 @@ let corpora dir n =
       write (Filename.concat dir (family ^ "-sorted.bin")) sorted)
     [ ("fixed64", 64, fixed64); ("mix128", 128, mix128) ]
 
-let read_file file =
-  Bytes.unsafe_of_string (In_channel.with_open_bin file In_channel.input_all)
-
 (* {1 The fold} *)
 
-let[@inline] ip_fields acc ~src ~dst ~ttl ~proto ~len =
+let ip_fields acc ~src ~dst ~ttl ~proto ~len =
   acc + (src lxor dst) + (ttl + proto + len)
 
-let[@inline] tcp_fields acc ~sp ~dp ~seq ~ack ~win ~flags ~off =
+let tcp_fields acc ~sp ~dp ~seq ~ack ~win ~flags ~off =
   acc + ((sp lsl 16) lor dp) + (seq lxor ack) + (win + flags + off)
 
-let[@inline] udp_fields acc ~sp ~dp ~len = acc + ((sp lsl 16) lor dp) + len
+let udp_fields acc ~sp ~dp ~len = acc + ((sp lsl 16) lor dp) + len
 
-let[@inline] packet_fields acc (packet : Packet_stack.t) =
+let packet_fields acc (packet : Packet_stack.t) =
   let acc = acc + UInt16.to_int packet.ether_type in
   match packet.ipv4 with
   | None -> acc
@@ -300,7 +298,10 @@ let[@inline] packet_fields acc (packet : Packet_stack.t) =
 
 module H = Headers
 
-(* {2 Wire.Codec: valid, then a proof-carrying read per field} *)
+(* {2 Wire.Codec: check, then a proof-carrying read per field}
+
+   [Codec.check] answers a header that fails its checks with a proof [Codec.ok]
+   refuses, so a bad header costs no exception. *)
 
 let eth_type = Staged.unstage (Codec.read H.eth H.eth_type)
 let ip_ihl = Staged.unstage (Codec.read H.ipv4 H.ipv4_ihl)
@@ -322,426 +323,284 @@ let udp_sp = Staged.unstage (Codec.read H.udp H.udp_src_port)
 let udp_dp = Staged.unstage (Codec.read H.udp H.udp_dst_port)
 let udp_len = Staged.unstage (Codec.read H.udp H.udp_length)
 
-let[@inline] codec_tcp base acc buf o ~payload =
-  match Codec.valid H.tcp buf o with
-  | exception Parse_error _ -> base
-  | t ->
-      let off = tcp_off t in
-      if off * 4 > payload then base
-      else
-        tcp_fields acc
-          ~sp:(UInt16.to_int (tcp_sp t))
-          ~dp:(UInt16.to_int (tcp_dp t))
-          ~seq:(UInt32.to_int (tcp_seq t))
-          ~ack:(UInt32.to_int (tcp_ack t))
-          ~win:(UInt16.to_int (tcp_win t))
-          ~flags:(tcp_flags t) ~off
+let codec_tcp base acc buf o ~payload =
+  let t = Codec.check H.tcp buf o in
+  if not (Codec.ok t) then base
+  else
+    let off = tcp_off t in
+    if off * 4 > payload then base
+    else
+      tcp_fields acc
+        ~sp:(UInt16.to_int (tcp_sp t))
+        ~dp:(UInt16.to_int (tcp_dp t))
+        ~seq:(UInt32.to_int (tcp_seq t))
+        ~ack:(UInt32.to_int (tcp_ack t))
+        ~win:(UInt16.to_int (tcp_win t))
+        ~flags:(tcp_flags t) ~off
 
-let[@inline] codec_udp base acc buf o ~payload =
-  match Codec.valid H.udp buf o with
-  | exception Parse_error _ -> base
-  | u ->
-      let len = UInt16.to_int (udp_len u) in
-      if len > payload then base
-      else
-        udp_fields acc
-          ~sp:(UInt16.to_int (udp_sp u))
-          ~dp:(UInt16.to_int (udp_dp u))
-          ~len
+let codec_udp base acc buf o ~payload =
+  let u = Codec.check H.udp buf o in
+  if not (Codec.ok u) then base
+  else
+    let len = UInt16.to_int (udp_len u) in
+    if len > payload then base
+    else
+      udp_fields acc
+        ~sp:(UInt16.to_int (udp_sp u))
+        ~dp:(UInt16.to_int (udp_dp u))
+        ~len
 
-let[@inline] codec_ipv4 base acc buf o ~avail =
-  match Codec.valid H.ipv4 buf o with
-  | exception Parse_error _ -> base
-  | ip -> (
-      let hlen = ip_ihl ip * 4 and len = UInt16.to_int (ip_len ip) in
-      if len < hlen || len > avail then base
+let codec_ipv4 base acc buf o ~avail =
+  let ip = Codec.check H.ipv4 buf o in
+  if not (Codec.ok ip) then base
+  else
+    let hlen = ip_ihl ip * 4 and len = UInt16.to_int (ip_len ip) in
+    if len < hlen || len > avail then base
+    else
+      let proto = UInt8.to_int (ip_proto ip) in
+      let acc =
+        ip_fields acc
+          ~src:(UInt32.to_int (ip_src ip))
+          ~dst:(UInt32.to_int (ip_dst ip))
+          ~ttl:(UInt8.to_int (ip_ttl ip))
+          ~proto ~len
+      in
+      if ip_flags ip land 1 <> 0 || ip_frag ip <> 0 then acc
       else
-        let proto = UInt8.to_int (ip_proto ip) in
-        let acc =
-          ip_fields acc
-            ~src:(UInt32.to_int (ip_src ip))
-            ~dst:(UInt32.to_int (ip_dst ip))
-            ~ttl:(UInt8.to_int (ip_ttl ip))
-            ~proto ~len
-        in
-        if ip_flags ip land 1 <> 0 || ip_frag ip <> 0 then acc
-        else
-          let payload = len - hlen in
-          match proto with
-          | 6 -> codec_tcp base acc buf (o + hlen) ~payload
-          | 17 -> codec_udp base acc buf (o + hlen) ~payload
-          | _ -> acc)
+        let payload = len - hlen in
+        match proto with
+        | 6 -> codec_tcp base acc buf (o + hlen) ~payload
+        | 17 -> codec_udp base acc buf (o + hlen) ~payload
+        | _ -> acc
 
-let[@inline] codec_packet ~avail acc buf o =
-  match Codec.valid H.eth buf o with
-  | exception Parse_error _ -> acc
-  | e ->
-      let ty = UInt16.to_int (eth_type e) in
-      if ty = ipv4 then codec_ipv4 acc (acc + ty) buf (o + 14) ~avail
-      else acc + ty
+let codec_packet ~avail acc buf o =
+  let e = Codec.check H.eth buf o in
+  if not (Codec.ok e) then acc
+  else
+    let ty = UInt16.to_int (eth_type e) in
+    if ty = ipv4 then codec_ipv4 acc (acc + ty) buf (o + 14) ~avail
+    else acc + ty
 
 (* {2 wire.ocaml: the generated view, then a read per field}
 
-   [View.check buf off] validates a header at [off] once and stands for it, as
-   wire.rust's [Valid::at] does, [View.ok] telling whether it passed; each
-   [view_<field>] is then one load with no bounds check. On OxCaml the view is
-   an unboxed record, two registers. *)
+   The buffer is named once ([Buf.v]) and its length read once; then
+   [View.check b len off] checks a header at [off] once and [View.get] turns
+   the answer into a proof that only [b]'s reads accept, as wire.rust's
+   [Valid::at] does; each [view_<field> b v] is then one load with no bounds
+   check, and the proof is an [int], so nothing is allocated. *)
 
-let[@inline] view_tcp base acc buf o ~payload =
-  let t = G_tcp.View.check buf o in
-  let w = G_tcp.view_data_offset_word t in
-  let off = G_tcp.data_offset_of_word w in
-  if (not (G_tcp.View.ok t)) || off * 4 > payload then base
+let view_tcp base acc b len o ~payload =
+  let c = G_tcp.View.check b len o in
+  if not (G_tcp.View.ok c) then base
   else
-    tcp_fields acc
-      ~sp:(UInt16.to_int (G_tcp.view_src_port t))
-      ~dp:(UInt16.to_int (G_tcp.view_dst_port t))
-      ~seq:(G_tcp.view_seq_int t) ~ack:(G_tcp.view_ack_int t)
-      ~win:(UInt16.to_int (G_tcp.view_window t))
-      ~flags:(G_tcp.flags_of_word w) ~off
-
-let[@inline] view_udp base acc buf o ~payload =
-  let u = G_udp.View.check buf o in
-  let len = UInt16.to_int (G_udp.view_length u) in
-  if (not (G_udp.View.ok u)) || len > payload then base
-  else
-    udp_fields acc
-      ~sp:(UInt16.to_int (G_udp.view_src_port u))
-      ~dp:(UInt16.to_int (G_udp.view_dst_port u))
-      ~len
-
-let[@inline] view_ipv4 base acc buf o ~avail =
-  let ip = G_ipv4.View.check buf o in
-  let hlen = G_ipv4.view_ihl ip * 4
-  and len = UInt16.to_int (G_ipv4.view_total_length ip) in
-  if (not (G_ipv4.View.ok ip)) || len < hlen || len > avail then base
-  else
-    let proto = UInt8.to_int (G_ipv4.view_protocol ip) in
-    let acc =
-      ip_fields acc
-        ~src:(G_ipv4.view_src_addr_int ip)
-        ~dst:(G_ipv4.view_dst_addr_int ip)
-        ~ttl:(UInt8.to_int (G_ipv4.view_ttl ip))
-        ~proto ~len
-    in
-    let w = G_ipv4.view_flags_word ip in
-    if
-      G_ipv4.flags_of_word w land 1 <> 0
-      || G_ipv4.fragment_offset_of_word w <> 0
-    then acc
+    let t = G_tcp.View.get c in
+    let w = G_tcp.view_data_offset_word b t in
+    let off = G_tcp.data_offset_of_word w in
+    if off * 4 > payload then base
     else
-      let payload = len - hlen in
-      match proto with
-      | 6 -> view_tcp base acc buf (o + hlen) ~payload
-      | 17 -> view_udp base acc buf (o + hlen) ~payload
-      | _ -> acc
+      tcp_fields acc
+        ~sp:(UInt16.to_int (G_tcp.view_src_port b t))
+        ~dp:(UInt16.to_int (G_tcp.view_dst_port b t))
+        ~seq:(G_tcp.view_seq_int b t) ~ack:(G_tcp.view_ack_int b t)
+        ~win:(UInt16.to_int (G_tcp.view_window b t))
+        ~flags:(G_tcp.flags_of_word w) ~off
 
-let[@inline] view_packet ~avail acc buf o =
-  let e = G_eth.View.check buf o in
-  if not (G_eth.View.ok e) then acc
+let view_udp base acc b len o ~payload =
+  let c = G_udp.View.check b len o in
+  if not (G_udp.View.ok c) then base
   else
-    let ty = UInt16.to_int (G_eth.view_ether_type e) in
-    if ty = ipv4 then view_ipv4 acc (acc + ty) buf (o + 14) ~avail else acc + ty
+    let u = G_udp.View.get c in
+    let ulen = UInt16.to_int (G_udp.view_length b u) in
+    if ulen > payload then base
+    else
+      udp_fields acc
+        ~sp:(UInt16.to_int (G_udp.view_src_port b u))
+        ~dp:(UInt16.to_int (G_udp.view_dst_port b u))
+        ~len:ulen
+
+let view_ipv4 base acc b len o ~avail =
+  let c = G_ipv4.View.check b len o in
+  if not (G_ipv4.View.ok c) then base
+  else
+    let ip = G_ipv4.View.get c in
+    let hlen = (G_ipv4.view_ihl b ip :> int) * 4
+    and tlen = UInt16.to_int (G_ipv4.view_total_length b ip) in
+    if tlen < hlen || tlen > avail then base
+    else
+      let proto = UInt8.to_int (G_ipv4.view_protocol b ip) in
+      let acc =
+        ip_fields acc
+          ~src:(G_ipv4.view_src_addr_int b ip)
+          ~dst:(G_ipv4.view_dst_addr_int b ip)
+          ~ttl:(UInt8.to_int (G_ipv4.view_ttl b ip))
+          ~proto ~len:tlen
+      in
+      let w = G_ipv4.view_flags_word b ip in
+      if
+        G_ipv4.flags_of_word w land 1 <> 0
+        || G_ipv4.fragment_offset_of_word w <> 0
+      then acc
+      else
+        let payload = tlen - hlen in
+        match proto with
+        | 6 -> view_tcp base acc b len (o + hlen) ~payload
+        | 17 -> view_udp base acc b len (o + hlen) ~payload
+        | _ -> acc
+
+let view_packet ~avail acc b len o =
+  let c = G_eth.View.check b len o in
+  if not (G_eth.View.ok c) then acc
+  else
+    let e = G_eth.View.get c in
+    let ty = UInt16.to_int (G_eth.view_ether_type b e) in
+    if ty = ipv4 then view_ipv4 acc (acc + ty) b len (o + 14) ~avail
+    else acc + ty
 
 let oxcaml = Stack_read.oxcaml
 
-(* The rows for one stride. The stride is a literal at the application, so
-   that, inlined, it reaches the generated scanners as a constant frame length,
-   as a caller with fixed-size frames would pass it. *)
-module type STRIDE = sig
-  val stride : int
-end
+(* The rows take the slot's stride at run time, as a reader of fixed-size
+   frames that learns their size from its input does. *)
 
-module Rows (S : STRIDE) = struct
-  let stride = S.stride
-
-  (* The frame size comes from the corpus's framing, while all protocol
-     dispatch, header lengths and parent-region bounds come from
-     Packet_stack. *)
-  let frame_codec =
-    Codec.v "BenchmarkFrame"
-      (fun p -> p)
-      Codec.
-        [
-          Field.v "packet"
-            (nested_at_most ~size:(int stride) (codec Packet_stack.codec))
-          $ Fun.id;
-        ]
-
-  let codec buf =
-    let acc = ref 0 in
-    for i = 0 to (Bytes.length buf / stride) - 1 do
-      match Codec.decode frame_codec buf (i * stride) with
-      | Error _ -> ()
-      | Ok packet -> acc := packet_fields !acc packet
-    done;
-    !acc
-
-  let[@inline always] frames f buf =
-    let acc = ref 0 in
-    for i = 0 to (Bytes.length buf / stride) - 1 do
-      acc := f !acc buf (i * stride) stride
-    done;
-    !acc
-
-  let[@inline always] linked f buf =
-    let acc = ref 0 in
-    for i = 0 to (Bytes.length buf / stride) - 1 do
-      acc := f ~avail:(stride - 14) !acc buf (i * stride)
-    done;
-    !acc
-
-  let codec_linked buf = linked codec_packet buf
-  let view_linked buf = linked view_packet buf
-  let generated buf = frames Stack_read.boxed buf
-  let generated_unboxed buf = frames Stack_read.unboxed buf
-  let generated_fold buf = frames Stack_read.fold buf
-  let generated_selected buf = frames Selected_read.fold buf
-  let generated_batch buf = Stack_read.batch ~stride 0 buf 0 (Bytes.length buf)
-
-  let generated_batch_unboxed buf =
-    Stack_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf)
-
-  let generated_selected_batch buf =
-    Selected_read.batch ~stride 0 buf 0 (Bytes.length buf)
-
-  let generated_selected_batch_unboxed buf =
-    Selected_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf)
-
-  (* dune generates for the OxCaml target on an OxCaml compiler. *)
-  let target = if oxcaml then ", OxCaml target" else ""
-
-  let all =
-    [
-      ("Wire.Codec stack decode", codec);
-      ("Wire.Codec valid/read, linked headers", codec_linked);
-      ("wire.ocaml View.check/view, linked headers" ^ target, view_linked);
-      ("wire.ocaml fused stack" ^ target, generated);
-      ("wire.ocaml fused stack, fold" ^ target, generated_fold);
-      ("wire.ocaml fused stack, batch" ^ target, generated_batch);
-    ]
-    @ (if oxcaml then
-         [ ("wire.ocaml fused stack, unboxed batch", generated_batch_unboxed) ]
-       else [])
-    @ [
-        ("wire.ocaml selected outputs, fold" ^ target, generated_selected);
-        ("wire.ocaml selected outputs, batch" ^ target, generated_selected_batch);
-      ]
-    @
-    if oxcaml then
+(* The frame size comes from the corpus's framing, while all protocol
+   dispatch, header lengths and parent-region bounds come from Packet_stack. *)
+let frame_codec stride =
+  Codec.v "BenchmarkFrame"
+    (fun p -> p)
+    Codec.
       [
-        ( "wire.ocaml selected outputs, unboxed batch",
-          generated_selected_batch_unboxed );
-        ("wire.ocaml fused stack, unboxed API", generated_unboxed);
+        Field.v "packet"
+          (nested_at_most ~size:(int stride) (codec Packet_stack.codec))
+        $ Fun.id;
       ]
-    else []
-end
-[@@inline always]
 
-module Rows64 = Rows (struct
-  let stride = 64
-end)
+let codec ~stride frame_codec buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    match Codec.decode frame_codec buf (i * stride) with
+    | Error _ -> ()
+    | Ok packet -> acc := packet_fields !acc packet
+  done;
+  !acc
 
-module Rows128 = Rows (struct
-  let stride = 128
-end)
+(* Each loop names the function it calls on every frame. *)
+
+let codec_linked ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := codec_packet ~avail:(stride - 14) !acc buf (i * stride)
+  done;
+  !acc
+
+let view_linked ~stride buf =
+  match Wire_runtime.Buf.v buf with
+  | Wire_runtime.Buf.Any b ->
+      let len = Wire_runtime.Buf.length b in
+      let acc = ref 0 in
+      for i = 0 to (Bytes.length buf / stride) - 1 do
+        acc := view_packet ~avail:(stride - 14) !acc b len (i * stride)
+      done;
+      !acc
+
+let generated ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := Stack_read.boxed !acc buf (i * stride) stride
+  done;
+  !acc
+
+let generated_unboxed ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := Stack_read.unboxed !acc buf (i * stride) stride
+  done;
+  !acc
+
+let generated_fold ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := Stack_read.fold !acc buf (i * stride) stride
+  done;
+  !acc
+
+let generated_selected ~stride buf =
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := Selected_read.fold !acc buf (i * stride) stride
+  done;
+  !acc
+
+(* dune generates for the OxCaml target on an OxCaml compiler. *)
+let target = if oxcaml then ", OxCaml target" else ""
+
+let rows stride =
+  let frame_codec = frame_codec stride in
+  [
+    ("Wire.Codec stack decode", fun buf -> codec ~stride frame_codec buf);
+    ("Wire.Codec check/read, linked headers", codec_linked ~stride);
+    ("wire.ocaml View.check/view, linked headers" ^ target, view_linked ~stride);
+    ("wire.ocaml fused stack" ^ target, generated ~stride);
+    ("wire.ocaml fused stack, fold" ^ target, generated_fold ~stride);
+    ( "wire.ocaml fused stack, batch" ^ target,
+      fun buf -> Stack_read.batch ~stride 0 buf 0 (Bytes.length buf) );
+  ]
+  @ (if oxcaml then
+       [
+         ( "wire.ocaml fused stack, unboxed batch",
+           fun buf ->
+             Stack_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
+       ]
+     else [])
+  @ [
+      ("wire.ocaml selected outputs, fold" ^ target, generated_selected ~stride);
+      ( "wire.ocaml selected outputs, batch" ^ target,
+        fun buf -> Selected_read.batch ~stride 0 buf 0 (Bytes.length buf) );
+    ]
+  @
+  if oxcaml then
+    [
+      ( "wire.ocaml selected outputs, unboxed batch",
+        fun buf ->
+          Selected_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
+      ("wire.ocaml fused stack, unboxed API", generated_unboxed ~stride);
+    ]
+  else []
 
 (* {1 Timing}
 
-   One warm-up pass, which also gives the checksum, then [runs] timed passes.
-   Each pass reads the wall clock and the process CPU time (user and system,
-   from [getrusage]) around the call; CPU time leaves out the time the process
-   spends descheduled, which on a loaded machine dominates the wall clock of
-   the slower rows. Only rows whose name contains [filter] run, so a process
-   can be measured whole for one row. cargo/src/main.rs does exactly the
-   same. *)
+   [Bench_lib.measure] times each row: one warm-up pass, which also gives the
+   checksum, then [runs] timed passes, each reading the wall clock and the
+   process CPU time around the call, as cargo/src/main.rs does. [filter]
+   can select one row by its name, so a process can be measured whole for one
+   row. *)
 
 let mask62 = (1 lsl 62) - 1
 
-let contains ~sub s =
-  let n = String.length sub and m = String.length s in
-  let rec go i = i + n <= m && (String.sub s i n = sub || go (i + 1)) in
-  go 0
-
-let cpu_time () =
-  let t = Unix.times () in
-  t.tms_utime +. t.tms_stime
-
-(* Best, 10th percentile, median and 90th percentile, sorted in place. *)
-let quantiles times =
-  Array.sort Float.compare times;
-  let pct p = times.((Array.length times - 1) * p / 100) in
-  (times.(0), pct 10, pct 50, pct 90)
-
-let measure ~corpus ~filter ~stride buf runs (name, f) =
-  if contains ~sub:filter name then begin
-    let packets = float (Bytes.length buf / stride) in
-    let sum = f buf land mask62 in
-    let cpu = Array.make runs 0. and wall = Array.make runs 0. in
-    for r = 0 to runs - 1 do
-      let w0 = Unix.gettimeofday () in
-      let c0 = cpu_time () in
-      ignore (Sys.opaque_identity (f (Sys.opaque_identity buf)));
-      let c1 = cpu_time () in
-      let w1 = Unix.gettimeofday () in
-      cpu.(r) <- (c1 -. c0) *. 1e9 /. packets;
-      wall.(r) <- (w1 -. w0) *. 1e9 /. packets
-    done;
-    let compiler =
-      (if oxcaml then "OxCaml " else "OCaml ") ^ Sys.ocaml_version
-    in
-    let c_best, c10, c50, c90 = quantiles cpu in
-    let w_best, w10, w50, w90 = quantiles wall in
-    Fmt.pr
-      "RESULT\t%s\t%s \
-       (%s)\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d@."
-      corpus name compiler c_best c10 c50 c90 w_best w10 w50 w90 sum
-  end
-
 let run file stride runs filter =
-  let rows =
-    match stride with
-    | 64 -> Rows64.all
-    | 128 -> Rows128.all
-    | _ -> Fmt.failwith "bench.exe: no rows for a stride of %d bytes" stride
-  in
-  let buf = read_file file in
-  if Bytes.length buf mod stride <> 0 then
+  let buf = Bench_lib.read_file file in
+  if stride <= 0 || Bytes.length buf mod stride <> 0 then
     Fmt.failwith "bench.exe: %s is not a whole number of %d-byte slots" file
       stride;
   let corpus = Filename.remove_extension (Filename.basename file) in
-  List.iter (measure ~corpus ~filter ~stride buf runs) rows
-
-(* {1 The report} *)
-
-type result = {
-  corpus : string;
-  name : string;
-  cpu : float * float * float * float;
-  wall : float * float * float * float;
-  sum : string;
-}
-
-let results files =
-  List.concat_map
-    (fun file ->
-      In_channel.with_open_text file In_channel.input_lines
-      |> List.filter_map (fun l ->
-          match String.split_on_char '\t' l with
-          | [ "RESULT"; corpus; name; c0; c1; c2; c3; w0; w1; w2; w3; sum ] ->
-              let f = float_of_string in
-              Some
-                {
-                  corpus;
-                  name;
-                  cpu = (f c0, f c1, f c2, f c3);
-                  wall = (f w0, f w1, f w2, f w3);
-                  sum;
-                }
-          | _ -> None))
-    files
-
-let best r =
-  let b, _, _, _ = r.cpu in
-  b
-
-let uniq l =
-  List.rev (List.fold_left (fun a x -> if List.mem x a then a else x :: a) [] l)
-
-(* The corpus [<family>-<order>] belongs to [<family>]: both orders hold the
-   same packets, so they must give the same checksum. *)
-let family corpus =
-  match String.rindex_opt corpus '-' with
-  | Some i -> String.sub corpus 0 i
-  | None -> corpus
-
-let corpus_table rs corpus =
-  let rs = List.filter (fun r -> r.corpus = corpus) rs in
-  let rs = List.sort (fun a b -> Float.compare (best a) (best b)) rs in
-  let fastest = match rs with r :: _ -> best r | [] -> nan in
-  Fmt.pr "@.Corpus %s, ranked by best CPU time:@.@." corpus;
-  Fmt.pr "%-58s %8s %8s %8s %8s %9s %9s %8s@." "Implementation" "CPU" "CPU"
-    "CPU" "CPU" "wall" "wall" "vs best";
-  Fmt.pr "%-58s %8s %8s %8s %8s %9s %9s %8s@." "(ns/packet)" "best" "p10"
-    "median" "p90" "best" "median" "(CPU)";
-  Fmt.pr "%s@." (String.make 127 '-');
   List.iter
-    (fun r ->
-      let c0, c1, c2, c3 = r.cpu and w0, _, w2, _ = r.wall in
-      Fmt.pr "%-58s %8.2f %8.2f %8.2f %8.2f %9.2f %9.2f %7.2fx@." r.name c0 c1
-        c2 c3 w0 w2 (c0 /. fastest))
-    rs
-
-(* Best CPU time per corpus, one column each, ranked by the first corpus. *)
-let summary rs corpora =
-  let names = uniq (List.map (fun r -> r.name) rs) in
-  let cell name corpus =
-    List.find_opt (fun r -> r.name = name && r.corpus = corpus) rs
-  in
-  let first = List.hd corpora in
-  let key name =
-    match cell name first with Some r -> best r | None -> infinity
-  in
-  let names = List.sort (fun a b -> Float.compare (key a) (key b)) names in
-  Fmt.pr "@.Best CPU ns/packet, by corpus:@.@.";
-  Fmt.pr "%-58s" "Implementation";
-  List.iter (fun c -> Fmt.pr " %15s" c) corpora;
-  Fmt.pr "@.%s@." (String.make (58 + (16 * List.length corpora)) '-');
-  List.iter
-    (fun name ->
-      Fmt.pr "%-58s" name;
-      List.iter
-        (fun c ->
-          match cell name c with
-          | Some r -> Fmt.pr " %15.2f" (best r)
-          | None -> Fmt.pr " %15s" "-")
-        corpora;
-      Fmt.pr "@.")
-    names
-
-let checksums rs =
-  let families = uniq (List.map (fun r -> family r.corpus) rs) in
-  let agree =
-    List.map
-      (fun fam ->
-        let mine = List.filter (fun r -> family r.corpus = fam) rs in
-        match uniq (List.map (fun r -> r.sum) mine) with
-        | [ s ] ->
-            Fmt.pr
-              "@.Every implementation read the same fields on %s (checksum \
-               %s).@."
-              fam s;
-            true
-        | _ ->
-            Fmt.epr "The implementations disagree on the fields of %s:@." fam;
-            List.iter
-              (fun r -> Fmt.epr "  %s on %s: %s@." r.name r.corpus r.sum)
-              mine;
-            false)
-      families
-  in
-  if not (List.for_all Fun.id agree) then exit 1
-
-let report files =
-  let rs = results files in
-  if rs = [] then
-    Fmt.failwith "bench.exe: no RESULT lines in %a"
-      Fmt.(list ~sep:sp string)
-      files;
-  let corpora = uniq (List.map (fun r -> r.corpus) rs) in
-  List.iter (corpus_table rs) corpora;
-  summary rs corpora;
-  checksums rs
+    (fun (name, f) ->
+      Bench_lib.measure ~corpus ~filter ~name
+        ~items:(Bytes.length buf / stride)
+        ~runs ~pp:Fmt.int
+        (fun () -> f (Sys.opaque_identity buf) land mask62))
+    (rows stride)
 
 let () =
   match Array.to_list Sys.argv with
   | [ _; "corpus"; dir; n ] -> corpora dir (int_of_string n)
   | _ :: "run" :: file :: stride :: runs :: rest ->
-      let filter = match rest with [ f ] -> f | _ -> "" in
-      run file (int_of_string stride) (int_of_string runs) filter
-  | _ :: "report" :: files -> report files
+      let filter =
+        Bench_lib.filter (match rest with [ f ] -> Some f | _ -> None)
+      in
+      run file (int_of_string stride) (int_of_string runs) filter;
+      Bench_lib.finish filter
+  | _ :: "report" :: files -> Bench_lib.report ~unit:(fun _ -> "packet") files
   | _ ->
       prerr_endline
-        "usage: bench.exe (corpus DIR N | run FILE STRIDE RUNS [FILTER] | \
-         report FILE...)";
+        "usage: bench.exe (corpus DIR N | run FILE STRIDE RUNS [ROW | --list] \
+         | report FILE...)";
       exit 2

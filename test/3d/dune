@@ -52,4 +52,4 @@
   Demo.3d)
  (action
   (bash
-   "~/.local/everparse/bin/3d.exe --version && for f in *.3d; do ~/.local/everparse/bin/3d.exe --batch \"$f\" > /dev/null 2>&1 || exit 1; done")))
+   "e=~/.local/everparse/bin/everparse-3d.exe; [ -x \"$e\" ] || e=~/.local/everparse/bin/3d.exe; \"$e\" --version && for f in *.3d; do \"$e\" --batch \"$f\" > /dev/null 2>&1 || exit 1; done")))

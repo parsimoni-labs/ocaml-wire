@@ -38,13 +38,28 @@ takes different CPU times on different cores and clocks, and other
 processes still evict caches and train the branch predictors, so read the
 p10 and median columns too.
 
-One run of `make bench-rust BUILD_EVERPARSE=1` with its defaults, 200,000 packets per corpus and 21
-timed passes per row, on an ARM64 macOS host whose load average fell from
-68 to 52 during the run. OCaml 5.4.1 (no flambda); OxCaml 5.4.0+ox (switch
-`5.4.0-ox9`); rustc 1.94.1 with etherparse 0.21.0, smoltcp 0.14.0 and
-pnet_packet 0.35.0, as `cargo/Cargo.lock` pins them; EverParse 3d v2026.08.21. The corpora are
-deterministic: `bench.exe corpus DIR 200000` writes them with these SHA-256
-digests.
+`make bench-rust-count` counts the instructions and cycles each row spends
+per packet with `bench/count.sh`, as `make bench-apps-count` does for the
+applications: the row alone with 1 and with 21 timed passes, the difference
+divided by 20 passes, so the process's fixed costs drop out. The numbers
+below are the median of ten runs with its defaults, 200,000 packets per
+corpus, measured at commit `aceaeb80` (the parent of the commit that adds
+them, which changes only READMEs) on an ARM64 macOS host under a load
+average of 145 to 380. The cycles move with the load and the core a row
+lands on, the instructions do not. OCaml 5.4.1 with `-inline 50`; OCaml
+5.4.1 with flambda (switch `5.4.1-flambda`, `-O2`); OxCaml 5.4.0+ox
+(switch `5.4.0-ox9`, `-O4`), each on every unit as `bench/README.md`
+(Compiler flags) explains;
+rustc 1.94.1 with etherparse 0.21.0, smoltcp 0.14.0 and pnet_packet 0.35.0,
+as `cargo/Cargo.lock` pins them. The four OxCaml batch rows and the two
+`wire.rust` scanner rows were counted again at commit `922e2bce`, after
+the OxCaml frame loop started loading each frame's IPv4 protocol ahead of
+its walk: the median of forty runs, the six rows interleaved on each
+corpus with their order rotated from run to run, under a load average of
+120 to 200. Interleaving makes the rows share the host's load, which ten
+runs taken one row after another do not; the medians still move by about
+5% from one such session to the next. The corpora are deterministic:
+`bench.exe corpus DIR 200000` writes them with these SHA-256 digests.
 
 | Corpus | SHA-256 |
 | --- | --- |
@@ -53,43 +68,54 @@ digests.
 | mix128-random | `eb051b87d495915d8f64fcbc101b021cec549933bce3f31d8eb1a555fd2716f0` |
 | mix128-sorted | `931fc45b7033d274f304753455284eacf77f1063d3424221c6de88041680c6d6` |
 
-Best CPU ns/packet:
+Instructions / cycles per packet, ordered by the instructions on
+`fixed64-random`:
 
 | Row | fixed64 random | fixed64 sorted | mix128 random | mix128 sorted |
 | --- | ---: | ---: | ---: | ---: |
-| wire.rust, linked headers | 6.60 | 5.52 | 7.78 | 3.87 |
-| wire.rust selected outputs | 6.79 | 5.68 | 7.06 | 4.03 |
-| wire.rust fused stack | 7.23 | 6.53 | 7.80 | 4.31 |
-| OxCaml selected outputs, unboxed batch | 7.90 | 9.02 | 11.74 | 4.88 |
-| OxCaml fused stack, unboxed batch | 8.15 | 8.93 | 11.70 | 4.82 |
-| smoltcp 0.14 | 8.54 | 6.93 | 8.94 | 4.68 |
-| OxCaml selected outputs, batch | 8.65 | 10.36 | 13.27 | 5.39 |
-| OxCaml fused stack, batch | 9.07 | 10.18 | 13.11 | 5.40 |
-| pnet_packet 0.35 | 9.34 | 7.62 | 9.54 | 6.13 |
-| etherparse 0.21 | 9.36 | 7.79 | 8.96 | 5.76 |
-| OxCaml selected outputs, fold | 9.77 | 10.55 | 14.35 | 6.50 |
-| OxCaml fused stack, unboxed API | 9.81 | 11.54 | 14.57 | 7.03 |
-| OxCaml fused stack, fold | 10.48 | 11.14 | 14.24 | 6.33 |
-| OxCaml fused stack, decode | 11.45 | 12.96 | 16.13 | 7.71 |
-| OCaml selected outputs, batch | 12.34 | 10.53 | 15.30 | 10.49 |
-| OCaml fused stack, batch | 12.38 | 10.41 | 15.57 | 8.50 |
-| OCaml selected outputs, fold | 13.41 | 11.88 | 16.83 | 9.75 |
-| OxCaml View.check/view, linked headers | 13.96 | 15.29 | 20.00 | 10.44 |
-| OCaml fused stack, fold | 14.24 | 11.80 | 16.44 | 12.05 |
-| OCaml View.check/view, linked headers | 20.40 | 17.34 | 23.22 | 16.93 |
-| EverParse C, default plug | 35.36 | 33.18 | 34.79 | 31.65 |
-| OCaml fused stack, decode | 36.24 | 32.47 | 41.67 | 33.97 |
-| OCaml `Wire.Codec` valid/read, linked headers | 46.02 | 42.09 | 48.49 | 38.56 |
-| OxCaml `Wire.Codec` valid/read, linked headers | 47.95 | 62.50 | 61.29 | 46.92 |
-| OxCaml `Wire.Codec` stack decode | 716.49 | 749.28 | 979.71 | 874.90 |
-| OCaml `Wire.Codec` stack decode | 806.86 | 825.16 | 801.03 | 722.45 |
+| wire.ocaml selected outputs, unboxed batch, OxCaml | 65.4 / 24.9 | 65.3 / 18.4 | 64.5 / 25.6 | 64.2 / 14.2 |
+| wire.ocaml selected outputs, batch, OxCaml | 66.7 / 24.2 | 66.7 / 18.1 | 65.5 / 24.9 | 65.5 / 14.2 |
+| wire.rust, linked headers | 68.6 / 24.4 | 68.6 / 18.8 | 67.0 / 25.2 | 66.7 / 14.9 |
+| wire.ocaml fused stack, unboxed batch, OxCaml | 70.0 / 25.3 | 70.1 / 19.4 | 68.8 / 26.1 | 68.8 / 15.3 |
+| wire.ocaml fused stack, batch, OxCaml | 71.4 / 25.2 | 71.4 / 19.1 | 70.2 / 25.6 | 70.0 / 15.3 |
+| wire.rust selected outputs | 73.5 / 24.3 | 73.5 / 19.1 | 72.0 / 25.4 | 71.8 / 14.9 |
+| wire.rust fused stack | 80.6 / 26.4 | 80.5 / 21.2 | 78.4 / 26.8 | 78.4 / 16.0 |
+| smoltcp 0.14 | 82.3 / 30.6 | 82.2 / 24.2 | 80.5 / 30.6 | 80.6 / 17.7 |
+| wire.ocaml selected outputs, batch, OCaml flambda | 87.0 / 32.3 | 86.8 / 26.9 | 85.8 / 34.0 | 85.9 / 23.1 |
+| wire.ocaml fused stack, batch, OCaml flambda | 87.3 / 32.4 | 87.2 / 27.4 | 86.2 / 35.2 | 86.0 / 21.1 |
+| wire.ocaml fused stack, batch, OCaml | 88.2 / 33.9 | 88.8 / 26.4 | 87.5 / 35.8 | 87.5 / 22.6 |
+| wire.ocaml selected outputs, batch, OCaml | 88.5 / 33.0 | 88.6 / 27.3 | 87.8 / 35.5 | 87.1 / 22.6 |
+| wire.ocaml selected outputs, fold, OxCaml | 88.8 / 32.4 | 88.7 / 25.1 | 87.5 / 34.5 | 87.2 / 20.8 |
+| wire.ocaml fused stack, fold, OxCaml | 90.6 / 32.0 | 90.7 / 26.7 | 89.3 / 33.8 | 89.2 / 21.5 |
+| pnet_packet 0.35 | 114 / 32.9 | 114 / 25.9 | 110 / 32.8 | 110 / 21.6 |
+| wire.ocaml fused stack, fold, OCaml flambda | 122 / 40.0 | 122 / 34.6 | 121 / 42.6 | 121 / 27.1 |
+| wire.ocaml selected outputs, fold, OCaml flambda | 122 / 39.7 | 122 / 34.6 | 121 / 41.8 | 121 / 27.4 |
+| etherparse 0.21 | 130 / 32.5 | 130 / 26.9 | 126 / 33.0 | 126 / 21.5 |
+| wire.ocaml fused stack, fold, OCaml | 136 / 42.5 | 136 / 36.3 | 135 / 43.9 | 135 / 31.4 |
+| wire.ocaml fused stack, OxCaml | 140 / 40.0 | 140 / 33.8 | 137 / 43.0 | 138 / 29.4 |
+| wire.ocaml fused stack, unboxed API, OxCaml | 141 / 38.1 | 141 / 31.6 | 139 / 39.7 | 139 / 24.5 |
+| wire.ocaml selected outputs, fold, OCaml | 143 / 43.0 | 143 / 36.0 | 142 / 44.9 | 142 / 29.4 |
+| wire.ocaml View.check/view, linked headers, OxCaml | 164 / 47.7 | 164 / 40.8 | 161 / 51.8 | 161 / 35.5 |
+| wire.ocaml View.check/view, linked headers, OCaml | 212 / 58.1 | 212 / 50.2 | 209 / 60.5 | 209 / 43.6 |
+| wire.ocaml View.check/view, linked headers, OCaml flambda | 224 / 58.1 | 224 / 51.0 | 220 / 61.7 | 220 / 47.5 |
+| wire.ocaml fused stack, OCaml flambda | 273 / 65.0 | 272 / 57.9 | 268 / 67.8 | 268 / 50.9 |
+| wire.ocaml fused stack, OCaml | 477 / 129 | 477 / 121 | 471 / 130 | 471 / 112 |
+| EverParse C, default plug | 677 / 120 | 676 / 113 | 687 / 121 | 688 / 107 |
+| Wire.Codec check/read, linked headers, OCaml | 681 / 139 | 681 / 130 | 670 / 136 | 669 / 117 |
+| Wire.Codec check/read, linked headers, OxCaml | 713 / 142 | 713 / 133 | 701 / 142 | 700 / 124 |
+| Wire.Codec check/read, linked headers, OCaml flambda | 740 / 146 | 740 / 141 | 727 / 148 | 727 / 130 |
+| Wire.Codec stack decode, OxCaml | 2943 / 694 | 2943 / 651 | 3013 / 719 | 3013 / 659 |
+| Wire.Codec stack decode, OCaml | 3005 / 699 | 3004 / 648 | 3098 / 727 | 3097 / 660 |
+| Wire.Codec stack decode, OCaml flambda | 3147 / 705 | 3147 / 659 | 3249 / 735 | 3249 / 670 |
 
 Every row gave checksum `886803207481188` on both `fixed64` corpora and
-`836859001324973` on both `mix128` corpora. On sorted corpora the best of
-the OxCaml rows often lies well below their median, so one run does not
-order rows within about 1 ns/packet there.
+`836859001324973` on both `mix128` corpora. A row spends the same
+instructions on the random and the sorted order of a family; the sorted
+order saves cycles where the branches on the kind of packet predict.
 
-The EverParse C validator's C was compiled by Apple clang 21.0.0 at `-O2`.
+The EverParse C row is `make bench-rust-count BUILD_EVERPARSE=1`, counted
+the same way at the same commit with EverParse 3d v2026.10.27; its C was
+compiled by Apple clang 21.0.0 at `-O2`.
 Each field reaches the plug through an out-of-line setter in another
 translation unit, 30 calls for a TCP packet, and the plug is zeroed per
 slot; the run does not separate that cost from the validator's own.
@@ -102,4 +128,6 @@ added, on the `fixed64-random` corpus of that time, the stock batch through
 allocated a five-word closure per frame and took 31.30 (full outputs) and
 20.18 (selected) ns/packet, against 15.38 and 14.86 by name, with no
 allocation and no call per frame. The stock `decode` row still builds its
-record through `fold`'s closures.
+record through `fold`'s closures. `Step` takes the outputs as `int64` and
+folds them as `int64`, as the unboxed OxCaml rows fold `int64_u` and the
+Rust rows `u64`.

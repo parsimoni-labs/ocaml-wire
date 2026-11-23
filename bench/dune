@@ -2,8 +2,57 @@
 
 (library
  (name bench_lib)
- (modules bench_lib)
+ (modules bench_lib ox)
  (libraries unix fmt))
+
+; The flags the [bench] profile of dune-workspace adds to every unit, for the
+; compiler that builds: what bench/flags-sweep.sh picks for OCaml, OCaml with
+; flambda and OxCaml (bench/README.md, Compiler flags).
+
+(rule
+ (enabled_if
+  (and
+   (<> %{ocaml-config:ox} true)
+   (= %{ocaml-config:flambda} false)))
+ (action
+  (with-stdout-to
+   flags.sexp
+   (echo "(-inline 50)\n"))))
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:flambda} true))
+ (action
+  (with-stdout-to
+   flags.sexp
+   (echo "(-O2)\n"))))
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   flags.sexp
+   (echo "(-O4)\n"))))
+
+; [Ox.v] tells the rows measured in their own process which compiler built
+; them, and [Ox.flambda] whether an OCaml compiler has flambda.
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   ox.ml
+   (echo "let v = true\nlet flambda = false\n"))))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   ox.ml
+   (echo "let v = false\nlet flambda = %{ocaml-config:flambda}\n"))))
 
 ; -- EverParse benchmark infrastructure --
 

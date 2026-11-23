@@ -13,13 +13,32 @@ open Scan_module
    module holds the interface. *)
 
 type target = [ `OCaml | `OxCaml ]
-type typ = Planner.typ = Typ : 'a Wire.typ -> typ
+type map = { path : string; ocaml : string; typ : Planner.typ }
 
+let map path ~typ m = { path; ocaml = typ; typ = Typ m }
 let ident = ident
-let ml = ml
-let bridge = bridge
+let typs = Option.map (List.map (fun m -> (m.path, m.typ)))
+let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
+
+let ml ?target ?simd ?make ?maps ~codec c =
+  ml ?target ?simd ?make:(Option.map fst make) ?maps:(typs maps) ~codec c
+
+let mli ?target ?simd ?make ?maps ~codec c =
+  Interface.record ?target ?simd ?make ?maps:(named maps) ~codec c
+
+let bridge ?maps ~codec ~core c = bridge ?maps:(typs maps) ~codec ~core c
+
+let bridge_mli ?(maps = []) ~codec ~core c =
+  (* The checks the bridge would refuse, refused here too. *)
+  ignore (bridge ~maps ~codec ~core c);
+  Interface.bridge ~maps:(maps <> []) ~codec ~core
+
 let scanner_fields = scanner_fields
-let scanner = scanner
+
+let scanner ?target ?fields ?step ~codec c =
+  scanner ?target ?fields ?step ~codec c
+
+let scanner_mli = Interface.scanner
 
 (* {1 The plan, for other backends} *)
 
@@ -72,10 +91,85 @@ module Plan = struct
   let nodes t = t.nodes
   let outputs t = t.outputs
 
+  type nonrec pos = pos = { var : string option; at : int }
+  type values = Decision.values
+
+  type bound = Decision.bound =
+    | Next
+    | Hoisted
+    | Checked of {
+        negative : bool;
+        cancelled : (int T.expr * int T.expr) option;
+      }
+
+  type choice = Decision.choice =
+    | Run of int option
+    | If of bool T.expr * choice * choice
+
+  type join = Decision.join = Joined | Copied
+  type short_frames = Decision.short_frames = Apart | Inline | Walked
+
+  type decision = Decision.t =
+    | Walk of { name : string; values : values; known : int }
+    | Prefix_bound of { at : pos; window : string; bytes : int; tested : bool }
+    | Span_bound of {
+        size : int T.expr;
+        at : pos;
+        window : string;
+        size_var : string;
+        overflows : bool;
+        bound : bound;
+      }
+    | Shared_words of {
+        at : int;
+        constant : bool;
+        lo : int;
+        hi : int;
+        window : string;
+        fields : (int * int) list;
+        held : int list;
+        loads : int list;
+      }
+    | Word_range of {
+        at : pos;
+        window : string;
+        first : string;
+        second : string;
+        lo : int;
+        hi : int;
+      }
+    | Dispatch of {
+        at : pos;
+        window : string;
+        cases : int;
+        choice : choice;
+        join : join;
+        hoisted : int T.expr option;
+      }
+    | Cut of { name : string; window : string; known : int }
+    | Frame_loop of {
+        name : string;
+        need : int;
+        frames : int;
+        short : short_frames option;
+        ahead : string list;
+      }
+
+  let pp_decision = Decision.pp
+
+  let decisions ?target ?fields ?step c =
+    let acc = ref [] in
+    let decide d = acc := d :: !acc in
+    ignore (Scan_module.scanner ~decide ?target ?fields ?step ~codec:"c" c);
+    List.rev !acc
+
   let select t names =
     match selected t names with
     | outputs -> outputs
     | exception Unsupported why -> invalid_arg why
+
+  let slot_depth = slot_depth
+  let slots t outputs = slots t outputs
 
   let live t outputs =
     let live = live t ~outputs:(List.map (fun (o : output) -> o.id) outputs) in
@@ -104,15 +198,21 @@ module Plan = struct
   end
 
   let conditions f = List.map (fun c -> c.cond) f.checks
+  let word_range = word_range
   let range (t : t) e = range t.ranges e
 
-  type nonrec tree = tree = { tid : int; node : tnode }
-  and tnode = tnode = Leaf of int option | Branch of bool T.expr * tree * tree
+  type tree = Dispatch_tree.tree = { tid : int; node : tnode }
 
-  let gates facts nodes = gate_run ~lower:(simplify facts) facts nodes
-  let decide = decide
+  and tnode = Dispatch_tree.tnode =
+    | Leaf of int option
+    | Branch of bool T.expr * tree * tree
+
+  let gates facts nodes =
+    Dispatch_tree.gate_run ~lower:(simplify facts) facts nodes
+
+  let decide = Dispatch_tree.decide
 
   let shared tree =
-    let shared, case_shared, _ = reach tree in
+    let shared, case_shared, _ = Dispatch_tree.reach tree in
     (shared, case_shared)
 end

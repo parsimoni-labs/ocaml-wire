@@ -11,16 +11,20 @@
 //! EtherType. Each reads the same fields and folds them the same way, so
 //! every implementation, OCaml ones included, must print the same checksum.
 //!
-//! Usage: `wire-bench-rust CORPUS SLOT RUNS [FILTER]`, reading CORPUS as
-//! SLOT-byte packets (`bench.exe corpus` writes the corpora) and printing one
-//! `RESULT <corpus> <name> <cpu best> <cpu p10> <cpu median> <cpu p90>
+//! Every row takes the slot size at run time, from the command line, as a
+//! reader of fixed-size frames that learns their size from its input does.
+//!
+//! Usage: `wire-bench-rust CORPUS SLOT RUNS [ROW | --list]`, reading CORPUS as
+//! SLOT-byte packets (`bench.exe corpus` writes the corpora) and printing
+//! one `RESULT <corpus> <name> <cpu best> <cpu p10> <cpu median> <cpu p90>
 //! <wall best> <wall p10> <wall median> <wall p90> <checksum>` line
 //! (ns/packet) per implementation, over RUNS timed passes; `<corpus>` is the
-//! file name without its extension. An optional FILTER runs only the rows
-//! whose name contains it.
+//! file name without its extension. An optional ROW runs only the row of
+//! that name, and fails when there is none; `--list` prints the row names.
 
 use std::hint::black_box;
-use std::time::Instant;
+
+mod timing;
 
 #[path = "gen/eth.rs"]
 mod eth;
@@ -39,21 +43,18 @@ const IPV4: u16 = 0x0800;
 
 // The fold every implementation applies to the fields it reads. Only `+` and
 // `^`, so its low 62 bits match OCaml's 63-bit `int`.
-#[inline(always)]
 fn ip_fields(acc: u64, src: u32, dst: u32, ttl: u8, proto: u8, len: u16) -> u64 {
     acc.wrapping_add((src ^ dst) as u64)
         .wrapping_add(ttl as u64 + proto as u64 + len as u64)
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline(always)]
 fn tcp_fields(acc: u64, sp: u16, dp: u16, seq: u32, ack: u32, win: u16, flags: u16, off: u8) -> u64 {
     acc.wrapping_add(((sp as u64) << 16) | dp as u64)
         .wrapping_add((seq ^ ack) as u64)
         .wrapping_add(win as u64 + flags as u64 + off as u64)
 }
 
-#[inline(always)]
 fn udp_fields(acc: u64, sp: u16, dp: u16, len: u16) -> u64 {
     acc.wrapping_add(((sp as u64) << 16) | dp as u64).wrapping_add(len as u64)
 }
@@ -104,8 +105,8 @@ fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
 // The scanner of `Packet_stack.codec` makes every check the linked headers
 // make, so the harness only folds the fields of an accepted frame.
 macro_rules! stack_fold {
-    ($scanner:ident) => {
-        |corpus: &[u8], slot: usize| -> u64 {
+    ($name:ident, $scanner:ident) => {
+        fn $name(corpus: &[u8], slot: usize) -> u64 {
             let mut acc = 0u64;
             for p in corpus.chunks_exact(slot) {
                 let Some(f) = $scanner::scan(p) else { continue };
@@ -126,6 +127,9 @@ macro_rules! stack_fold {
         }
     };
 }
+
+stack_fold!(wire_rust_stack, stack);
+stack_fold!(wire_rust_selected, stack_selected);
 
 fn etherparse(corpus: &[u8], slot: usize) -> u64 {
     use etherparse::{LinkSlice, NetSlice, SlicedPacket, TransportSlice};
@@ -270,55 +274,12 @@ fn pnet(corpus: &[u8], slot: usize) -> u64 {
     acc
 }
 
-// Process CPU time, user and system, in seconds: `getrusage`, as OCaml's
-// `Unix.times` reads it.
-fn cpu_time() -> f64 {
-    let mut ru = std::mem::MaybeUninit::<libc::rusage>::uninit();
-    // SAFETY: getrusage fills the whole struct when it returns 0.
-    let ru = unsafe {
-        assert_eq!(libc::getrusage(libc::RUSAGE_SELF, ru.as_mut_ptr()), 0);
-        ru.assume_init()
-    };
-    let secs = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
-    secs(ru.ru_utime) + secs(ru.ru_stime)
-}
-
-// Best, 10th percentile, median and 90th percentile.
-fn quantiles(mut times: Vec<f64>) -> [f64; 4] {
-    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let pct = |p: usize| times[(times.len() - 1) * p / 100];
-    [times[0], pct(10), pct(50), pct(90)]
-}
-
-// One warm-up pass, which also gives the checksum, then RUNS timed passes.
-// Each pass reads the wall clock and the process CPU time (user and system)
-// around the call; CPU time leaves out the time the process spends
-// descheduled. Only rows whose name contains FILTER run, so a process can be
-// measured whole for one row. The OCaml harness (bench.ml) does exactly the
-// same.
+// Times `f` on the corpus of `slot`-byte packets with `timing::measure`,
+// which the OCaml harness's `Bench_lib.measure` mirrors. `f` is the row's
+// function itself, so each pass calls it directly.
 #[allow(clippy::too_many_arguments)]
-fn measure(corpus_name: &str, name: &str, filter: &str, corpus: &[u8], slot: usize, runs: usize, f: fn(&[u8], usize) -> u64) {
-    if !name.contains(filter) {
-        return;
-    }
-    let packets = (corpus.len() / slot) as f64;
-    let sum = f(black_box(corpus), slot);
-    let mut cpu = Vec::with_capacity(runs);
-    let mut wall = Vec::with_capacity(runs);
-    for _ in 0..runs {
-        let w0 = Instant::now();
-        let c0 = cpu_time();
-        black_box(f(black_box(corpus), slot));
-        let c1 = cpu_time();
-        wall.push(w0.elapsed().as_nanos() as f64 / packets);
-        cpu.push((c1 - c0) * 1e9 / packets);
-    }
-    let [c0, c1, c2, c3] = quantiles(cpu);
-    let [w0, w1, w2, w3] = quantiles(wall);
-    println!(
-        "RESULT\t{corpus_name}\t{name}\t{c0:.2}\t{c1:.2}\t{c2:.2}\t{c3:.2}\t{w0:.2}\t{w1:.2}\t{w2:.2}\t{w3:.2}\t{}",
-        sum & ((1 << 62) - 1)
-    );
+fn measure(corpus_name: &str, name: &str, filter: &timing::Filter, corpus: &[u8], slot: usize, runs: usize, f: impl Fn(&[u8], usize) -> u64) {
+    timing::measure(corpus_name, name, filter, corpus.len() / slot, runs, || f(black_box(corpus), slot) & ((1 << 62) - 1));
 }
 
 fn main() {
@@ -327,13 +288,15 @@ fn main() {
     let corpus = std::fs::read(path).expect("corpus");
     let slot: usize = args[2].parse().expect("slot");
     let runs: usize = args[3].parse().expect("runs");
-    let filter = args.get(4).map(String::as_str).unwrap_or("");
-    assert!(corpus.len() % slot == 0, "the corpus is not a whole number of slots");
+    let filter = timing::Filter::new(args.get(4).map(String::as_str));
+    assert!(slot > 0 && corpus.len().is_multiple_of(slot), "the corpus is not a whole number of slots");
     let c = path.file_stem().and_then(|s| s.to_str()).expect("corpus name");
-    measure(c, "wire.rust, linked headers", filter, &corpus, slot, runs, wire_rust);
-    measure(c, "wire.rust fused stack", filter, &corpus, slot, runs, stack_fold!(stack));
-    measure(c, "wire.rust selected outputs", filter, &corpus, slot, runs, stack_fold!(stack_selected));
-    measure(c, "etherparse 0.21", filter, &corpus, slot, runs, etherparse);
-    measure(c, "smoltcp 0.14", filter, &corpus, slot, runs, smoltcp);
-    measure(c, "pnet_packet 0.35", filter, &corpus, slot, runs, pnet);
+    let f = &filter;
+    measure(c, "wire.rust, linked headers", f, &corpus, slot, runs, wire_rust);
+    measure(c, "wire.rust fused stack", f, &corpus, slot, runs, wire_rust_stack);
+    measure(c, "wire.rust selected outputs", f, &corpus, slot, runs, wire_rust_selected);
+    measure(c, "etherparse 0.21", f, &corpus, slot, runs, etherparse);
+    measure(c, "smoltcp 0.14", f, &corpus, slot, runs, smoltcp);
+    measure(c, "pnet_packet 0.35", f, &corpus, slot, runs, pnet);
+    filter.finish();
 }

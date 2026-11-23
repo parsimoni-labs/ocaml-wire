@@ -1,0 +1,90 @@
+; clcw.ml, the record module Wire_ocaml writes for Space.clcw_codec, and
+; stack.ml, the scanner it writes for Packet_stack.codec, are committed with
+; their interfaces so they are read and reviewed like any other source. The
+; generator prints each file and ocamlformat formats it under the project's
+; .ocamlformat, so [dune fmt] leaves it alone. The runtest diffs fail when one
+; drifts from its codec and [dune promote] refreshes it. Without ocamlformat
+; the checks are skipped and the committed copies build as they are.
+
+(executable
+ (name gen)
+ (modules gen)
+ (libraries space net wire.ocaml))
+
+(rule
+ (target clcw.ml.gen)
+ (enabled_if %{bin-available:ocamlformat})
+ (deps %{project_root}/.ocamlformat)
+ (action
+  (with-stdout-to
+   clcw.ml.gen
+   (pipe-stdout
+    (run ./gen.exe clcw.ml)
+    (run ocamlformat --impl --name=clcw.ml -)))))
+
+(rule
+ (target clcw.mli.gen)
+ (enabled_if %{bin-available:ocamlformat})
+ (deps %{project_root}/.ocamlformat)
+ (action
+  (with-stdout-to
+   clcw.mli.gen
+   (pipe-stdout
+    (run ./gen.exe clcw.mli)
+    (run ocamlformat --intf --name=clcw.mli -)))))
+
+(rule
+ (target stack.ml.gen)
+ (enabled_if %{bin-available:ocamlformat})
+ (deps %{project_root}/.ocamlformat)
+ (action
+  (with-stdout-to
+   stack.ml.gen
+   (pipe-stdout
+    (run ./gen.exe stack.ml)
+    (run ocamlformat --impl --name=stack.ml -)))))
+
+(rule
+ (target stack.mli.gen)
+ (enabled_if %{bin-available:ocamlformat})
+ (deps %{project_root}/.ocamlformat)
+ (action
+  (with-stdout-to
+   stack.mli.gen
+   (pipe-stdout
+    (run ./gen.exe stack.mli)
+    (run ocamlformat --intf --name=stack.mli -)))))
+
+(rule
+ (alias runtest)
+ (enabled_if %{bin-available:ocamlformat})
+ (action
+  (diff clcw.ml clcw.ml.gen)))
+
+(rule
+ (alias runtest)
+ (enabled_if %{bin-available:ocamlformat})
+ (action
+  (diff clcw.mli clcw.mli.gen)))
+
+(rule
+ (alias runtest)
+ (enabled_if %{bin-available:ocamlformat})
+ (action
+  (diff stack.ml stack.ml.gen)))
+
+(rule
+ (alias runtest)
+ (enabled_if %{bin-available:ocamlformat})
+ (action
+  (diff stack.mli stack.mli.gen)))
+
+(library
+ (name clcw)
+ (modules clcw)
+ (libraries wire.runtime))
+
+(library
+ (name stack)
+ (modules stack)
+ (libraries wire.runtime))

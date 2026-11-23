@@ -5,8 +5,8 @@
     glue written with each one hands them over as a {!t}, every value shown as a
     string. *)
 
-(** Which of a field's getters: [get_<f>], [get_<f>_int] for a 32-bit field, or
-    [<f>_of_word] on [get_<f>_word] for a bitfield. *)
+(** Which of a field's getters: [Get.<f>], [Get.<f>_int] for a 32-bit field, or
+    [<f>_of_word] on [Get.<f>_word] for a bitfield. *)
 type view = Get | Get_int | Of_word
 
 type ops = {
@@ -80,8 +80,8 @@ val check : string -> Fuzz_gen.packed -> t -> bytes -> unit
     or raise the same error, every getter reads what {!Wire.Codec.get} reads or
     raises what it raises, encode writes the same bytes or raises the same error
     into buffers around the record, and [Valid.v] with its reads agrees with
-    {!Wire.Codec.validate} then {!Wire.Codec.get}, on [bytes] and on a bigarray.
-    Fails with {!Alcobar.failf}. *)
+    {!Wire.Codec.validate_exn} then {!Wire.Codec.get}, on [bytes] and on a
+    bigarray. Fails with {!Alcobar.failf}. *)
 
 val report : string -> (string * Fuzz_gen.packed * string) list -> bool
 (** [report name refused] prints how many of the sampled {!codecs}, and of the
@@ -136,7 +136,7 @@ val check_scan :
 (** [check_scan ?oracle r backends buf] compares each scanner with [r]'s codec
     on frames of [buf] at several offsets, bounds past the buffer included: the
     outputs, acceptance against {!Wire.Codec.decode}, its general path and
-    {!Wire.Codec.validate}, [fold_frames] at several strides, and, with
+    {!Wire.Codec.validate_exn}, [fold_frames] at several strides, and, with
     [oracle], the acceptance and consumed prefix of the EverParse C validators
     of the standalone and FFI projections, and the plug scalars of the FFI one.
     A read must not change [buf]. Fails with {!Alcobar.failf}. *)

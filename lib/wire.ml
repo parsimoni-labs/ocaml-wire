@@ -1,6 +1,9 @@
 (* Wire: Dependent Data Descriptions for EverParse 3D *)
 
 module Staged = Staged
+
+module type S = Wire_runtime.Record.S
+
 module UInt32 = UInt32
 module UInt63 = UInt63
 module Action = Action
@@ -112,6 +115,8 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_decode = Codec.embed_decode_ctx c in
   let codec_validate = Codec.embed_validate_ctx c in
   let codec_validate_sized = Codec.embed_validate_sized_ctx c in
+  let codec_check_end = Codec.embed_check_end c in
+  let codec_walk = Codec.embed_walk c in
   let codec_encode = Codec.embed_encode_ctx c in
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
@@ -126,6 +131,8 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_decode;
           codec_validate;
           codec_validate_sized;
+          codec_check_end;
+          codec_walk;
           codec_encode;
           codec_fixed_size = Some n;
           codec_min_size;
@@ -142,6 +149,8 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_decode;
           codec_validate;
           codec_validate_sized;
+          codec_check_end;
+          codec_walk;
           codec_encode;
           codec_fixed_size = None;
           codec_min_size;

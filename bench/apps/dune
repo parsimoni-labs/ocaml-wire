@@ -1,0 +1,101 @@
+; The application benchmarks (bench/routing, bench/gateway, bench/clcw) across
+; languages: their OCaml workloads and the same application logic over the
+; OCaml Wire_ocaml generates (this directory: for the OCaml target on OCaml, for
+; the OxCaml target on an OxCaml compiler), against the same logic over the
+; Rust Wire_rust generates and over released crates (cargo/, a cargo project
+; outside the dune build so that dune never needs the network). `make
+; bench-apps-rust` runs both and prints the tables.
+
+(executable
+ (name gen)
+ (modules gen)
+ (libraries space wire wire.ocaml wire.rust))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (targets
+  g_space_packet.ml
+  g_space_packet.mli
+  g_tm_frame.ml
+  g_tm_frame.mli
+  g_clcw.ml
+  g_clcw.mli)
+ (action
+  (run ./gen.exe --ocaml)))
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (and
+    (<> %{architecture} arm64)
+    (<> %{architecture} amd64))))
+ (targets
+  g_space_packet.ml
+  g_space_packet.mli
+  g_tm_frame.ml
+  g_tm_frame.mli
+  g_clcw.ml
+  g_clcw.mli)
+ (action
+  (run ./gen.exe --oxcaml)))
+
+; On arm64 and amd64 the records that have SIMD lanes get them, which [Lanes]
+; uses.
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (or
+    (= %{architecture} arm64)
+    (= %{architecture} amd64))))
+ (targets
+  g_space_packet.ml
+  g_space_packet.mli
+  g_tm_frame.ml
+  g_tm_frame.mli
+  g_clcw.ml
+  g_clcw.mli)
+ (action
+  (run ./gen.exe --oxcaml --simd)))
+
+; [Lanes] is the CLCW logic over those lanes, four words per NEON register, on
+; OxCaml for arm64 or amd64; elsewhere it has no rows.
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (or
+    (= %{architecture} arm64)
+    (= %{architecture} amd64))))
+ (action
+  (copy lanes.neon.ml lanes.ml)))
+
+(rule
+ (enabled_if
+  (or
+   (<> %{ocaml-config:ox} true)
+   (and
+    (<> %{architecture} arm64)
+    (<> %{architecture} amd64))))
+ (action
+  (copy lanes.none.ml lanes.ml)))
+
+; [Loops] is the application logic over the generated code, the same source on
+; OCaml and on OxCaml. Nothing runs the bench as bytecode, so it is built native
+; only.
+
+(executable
+ (name bench)
+ (modes native)
+ (modules bench loops lanes g_space_packet g_tm_frame g_clcw)
+ (libraries
+  bench_lib
+  routing_workload
+  gateway_workload
+  clcw_workload
+  wire.runtime
+  fmt))

@@ -6,38 +6,161 @@
 (copy_files
  (files ../ocaml/test_wire_ocaml.{ml,mli}))
 
+(copy_files
+ (files ../ocaml/test_same.{ml,mli}))
+
 (rule
  (copy ../ocaml/test.ml test.ml))
 
+; On arm64 and amd64 the records that have SIMD lanes get them ([--simd]).
+
 (rule
  (enabled_if
-  (= %{ocaml-config:ox} true))
+  (and
+   (= %{ocaml-config:ox} true)
+   (or
+    (= %{architecture} arm64)
+    (= %{architecture} amd64))))
  (targets
   g_ipv4.ml
+  g_ipv4.mli
   g_ipv4_wire.ml
+  g_ipv4_wire.mli
   g_ipv4_record.ml
+  g_ipv4_record.mli
   g_ipv4_record_wire.ml
+  g_ipv4_record_wire.mli
   g_checked.ml
+  g_checked.mli
   g_checked_wire.ml
+  g_checked_wire.mli
   g_mixed.ml
+  g_mixed.mli
   g_mixed_wire.ml
+  g_mixed_wire.mli
   g_small.ml
+  g_small.mli
   g_small_wire.ml
+  g_small_wire.mli
   g_eth.ml
+  g_eth.mli
   g_eth_wire.ml
+  g_eth_wire.mli
   g_wide.ml
+  g_wide.mli
   g_wide_wire.ml
+  g_wide_wire.mli
   g_mapped.ml
+  g_mapped.mli
   g_mapped_wire.ml
+  g_mapped_wire.mli
   g_signed.ml
+  g_signed.mli
   g_signed_wire.ml
+  g_signed_wire.mli
+  g_packed.ml
+  g_packed.mli
+  g_packed_wire.ml
+  g_packed_wire.mli
   g_refined.ml
+  g_refined.mli
   g_refined_wire.ml
+  g_refined_wire.mli
   g_overflow.ml
+  g_overflow.mli
   g_overflow_wire.ml
+  g_overflow_wire.mli
+  g_lanes.ml
+  g_lanes.mli
+  g_lanes_wire.ml
+  g_lanes_wire.mli
   s_sized.ml
+  s_sized.mli
   s_overflow.ml
-  s_skipped.ml)
+  s_overflow.mli
+  s_skipped.ml
+  s_skipped.mli
+  s_huge.ml
+  s_huge.mli
+  s_bigspan.ml
+  s_bigspan.mli
+  s_nested.ml
+  s_nested.mli)
+ (action
+  (run ../ocaml/gen.exe --oxcaml --simd)))
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (and
+    (<> %{architecture} arm64)
+    (<> %{architecture} amd64))))
+ (targets
+  g_ipv4.ml
+  g_ipv4.mli
+  g_ipv4_wire.ml
+  g_ipv4_wire.mli
+  g_ipv4_record.ml
+  g_ipv4_record.mli
+  g_ipv4_record_wire.ml
+  g_ipv4_record_wire.mli
+  g_checked.ml
+  g_checked.mli
+  g_checked_wire.ml
+  g_checked_wire.mli
+  g_mixed.ml
+  g_mixed.mli
+  g_mixed_wire.ml
+  g_mixed_wire.mli
+  g_small.ml
+  g_small.mli
+  g_small_wire.ml
+  g_small_wire.mli
+  g_eth.ml
+  g_eth.mli
+  g_eth_wire.ml
+  g_eth_wire.mli
+  g_wide.ml
+  g_wide.mli
+  g_wide_wire.ml
+  g_wide_wire.mli
+  g_mapped.ml
+  g_mapped.mli
+  g_mapped_wire.ml
+  g_mapped_wire.mli
+  g_signed.ml
+  g_signed.mli
+  g_signed_wire.ml
+  g_signed_wire.mli
+  g_packed.ml
+  g_packed.mli
+  g_packed_wire.ml
+  g_packed_wire.mli
+  g_refined.ml
+  g_refined.mli
+  g_refined_wire.ml
+  g_refined_wire.mli
+  g_overflow.ml
+  g_overflow.mli
+  g_overflow_wire.ml
+  g_overflow_wire.mli
+  g_lanes.ml
+  g_lanes.mli
+  g_lanes_wire.ml
+  g_lanes_wire.mli
+  s_sized.ml
+  s_sized.mli
+  s_overflow.ml
+  s_overflow.mli
+  s_skipped.ml
+  s_skipped.mli
+  s_huge.ml
+  s_huge.mli
+  s_bigspan.ml
+  s_bigspan.mli
+  s_nested.ml
+  s_nested.mli)
  (action
   (run ../ocaml/gen.exe --oxcaml)))
 
@@ -46,67 +169,100 @@
   (<> %{ocaml-config:ox} true))
  (targets
   g_ipv4.ml
+  g_ipv4.mli
   g_ipv4_wire.ml
+  g_ipv4_wire.mli
   g_ipv4_record.ml
+  g_ipv4_record.mli
   g_ipv4_record_wire.ml
+  g_ipv4_record_wire.mli
   g_checked.ml
+  g_checked.mli
   g_checked_wire.ml
+  g_checked_wire.mli
   g_mixed.ml
+  g_mixed.mli
   g_mixed_wire.ml
+  g_mixed_wire.mli
   g_small.ml
+  g_small.mli
   g_small_wire.ml
+  g_small_wire.mli
   g_eth.ml
+  g_eth.mli
   g_eth_wire.ml
+  g_eth_wire.mli
   g_wide.ml
+  g_wide.mli
   g_wide_wire.ml
+  g_wide_wire.mli
   g_mapped.ml
+  g_mapped.mli
   g_mapped_wire.ml
+  g_mapped_wire.mli
   g_signed.ml
+  g_signed.mli
   g_signed_wire.ml
+  g_signed_wire.mli
+  g_packed.ml
+  g_packed.mli
+  g_packed_wire.ml
+  g_packed_wire.mli
   g_refined.ml
+  g_refined.mli
   g_refined_wire.ml
+  g_refined_wire.mli
   g_overflow.ml
+  g_overflow.mli
   g_overflow_wire.ml
+  g_overflow_wire.mli
+  g_lanes.ml
+  g_lanes.mli
+  g_lanes_wire.ml
+  g_lanes_wire.mli
   s_sized.ml
+  s_sized.mli
   s_overflow.ml
-  s_skipped.ml)
+  s_overflow.mli
+  s_skipped.ml
+  s_skipped.mli
+  s_huge.ml
+  s_huge.mli
+  s_bigspan.ml
+  s_bigspan.mli
+  s_nested.ml
+  s_nested.mli)
  (action
   (run ../ocaml/gen.exe)))
 
-; Dune's dev profile compiles libraries -opaque, which hides from the
-; zero_alloc checker what a function of another library allocates, so every
-; call out of the module looks like it may. The checks run in any other
-; profile (make test-oxcaml uses release) and are off in dev, where they
-; cannot pass.
+; Whether a 64-bit load of wire.runtime returns a boxed int64 to the code
+; generated: never on OxCaml, whose loads give an int64_u; in the dev profile
+; elsewhere, which compiles wire.runtime with -opaque.
 
 (rule
- (enabled_if
-  (and
-   (= %{ocaml-config:ox} true)
-   (= %{profile} dev)))
- (action
-  (with-stdout-to
-   zero_alloc.sexp
-   (echo "(-zero-alloc-check none)"))))
-
-(rule
+ (target boxed_loads.ml)
  (enabled_if
   (or
-   (<> %{ocaml-config:ox} true)
+   (= %{ocaml-config:ox} true)
    (<> %{profile} dev)))
  (action
-  (with-stdout-to
-   zero_alloc.sexp
-   (echo "()"))))
+  (write-file %{target} "let v = false\n")))
+
+(rule
+ (target boxed_loads.ml)
+ (enabled_if
+  (and
+   (<> %{ocaml-config:ox} true)
+   (= %{profile} dev)))
+ (action
+  (write-file %{target} "let v = true\n")))
 
 (library
  (name gens_ox)
- (ocamlopt_flags
-  (:standard
-   (:include zero_alloc.sexp)))
  (wrapped false)
  (modules
   test_wire_ocaml
+  test_same
   g_ipv4
   g_ipv4_wire
   g_ipv4_record
@@ -125,19 +281,28 @@
   g_mapped_wire
   g_signed
   g_signed_wire
+  g_packed
+  g_packed_wire
   g_refined
   g_refined_wire
   g_overflow
   g_overflow_wire
+  g_lanes
+  g_lanes_wire
   s_sized
   s_overflow
-  s_skipped)
+  s_skipped
+  s_huge
+  s_bigspan
+  s_nested
+  boxed_loads)
  (libraries
   schemas
   wire
   wire.runtime
   wire.ocaml
   diff_codecs
+  net
   diff_driver
   diff_ocaml
   ocaml_index_ox
@@ -164,3 +329,70 @@
  (action
   (echo
    "test/ocaml-ox: skipped, OCaml %{ocaml_version} is not an OxCaml compiler\n")))
+
+; The modes of the code for OxCaml: buffers on the stack, local constructors
+; and portable callers. test_modes.ox.ml is OxCaml syntax, so only an OxCaml
+; compiler, which has its unboxed integer library, builds it; any other runs
+; an empty suite.
+
+(rule
+ (with-stdout-to
+  test_modes.std.ml
+  (echo "let suite = (\"modes\", [])\n")))
+
+(executable
+ (name test_modes_main)
+ (modules test_modes_main test_modes)
+ (libraries
+  gens_ox
+  alcotest
+  (select
+   test_modes.ml
+   from
+   (stdlib_upstream_compatible wire.runtime -> test_modes.ox.ml)
+   (-> test_modes.std.ml))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (run ./test_modes_main.exe)))
+
+; The SIMD lanes of the code for OxCaml on arm64 and amd64 ([--simd]) against
+; one record at a time. test_simd.ml.ox is OxCaml syntax over NEON or SSE
+; builtins, so only an OxCaml compiler for those builds it; any other runs an
+; empty suite.
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (or
+    (= %{architecture} arm64)
+    (= %{architecture} amd64))))
+ (action
+  (copy test_simd.ml.ox test_simd.ml)))
+
+(rule
+ (enabled_if
+  (or
+   (<> %{ocaml-config:ox} true)
+   (and
+    (<> %{architecture} arm64)
+    (<> %{architecture} amd64))))
+ (action
+  (with-stdout-to
+   test_simd.ml
+   (echo
+    "module _ = Wire_runtime.Vec (* empty here *)\nlet suite = (Fmt.str \"simd\", [])\n"))))
+
+(executable
+ (name test_simd_main)
+ (modules test_simd_main test_simd)
+ (libraries gens_ox wire.runtime fmt alcotest))
+
+(rule
+ (alias runtest)
+ (action
+  (run ./test_simd_main.exe)))

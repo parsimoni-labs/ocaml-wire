@@ -101,9 +101,11 @@ let test_clash () =
       Codec.[ Field.v n1 t1 $ fst; Field.v n2 t2 $ snd ]
   in
   refused "X and x" (pair "X" uint8 "x" uint8) [ "\"X\""; "\"x\"" ];
-  refused "type and type_"
-    (pair "type" uint8 "type_" uint8)
-    [ "\"type\""; "\"type_\"" ];
+  (* The keyword escape is injective: [type] and [type_] are [type_] and
+     [type__]. *)
+  has "type and type_"
+    (Wire_rust.rs ~codec:"c" (pair "type" uint8 "type_" uint8))
+    "pub type_: u8,\n    pub type__: u8,";
   refused "a bitfield x and x_word"
     (pair "x" (bits ~width:3 U8) "x_word" uint8)
     [ "\"x\""; "\"x_word\"" ];
@@ -146,14 +148,14 @@ let test_scanner () =
     "no unsafe code" false
     (contains src "unsafe {" || contains src "unsafe fn");
   Alcotest.(check bool) "no std" false (contains src "std::");
-  (* Selecting no output keeps every check and decision: the IPv4 version,
-     the header length, the TCP data offset and the UDP length. *)
+  (* Selecting no output keeps every check: the range of the IPv4 version and
+     header length byte, the TCP data offset and the UDP length. *)
   let v = Wire_rust.scanner ~fields:[] ~codec:"v" Packet_stack.codec in
   let validation = has "validation only" v in
   validation "pub struct Fields {\n}";
   validation "Some(Fields { })";
-  validation " == 4i64)) { return None; }";
-  validation " >= 5i64)) { return None; }";
+  validation " >= 69i64 && ";
+  validation " <= 79i64) { return None; }";
   validation " >= 8i64)) { return None; }";
   validation " == 2048i64) {";
   validation " == 6i64) {";
@@ -212,11 +214,33 @@ let test_scanner_enum () =
   has "enum" (Wire_rust.scanner ~codec:"c" c) check;
   has "enum, no output" (Wire_rust.scanner ~fields:[] ~codec:"c" c) check
 
-(* The code after an optional field is written once, so it grows linearly
-   with the number of optional fields, in a run or nested; a run binds the
-   outputs under it, so nested fields handing out everything grow with the
-   depth times the outputs. As test/ocaml measures the OCaml scanner. *)
+(* The code after an optional field is written once and an output under
+   more than [Plan.slot_depth] of them is bound once, so the code grows
+   linearly with the number of optional fields, in a run or nested, whatever
+   it hands out. As test/ocaml measures the OCaml scanner, in lines and in
+   words, a word being a run of letters, digits and underscores, which a
+   long line cannot hide. *)
 let lines s = List.length (String.split_on_char '\n' s)
+
+let words s =
+  let word = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+    | _ -> false
+  in
+  let n = ref 0 and inside = ref false in
+  String.iter
+    (fun c ->
+      if word c && not !inside then incr n;
+      inside := word c)
+    s;
+  !n
+
+(* [n] optional fields nested inside each other that hand out every output:
+   a level costs 18 lines and 74 words, its three slots, the split and reads
+   of its two prefixes, its presence, the block that leaves its tail, and
+   its three fields of [Fields] and of the result. The first four levels
+   bind their outputs in tuples instead. *)
+let nested_budget n = ((20 * n) + 80, (80 * n) + 450)
 
 let test_scanner_linear () =
   List.iter
@@ -232,10 +256,18 @@ let test_scanner_linear () =
       ("in a run", Schemas.gated, None);
       ("in a run, checks only", Schemas.gated, Some []);
       ("nested, checks only", Schemas.nested, Some []);
+      ("nested", Schemas.nested, None);
     ];
-  let nested = lines (Wire_rust.scanner ~codec:"g" (Schemas.nested 32)) in
-  if nested > 150 * 32 then
-    Alcotest.failf "32 nested optional fields: %d lines" nested
+  List.iter
+    (fun n ->
+      let src = Wire_rust.scanner ~codec:"g" (Schemas.nested n) in
+      let max_lines, max_words = nested_budget n in
+      if lines src > max_lines || words src > max_words then
+        Alcotest.failf
+          "%d nested optional fields, every output: %d lines and %d words, \
+           over %d and %d"
+          n (lines src) (words src) max_lines max_words)
+    [ 8; 16; 32; 64 ]
 
 (* A run of optional fields is one decision tree, which tests each atom once
    on a path. A subtree two paths reach is one closure, and the case it
@@ -270,14 +302,13 @@ let scanner_refused what ?fields c names =
 
 (* What the plan refuses, the Rust scanner refuses: a map, whose functions
    are OCaml code, a 64-bit scalar and an unknown output. So are two outputs
-   that only Rust spells alike, once its keywords are escaped. *)
+   of one name. *)
 let test_scanner_refused () =
   let pair n1 n2 =
     Codec.v "C"
       (fun a b -> (a, b))
       Codec.[ Field.v n1 uint8 $ fst; Field.v n2 uint8 $ snd ]
   in
-  scanner_refused "fn and fn_" (pair "fn" "fn_") [ "\"fn\""; "\"fn_\"" ];
   scanner_refused "two outputs of one name" (pair "a_b" "a_B") [ "a_b" ];
   scanner_refused "an unknown output" ~fields:[ "nope" ] Packet_stack.codec
     [ "nope" ];

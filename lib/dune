@@ -9,10 +9,15 @@
   layout
   seed
   codec_leaf
+  codec_run
   codec_repr
   codec_elem
   codec_compile
-  codec_seal)
+  codec_intervals
+  codec_layout
+  codec_walk
+  codec_seal
+  codec_words)
  (flags
   (:standard -open Wire_runtime))
  (libraries bytesrw fmt optint wire.runtime))

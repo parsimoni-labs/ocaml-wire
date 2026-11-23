@@ -115,7 +115,8 @@ let advance_next_off (no : next_off) (n : int) : next_off =
   | Static k -> Static (k + n)
   | Dynamic f ->
       Dynamic
-        (fun runtime input_end buf base -> f runtime input_end buf base + n)
+        (fun runtime input_end buf base ->
+          offset_add (f runtime input_end buf base) n)
 
 let null_int_reader : runtime -> Input_end.t -> bytes -> int -> int =
  fun _runtime _input_end _buf _base -> 0
@@ -126,7 +127,7 @@ let no_populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit =
 (* A sub-codec field's check pass: run the sub-codec's own validator where the
    field sits. This is the whole of what the generated C emits for a sub-struct
    field, a call to the nested struct's validator, and it is what makes
-   [Codec.validate] reject at a use site everything the sub-codec's [decode]
+   [Codec.validate_exn] reject at a use site everything the sub-codec's [decode]
    rejects. No int slot is filled: a record-typed field has no scalar value an
    enclosing expression could reference. *)
 let sub_codec_populate ~codec_validate ~off_fn :
@@ -282,11 +283,12 @@ let compile_codec_variable : type a r.
     codec_decode:(runtime -> Input_end.t -> bytes -> int -> a) ->
     codec_validate:(runtime -> Input_end.t -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
+    codec_min_size:int ->
     codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
     nested_readers:field_reader list ->
     (a, r) compiled_field =
- fun ctx ~get ~codec_decode ~codec_validate ~codec_encode ~codec_size_of
-     ~nested_readers ->
+ fun ctx ~get ~codec_decode ~codec_validate ~codec_encode ~codec_min_size
+     ~codec_size_of ~nested_readers ->
   let off_fn, (field_access : field_access), validator_off =
     match ctx.next_off with
     | Static n ->
@@ -322,13 +324,14 @@ let compile_codec_variable : type a r.
         codec_encode (get v) runtime buf write_off);
     extra_writers = [];
     field_access;
-    size_delta = 0;
+    (* The sub-codec always holds at least its own [min_size]. *)
+    size_delta = codec_min_size;
     next_off =
       Dynamic
         (fun runtime input_end buf base ->
-          base
-          + off_fn runtime input_end buf base
-          + size_fn runtime input_end buf base);
+          offset_add
+            (base + off_fn runtime input_end buf base)
+            (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers;
@@ -343,12 +346,13 @@ let compile_codec : type a r.
     codec_validate:(runtime -> Input_end.t -> bytes -> int -> unit) ->
     codec_encode:(a -> runtime -> bytes -> int -> int) ->
     codec_fixed_size:int option ->
+    codec_min_size:int ->
     codec_size_of:(runtime -> Input_end.t -> bytes -> int -> int) ->
     codec_field_readers:
       (string * (runtime -> Input_end.t -> bytes -> int -> int)) list ->
     (a, r) compiled_field =
  fun ctx fld ~codec_decode ~codec_validate ~codec_encode ~codec_fixed_size
-     ~codec_size_of ~codec_field_readers ->
+     ~codec_min_size ~codec_size_of ~codec_field_readers ->
   let nested_readers =
     build_nested_readers ctx
       (List.map (fun (n, r) -> (Some n, r)) codec_field_readers)
@@ -375,7 +379,7 @@ let compile_codec : type a r.
       }
   | None ->
       compile_codec_variable ctx ~get ~codec_decode ~codec_validate
-        ~codec_encode ~codec_size_of ~nested_readers
+        ~codec_encode ~codec_min_size ~codec_size_of ~nested_readers
 
 (* Variable-size sub-codec: dispatch on whether we sit at a static or a
    dynamic running offset. Mirrors [compile_var_bytes] -- both flavours
@@ -392,7 +396,8 @@ let dynamic_optional_next_off ctx present_fn fsize =
         | Static n -> base + n
         | Dynamic f -> f runtime input_end buf base
       in
-      if present_fn runtime input_end buf base then off + fsize else off)
+      if present_fn runtime input_end buf base then offset_add off fsize
+      else off)
 
 (* Absolute byte position a [next_off] points at, given the record [base]. *)
 let next_off_pos : next_off -> runtime -> Input_end.t -> bytes -> int -> int =
@@ -508,7 +513,7 @@ let repeat_raw_variable : type elt seq.
   in
   loop seq.empty start budget
 
-(* Accumulates nothing. [Codec.validate] wants a repeat's elements read for
+(* Accumulates nothing. [Codec.validate_exn] wants a repeat's elements read for
    their checks and does not want the sequence, so the walk it runs drops each
    element as it goes: a list built and thrown away is allocation the sender
    sizes through the byte budget, on the path a server runs once per packet.
@@ -556,7 +561,7 @@ let repeat_raw_reader : type elt seq.
    [By] says the element type carries its own validator, which a sub-codec does.
 
    The last two are departures from derivation, and each is a claim about a
-   reader that [Codec.validate] agreeing with [Codec.decode] is what keeps
+   reader that [Codec.validate_exn] agreeing with [Codec.decode] is what keeps
    honest. *)
 type 'a elem_strategy =
   | By_reading
@@ -612,7 +617,7 @@ let casetype_elem_check : type k.
 
 (* Every constructor is listed and there is deliberately no [| _ -> ...]: a typ
    added later must not pick a strategy by falling through, since picking
-   [Value_only] for a reader that checks something is how [Codec.validate] comes
+   [Value_only] for a reader that checks something is how [Codec.validate_exn] comes
    to accept what [Codec.decode] rejects. Adding one stops the build until
    somebody chooses.
 
@@ -763,14 +768,14 @@ let compile_repeat : type elt seq r.
     next_off =
       Dynamic
         (fun runtime input_end buf base ->
-          base
-          + off_fn runtime input_end buf base
-          + size_fn runtime input_end buf base);
+          offset_add
+            (base + off_fn runtime input_end buf base)
+            (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers = [];
     validator_off;
-    (* [Codec.validate] reaches a repeat only through its populate, and the
+    (* [Codec.validate_exn] reaches a repeat only through its populate, and the
        budget checks live in [repeat_raw_reader]. Run the same walk over
        {!seq_discard}, which checks every element and keeps none. *)
     populate =
@@ -798,7 +803,7 @@ let missing_before ~first ~sz ~len =
    as end-of-input instead. *)
 let[@inline] check_span_bounds buf ~first ~sz =
   let len = Bytes.length buf in
-  if sz < 0 || first < 0 || first + sz > len then
+  if sz < 0 || first < 0 || first > len - sz then
     raise_eof ~at:first
       ~expected:(missing_before ~first ~sz ~len)
       ~got:(bytes_from (Input_end.of_bytes buf) first)
@@ -860,7 +865,7 @@ let var_bytes_reader : type a.
   | _ -> assert false
 
 (* The scan a span type's reader performs, without the string it hands back.
-   [Codec.validate] returns unit, so running the reader for its checks alone
+   [Codec.validate_exn] returns unit, so running the reader for its checks alone
    turns over a copy of the span and drops it: allocation that scales with a
    length the sender chose, on the path a server runs once per packet.
    [None] for the spans whose reader only re-slices the buffer and has nothing
@@ -946,6 +951,13 @@ let container_populate : type a.
           check runtime input_end buf first)
   | Single_elem { elem; at_most; _ } ->
       let check = sized_check elem in
+      (* A sub-codec that measures and checks itself in one walk answers first;
+         when it cannot tell, the measure and the check below answer. *)
+      let check_end =
+        match elem with
+        | Codec { codec_check_end; _ } -> codec_check_end
+        | _ -> fun _ _ _ -> -2
+      in
       Some
         (fun _slots runtime input_end buf base ->
           let first = base + off_fn runtime input_end buf base in
@@ -956,10 +968,18 @@ let container_populate : type a.
              accept and reject on different grounds than the decode it stands
              in for. *)
           let region_end = Input_end.narrow input_end (first + sz) in
-          let consumed = elem_size_of elem runtime region_end buf first in
-          if consumed > sz || ((not at_most) && consumed <> sz) then
-            raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-          check runtime input_end buf first (first + consumed))
+          let e =
+            if is_fallback runtime then -2 else check_end region_end buf first
+          in
+          if e < 0 || e - first > sz || ((not at_most) && e - first <> sz) then begin
+            (* A walk that did not accept ([-1]) has been tried: the general
+               passes do not try it again. *)
+            let runtime = if e = -1 then fallback_runtime else runtime in
+            let consumed = elem_size_of elem runtime region_end buf first in
+            if consumed > sz || ((not at_most) && consumed <> sz) then
+              raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
+            check runtime input_end buf first (first + consumed)
+          end)
   | _ -> None
 
 (* What a field's validate runs in place of its reader: a span's scan, or a
@@ -1193,7 +1213,7 @@ let compile_var_bytes : type a r.
       Dynamic
         (fun runtime input_end buf base ->
           let fo = off_fn runtime input_end buf base in
-          base + fo + size_fn runtime input_end buf base);
+          offset_add (base + fo) (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader;
     nested_readers = [];
@@ -1394,7 +1414,7 @@ let compile_union : type a k r.
       Dynamic
         (fun runtime input_end buf base ->
           let fo = off_fn runtime input_end buf base in
-          base + fo + size_fn runtime input_end buf base);
+          offset_add (base + fo) (size_fn runtime input_end buf base));
     bf_after = None;
     int_reader = null_int_reader;
     nested_readers = [];
@@ -1553,12 +1573,13 @@ let rec compile_field : type a r.
         codec_validate;
         codec_encode;
         codec_fixed_size;
+        codec_min_size;
         codec_size_of;
         codec_field_readers;
         _;
       } ->
       compile_codec ctx fld ~codec_decode ~codec_validate ~codec_encode
-        ~codec_fixed_size ~codec_size_of ~codec_field_readers
+        ~codec_fixed_size ~codec_min_size ~codec_size_of ~codec_field_readers
   | Optional { present; inner } -> compile_optional ctx fld present inner
   | Optional_or { present; inner; default } ->
       compile_optional_or ctx fld present inner default
@@ -1598,7 +1619,7 @@ and compile_map : type a w r.
     cf with
     raw_reader = checked_reader;
     (* [decode] is where a lookup checks its index is in range; run it in
-       populate too so [Codec.validate] enforces the bound decode does. The inner
+       populate too so [Codec.validate_exn] enforces the bound decode does. The inner
        populate still fills the int slot from the raw value. *)
     populate =
       (fun arr runtime input_end buf base ->

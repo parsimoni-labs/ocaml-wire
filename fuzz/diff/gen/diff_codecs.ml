@@ -250,8 +250,65 @@ let packet_inputs raw =
   let tcp = mutate true 0 and udp = mutate false 0 in
   [ raw; tcp; udp; mutate true 0x2000; Bytes.sub tcp 0 (byte 3 mod 129) ]
 
+(* The packet fixture cut to [len] bytes, with the IPv4 total length set to
+   [total]. *)
+let edge ~tcp ~ihl ~words ~fragment ~total len =
+  let b = packet ~tcp ~ihl ~words ~fragment in
+  Bytes.set_uint16_be b 16 total;
+  Bytes.sub b 0 len
+
+let packet_bounds =
+  let pair name ~tcp ~ihl ~words ?(fragment = 0) ~total ~len ~short () =
+    let fits = edge ~tcp ~ihl ~words ~fragment ~total len in
+    [
+      (name ^ " fits", fits, true);
+      (name ^ " overflows by one byte", short fits, false);
+    ]
+  in
+  let cut b = Bytes.sub b 0 (Bytes.length b - 1) in
+  let at i v b =
+    let b = Bytes.copy b in
+    Bytes.set_uint16_be b i v;
+    b
+  in
+  let total_minus_one b = at 16 (Bytes.get_uint16_be b 16 - 1) b in
+  pair "IPv4 options in the frame" ~tcp:true ~ihl:15 ~words:5 ~fragment:0x2000
+    ~total:60 ~len:74 ~short:cut ()
+  @ pair "IPv4 payload in the frame" ~tcp:true ~ihl:5 ~words:5 ~total:70 ~len:84
+      ~short:cut ()
+  @ pair "IPv4 payload after options in the frame" ~tcp:true ~ihl:6 ~words:5
+      ~total:70 ~len:84 ~short:cut ()
+  @ pair "TCP options in the TCP header" ~tcp:true ~ihl:5 ~words:6 ~total:44
+      ~len:128 ~short:total_minus_one ()
+  @ pair "TCP options after IPv4 options" ~tcp:true ~ihl:7 ~words:6 ~total:52
+      ~len:128 ~short:total_minus_one ()
+  @ pair "UDP payload in the IPv4 payload" ~tcp:false ~ihl:5 ~words:18 ~total:38
+      ~len:128 ~short:total_minus_one ()
+  @ pair "UDP payload after IPv4 options" ~tcp:false ~ihl:6 ~words:18 ~total:42
+      ~len:128 ~short:total_minus_one ()
+
+(* Fragments that differ only in the IPv4 version and header length byte, so
+   that byte alone decides whether the codec accepts them. *)
+let packet_versions =
+  List.map
+    (fun (byte, accepted) ->
+      let b = edge ~tcp:true ~ihl:15 ~words:5 ~fragment:0x2000 ~total:60 74 in
+      Bytes.set_uint8 b 14 byte;
+      (Fmt.str "IPv4 version and header length 0x%02x" byte, b, accepted))
+    [
+      (0x3f, false);
+      (0x44, false);
+      (0x45, true);
+      (0x4f, true);
+      (0x50, false);
+      (0x35, false);
+      (0x55, false);
+    ]
+
 let packet_corpus () =
-  let cases = ref [] in
+  let cases =
+    ref (List.map (fun (_, b, _) -> b) (packet_bounds @ packet_versions))
+  in
   List.iter
     (fun tcp ->
       List.iter
@@ -269,6 +326,29 @@ let packet_corpus () =
         [ 5; 6; 15 ])
     [ false; true ];
   List.rev !cases
+
+(* Long frames reuse the packet fixture of the scalar lanes, with the IPv4 and
+   UDP lengths set to cover the payload. *)
+let packet_payload_corpus () =
+  List.concat_map
+    (fun length ->
+      List.concat_map
+        (fun (tcp, ihl, fragment) ->
+          let header =
+            packet ~tcp ~ihl ~words:(if tcp then 15 else 8) ~fragment
+          in
+          let frame =
+            Bytes.init length (fun i ->
+                if i < Bytes.length header then Bytes.get header i
+                else Char.chr (i land 255))
+          in
+          let total = length - 14 in
+          Bytes.set_uint16_be frame 16 total;
+          if not tcp then
+            Bytes.set_uint16_be frame (14 + (ihl * 4) + 4) (total - (ihl * 4));
+          [ frame; Bytes.sub frame 0 (length - 1) ])
+        [ (true, 5, 0); (true, 15, 0); (false, 15, 0); (true, 5, 0x2000) ])
+    [ 1500; 9000; 65535; 65549 ]
 
 let small_scan at_most =
   let open Wire in
@@ -308,6 +388,43 @@ let small_scan at_most =
               in
               List.init 21 (fun len -> Bytes.sub b 0 len))
             (List.init 16 Fun.id));
+    }
+
+(* A region of a constant size holding a record: EverParse before v2026.10
+   gave its standalone validator a module that krml could not bundle
+   (project-everest/everparse#321). *)
+let const_region_scan at_most =
+  let open Wire in
+  let leaf =
+    Codec.v "ConstLeaf" Fun.id Codec.[ Field.v "v" uint32be $ Fun.id ]
+  in
+  let inner = if at_most then nested_at_most else nested in
+  let codec =
+    Codec.v
+      (if at_most then "ScanConstAtMost" else "ScanConstExact")
+      (fun t a -> (t, a))
+      Codec.
+        [
+          Field.v "t" uint8 $ fst;
+          Field.v "a" (inner ~size:(int 4) (codec leaf)) $ snd;
+        ]
+  in
+  let project (t, a) = [ ("t", UInt8.to_int t); ("a_v", UInt32.to_int a) ] in
+  Scan
+    {
+      label = (if at_most then "scan_const_at_most" else "scan_const_exact");
+      codec;
+      project;
+      inputs = (fun b -> [ b ]);
+      corpus =
+        (fun () ->
+          List.concat_map
+            (fun t ->
+              let b =
+                Bytes.init 8 (fun i -> Char.chr (if i = 0 then t else i))
+              in
+              List.init 9 (fun len -> Bytes.sub b 0 len))
+            [ 0; 1; 255 ]);
     }
 
 let optional_scan ~region =
@@ -738,6 +855,140 @@ let refined_size_scan =
       corpus = refined_size_corpus;
     }
 
+(* A bound checked once before a dispatch holds only in the window it was
+   checked against. The two scans below repeat the checked span inside a
+   smaller region, in a case and after the dispatch. [region_word] holds a
+   scalar because EverParse cannot extract a standalone validator for a
+   constant-size region that holds a record. *)
+let region_word = Wire.(nested_at_most ~size:(int 4) uint32be)
+
+let region_inner =
+  let open Wire in
+  Codec.v "ScanRegionInner"
+    (fun x y w -> (x, y, w))
+    Codec.
+      [
+        (Field.v "x" uint8 $ fun (x, _, _) -> x);
+        (Field.v "y" uint8 $ fun (_, y, _) -> y);
+        (Field.v "w" region_word $ fun (_, _, w) -> w);
+      ]
+
+let region_inner_values name (x, y, w) =
+  let u8 = Wire.UInt8.to_int in
+  [
+    (name ^ "_x", u8 x); (name ^ "_y", u8 y); (name ^ "_w", Wire.UInt32.to_int w);
+  ]
+
+let region_cases body =
+  let open Wire in
+  let tag = Field.v "tag" uint8 in
+  let zero = Expr.(Field.ref tag = int 0) in
+  ( tag,
+    Field.optional "a" ~present:zero body,
+    Field.optional "b" ~present:Expr.(not zero) body )
+
+let region_present name project = function
+  | None -> [ (name ^ "_present", 0) ]
+  | Some v -> (name ^ "_present", 1) :: project v
+
+(* Both tags, with the inner region shorter and longer than the 6 bytes
+   [region_inner] needs, each frame cut at every length. *)
+let region_corpus () =
+  List.concat_map
+    (fun tag ->
+      List.concat_map
+        (fun len ->
+          let b =
+            Bytes.init 20 (fun i ->
+                Char.chr (if i = 0 then tag else if i = 6 then len else i))
+          in
+          List.init 21 (fun n -> Bytes.sub b 0 n))
+        [ 0; 4; 5; 6; 7; 255 ])
+    [ 0; 1 ]
+
+let region_in_case_scan =
+  let open Wire in
+  let len = Field.v "len" uint8 in
+  let case =
+    Codec.v "ScanRegionCase"
+      (fun h len r -> (h, len, r))
+      Codec.
+        [
+          (Field.v "h" region_word $ fun (x, _, _) -> x);
+          (len $ fun (_, x, _) -> x);
+          ( Field.v "r"
+              (nested_at_most ~size:(Field.ref len) (codec region_inner))
+          $ fun (_, _, x) -> x );
+        ]
+  in
+  let tag, a, b = region_cases (codec case) in
+  let codec =
+    Codec.v "ScanRegionInCase"
+      (fun tag pad a b -> (tag, pad, a, b))
+      Codec.
+        [
+          (tag $ fun (x, _, _, _) -> x);
+          (Field.v "pad" uint8 $ fun (_, x, _, _) -> x);
+          (a $ fun (_, _, x, _) -> x);
+          (b $ fun (_, _, _, x) -> x);
+        ]
+  in
+  let case_values name (h, len, r) =
+    [ (name ^ "_h", UInt32.to_int h); (name ^ "_len", UInt8.to_int len) ]
+    @ region_inner_values (name ^ "_r") r
+  in
+  let project (tag, pad, a, b) =
+    [ ("tag", UInt8.to_int tag); ("pad", UInt8.to_int pad) ]
+    @ region_present "a" (case_values "a") a
+    @ region_present "b" (case_values "b") b
+  in
+  Scan
+    {
+      label = "scan_region_in_case";
+      codec;
+      project;
+      inputs = (fun b -> [ b ]);
+      corpus = region_corpus;
+    }
+
+let region_after_cases_scan =
+  let open Wire in
+  let tag, a, b = region_cases region_word in
+  let len = Field.v "len" uint8 in
+  let codec =
+    Codec.v "ScanRegionAfterCases"
+      (fun tag pad a b len r tail -> (tag, pad, a, b, len, r, tail))
+      Codec.
+        [
+          (tag $ fun (x, _, _, _, _, _, _) -> x);
+          (Field.v "pad" uint8 $ fun (_, x, _, _, _, _, _) -> x);
+          (a $ fun (_, _, x, _, _, _, _) -> x);
+          (b $ fun (_, _, _, x, _, _, _) -> x);
+          (len $ fun (_, _, _, _, x, _, _) -> x);
+          ( Field.v "r"
+              (nested_at_most ~size:(Field.ref len) (codec region_inner))
+          $ fun (_, _, _, _, _, x, _) -> x );
+          (Field.v "tail" uint8 $ fun (_, _, _, _, _, _, x) -> x);
+        ]
+  in
+  let word name w = [ (name, UInt32.to_int w) ] in
+  let project (tag, pad, a, b, len, r, tail) =
+    [ ("tag", UInt8.to_int tag); ("pad", UInt8.to_int pad) ]
+    @ region_present "a" (word "a") a
+    @ region_present "b" (word "b") b
+    @ [ ("len", UInt8.to_int len) ]
+    @ region_inner_values "r" r
+    @ [ ("tail", UInt8.to_int tail) ]
+  in
+  Scan
+    {
+      label = "scan_region_after_cases";
+      codec;
+      project;
+      inputs = (fun b -> [ b ]);
+      corpus = region_corpus;
+    }
+
 let scan_cases =
   (refined_size_scan :: signed_shift_scan :: bit_guard_scans)
   @ [
@@ -745,9 +996,13 @@ let scan_cases =
       branch_scan;
       small_scan false;
       small_scan true;
+      const_region_scan false;
+      const_region_scan true;
       optional_scan ~region:false;
       optional_scan ~region:true;
       nested_optional_scan;
+      region_in_case_scan;
+      region_after_cases_scan;
       Scan
         {
           label = "scan_packet";

@@ -1,6 +1,13 @@
 open Types
 module Slice = Bytesrw.Bytes.Slice
 
+(* What [Bytes.get_uint8] raises outside the buffer, out of line: an
+   accessor whose only call is this one, in tail position, needs no frame. *)
+let[@inline never] out_of_bounds () = invalid_arg "index out of bounds"
+
+(* Whether the [n] bytes at [p] lie in [buf]. *)
+let[@inline] outside buf p n = p < 0 || p > Bytes.length buf - n
+
 let blit_string_exact n buf off v =
   check_byte_field_size ~expected:n ~actual:(String.length v);
   Bytes.blit_string v 0 buf off n;
@@ -47,7 +54,7 @@ let rec nul_scan buf ~at ~limit i =
 let zeroterm_nul_pos buf ~first ~limit = nul_scan buf ~at:first ~limit first
 
 (* The refinement of a [byte_array_where] lives in its reader: every compiled
-   path that yields the span runs it, so [Codec.decode] and [Codec.validate]
+   path that yields the span runs it, so [Codec.decode] and [Codec.validate_exn]
    reject the same bytes as [Wire.of_string] and as the EverParse validator
    built from the same schema. *)
 let refined_span_check ~elt_var ~cond buf ~first ~len =
@@ -478,9 +485,21 @@ let rec build_immediate_reader : type a.
  fun typ field_off ->
   let at base = base + field_off in
   match typ with
-  | Uint8 -> Some (fun buf base -> UInt8.get buf (at base))
-  | Uint16 Little -> Some (fun buf base -> UInt16.le buf (at base))
-  | Uint16 Big -> Some (fun buf base -> UInt16.be buf (at base))
+  | Uint8 ->
+      Some
+        (fun buf base ->
+          let p = at base in
+          if outside buf p 1 then out_of_bounds () else UInt8.unsafe_get buf p)
+  | Uint16 Little ->
+      Some
+        (fun buf base ->
+          let p = at base in
+          if outside buf p 2 then out_of_bounds () else UInt16.unsafe_le buf p)
+  | Uint16 Big ->
+      Some
+        (fun buf base ->
+          let p = at base in
+          if outside buf p 2 then out_of_bounds () else UInt16.unsafe_be buf p)
   | Uint32 Little -> Some (fun buf base -> UInt32.le buf (at base))
   | Uint32 Big -> Some (fun buf base -> UInt32.be buf (at base))
   | Uint64 Little -> Some (fun buf base -> UInt64.le buf (at base))
@@ -556,3 +575,48 @@ let rec build_immediate_encoder : type a.
   | Bits { width; base; bit_order } ->
       Some (bits_field_encoder ~width ~base ~bit_order)
   | _ -> None
+
+(* The [Codec.set] writer of a field at [field_off], one closure for a
+   fixed-width integer: a bounds check, then one store. *)
+let rec build_immediate_setter : type a.
+    a typ -> int -> (bytes -> int -> a -> unit) option =
+ fun typ field_off ->
+  match typ with
+  | Uint8 ->
+      Some
+        (fun buf base v ->
+          let p = base + field_off in
+          if outside buf p 1 then out_of_bounds ()
+          else Unchecked.set_u8 buf p (v :> int))
+  | Uint16 Little ->
+      Some
+        (fun buf base v ->
+          let p = base + field_off in
+          if outside buf p 2 then out_of_bounds ()
+          else Unchecked.set_u16le buf p (v :> int))
+  | Uint16 Big ->
+      Some
+        (fun buf base v ->
+          let p = base + field_off in
+          if outside buf p 2 then out_of_bounds ()
+          else Unchecked.set_u16be buf p (v :> int))
+  | Uint32 Little ->
+      Some (fun buf base v -> UInt32.set_le buf (base + field_off) v)
+  | Uint32 Big ->
+      Some (fun buf base v -> UInt32.set_be buf (base + field_off) v)
+  | Int8 -> Some (fun buf base v -> SInt8.set buf (base + field_off) v)
+  | Int16 Little ->
+      Some (fun buf base v -> SInt16.set_le buf (base + field_off) v)
+  | Int16 Big -> Some (fun buf base v -> SInt16.set_be buf (base + field_off) v)
+  | Where { inner; _ } -> build_immediate_setter inner field_off
+  | Enum { base; _ } -> build_immediate_setter base field_off
+  | Map { inner; encode; _ } -> (
+      match build_immediate_setter inner field_off with
+      | None -> None
+      | Some write -> Some (fun buf base v -> write buf base (encode v)))
+  | _ -> (
+      match build_immediate_encoder typ with
+      | None -> None
+      | Some write ->
+          Some (fun buf base v -> ignore (write buf (base + field_off) v : int))
+      )

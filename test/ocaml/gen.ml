@@ -3,42 +3,87 @@ let write file s =
   output_string oc s;
   close_out oc
 
-(* [--oxcaml] generates for the OxCaml target. *)
+(* [Step], the consumer the scanner of [c] calls by name, adds up the outputs,
+   which it takes as [int64]. The scanner's module defines it first, so the
+   compiler inlines it in every profile and no output is boxed. *)
+let summed c =
+  let fields = Wire_ocaml.scanner_fields c in
+  let args = List.map (fun (name, _) -> "~" ^ name) fields
+  and terms =
+    List.map
+      (fun (name, is_bool) ->
+        if is_bool then "Bool.to_int " ^ name else "Int64.to_int " ^ name)
+      fields
+  in
+  "module Step = struct\n\
+   type t = int\n\n\
+   let invalid acc = acc - 1\n\
+   let[@inline] valid acc " ^ String.concat " " args ^ " =\nacc + "
+  ^ String.concat " + " terms ^ "\nend\n\n"
+
+(* [--oxcaml] generates for the OxCaml target, and [--simd] adds the SIMD
+   lanes of the records that have them (OxCaml on arm64 or amd64). Each module
+   comes with its interface. *)
 let () =
-  let target =
-    if Array.exists (String.equal "--oxcaml") Sys.argv then `OxCaml else `OCaml
+  let flag f = Array.exists (String.equal f) Sys.argv in
+  let target = if flag "--oxcaml" then `OxCaml else `OCaml in
+  let simd = flag "--simd" in
+  let base name = Filename.remove_extension name in
+  (* Each module, and the bridge that checks it against its codec. [make] is
+     the constructor [Schemas.<codec>_make] and its type [Schemas.<codec>]. *)
+  let g name ?(make = true) ?maps codec c =
+    let make =
+      if make then Some ("Schemas." ^ codec ^ "_make", "Schemas." ^ codec)
+      else None
+    in
+    let codec = "Schemas." ^ codec
+    and core = String.capitalize_ascii (base name) in
+    write name (Wire_ocaml.ml ~target ~simd ?make ?maps ~codec c);
+    write (name ^ "i") (Wire_ocaml.mli ~target ~simd ?make ?maps ~codec c);
+    write (base name ^ "_wire.ml") (Wire_ocaml.bridge ?maps ~codec ~core c);
+    write (base name ^ "_wire.mli") (Wire_ocaml.bridge_mli ?maps ~codec ~core c)
   in
-  (* Each module, and the bridge that checks it against its codec. *)
-  let g name ?make ?maps codec c =
+  let s name ?(step = false) codec c =
     let codec = "Schemas." ^ codec in
-    write name (Wire_ocaml.ml ~target ?make ?maps ~codec c);
-    let base = Filename.remove_extension name in
-    write (base ^ "_wire.ml")
-      (Wire_ocaml.bridge ?maps ~codec ~core:(String.capitalize_ascii base) c)
+    let ml = Wire_ocaml.scanner ~target ~codec c
+    and mli = Wire_ocaml.scanner_mli ~target ~codec c in
+    if not step then begin
+      write name ml;
+      write (name ^ "i") mli
+    end
+    else begin
+      let step = "Step" in
+      write name (summed c ^ Wire_ocaml.scanner ~target ~step ~codec c);
+      write (name ^ "i")
+        ("module Step : sig\n  type t = int\nend\n\n"
+        ^ Wire_ocaml.scanner_mli ~target ~step ~codec c)
+    end
   in
-  g "g_ipv4.ml" ~make:"Schemas.ipv4_make" "ipv4" Schemas.ipv4;
-  g "g_ipv4_record.ml" "ipv4" Schemas.ipv4;
-  g "g_checked.ml" ~make:"Schemas.checked_make" "checked" Schemas.checked;
-  g "g_mixed.ml" ~make:"Schemas.mixed_make" "mixed" Schemas.mixed;
-  g "g_small.ml" ~make:"Schemas.small_make" "small" Schemas.small;
-  g "g_eth.ml" ~make:"Schemas.eth_make" "eth" Schemas.eth;
-  g "g_wide.ml" ~make:"Schemas.wide_make" "wide" Schemas.wide;
-  g "g_signed.ml" ~make:"Schemas.signed_make" "signed" Schemas.signed;
-  g "g_refined.ml" ~make:"Schemas.refined_make" "refined" Schemas.refined;
-  g "g_overflow.ml" ~make:"Schemas.overflow_make" "overflow" Schemas.overflow;
-  write "s_sized.ml"
-    (Wire_ocaml.scanner ~target ~codec:"Schemas.sized" Schemas.sized);
-  write "s_overflow.ml"
-    (Wire_ocaml.scanner ~target ~codec:"Schemas.overflow" Schemas.overflow);
-  write "s_skipped.ml"
-    (Wire_ocaml.scanner ~target ~codec:"Schemas.skipped" Schemas.skipped);
-  g "g_mapped.ml" ~make:"Schemas.mapped_make"
+  g "g_ipv4.ml" "ipv4" Schemas.ipv4;
+  g "g_ipv4_record.ml" ~make:false "ipv4" Schemas.ipv4;
+  g "g_checked.ml" "checked" Schemas.checked;
+  g "g_mixed.ml" "mixed" Schemas.mixed;
+  g "g_small.ml" "small" Schemas.small;
+  g "g_eth.ml" "eth" Schemas.eth;
+  g "g_wide.ml" "wide" Schemas.wide;
+  g "g_signed.ml" "signed" Schemas.signed;
+  g "g_packed.ml" "packed" Schemas.packed;
+  g "g_refined.ml" "refined" Schemas.refined;
+  g "g_overflow.ml" "overflow" Schemas.overflow;
+  g "g_lanes.ml" "lanes" Schemas.lanes;
+  s "s_sized.ml" "sized" Schemas.sized;
+  s "s_overflow.ml" "overflow" Schemas.overflow;
+  s "s_skipped.ml" "skipped" Schemas.skipped;
+  s "s_huge.ml" ~step:true "huge" Schemas.huge;
+  s "s_bigspan.ml" "bigspan" Schemas.bigspan;
+  s "s_nested.ml" ~step:true "nested 12" (Schemas.nested 12);
+  g "g_mapped.ml" "mapped" Schemas.mapped
     ~maps:
       Wire_ocaml.
         [
-          ("Schemas.u16be_int", Typ Schemas.u16be_int);
-          ("Schemas.i32be_int", Typ Schemas.i32be_int);
-          ("Schemas.proto_lookup", Typ Schemas.proto_lookup);
-          ("Schemas.flag_bit", Typ Schemas.flag_bit);
+          map "Schemas.u16be_int" ~typ:"int" Schemas.u16be_int;
+          map "Schemas.i32be_int" ~typ:"int32" Schemas.i32be_int;
+          map "Schemas.proto_lookup" ~typ:"[ `Icmp | `Tcp | `Udp ]"
+            Schemas.proto_lookup;
+          map "Schemas.flag_bit" ~typ:"bool" Schemas.flag_bit;
         ]
-    "mapped" Schemas.mapped

@@ -57,6 +57,28 @@ type bf_info = {
 val no_runtime : Types.eval_ctx
 (** The context with no parameter bindings. *)
 
+val offset_add : int -> int -> int
+(** [offset_add a b] is [a + b], saturated at [max_int] and [min_int]. A
+    saturated offset lies outside any buffer, so every bounds check rejects it.
+*)
+
+val fallback_runtime : Types.eval_ctx
+(** The context of the general passes a record without parameters falls back on
+    when its layout walk has not accepted it. It binds no parameter, and a
+    sub-codec checked with it goes straight to its own general passes. *)
+
+val is_fallback : Types.eval_ctx -> bool
+(** [is_fallback ctx] is [true] when [ctx] is {!fallback_runtime}. *)
+
+val extent_fallback_runtime : Types.eval_ctx
+(** The context of the general extent a record without parameters falls back on
+    when its extent walk has failed. It binds no parameter, and a sub-codec
+    measured with it goes straight to its own general extent. *)
+
+val is_extent_fallback : Types.eval_ctx -> bool
+(** [is_extent_fallback ctx] is [true] when [ctx] is {!extent_fallback_runtime}.
+*)
+
 val runtime : ?env:Types.param_env -> unit -> Types.eval_ctx
 (** [runtime ?env ()] resolves parameters through [env], or is {!no_runtime}. *)
 
@@ -236,6 +258,9 @@ type step =
       -> step
   | Full of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
   | Covered of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+  | Laid of (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+      (** A gated field or a sub-codec, which a layout pass measures and checks
+          whole: the general validator, run unless that pass has accepted. *)
 
 (** How the encoder writes a field it has a descriptor for: the field's value,
     put at the descriptor's offset with no bounds check of its own. *)
@@ -244,11 +269,59 @@ type 'r put =
   | Blit : { get : 'r -> string; at : int; len : int } -> 'r put
 
 (** How a field adds to the record's extent, for the layout pass: a fixed width,
-    a byte span whose size the data decides, or the rest of the buffer. *)
-type layout = Lfix of int | Lspan of int Types.expr | Lrest
+    a byte span whose size the data decides, the rest of the buffer, a field
+    gated by a condition, a sub-codec in a region of a given size ([at_most]
+    when it may end before the region does), or a sub-codec measuring itself. A
+    sub-codec is given by its size and its validate on a measured end. *)
+type layout =
+  | Lfix of int
+  | Lspan of int Types.expr
+  | Lrest
+  | Lopt of bool Types.expr * layout
+  | Lregion of { size : int Types.expr; at_most : bool; sub : sub }
+  | Lsub of sub
+
+and sub = {
+  size_of : runtime -> Input_end.t -> bytes -> int -> int;
+  validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
+  check_end : Input_end.t -> bytes -> int -> int;
+}
 
 (** A scalar of any type. *)
 type packed_scalar = Ps : 'a scalar -> packed_scalar
+
+(** How the walk reads a field: in place at a fixed offset of the record, inside
+    the frame the walk has checked, or as the cursor moves over it. *)
+type _ walk_read =
+  | Scalar : 'a scalar -> 'a walk_read
+  | String : int * int -> string walk_read
+      (** A byte array of the given offset and length. *)
+  | Slice : int * int -> Bytesrw.Bytes.Slice.t walk_read
+      (** A byte slice of the given offset and length. *)
+  | Walk : (Types.cursor -> 'a) -> 'a walk_read
+
+(** The walk's readers in field order, as {!readers}. *)
+type (_, _) walk_readers =
+  | WNil : ('f, 'f) walk_readers
+  | WSnoc :
+      ('full, 'a -> 'rest) walk_readers * 'a walk_read
+      -> ('full, 'rest) walk_readers
+
+(** A check the walk makes before it reads: a field at a fixed offset within a
+    set of intervals, or a condition on such fields. *)
+type walk_check =
+  | Within of packed_scalar * (int * int) array
+  | Holds of (Types.cursor -> bool)
+
+type ('full, 'f) walk = {
+  wreaders : ('full, 'f) walk_readers;
+  wchecks_rev : walk_check list;
+  wstart : int option;
+  wgates : (bool Types.expr * int) list;
+}
+(** The walk of a record under construction: its readers, its checks, last
+    first, and where the first field the cursor moves over starts in the record,
+    once there is one. *)
 
 (** A record under construction: the fields added so far. *)
 type ('f, 'r) record =
@@ -260,6 +333,7 @@ type ('f, 'r) record =
       writers_rev : ('r -> runtime -> bytes -> int -> int -> int) list;
       puts_rev : 'r put list option;
       layout_rev : layout list option;
+      walk : ('full, 'f) walk option;
       prefix : (string * packed_scalar) list;
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
       min_wire_size : int;
@@ -309,7 +383,21 @@ type pass =
       flat : int array;
       tables : string array;
       intervals : interval array;
+      words : (bytes -> int -> bool) option;
+          (** The tests as reads of the record's words, when they can be. *)
     }
+  | Word of {
+      q : int;
+      l : int;
+      r : int;
+      m : int;
+      lo : int;
+      hi : int;
+      intervals : interval array;
+    }
+      (** A single interval test on a big-endian field or bitfield, read from
+          the record's 8-byte word at [q] and run inline
+          ({!Codec_intervals.within}). *)
   | Steps of {
       steps : step array;
       where : (slots -> bool) option;
@@ -325,6 +413,7 @@ type 'r compiled = {
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
   read : runtime -> Input_end.t -> bytes -> int -> 'r;
   plain_decode : (bytes -> int -> 'r) option;
+  walk : (Types.cursor -> 'r) option;
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
@@ -334,6 +423,7 @@ type 'r compiled = {
   plain_pass : pass;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
   validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
+  check_end : Input_end.t -> bytes -> int -> int;
   validate_arr : slots -> runtime -> Input_end.t -> bytes -> int -> unit;
   clear_scratch : slots -> unit;
   populate : slots -> runtime -> Input_end.t -> bytes -> int -> unit;

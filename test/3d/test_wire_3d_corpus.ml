@@ -229,7 +229,7 @@ let test_corpus_verdict_resolves_params () =
         | Error _ -> false
         | Ok v -> (
             match
-              Codec.validate ~env c b 0;
+              Codec.validate_exn ~env c b 0;
               Codec.size_of_value c v
             with
             | n -> Int.equal n (Bytes.length b)

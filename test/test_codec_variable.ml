@@ -279,7 +279,7 @@ let test_repeat_oversized_length_rejected () =
   Alcotest.(check bool)
     "length past buffer fails cleanly" true (decodes "\x00\x10abc")
 
-(* [Codec.validate] never walks a record field by field the way decode does: it
+(* [Codec.validate_exn] never walks a record field by field the way decode does: it
    reaches each field's bytes through that field's populate, at the offset the
    layout computes. An overlong [Field.repeat] budget pushes every following
    field past the end of the buffer, and the populate used to read there
@@ -344,7 +344,7 @@ let validate_overrun_input =
 
 let test_validate_overrun_field_offset () =
   let buf = Bytes.of_string validate_overrun_input in
-  (match Codec.validate validate_overrun_codec buf 0 with
+  (match Codec.validate_exn validate_overrun_codec buf 0 with
   | () ->
       Alcotest.fail "validate accepted a record whose fields run off the end"
   | exception Wire.Parse_error _ -> ()
@@ -410,22 +410,30 @@ let dynamic_subcodec_before_fixed =
         (Field.v "tail" all_zeros $ fun (_, _, tail) -> tail);
       ]
 
+(* The record holds at least 5 bytes, the gate and the value. A shorter buffer
+   fails the frame check at offset 0. A 5-byte one passes it and fails at the
+   value, which the payload has moved. *)
 let test_decode_dynamic_field_past_end () =
-  let buf = Bytes.of_string "\x01\x00\x00\x00" in
-  let decoded =
+  let decoding buf =
     match Codec.decode dynamic_subcodec_before_fixed buf 0 with
     | Ok _ -> Ok ()
     | Error e -> Error e
     | exception Invalid_argument m ->
         Alcotest.failf "decode crashed instead of failing cleanly: %s" m
   in
-  check_located_eof "decode" ~at:3 ~expected:4 ~got:1 decoded;
-  check_located_eof "validate" ~at:3 ~expected:4 ~got:1
-    (validating "validate" (fun () ->
-         Codec.validate dynamic_subcodec_before_fixed buf 0))
+  let validate buf =
+    validating "validate" (fun () ->
+        Codec.validate_exn dynamic_subcodec_before_fixed buf 0)
+  in
+  let short = Bytes.of_string "\x01\x00\x00\x00" in
+  check_located_eof "decode, short" ~at:0 ~expected:5 ~got:4 (decoding short);
+  check_located_eof "validate, short" ~at:0 ~expected:5 ~got:4 (validate short);
+  let buf = Bytes.of_string "\x01\x00\x00\x00\x00" in
+  check_located_eof "decode" ~at:3 ~expected:4 ~got:2 (decoding buf);
+  check_located_eof "validate" ~at:3 ~expected:4 ~got:2 (validate buf)
 
 (* [Codec.validate_struct] runs the same populate-driven field pass as
-   [Codec.validate] and needs the same per-field bounds check. [Data] is sized
+   [Codec.validate_exn] and needs the same per-field bounds check. [Data] is sized
    by [Len], so a [Len] of 200 in a 5-byte buffer puts [V] at offset 201: the
    first byte read off the end. The trailing greedy [Z] keeps the struct's span
    resolvable, so nothing rejects the record before [V]'s read. *)
@@ -457,7 +465,7 @@ let test_validate_struct_field_past_end () =
          | Ok () -> ()
          | Error e -> raise (Wire.Parse_error e)))
 
-(* Unlike [Codec.validate], [Codec.validate_struct] has no whole-record bounds
+(* Unlike [Codec.validate_exn], [Codec.validate_struct] has no whole-record bounds
    check in front of the field pass, so even a statically placed field can be
    read off the end: [B] sits at offset 1 in a 1-byte buffer. The constraint is
    what makes the validator populate [B] at all. *)
@@ -505,7 +513,7 @@ let test_validate_present_optional_past_end () =
      invented, so the failure belongs to the span. *)
   check_located_eof "validate" ~at:2 ~expected:200 ~got:3
     (validating "validate" (fun () ->
-         Codec.validate validate_optional_codec buf 0))
+         Codec.validate_exn validate_optional_codec buf 0))
 
 (* [optional_or] gates its read on the same kind of runtime expression and has
    the same hole. Same shape and same bytes as [validate_optional_codec]. *)
@@ -531,7 +539,7 @@ let test_validate_present_optional_or_past_end () =
   let buf = Bytes.of_string "\x01\xc8\x00\x00\x00" in
   check_located_eof "validate" ~at:2 ~expected:200 ~got:3
     (validating "validate" (fun () ->
-         Codec.validate validate_optional_or_codec buf 0))
+         Codec.validate_exn validate_optional_or_codec buf 0))
 
 (* A [uint_var] of runtime width reads its bytes directly instead of through
    the span reader every other variable-width field uses, so it needs that
@@ -554,13 +562,13 @@ let test_validate_uint_var_past_end () =
      buffer still had at offset 1, the way a truncated byte span does. *)
   check_located_eof "validate" ~at:1 ~expected:7 ~got:2
     (validating "validate" (fun () ->
-         Codec.validate validate_uint_var_codec buf 0))
+         Codec.validate_exn validate_uint_var_codec buf 0))
 
 (* A [Field.repeat] consumes its byte budget exactly, so an 11-byte budget over
    a 2-byte element is illegal however long the buffer is (here 64 bytes): the
    budget does not split into whole elements. EverParse rejects the same frame
    from the same schema, with a dedicated "list size not multiple" error, and so
-   does [Codec.decode]. [Codec.validate] used to accept it: it reaches a field
+   does [Codec.decode]. [Codec.validate_exn] used to accept it: it reaches a field
    only through that field's populate, and the repeat had none. Bytes are the
    fuzz sample verbatim ([fuzz.exe -s 32582623701 -r 7500]). *)
 let repeat_odd_budget =
@@ -598,7 +606,8 @@ let test_validate_repeat_partial_element () =
        2-byte element needs two. Both sides must report that same spot: a fix
        that made them agree on accepting would pass a bare "they agree" check. *)
     check_located_eof (name ^ " validate") ~at:12 ~expected:2 ~got:1
-      (validating (name ^ " validate") (fun () -> Codec.validate codec buf 0));
+      (validating (name ^ " validate") (fun () ->
+           Codec.validate_exn codec buf 0));
     check_located_eof (name ^ " decode") ~at:12 ~expected:2 ~got:1
       (validating (name ^ " decode") (fun () ->
            match Codec.decode codec buf 0 with
@@ -613,7 +622,7 @@ let test_validate_repeat_partial_element () =
     Bytes.of_string ("\x00\x0a" ^ String.sub repeat_odd_budget 2 10)
   in
   let accepts name codec =
-    (match Codec.validate codec whole 0 with
+    (match Codec.validate_exn codec whole 0 with
     | () -> ()
     | exception Wire.Parse_error e ->
         Alcotest.failf "%s: validate rejected a whole budget: %a" name
@@ -637,7 +646,7 @@ let test_eof_counts_are_base_invariant () =
   let buf = Bytes.of_string (String.make pad '\xee' ^ "\x07\x00\x00") in
   check_located_eof "validate at base 8" ~at:(pad + 1) ~expected:7 ~got:2
     (validating "validate at base 8" (fun () ->
-         Codec.validate validate_uint_var_codec buf pad))
+         Codec.validate_exn validate_uint_var_codec buf pad))
 
 (* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
    length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
@@ -670,6 +679,148 @@ let test_byte_slice_negative_size () =
   | exception Invalid_argument _ ->
       Alcotest.fail
         "negative byte_slice size crashed instead of failing cleanly"
+
+(* A record whose sizes sum past [max_int] fails with an EOF that names more
+   bytes than the buffer holds. *)
+let check_eof_past_buffer name = function
+  | Ok _ -> Alcotest.failf "%s: accepted a record larger than any buffer" name
+  | Error (e : parse_error) -> (
+      match e.kind with
+      | Unexpected_eof { expected; got } ->
+          if expected <= got then
+            Alcotest.failf "%s: %a names no missing byte" name pp_parse_error e
+      | k -> Alcotest.failf "%s: expected an eof, got %a" name pp_error_kind k)
+
+type deep = { inner : deep option; big : Bytesrw.Bytes.Slice.t }
+
+(* [depth + 1] variable-size codecs nested in each other, each ending with a
+   slice of [big] bytes. *)
+let rec deep_level big k : deep Codec.t =
+  let slice = Field.v "big" (byte_slice ~size:(int big)) in
+  if k = 0 then
+    let len = Field.v "len" uint8 in
+    let data = Field.v "data" (byte_slice ~size:(Field.ref len)) in
+    Codec.v "L0"
+      (fun _ _ big -> { inner = None; big })
+      Codec.
+        [
+          (len $ fun _ -> UInt8.zero);
+          (data $ fun r -> r.big);
+          (slice $ fun r -> r.big);
+        ]
+  else
+    let inner = Field.v "inner" (codec (deep_level big (k - 1))) in
+    Codec.v (Fmt.str "L%d" k)
+      (fun inner big -> { inner = Some inner; big })
+      Codec.[ (inner $ fun r -> Option.get r.inner); (slice $ fun r -> r.big) ]
+
+let deep_top big depth =
+  let body = Field.v "body" (codec (deep_level big depth)) in
+  let tail = Field.v "tail" uint8 in
+  Codec.v "Top"
+    (fun body tail -> (body, tail))
+    Codec.[ (body $ fun (b, _) -> b); (tail $ fun (_, t) -> t) ]
+
+(* A codec that no buffer can hold is refused when it is built. *)
+let test_nested_codecs_past_largest_buffer () =
+  List.iter
+    (fun depth ->
+      match deep_top (Sys.max_string_length - 1) depth with
+      | _ -> Alcotest.failf "%d levels: built a codec no buffer can hold" depth
+      | exception Invalid_argument msg ->
+          if not (Re.execp (Re.compile (Re.str "past the largest buffer")) msg)
+          then
+            Alcotest.failf "%d levels: refused for another reason: %s" depth msg)
+    [ 1; 32 ]
+
+let sub_min_inner =
+  let len = Field.v "len" uint8 in
+  Codec.v "SubMinInner"
+    (fun l d t -> (l, d, t))
+    Codec.
+      [
+        (len $ fun (l, _, _) -> l);
+        (Field.v "data" (byte_slice ~size:(Field.ref len)) $ fun (_, d, _) -> d);
+        (Field.v "tag" uint16be $ fun (_, _, t) -> t);
+      ]
+
+let sub_min_outer =
+  Codec.v "SubMinOuter"
+    (fun i x -> (i, x))
+    Codec.
+      [
+        (Field.v "inner" (codec sub_min_inner) $ fun (i, _) -> i);
+        (Field.v "x" uint8 $ fun (_, x) -> x);
+      ]
+
+(* A sub-codec's [min_size] counts in its parent's: the inner record holds at
+   least 3 bytes, so the outer one holds at least 4. *)
+let test_sub_codec_min_size () =
+  Alcotest.(check int) "min_wire_size" 4 (Codec.min_wire_size sub_min_outer);
+  let buf = Bytes.of_string "\000\001" in
+  check_located_eof "decode" ~at:0 ~expected:4 ~got:2
+    (Result.map ignore (Codec.decode sub_min_outer buf 0));
+  check_located_eof "validate" ~at:0 ~expected:4 ~got:2
+    (Codec.validate sub_min_outer buf 0)
+
+type spans = {
+  a : Bytesrw.Bytes.Slice.t;
+  b : Bytesrw.Bytes.Slice.t;
+  c : Bytesrw.Bytes.Slice.t;
+  tl : UInt8.t;
+}
+
+let spans_tl = Codec.(Field.v "tl" uint8 $ fun r -> r.tl)
+
+(* Three spans, each sized by a field times 2^31. Two of the largest size
+   nearly fill a 63-bit int, and a third overflows it. *)
+let spans () =
+  let x1 = Field.v "x1" uint32be
+  and x2 = Field.v "x2" uint32be
+  and x3 = Field.v "x3" uint32be in
+  let k = 1 lsl 31 in
+  let span name x =
+    Field.v name (byte_slice ~size:Expr.(Field.ref x * int k))
+  in
+  Codec.v "Spans"
+    (fun _ _ _ a b c tl -> { a; b; c; tl })
+    Codec.
+      [
+        (x1 $ fun _ -> UInt32.zero);
+        (x2 $ fun _ -> UInt32.zero);
+        (x3 $ fun _ -> UInt32.zero);
+        (span "a" x1 $ fun r -> r.a);
+        (span "b" x2 $ fun r -> r.b);
+        (span "c" x3 $ fun r -> r.c);
+        spans_tl;
+      ]
+
+let spans_buf x3 =
+  let b = Bytes.make 13 '\042' in
+  Bytes.set_int32_be b 0 Int32.max_int;
+  Bytes.set_int32_be b 4 Int32.max_int;
+  Bytes.set_int32_be b 8 (Int32.of_int x3);
+  b
+
+let spans_past_max_int () =
+  let spans = spans () in
+  let buf = spans_buf 0 in
+  check_eof_past_buffer "decode" (Codec.decode spans buf 0);
+  check_eof_past_buffer "validate" (Codec.validate spans buf 0);
+  (* A third span of 2^32 bytes would wrap the sum to 0. [get] of the field
+     after the spans must still fail. *)
+  let buf = spans_buf 2 in
+  let get = Staged.unstage (Codec.get spans spans_tl) in
+  match get buf 0 with
+  | v ->
+      Alcotest.failf "get read %d from a field %d bytes past the buffer"
+        (UInt8.to_int v) max_int
+  | exception (Parse_error _ | Invalid_argument _) -> ()
+
+(* The sum under test needs 63-bit ints. On narrower ints the product
+   overflows first and is rejected as out of range. *)
+let test_spans_past_max_int () =
+  if Sys.int_size >= 63 then spans_past_max_int ()
 
 let suite =
   ( "codec_variable",
@@ -713,4 +864,9 @@ let suite =
         test_validate_repeat_partial_element;
       Alcotest.test_case "diag: eof counts do not move with the base" `Quick
         test_eof_counts_are_base_invariant;
+      Alcotest.test_case "nested codecs past the largest buffer" `Quick
+        test_nested_codecs_past_largest_buffer;
+      Alcotest.test_case "a sub-codec's fixed bytes count in min_size" `Quick
+        test_sub_codec_min_size;
+      Alcotest.test_case "spans past max_int" `Quick test_spans_past_max_int;
     ] )

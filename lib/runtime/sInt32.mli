@@ -58,7 +58,7 @@ val of_int32 : int32 -> t
 (** [of_int32 n] is the [int32] as a signed 32-bit value: the same value {!le}
     and {!be} decode those four bytes to, on every platform. *)
 
-val to_int : t -> int
+val [@zero_alloc] to_int : t -> int
 (** [to_int t] is the value as a native [int]. Exact on a 64-bit host; where the
     native [int] is narrower it does not hold the full range, so prefer
     {!to_int32} across such a boundary. *)
@@ -68,7 +68,7 @@ val to_int_opt : t -> int option
     too narrow to hold it. Always [Some] on a 64-bit host. Prefer it to
     {!to_int} on any path that must not silently drop the top bits. *)
 
-val of_int : int -> t
+val [@zero_alloc] of_int : int -> t
 (** [of_int n] is [n] as a signed 32-bit value. Raises [Invalid_argument] when
     [n] is outside the range, rather than masking it to a legal value the caller
     did not mean. *)

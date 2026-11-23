@@ -210,7 +210,7 @@ let both case f =
   f "bytes" case.m.bytes;
   f "bigstring" case.m.bigstring
 
-(* [is_valid], [View.at] and [View.check] at [off], against [Codec.validate]
+(* [is_valid], [View.at] and [View.check] at [off], against [Codec.validate_exn]
    and each field's reader there. *)
 let views_at case c ~what ~validated ops buf off =
   same case.label (what "is_valid")
@@ -218,7 +218,7 @@ let views_at case c ~what ~validated ops buf off =
     (string_of_bool (ops.is_valid buf off));
   let expected =
     outcome (fun () ->
-        Wire.Codec.validate c buf off;
+        Wire.Codec.validate_exn c buf off;
         String.concat ","
           (List.map
              (fun (name, _) -> List.assoc name case.refs buf off)
@@ -233,7 +233,7 @@ let views_at case c ~what ~validated ops buf off =
         match ops.checked buf off with
         | true, reads -> String.concat "," reads
         | false, _ ->
-            Wire.Codec.validate c buf off;
+            Wire.Codec.validate_exn c buf off;
             "")
   in
   same case.label (what "View.check then each read") expected checked
@@ -246,7 +246,7 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
   in
   let validated =
     outcome (fun () ->
-        Wire.Codec.validate c buf off;
+        Wire.Codec.validate_exn c buf off;
         "")
   in
   both case (fun kind ops ->
@@ -298,13 +298,13 @@ let encodes_at case (Fuzz_gen.Pack g) buf off =
           (size, -1);
         ]
 
-(* [Valid.v] on the buffer and each read, against [Codec.validate] and each
+(* [Valid.v] on the buffer and each read, against [Codec.validate_exn] and each
    field's reader at offset 0. *)
 let valid case (Fuzz_gen.Pack g) buf =
   let c = Fuzz_gen.codec g in
   let expected keys =
     outcome (fun () ->
-        Wire.Codec.validate c buf 0;
+        Wire.Codec.validate_exn c buf 0;
         String.concat ","
           (List.map (fun (name, _) -> List.assoc name case.refs buf 0) keys))
   in
@@ -594,12 +594,12 @@ let codec_agrees (Reference r) ~general bounded value =
   let validated =
     Option.fold ~none:false
       ~some:(fun b ->
-        match Wire.Codec.validate r.codec b 0 with
+        match Wire.Codec.validate_exn r.codec b 0 with
         | () -> true
         | exception Wire.Parse_error _ -> false)
       bounded
   in
-  scan_same r.label "Codec.validate" string_of_bool (Option.is_some value)
+  scan_same r.label "Codec.validate_exn" string_of_bool (Option.is_some value)
     validated
 
 let check_scan ?oracle ?strides ?(expand = true) (Reference r as ref_) backends
@@ -649,9 +649,9 @@ let scan_corpus ?oracle (Diff_codecs.Scan c as case) backends =
   let check = check_scan ?oracle ~expand:false ref_ backends in
   let corpus = c.corpus () in
   List.iter check corpus;
-  (* Good, bad and good frames of one length, then a partial one, through
-     the batch fold: recovery after a rejected frame, and the order of the
-     accumulator. *)
+  (* The batch fold recovers after a rejected frame and keeps the order of
+     the accumulator. Runs of three, six and nine frames, then a partial one,
+     leave every remainder for a fold that walks four frames an iteration. *)
   let frames = Hashtbl.create 16 in
   List.iter
     (fun b ->
@@ -669,11 +669,17 @@ let scan_corpus ?oracle (Diff_codecs.Scan c as case) backends =
       Option.iter
         (fun good ->
           let bad = Option.value ~default:good bad in
-          let joined =
-            Bytes.concat Bytes.empty
-              [ good; bad; good; Bytes.sub good 0 (n / 2) ]
-          in
-          check_scan ?oracle ~strides:[ n ] ~expand:false ref_ backends joined)
+          let partial = Bytes.sub good 0 (n / 2) in
+          List.iter
+            (fun frames ->
+              let joined = Bytes.concat Bytes.empty (frames @ [ partial ]) in
+              check_scan ?oracle ~strides:[ n ] ~expand:false ref_ backends
+                joined)
+            [
+              [ good; bad; good ];
+              [ good; bad; good; good; good; bad ];
+              [ good; bad; good; good; bad; good; good; bad; good ];
+            ])
         good)
     frames
 

@@ -6,12 +6,13 @@
 make build              # dune build
 make test               # dune runtest
 make test-wasm          # test/wasm under node via wasm_of_ocaml (needs wasm_of_ocaml, node)
-make 3d                 # validate all schemas with 3d.exe (needs 3d.exe)
-make bench              # EverParse C vs OCaml (needs 3d.exe)
+make 3d                 # validate all schemas with EverParse (needs everparse-3d.exe)
+make bench              # EverParse C vs OCaml (needs everparse-3d.exe)
 make bench-routing      # APID demux throughput
 make bench-gateway      # TM frame reassembly
 make bench-clcw         # CLCW polling loop
 make bench-rust         # Ethernet/IPv4/TCP/UDP: OCaml, OxCaml, Rust (needs cargo)
+make bench-apps-rust    # routing, gateway, CLCW workloads: OCaml, OxCaml, Rust (needs cargo)
 make fuzz-rust          # sampled codecs vs the Rust Wire_rust generates (needs rustc)
 make prof               # CPU profile with Instruments (open prof.trace)
 make memtrace           # allocation hotspots via memtrace
@@ -19,19 +20,22 @@ make cppcheck           # static analysis of the hand-written C (skips if cppche
 make clean              # dune clean
 ```
 
-`make bench` requires EverParse (`3d.exe` in PATH or `~/.local/everparse/bin/`).
-All bench/prof/memtrace targets use `--profile=release`.
+`make bench` requires EverParse (`everparse-3d.exe`, or `3d.exe` before
+v2026.10, in PATH or `~/.local/everparse/bin/`).
+All bench/prof/memtrace targets use `--profile=bench`: the release profile
+with `-O3` on every unit, the libraries a benchmark links included
+(`dune-workspace`).
 The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 (`make test-wasm`) are in [docs/projection.md](docs/projection.md#narrow-int-targets).
 
 ## Project structure
 
 - `lib/` -- core `wire` library: DSL types, Everparse codegen, Codec (parse/encode)
-- `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run 3d.exe, generate C tests)
+- `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run everparse-3d.exe, generate C tests)
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
 - `lib/ocaml/` -- `wire.ocaml` sublibrary: a fixed-size codec written out as OCaml (or OxCaml)
 - `lib/rust/` -- `wire.rust` sublibrary: the same codec written out as dependency-free Rust
-- `lib/diff/` and `lib/diff-gen/` -- differential test infrastructure
+- `lib/diff/` -- `wire.diff` sublibrary: differential test infrastructure
 - `test/stubs/` -- Wire_stubs test suite (compile + EverParse e2e tests)
 - `examples/` -- protocol definitions as Wire DSL examples
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
@@ -41,6 +45,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
   - `bench/clcw/` -- CLCW polling loop, uses `Codec.bitfield`/`load_word`/`extract`
   - `bench/routing/` -- APID demux throughput
   - `bench/gateway/` -- TM frame reassembly
+  - `bench/apps/` -- the routing, gateway and CLCW workloads in Wire.Codec, generated OCaml/OxCaml, generated Rust and crates
   - `bench/gen_stubs.ml` -- generates C/OCaml stubs for EverParse comparison
   - `bench/bench_lib.ml` -- shared benchmark framework (timing, tables, comparison)
   - `bench/memtrace/` -- allocation profiling
@@ -122,7 +127,7 @@ codecs share one library, is in [docs/projection.md](docs/projection.md#generate
 The **only** goal of benchmarks is to compare these three tiers -- all derived
 from the same Wire DSL definition:
 
-1. **Pure OCaml** -- `Wire.Codec.get` / `Wire.Codec.set` (zero-copy field access)
+1. **Pure OCaml** -- `Wire.Codec`'s staged reads and writes (zero-copy field access)
 2. **EverParse C** -- EverParse-generated verified C validator in a C loop
 3. **OCaml->C FFI** -- OCaml calling the EverParse-generated C validator
 
@@ -135,12 +140,24 @@ application logic (routing, anomaly counting, reassembly) but all field
 access must use the default plug (or a custom plug made by copy-and-trim of
 the shipped `<Name>_Fields.c`).
 
+**Benchmark loops are what a user of each library writes.** Every
+optimisation lives in the code generator or the runtime, never in the
+harness: plain checked indexing, no `unsafe_get`, masks, hand unboxing,
+inlining attributes or intrinsics in a loop, and SIMD only through an API
+the generator emits. The rows of one workload in one language share one
+loop shape and differ only in the API they call; a crate row calls the
+crate the way its documentation shows. A harness trick is a defect: it
+measures the trick, not the library, and its win belongs in the generator.
+
 **Demo bench** (`bench/demo/`) covers every Wire type at the field level.
 
 **Application benchmarks** (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
-does the same work with `Codec.get`/`Codec.set`.
+does the same work with the codec's read and write API, as a user would:
+`Codec.read_word` once per header and `Codec.of_word` per field
+(`Codec.load_word` and `Codec.extract` for CLCW), `Codec.writer` per header
+written, and `Codec.get`/`Codec.set` for a lone field.
 
 **Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one
 exception to the three tiers: it measures the code generators against
@@ -159,6 +176,25 @@ fixed headers of `bench/rust/headers.ml` and link them in the harness. Keep
 the harnesses symmetric: a change to how one side times or folds goes into
 the other too, and never weaken a crate's row. The Rust side is a cargo
 project outside the dune build, so `dune build` never needs the network.
+
+**Cross-language application benchmarks** (`bench/apps/`, `make
+bench-apps-rust`) run the three application workloads the same way: the
+OCaml workload of each (`<app>_workload.ml` in its directory, the one its
+EverParse comparison times) on OCaml and on OxCaml, and the same application
+logic over the modules `Wire_ocaml` (OCaml target on OCaml, OxCaml target on
+OxCaml) and `Wire_rust` generate from the same codecs, on the inputs the
+OCaml generators write; dune rules regenerate the OCaml modules. Each
+workload has a reading side and a writing side (`bench.exe write`,
+`wire-bench-apps write`), whose result is the hash of the buffer it writes.
+Each row is the loop a user of its library writes
+(`bench/apps/loops.ml` for OCaml and OxCaml, `cargo/src/main.rs` for Rust),
+and every row must give the same result. A
+released crate gets a row only where one reads and writes the format
+(`spacepackets`, `ccsds_primary_header` and `gaia-ccsds-c2a` for the space
+packet header, `chronus-gateway` for the TM frame header, `gaia-ccsds-c2a`
+for the CLCW); a hand-written Rust parser never stands in for one. Timing, the report and
+the cargo layout are those of `bench/rust` (`Bench_lib.measure` and
+`bench/rust/cargo/src/timing.rs`, shared by both).
 
 ## Style
 

@@ -1,7 +1,12 @@
 (library
+ (name gateway_workload)
+ (modules gateway_workload)
+ (libraries space wire bench_lib))
+
+(library
  (name gateway_bench)
  (modules gateway_bench)
- (libraries space wire bench_lib memtrace unix fmt))
+ (libraries gateway_workload bench_lib memtrace unix fmt))
 
 (library
  (name gateway_bench_c)

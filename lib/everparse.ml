@@ -350,6 +350,8 @@ let boxed : type a. walk -> path:string -> a Types.typ -> a Types.typ =
       codec_decode = Codec.embed_decode_ctx c;
       codec_validate = Codec.embed_validate_ctx c;
       codec_validate_sized = Codec.embed_validate_sized_ctx c;
+      codec_check_end = Codec.embed_check_end c;
+      codec_walk = Codec.embed_walk c;
       codec_encode = Codec.embed_encode_ctx c;
       codec_fixed_size = Some size;
       codec_min_size = size;
@@ -466,7 +468,7 @@ let flatten schema (s : Types.struct_) =
   in
   let slots = List.rev !(w.slots) in
   (* A path can spell a field's own name ([ip_src] beside [ip.src]): refuse it,
-     as the plug cannot hold both. Spellings that differ but escape alike are
+     as the plug cannot hold both. Spellings that differ but fold alike are
      refused where the plug is written ([Wire_3d.check_plug_names]). *)
   let seen = Hashtbl.create 16 in
   List.iter

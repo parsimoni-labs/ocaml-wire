@@ -769,8 +769,13 @@ let digest c = Wire.Private.Gen.digest c
    against the tail. Every scalar is an [i64] holding the 63-bit [int] the
    codec computes with; a checked operation returns [None] where the codec's
    overflows, which rejects the record through [?]. The code after a run of
-   optional fields is written once: the run binds its outputs and the tail
-   in one [let], so the code grows linearly with the optional fields. *)
+   optional fields is written once: the run binds the tail it leaves, and
+   its outputs that are not slots, in one [let]. A slot ([Plan.slots], an
+   output under more than [Plan.slot_depth] optional fields) is a [let mut]
+   bound to its absent value where the scan starts, which only a field
+   present assigns. An output is thus written by at most [Plan.slot_depth]
+   runs, and the code grows linearly with the optional fields, nested or
+   not. *)
 
 type scan = {
   out : Buffer.t;
@@ -778,6 +783,7 @@ type scan = {
   scope : P.Scope.t;
   live : string -> bool;
   exported : string -> bool;
+  slot : string -> bool;
   fresh : string -> string;
 }
 
@@ -813,6 +819,22 @@ let scan_value a words (f : P.field) =
       else Fmt.str "((%s >> %d) & %s)" w shift (mask width)
   | Bytes _ -> invalid_arg "Wire_rust.scan_value: a byte array"
 
+(* Binds each word of the prefix array [a] that holds a live bitfield, once,
+   keyed by its offset and base. *)
+let scan_words s a live =
+  List.filter_map
+    (fun (f : P.field) ->
+      match f.store with
+      | Bits { base; _ } -> Some (f.offset, base)
+      | Int _ | Bytes _ -> None)
+    live
+  |> List.sort_uniq compare
+  |> List.map (fun ((at, base) as key) ->
+      let w = s.fresh "w" in
+      line s "let %s: i64 = %s as i64;" w
+        (load a at (Bitfield.byte_size base) (base_endian base) (base_type base));
+      (key, w))
+
 (* A prefix: the tail [rest] must hold its [size] bytes, which come back as an
    array; each field the walk binds is read from it, and each field's checks
    follow it in the codec's order. *)
@@ -825,32 +847,35 @@ let scan_prefix s (fields : P.field list) size rest =
     "let Some((%s, %s)) = %s.split_first_chunk::<%d>() else { return None; };"
     (if live = [] then "_" else a)
     next rest size;
-  let words =
-    List.filter_map
-      (fun (f : P.field) ->
-        match f.store with
-        | Bits { base; _ } -> Some (f.offset, base)
-        | Int _ | Bytes _ -> None)
-      live
-    |> List.sort_uniq compare
-    |> List.map (fun ((at, base) as key) ->
-        let w = s.fresh "w" in
-        line s "let %s: i64 = %s as i64;" w
-          (load a at (Bitfield.byte_size base) (base_endian base)
-             (base_type base));
-        (key, w))
+  let words = scan_words s a live in
+  let bind (f : P.field) =
+    if List.memq f live then
+      line s "%s = %s;"
+        (if s.slot f.id then f.id else Fmt.str "let %s: i64" f.id)
+        (scan_value a words f)
   in
-  let s =
-    List.fold_left
-      (fun s (f : P.field) ->
-        if List.memq f live then
-          line s "let %s: i64 = %s;" f.id (scan_value a words f);
+  let refine s conditions =
+    { s with scope = P.Scope.refine s.scope conditions }
+  in
+  let range f g =
+    Option.bind (P.word_range f g) (fun (at, lo, hi) ->
+        Option.map (fun w -> (w, lo, hi)) (List.assoc_opt at words))
+  in
+  let rec go s = function
+    | [] -> s
+    | f :: g :: rest when Option.is_some (range f g) ->
+        let w, lo, hi = Option.get (range f g) in
+        bind f;
+        bind g;
+        line s "if !(%s >= %di64 && %s <= %di64) { return None; }" w lo w hi;
+        go (refine s (P.conditions f @ P.conditions g)) rest
+    | f :: rest ->
+        bind f;
         let conditions = P.conditions f in
         List.iter (scan_check s) conditions;
-        { s with scope = P.Scope.refine s.scope conditions })
-      s fields
+        go (refine s conditions) rest
   in
-  (s, next)
+  (go s fields, next)
 
 (* A size checked against the tail [rest], compared as [u64], which holds
    both the size and any slice length, so no cast narrows it. A negative size
@@ -958,10 +983,11 @@ let rec scan_walk s nodes rest k =
 
 (* A run of optional fields whose conditions exclude each other: the decision
    tree of their conditions picks the case that runs, which binds the outputs
-   of every field of the run, absent ones for the others, and the tail after
-   it in one [let]; the code after the run follows that [let] once. When a
-   subtree or a case of the tree is reached twice, the tree picks the case's
-   number, each shared subtree a closure, and a [match] runs the case. *)
+   of every field of the run that are not slots, absent ones for the others,
+   and the tail after it in one [let], and assigns its presence when a slot;
+   the code after the run follows that [let] once. When a subtree or a case
+   of the tree is reached twice, the tree picks the case's number, each
+   shared subtree a closure, and a [match] runs the case. *)
 and scan_gates s nodes rest k =
   let gates, after = P.gates (P.Scope.facts s.scope) nodes in
   let indexed = List.mapi (fun i g -> (i, g)) gates in
@@ -975,7 +1001,8 @@ and scan_gates s nodes rest k =
       (fun (i, (_, (present : P.output), children, _)) ->
         List.filter_map
           (fun (o : P.output) ->
-            if s.exported o.id then Some (i, present, o) else None)
+            if s.exported o.id && not (s.slot o.id) then Some (i, present, o)
+            else None)
           (present :: children))
       indexed
   in
@@ -990,11 +1017,13 @@ and scan_gates s nodes rest k =
     @ [ rest ]
   in
   let case s i =
-    let cond, _, _, body = List.nth gates i in
+    let cond, (present : P.output), _, body = List.nth gates i in
     scan_walk
       { s with scope = P.Scope.refine s.scope [ cond ] }
       body rest
-      (fun s rest -> line s "%s" (tuple (values ~fired:(Some i) rest)))
+      (fun s rest ->
+        if s.slot present.id then line s "%s = true;" present.id;
+        line s "%s" (tuple (values ~fired:(Some i) rest)))
   in
   let absent s = line s "%s" (tuple (values ~fired:None rest)) in
   let bound =
@@ -1010,6 +1039,14 @@ and scan_gates s nodes rest k =
   end;
   scan_walk s after tail k
 
+(* The slots, each bound to its absent value where the scan starts. *)
+let scan_slots s slots =
+  List.iter
+    (fun (o : P.output) ->
+      if o.is_bool then line s "let mut %s: bool = false;" o.id
+      else line s "let mut %s: i64 = 0;" o.id)
+    slots
+
 let scan_type (o : P.output) =
   if o.is_bool then "bool"
   else if o.signed then
@@ -1018,7 +1055,7 @@ let scan_type (o : P.output) =
     else "i32"
   else bits_type o.wire_width
 
-let scan_header ~codec ~digest =
+let scan_header ~codec ~digest ~slots =
   [
     Fmt.str
       "//! Generated by Wire_rust from %s. Do not edit: generate it again when"
@@ -1035,15 +1072,25 @@ let scan_header ~codec ~digest =
     "#![forbid(unsafe_code)]";
     "#![allow(dead_code, non_snake_case, unused_parens, unused_variables, \
      clippy::all)]";
-    "";
-    "/// The codec this module was generated from.";
-    Fmt.str "pub const CODEC: &str = %s;" (rust_string codec);
-    "";
-    "/// The digest of the codec's description, which changes whenever the";
-    "/// bytes it accepts or the values it reads do.";
-    Fmt.str "pub const DIGEST: &str = %s;" (rust_string digest);
-    "";
   ]
+  @ (if slots then
+       [
+         "// An optional field that is always present overwrites its outputs' \
+          absent";
+         "// values, and one that never is leaves them.";
+         "#![allow(unused_assignments, unused_mut)]";
+       ]
+     else [])
+  @ [
+      "";
+      "/// The codec this module was generated from.";
+      Fmt.str "pub const CODEC: &str = %s;" (rust_string codec);
+      "";
+      "/// The digest of the codec's description, which changes whenever the";
+      "/// bytes it accepts or the values it reads do.";
+      Fmt.str "pub const DIGEST: &str = %s;" (rust_string digest);
+      "";
+    ]
 
 let scan_prelude =
   arith_prelude ~result:"Option<i64>" ~ok:"Some" ~overflow:"None"
@@ -1096,6 +1143,7 @@ let pp_scanner ?fields ~codec ppf c =
     incr count;
     Fmt.str "%s%d" prefix !count
   in
+  let slots = P.slots plan outputs in
   let ids = List.map (fun (o : P.output) -> o.id) outputs in
   let s =
     {
@@ -1104,11 +1152,13 @@ let pp_scanner ?fields ~codec ppf c =
       scope = P.Scope.v plan;
       live = P.live plan outputs;
       exported = (fun v -> List.mem v ids);
+      slot = (fun v -> List.exists (fun (o : P.output) -> o.id = v) slots);
       fresh;
     }
   in
+  scan_slots s slots;
   let header =
-    try scan_header ~codec ~digest:(digest c)
+    try scan_header ~codec ~digest:(digest c) ~slots:(slots <> [])
     with Unsupported reason -> refuse ~codec reason
   in
   (try

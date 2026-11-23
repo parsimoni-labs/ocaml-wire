@@ -34,6 +34,25 @@ val eval_set_param : eval_ctx -> string -> int -> unit
 (** Update a bound output parameter, if the context accepts writes. Internal
     use. *)
 
+type cursor = {
+  wbuf : bytes;
+  mutable wbase : int;  (** Where the record being walked starts. *)
+  mutable wpos : int;
+      (** Where the next variable-size field starts; once a record is walked,
+          where it ends. *)
+  mutable wend : Input_end.t;  (** Where the bytes handed to the walk stop. *)
+  mutable wgates : int;
+      (** The answers of the gates the record being walked has evaluated, one
+          bit each. *)
+}
+(** The state of a walk, the one-pass decode of a record without parameters:
+    each field is checked and read once, in order, and a sub-codec hands back
+    its value and its end together. Internal use. *)
+
+exception Unwalked
+(** Raised by a walk that does not accept the record, which then goes to the
+    general decode for its answer and its error. Internal use. *)
+
 (* The parse-error types are declared here, before {!typ}, so that {!typ}'s own
    [Where] / [Field] constructors win type-directed disambiguation throughout;
    the {!predicate} constructors are reached only through a [predicate]-typed
@@ -155,11 +174,6 @@ val raise_no_matching_case : unit -> 'a
 
 val enum_values : (string * int) list -> int list
 (** The value set of an enum's named cases. *)
-
-val enum_member : int list -> int -> bool
-(** [enum_member valid v] is [true] when [v] is one of [valid]. The single
-    membership rule decode and encode share, so the two halves agree on what a
-    closed enum admits. *)
 
 val check_enum_decode : at:int -> cases:(string * int) list -> int -> unit
 (** Check a decoded value against a closed enum's named cases. An unlisted value
@@ -383,6 +397,17 @@ and _ typ =
           (** [codec_validate] of a record whose end, the last argument, the
               caller has just measured with [codec_size_of] over the same bytes:
               the frame checks that end instead of measuring again. *)
+      codec_check_end : Input_end.t -> bytes -> int -> int;
+          (** Where the record at the offset ends when its fast checks accept
+              it, else [-1], or [-2] when it has no fast checks: an end it gives
+              is the one [codec_size_of] measures, and [codec_validate_sized]
+              accepts the record with it. A use site with a negative answer runs
+              those two, and after [-1] does not try the fast checks of the
+              records under it again. *)
+      codec_walk : (cursor -> 'r) option;
+          (** The walk of the record at the cursor's {!field-wpos}, within its
+              {!field-wend}: its value, with the cursor moved to its end. [None]
+              when the codec has none. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_min_size : int;
@@ -1095,7 +1120,11 @@ val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
     {!to_3d} for [enum_as_type]. *)
 
 val escape_3d : string -> string
-(** [escape_3d name] appends [_] if [name] is a 3D or C reserved word. *)
+(** [escape_3d name] is [name] as a 3D identifier: a word 3D or F* reserves,
+    followed by any underscores, takes one more ([end_], [end__] for [end_]);
+    [typeof], followed by underscores and [3d]s, takes [3d], since KaRaMeL drops
+    trailing underscores and C reads [typeof] as a keyword. The map is
+    injective. *)
 
 (** {1:parse-errors Parse Errors}
 

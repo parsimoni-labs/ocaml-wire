@@ -103,11 +103,10 @@ let sampler_refined_leaves : any list =
     Any { g = field_constraint; size = Some 2; label = "fconstraint" };
   ]
 
-(* Enum names 3D declares beside the module's types. Keywords, escaped and
-   accepted by every lane; two cases that escape onto each other, and a
-   case [enum] (and [enum_open]) also declares, both refused by the
-   EverParse lane alone, the second only where the two meet in one record.
-   The OCaml lane reads enums by value and compares all three. *)
+(* Enum names 3D declares beside the module's types: keywords, a case next to
+   its escape, and a case [enum] (and [enum_open]) also declares. The escape
+   is injective and each 3D constant carries its enum's name, so every lane
+   accepts all three. The OCaml lane reads enums by value. *)
 let sampler_enum_name_leaves : any list =
   [
     Any
@@ -227,9 +226,9 @@ let sample_leaf rng drawn =
    the caller's list holds exactly what the returned codec does. [uid] names the
    sub-codecs apart, since a projection keys its typedefs by name. *)
 (* Field names a code generator can trip on, in groups. Every generator
-   escapes a keyword of its target with a trailing underscore and folds case
-   where its target does, and refuses, naming both fields, two names that still
-   spell one identifier (see [Wire.Private.Names]); which lane refuses a group
+   escapes the keywords of its target injectively and folds case where its
+   target does, and refuses, naming both fields, two names that still spell
+   one identifier (see [Wire.Private.Names]); which lane refuses a group
    is noted against it. The EverParse lane drops what it refuses with
    [Diff_codecs.Name_clash]; the OCaml lane counts a name clash as an expected
    refusal. *)
@@ -242,20 +241,18 @@ let sampler_name_groups =
     [ "x"; "x_word" ];
     [ "x_word"; "x" ];
     (* Keywords of OCaml and OxCaml, escaped by both lanes, and a name whose
-       getter [get_failed] the OCaml lane's module defines for itself, refused
-       by that lane alone. *)
+       getter [Get.cast] would shadow a helper the OCaml lane's getters call,
+       refused by that lane alone. *)
     [ "done" ];
     [ "method"; "local_"; "exclave_"; "stack_" ];
-    [ "failed" ];
+    [ "cast" ];
     (* Keywords of 3D, F* and C, escaped apart: accepted by both lanes. *)
     [ "end"; "typeof"; "int"; "string" ];
     (* Two names one case fold spells alike: refused by both lanes (the plug's
        [_IDX_] macro, the stubs' and the OCaml lane's label). *)
     [ "X"; "x" ];
-    (* A keyword next to its escape. [done]: refused by both lanes (the stubs'
-       and the OCaml lane's label), not by 3D. [end]: refused by both (the 3D
-       name and the labels). [restrict]: refused by the EverParse lane alone
-       (the plug's struct member); the OCaml lane compares it. *)
+    (* A keyword next to its escape, which the escape keeps apart ([done_]
+       and [done__]): accepted by both lanes. *)
     [ "done"; "done_" ];
     [ "end"; "end_" ];
     [ "restrict"; "restrict_" ];

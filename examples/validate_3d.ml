@@ -145,15 +145,15 @@ let validate_one case =
         try In_channel.with_open_text path In_channel.input_all
         with Sys_error _ -> "(could not read .3d)"
       in
-      Alcotest.failf "@[<v>3d.exe rejected %s:@,%s@,---@,%s@]" (case_name case)
-        err content
+      Alcotest.failf "@[<v>EverParse rejected %s:@,%s@,---@,%s@]"
+        (case_name case) err content
 
 let test_case case =
   Alcotest.test_case (case_name case) `Quick (fun () -> validate_one case)
 
 let () =
   if not (Wire_3d.has_3d_exe ()) then begin
-    Fmt.pr "3d.exe not found, skipping validation\n";
+    Fmt.pr "everparse-3d.exe (or 3d.exe) not found, skipping validation\n";
     exit 0
   end;
   Alcotest.run "validate_3d" [ ("schemas", List.map test_case cases) ]

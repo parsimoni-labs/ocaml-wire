@@ -58,18 +58,36 @@ val mixed_make :
 val mixed : mixed Codec.t
 (** [mixed] has little-endian and signed integers and 16-bit bitfields. *)
 
-val small_make : UInt8.t -> UInt16.t -> UInt8.t * UInt16.t
+type small = UInt8.t * UInt16.t
+(** A {!small} record. *)
+
+val small_make : UInt8.t -> UInt16.t -> small
 (** [small_make] builds a {!small} record. *)
 
-val small : (UInt8.t * UInt16.t) Codec.t
+val small : small Codec.t
 (** [small] is narrower than one 64-bit word. Its fields are named [Type] and
     [local_], a keyword of OCaml and one of OxCaml, so the code written for the
     default target escapes both and compiles on either compiler. *)
 
-val eth_make : string -> string -> UInt16.t -> string * string * UInt16.t
+type lanes = int * int * UInt8.t * int * int * int * int
+(** A {!lanes} record. *)
+
+val lanes_make : int -> int -> UInt8.t -> int -> int -> int -> int -> lanes
+(** [lanes_make] builds a {!lanes} record. *)
+
+val lanes : lanes Codec.t
+(** [lanes] is 4 bytes whose fields each sit in one byte: two 4-bit fields of a
+    byte, a byte, and four bitfields of a big-endian 16-bit word. The OxCaml
+    target with [~simd:true] reads and writes four of them in one NEON register.
+*)
+
+type eth = string * string * UInt16.t
+(** An Ethernet header: destination, source and EtherType. *)
+
+val eth_make : string -> string -> UInt16.t -> eth
 (** [eth_make] builds an Ethernet header. *)
 
-val eth : (string * string * UInt16.t) Codec.t
+val eth : eth Codec.t
 (** [eth] has fixed byte arrays. *)
 
 val variable_make : UInt8.t -> string -> UInt8.t * string
@@ -150,6 +168,42 @@ val signed_make : SInt8.t -> SInt16.t -> signed
 val signed : signed Codec.t
 (** [signed] refines signed fields against negative literals. *)
 
+type packed = {
+  a : SInt8.t;
+  b : UInt8.t;
+  c : SInt16.t;
+  d : UInt16.t;
+  e : int;
+  f : SInt32.t;
+  g : SInt8.t;
+  h : UInt8.t;
+  i : SInt16.t;
+  j : UInt16.t;
+  k : SInt8.t;
+  l : UInt8.t;
+}
+
+val packed_make :
+  SInt8.t ->
+  UInt8.t ->
+  SInt16.t ->
+  UInt16.t ->
+  int ->
+  SInt32.t ->
+  SInt8.t ->
+  UInt8.t ->
+  SInt16.t ->
+  UInt16.t ->
+  SInt8.t ->
+  UInt8.t ->
+  packed
+(** [packed_make] builds a {!packed} record. *)
+
+val packed : packed Codec.t
+(** [packed] has runs of adjacent fields that fill 8 bytes in little-endian
+    order, then 8 in big-endian order, then 4, with signed fields inside each
+    run, and a field after them. *)
+
 type refined = int * int * UInt8.t * UInt8.t
 
 val refined_make : int -> int -> UInt8.t -> UInt8.t -> refined
@@ -183,6 +237,32 @@ val skipped : skipped Codec.t
     but the codec still evaluates [n * n], which overflows the native int for a
     large [n]. *)
 
+type huge = UInt8.t * Bytesrw.Bytes.Slice.t * UInt8.t
+
+val huge : huge Codec.t
+(** [huge] is a byte [Flag], a byte slice of a fixed size close to
+    [Sys.max_string_length], then a byte [Tail]. The three fields are one
+    prefix. *)
+
+type deep = { inner : deep option; big : Bytesrw.Bytes.Slice.t }
+type deep_top = { body : deep; tail : UInt8.t }
+
+val deep : int -> int -> deep_top Codec.t
+(** [deep depth big] is [depth + 1] variable-size codecs nested in each other,
+    each ending with a slice of [big] bytes, then a byte {!field-tail}. The
+    innermost starts with a byte [len] and a slice of [len] bytes. The constant
+    offset of {!field-tail} after that slice is about [depth * big], which
+    overflows the native int for [depth = 32] and [big] close to
+    [Sys.max_string_length]. *)
+
+type bigspan =
+  UInt8.t * UInt8.t * Bytesrw.Bytes.Slice.t * Bytesrw.Bytes.Slice.t * UInt8.t
+
+val bigspan : bigspan Codec.t
+(** [bigspan] is two bytes [A] and [B], two byte spans of [A + 2{^61}] and
+    [B + 2{^61}] bytes, then a byte [T]. No frame holds the spans, and the sum
+    of their ends overflows the native int. *)
+
 val gated : int -> unit Codec.t
 (** [gated n] has [n] optional fields, each present when the tag before it is 1.
 *)
@@ -205,3 +285,11 @@ val shared : shared Codec.t
 (** [shared] has three optional fields whose conditions exclude each other,
     [a = 1 && b = 1], [a = 2 && b = 1] and [c = 1 && b = 2], so the decision
     tree reaches the test of the third from two paths. *)
+
+type stacked = UInt16.t * UInt16.t * checked option
+(** A {!val-stacked} record. *)
+
+val stacked : stacked Codec.t
+(** [stacked] is a kind and flags, then a {!val-checked} record when the kind is
+    [0x0800], as Ethernet carries IPv4. One 64-bit word holds the kind and the
+    fields of the record after it. *)

@@ -342,7 +342,7 @@ let stack_answers =
   fun input ->
     let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
     let decode c b off () = Codec.decode_exn c b off in
-    let validate c b off () = Codec.validate c b off in
+    let validate c b off () = Codec.validate_exn c b off in
     [
       stack_answer show_stack (decode Packet_stack.codec input 0);
       stack_answer show_stack (decode Packet_stack.codec shifted 2);
@@ -353,7 +353,7 @@ let stack_answers =
       stack_answer show_stack (fun () ->
           Codec.decode_exn ~env:(env ()) param_frame input 0);
       stack_answer unit (fun () ->
-          Codec.validate ~env:(env ()) param_frame input 0);
+          Codec.validate_exn ~env:(env ()) param_frame input 0);
       stack_answer show_ipv4 (decode Packet_stack.ipv4 input 14);
       stack_answer unit (validate Packet_stack.ipv4 input 14);
     ]
@@ -372,9 +372,124 @@ let test_stack_answers_pinned () =
     "digest" "bbe5dae3ba1f2e29c38b4a137661ea0c"
     (Digest.to_hex (Digest.string (String.concat "\n" lines)))
 
+(* The stack, and a frame around it, decode through the walk, so the answers
+   pinned above are the walk's. *)
+let test_stack_walks () =
+  List.iter
+    (fun (name, paths) ->
+      Alcotest.(check bool) name true (List.mem "decode.walk" paths))
+    [
+      ("stack", Private.Testing.paths Packet_stack.codec);
+      ("ipv4", Private.Testing.paths Packet_stack.ipv4);
+      ("frame", Private.Testing.paths (stack_frame (int 64) "StackFrame"));
+    ]
+
+(* A fixed span after one sized by an earlier field: the walk reads the latter
+   where the fixed fields before it end, not at the record's minimum size, and
+   answers as the general decode does on every input. *)
+let test_walk_trailer () =
+  let len = Field.v "len" uint8 in
+  let c =
+    Codec.v "Trailer"
+      (fun l s t -> (l, s, t))
+      Codec.
+        [
+          (len $ fun (l, _, _) -> l);
+          (Field.v "s" (byte_array ~size:(Field.ref len)) $ fun (_, s, _) -> s);
+          (Field.v "t" (byte_array ~size:(int 2)) $ fun (_, _, t) -> t);
+        ]
+  in
+  Alcotest.(check bool)
+    "walks" true
+    (List.mem "decode.walk" (Private.Testing.paths c));
+  let general = Private.Testing.general c in
+  let show = function
+    | Ok (l, s, t) -> Fmt.str "ok %d %S %S" (UInt8.to_int l) s t
+    | Error e -> Fmt.str "error %a" pp_parse_error e
+  in
+  List.iter
+    (fun s ->
+      let buf = Bytes.of_string s in
+      Alcotest.(check string)
+        (Fmt.str "%S" s)
+        (show (Codec.decode general buf 0))
+        (show (Codec.decode c buf 0)))
+    [ "\002abXY"; "\000XY"; "\002abX"; "\003abXY"; "\001aXYZZ" ];
+  Alcotest.(check string)
+    "value" "ok 2 \"ab\" \"XY\""
+    (show (Codec.decode c (Bytes.of_string "\002abXY") 0))
+
+(* Gates that reuse an earlier gate's answer, in a record and in a sub-codec
+   walked between the gate and its reuse: the walk answers as the general
+   decode does on every input. *)
+let test_walk_shared_gates () =
+  let flag = Field.v "flag" uint8 in
+  let on = Expr.(Field.ref flag = int 1) in
+  let inner =
+    Codec.v "Inner"
+      (fun f a b -> (f, a, b))
+      Codec.
+        [
+          (flag $ fun (f, _, _) -> f);
+          ( Field.optional "a" ~present:on (byte_array ~size:(int 1))
+          $ fun (_, a, _) -> a );
+          ( Field.optional "b" ~present:Expr.(not on) (byte_array ~size:(int 2))
+          $ fun (_, _, b) -> b );
+        ]
+  in
+  let k = Field.v "k" uint8 in
+  let one = Expr.(Field.ref k = int 1) in
+  let c =
+    Codec.v "Outer"
+      (fun k x y -> (k, x, y))
+      Codec.
+        [
+          (k $ fun (k, _, _) -> k);
+          (Field.optional "x" ~present:one (codec inner) $ fun (_, x, _) -> x);
+          ( Field.optional "y" ~present:Expr.(not one) (byte_array ~size:(int 1))
+          $ fun (_, _, y) -> y );
+        ]
+  in
+  Alcotest.(check bool)
+    "walks" true
+    (List.mem "decode.walk" (Private.Testing.paths c));
+  let general = Private.Testing.general c in
+  let opt = Option.value ~default:"-" in
+  let show = function
+    | Ok (k, x, y) ->
+        Fmt.str "ok %d [%s] %s" (UInt8.to_int k)
+          (match x with
+          | None -> "-"
+          | Some (f, a, b) ->
+              Fmt.str "%d %s %s" (UInt8.to_int f) (opt a) (opt b))
+          (opt y)
+    | Error e -> Fmt.str "error %a" pp_parse_error e
+  in
+  List.iter
+    (fun k ->
+      List.iter
+        (fun f ->
+          for n = 0 to 4 do
+            let buf = Bytes.make (2 + n) 'z' in
+            Bytes.set_uint8 buf 0 k;
+            Bytes.set_uint8 buf 1 f;
+            Alcotest.(check string)
+              (Fmt.str "k=%d flag=%d +%d" k f n)
+              (show (Codec.decode general buf 0))
+              (show (Codec.decode c buf 0))
+          done)
+        [ 0; 1; 2 ])
+    [ 0; 1; 2 ]
+
 let suite =
   ( "codec_stack",
     [
+      Alcotest.test_case "walk: gates that reuse an earlier gate" `Quick
+        test_walk_shared_gates;
+      Alcotest.test_case "walk: a fixed field after a span" `Quick
+        test_walk_trailer;
+      Alcotest.test_case "stack: decode walks each layer once" `Quick
+        test_stack_walks;
       Alcotest.test_case "stack: every entry point's answers are pinned" `Quick
         test_stack_answers_pinned;
     ] )

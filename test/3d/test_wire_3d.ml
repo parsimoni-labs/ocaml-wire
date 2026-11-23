@@ -1017,6 +1017,32 @@ let test_doc_differential_hex () =
               Alcotest.failf "agree did not refuse hex %S:\n%s" hex output)
         [ "0g01"; "G001"; "010"; "+101" ])
 
+(* A parameter under [Wire.map]. The agree harness casts each corpus parameter
+   to the C type wire reports for it, so a type narrower than the integer drops
+   the high bits before the validator sees them. Two lines either side of
+   2^32: the bound is met only if all 64 bits arrive. *)
+let diff_wrapped_param_codec =
+  let open Wire in
+  let limit =
+    Param.input "limit" (map ~decode:Fun.id ~encode:Fun.id uint64be)
+  in
+  let f_v = Field.v "v" uint64be in
+  Codec.v "Limited"
+    ~where:Expr.(Field.ref f_v <= Param.expr limit)
+    (fun v -> v)
+    [ Codec.( $ ) f_v (fun v -> v) ]
+
+let test_doc_differential_wrapped_param () =
+  needs_3d_exe ();
+  differential_ok ~name:"limitspec" ~package:"limit-doc"
+    ~corpus:
+      (`Lines
+         [
+           "Limited 4294967296 0000000000000005 1";
+           "Limited 4 0000000000000005 0";
+         ])
+    [ Wire_3d.pack diff_wrapped_param_codec ]
+
 (* EverParse renamed the wrapper's status local between releases ([result] up
    to v2026.02.25, [ep_status] by v2026.08.21). The consumption check has to
    name whichever one the wrapper actually binds; naming a fixed one emitted C
@@ -1485,14 +1511,15 @@ let test_uses_wire_ctx () =
    [~/.local/everparse/bin] fallback -- resolved here independently of
    [Wire_3d]'s own lookup. *)
 let test_has_3d_exe () =
-  let on_path = Sys.command "command -v 3d.exe > /dev/null 2>&1" = 0 in
-  let fallback =
-    Sys.file_exists
-      (Filename.concat (Sys.getenv "HOME") ".local/everparse/bin/3d.exe")
+  let found name =
+    Fmt.kstr Sys.command "command -v %s > /dev/null 2>&1" name = 0
+    || Sys.file_exists
+         (Filename.concat (Sys.getenv "HOME") (".local/everparse/bin/" ^ name))
   in
   Alcotest.(check bool)
     "has_3d_exe agrees with PATH plus the ~/.local/everparse fallback"
-    (on_path || fallback) (Wire_3d.has_3d_exe ())
+    (found "everparse-3d.exe" || found "3d.exe")
+    (Wire_3d.has_3d_exe ())
 
 let test_main_exists () =
   (* main dispatches on Sys.argv; calling it in tests would exit, so we only
@@ -1724,6 +1751,8 @@ let suite =
         test_doc_differential_trailing_bytes;
       Alcotest.test_case "doc differential hex decode (needs 3d.exe)" `Quick
         test_doc_differential_hex;
+      Alcotest.test_case "doc differential wrapped param (needs 3d.exe)" `Quick
+        test_doc_differential_wrapped_param;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
       Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;

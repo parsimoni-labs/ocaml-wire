@@ -24,6 +24,8 @@ AGENTS.md
 _opam/
 todo/
 
-# Rust code bench/rust generates, and its cargo build
+# Rust code bench/rust and bench/apps generate, and their cargo builds
 bench/rust/cargo/src/gen/
 bench/rust/cargo/target/
+bench/apps/cargo/src/gen/
+bench/apps/cargo/target/

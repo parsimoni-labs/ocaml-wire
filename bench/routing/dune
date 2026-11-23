@@ -1,7 +1,12 @@
 (library
+ (name routing_workload)
+ (modules routing_workload)
+ (libraries space wire fmt))
+
+(library
  (name routing_bench)
  (modules routing_bench)
- (libraries space wire bench_lib memtrace unix fmt))
+ (libraries routing_workload bench_lib memtrace unix fmt))
 
 (library
  (name routing_bench_c)

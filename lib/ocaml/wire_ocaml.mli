@@ -24,34 +24,46 @@
     codec checks it: an overflow rejects the record with the codec's error.
 
     A generator executable, run by a dune rule, prints the module for a codec
-    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)].
+    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)], and its
+    interface with {!mli} and the same arguments. Each generator has such an
+    interface printer: the interface states the module's public API, each value
+    documented from the codec, and hides the rest; on OxCaml it states the modes
+    and the [[@zero_alloc]] checks of the implementation. The text is not laid
+    out as ocamlformat would; a project that commits the module pipes it through
+    [ocamlformat --impl --name=FILE -] (and [--intf] for the interface) in that
+    rule, so the committed copy is formatted under the project's own
+    [.ocamlformat] and [dune fmt] leaves it alone, and keeps it current with a
+    runtest [diff] and [dune promote] or with [(mode promote)].
+    [examples/generated] in the sources does this.
 
-    The generated module has [get_<field> buf off] for each field, which reads
+    The generated module has [Get.<field> buf off] for each field, which reads
     it as {!Wire.Codec.get} does with one bounds-checked load at a constant
-    offset, and [get_<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
-    validates the record at offset 0, as {!Wire.Codec.valid} does, and
+    offset, and [Get.<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
+    validates the record at offset 0, as {!Wire.Codec.check} does, and
     [read_<field>] on what it returns is one load with no check of its own. As
-    for {!Wire.Codec.valid}, the promise is memory safety only: a buffer's
+    for {!Wire.Codec.check}, the promise is memory safety only: a buffer's
     length never changes, so a read never leaves the buffer, but if its bytes
     change after [Valid.v], a read may return a value that breaks a constraint.
     [(v :> bytes)] is the buffer itself, not a copy. For a bitfield,
-    [get_<field>_word] loads the word that holds it and [<field>_of_word] takes
+    [Get.<field>_word] loads the word that holds it and [<field>_of_word] takes
     the field out, so fields packed in one word share one load.
 
     [is_valid buf off] checks the record at [off] without raising, loading only
-    the fields its constraints read; [validate] raises the codec's error where
-    it is false. [View.at buf off] validates the record at any offset and stands
-    for it, with the same promise as [Valid]: each [view_<field>] (and
-    [view_<field>_int], [view_<field>_word]) is one load with no bounds check.
-    [View.check buf off] does the same without raising, and [View.ok] tells
-    whether the record passed. A view that failed holds no bytes: [View.buf] is
-    then an empty buffer and each read gives zero without loading, so failed
-    views share nothing a caller can write. On OxCaml a view is an unboxed
-    record, held in registers; on OCaml it is a small record. A [Bigstring]
-    submodule has the same functions, [Valid] and [View] included, on a bigarray
-    of bytes. It has [size], [decode], [validate] and [write buf off v1 ... vn],
-    which stores field values in order. Without [~make] it also defines a record
-    [t] of the field values, [make] and [encode]. *)
+    the fields its constraints read; [validate] answers the codec's error where
+    it is false, and [validate_exn] raises it. A view reads a buffer named once
+    with [Wire_runtime.Buf.v], as ['b Buf.t], and whose length is read once:
+    [View.check b len off] checks the record at [off] without raising,
+    [View.ok c] tells whether it passed and [View.get c] turns an answer that
+    passed into a ['b View.t], with the same promise as [Valid]: each
+    [view_<field> b v] (and [view_<field>_int], [view_<field>_word]) is one load
+    with no bounds check, and only the buffer named ['b] is accepted. A view is
+    an [int], so it allocates nothing. [View.at] raises the codec's error where
+    the check fails, and [View.with_ b len off ~ok ~fail] hands the view to [ok]
+    or calls [fail]. A [Bigstring] submodule has the same functions, [Valid] and
+    [View] included, on a bigarray of bytes. It has [size], [decode], [validate]
+    and [write buf off v1 ... vn], which stores field values in order. Without
+    [~make] it also defines a record [t] of the field values, its constructor
+    [v], its printer [pp] and [encode]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
@@ -62,53 +74,88 @@ type target = [ `OCaml | `OxCaml ]
 
 val ident : string -> string
 (** [ident name] is the OCaml name a generated module derives from the field
-    [name], for either target: its getter is [get_<ident name>], its read
+    [name], for either target: its getter is [Get.<ident name>], its read
     [read_<ident name>] and its record field [ident name]. It is [name]
     lower-cased, any character other than a letter, a digit or ['_'] turned into
     ['_'], prefixed with ["f_"] when that is empty or starts with a digit, and
     suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the code
     for the default target compiles on an OxCaml compiler too. *)
 
-(** A {!Wire.typ} of any value type. *)
-type typ = Typ : 'a Wire.typ -> typ
+type map
+(** The type for a {!Wire.map} the generated code calls by its OCaml path. *)
+
+val map : string -> typ:string -> 'a Wire.typ -> map
+(** [map path ~typ m] is the map [m], at the OCaml path [path], whose values
+    have the OCaml type [typ], as in
+    [map "Page.u16be_int" ~typ:"int" Page.u16be_int]. *)
 
 val ml :
   ?target:target ->
-  ?make:string ->
-  ?maps:(string * typ) list ->
+  ?simd:bool ->
+  ?make:string * string ->
+  ?maps:map list ->
   codec:string ->
   'r Wire.Codec.t ->
   string
-(** [ml ?target ?make ?maps ~codec c] is the source of a module specialised to
-    [c], for [target] (default [`OCaml]). [codec], the OCaml path of [c], names
-    it in the module's header; the module itself never refers to [c]. [make],
-    the path of a function taking the field values in order, builds the decoded
-    value; it defaults to a generated record, which a codec with a map field
+(** [ml ?target ?simd ?make ?maps ~codec c] is the source of a module
+    specialised to [c], for [target] (default [`OCaml]). [codec], the OCaml path
+    of [c], names it in the module's header; the module itself never refers to
+    [c]. [make] is [(f, t)]: [f] the path of a function taking the field values
+    in order, which builds the decoded value, and [t] the path of the type it
+    returns. It defaults to a generated record, which a codec with a map field
     cannot use.
 
-    A field under a {!Wire.map} is specialised when [maps] names the map: a pair
-    of its OCaml path and the map itself, as in
-    [("Page.u16be_int", Typ Page.u16be_int)]. The generated module calls the
-    map's functions by that path; {!bridge} checks that the field still holds
-    that very map.
+    A field under a {!Wire.map} is specialised when [maps] names the map. The
+    generated module calls the map's functions by its path; {!bridge} checks
+    that the field still holds that very map.
+
+    With [~simd:true] (default [false]), for the OxCaml target on arm64 or
+    amd64, a 4-byte record whose fields each sit in one byte, unsigned and with
+    no check, enum or map, also gets [X4], four records in the lanes of a SIMD
+    register. [X4.with_] checks and loads four records, and [X4.<field>] takes a
+    field out of each lane. A write builds an [X4.part] from each field's bits,
+    [X4.<field>_bits] (its low bits) or [X4.<field>_of] (checked), joined with
+    [X4.( ++ )]; since any such bits are a valid record, [X4.store] and
+    [X4.fill] check only that the records fit, and raise what [write_int_at]
+    would for the first that does not. The generated module then needs the
+    runtime's [Vec], which exists on OxCaml for arm64 (NEON) and amd64 (SSE)
+    only.
 
     Raises [Invalid_argument], naming the field and the reason, for a codec it
     cannot specialise: a variable size, parameters, actions, or a map [maps]
-    does not name; and naming both fields when two of them would define the same
-    OCaml name ({!ident}), or one of them a name the module defines for itself,
-    such as [get_failed]. *)
+    does not name; for [~simd:true] with the [`OCaml] target; and naming both
+    fields when two of them would define the same OCaml name ({!ident}), or one
+    of them a getter that would shadow a name the getters call, such as
+    [Get.cast]. *)
 
-val bridge :
-  ?maps:(string * typ) list ->
+val mli :
+  ?target:target ->
+  ?simd:bool ->
+  ?make:string * string ->
+  ?maps:map list ->
   codec:string ->
-  core:string ->
   'r Wire.Codec.t ->
   string
+(** [mli ?target ?simd ?make ?maps ~codec c] is the interface of
+    [ml ?target ?simd ?make ?maps ~codec c]: its types and values, each
+    documented, the fields of [c] with their place, width and constraints in the
+    preamble. The interface for [`OCaml] is OCaml, so js_of_ocaml and
+    wasm_of_ocaml read it too; the one for [`OxCaml] takes buffers [local] and
+    states the [[@zero_alloc]] checks and the portability of the implementation.
+    Raises [Invalid_argument] as {!ml} does. *)
+
+val bridge :
+  ?maps:map list -> codec:string -> core:string -> 'r Wire.Codec.t -> string
 (** [bridge ?maps ~codec ~core c] is the source of a module that checks, when it
     loads, that the codec [c] at the path [codec] still has the shape the module
     at the path [core] was generated from by {!ml}, and that each map [maps]
     names is still the very map of its field. It links [wire]; link it next to
     [core] wherever [wire] is linked anyway. *)
+
+val bridge_mli :
+  ?maps:map list -> codec:string -> core:string -> 'r Wire.Codec.t -> string
+(** [bridge_mli ?maps ~codec ~core c] is the interface of
+    [bridge ?maps ~codec ~core c], which defines nothing: its doc comment. *)
 
 (** {1 Scanning}
 
@@ -143,28 +190,43 @@ val scanner :
     [invalid ()] when the record or the bounds are bad. An absent field is 0.
     [fields] selects the outputs: the others are not read unless a check needs
     them, and every check still runs. [decode buf off len] returns the outputs
-    in a record with an [ok] flag.
+    in a record with an [ok] flag, which [pp] prints.
 
-    [n] optional fields give code linear in [n] when they follow each other, or
-    when they nest and [fields] selects no output. Nested inside each other with
-    every output handed out, they give code quadratic in [n].
+    [n] optional fields give code linear in [n], whether they follow each other
+    or nest, and whatever outputs are handed out.
     [fold_frames buf off len ~stride ~init ~invalid ~valid] folds over the
     [len / stride] frames of [stride] bytes, each checked on its own; it raises
     [Invalid_argument] for bad bounds or a [stride] that is not positive.
 
-    [step], the path of a module with [valid acc ~f1 ... ~fn] and [invalid acc],
-    adds [fold_step buf off len ~init] and
+    [step], the path of a module with a type [t], the accumulator, and
+    [valid : t -> f1:int64 -> ... -> fn:int64 -> t] (a presence is a [bool]) and
+    [invalid : t -> t], adds [fold_step buf off len ~init] and
     [fold_frames_step buf off len ~stride ~init], which are [fold] and
     [fold_frames] with [init] as the accumulator, calling that module's
     functions by name. OCaml without flambda never inlines a function passed as
-    an argument, so only these call the consumer with neither a closure call nor
-    an allocation per frame. The module must be in scope where the generated
-    code is compiled.
+    an argument, so only these call the consumer with no closure call. They pass
+    each integer to [valid] as an [int64], on both targets. Nothing is boxed and
+    no frame allocates where the compiler inlines [valid]. On OCaml the
+    runtime's loads must be inlined too, which dune's dev profile prevents by
+    compiling [wire.runtime] with [-opaque]. Where ints have 32 bits or fewer,
+    an [int64] is a heap value and they run slower than [fold]. The module must
+    be in scope where the generated code is compiled.
 
     On OxCaml the outputs are [int64_u] inside, and [fold_unboxed],
     [fold_frames_unboxed] (whose accumulator has layout [bits64]) and
     [decode_unboxed] hand them out unboxed; [box] makes the record of an unboxed
     one. *)
+
+val scanner_mli :
+  ?target:target ->
+  ?fields:string list ->
+  ?step:string ->
+  codec:string ->
+  'r Wire.Codec.t ->
+  string
+(** [scanner_mli ?target ?fields ?step ~codec c] is the interface of
+    [scanner ?target ?fields ?step ~codec c], as {!mli} is that of {!ml}. Raises
+    [Invalid_argument] as {!scanner} does. *)
 
 (** {1 The plan}
 
@@ -235,6 +297,137 @@ module Plan : sig
   val nodes : t -> node list
   (** [nodes t] is the nodes of [t], in the order the codec checks them. *)
 
+  (** {2:decisions Decisions}
+
+      What {!scanner} decides, beyond the plan, that changes which checks the
+      generated code runs or which bytes it reads. The scanner writes its code
+      from these decisions, so they are what that code does. *)
+
+  type pos = { var : string option; at : int }
+  (** A position in a window: a variable when the data decides it, plus a
+      constant. *)
+
+  type values = [ `Int | `Int64 | `Int64_u ]
+  (** How a walk holds integer values: as [int], as [int64] in the OCaml step
+      functions, or as [int64_u] on OxCaml. Positions and sizes are [int]. *)
+
+  (** How a span's bound is written. *)
+  type bound =
+    | Next  (** Left to the check of the bytes right after the span. *)
+    | Hoisted
+        (** Checked once before the dispatch whose cases start with it. *)
+    | Checked of {
+        negative : bool;  (** With a test that its size is negative. *)
+        cancelled :
+          (int Wire.Private.Types.expr * int Wire.Private.Types.expr) option;
+            (** As [lhs > rhs], the terms its position and size share cancelled.
+            *)
+      }  (** Checked where it is. *)
+
+  (** Which case of a dispatch runs. *)
+  type choice =
+    | Run of int option  (** The case of that index, or none. *)
+    | If of bool Wire.Private.Types.expr * choice * choice
+        (** A test, and where it leads when it holds and when it does not. *)
+
+  (** Where the code after a dispatch is written. *)
+  type join =
+    | Joined  (** Once, in a local function every case jumps to. *)
+    | Copied  (** Into each case, which keeps what the case established. *)
+
+  (** How a frame loop walks frames shorter than the bytes it leaves unchecked.
+  *)
+  type short_frames =
+    | Apart  (** Through [fold], in a function of their own. *)
+    | Inline  (** Through [fold], in the frame loop's function. *)
+    | Walked  (** Through a walk of their own that knows no byte. *)
+
+  type decision =
+    | Walk of { name : string; values : values; known : int }
+        (** A walk of a record starts in the function [name], with [known] bytes
+            of its window known to be there. *)
+    | Prefix_bound of { at : pos; window : string; bytes : int; tested : bool }
+        (** The run of fields from [at] needs [bytes] bytes of the window
+            [window]; [tested] when a test of its length is written, otherwise
+            the bytes are already known to be there. *)
+    | Span_bound of {
+        size : int Wire.Private.Types.expr;
+        at : pos;
+        window : string;
+        size_var : string;  (** The variable its size is bound to. *)
+        overflows : bool;  (** Its size is computed with checked arithmetic. *)
+        bound : bound;
+      }  (** A span or a region of [size] bytes at [at]. *)
+    | Shared_words of {
+        at : int;
+        constant : bool;  (** The position is a constant of the window. *)
+        lo : int;
+        hi : int;
+        window : string;
+        fields : (int * int) list;
+            (** The offset and the width in bytes of each field a word may hold.
+            *)
+        held : int list;  (** The words loaded before that it reads. *)
+        loads : int list;  (** The words it loads. *)
+      }
+        (** In the [int64] form, the 64-bit words a run of fields at [at] loads
+            once and reads several fields from. Offsets are from the run's
+            address; every word lies in [[lo, hi]]. *)
+    | Word_range of {
+        at : pos;
+        window : string;
+        first : string;
+        second : string;
+        lo : int;
+        hi : int;
+      }
+        (** The checks of the bitfields [first] and [second] of the run at [at]
+            are one test that their word is in [[lo, hi]]. *)
+    | Dispatch of {
+        at : pos;
+        window : string;
+        cases : int;
+        choice : choice;
+        join : join;
+        hoisted : int Wire.Private.Types.expr option;
+      }
+        (** A run of [cases] optional fields at [at], each tested condition
+            evaluated at most once on a path; with [hoisted], the size of the
+            span every case starts with, whose bound is checked once before. *)
+    | Cut of { name : string; window : string; known : int }
+        (** The rest of a walk is written as the function [name], in the window
+            [window] with [known] bytes known to be there. *)
+    | Frame_loop of {
+        name : string;
+        need : int;
+        frames : int;
+        short : short_frames option;
+        ahead : string list;
+      }
+        (** The loop [name] over frames walks [frames] frames an iteration, each
+            with the [need] bytes of its leading fields known once its stride
+            is; [short] walks the frames shorter than that. An iteration of
+            several frames loads the fields [ahead] of each of them before the
+            first frame's checks: the fields its optional fields are chosen on,
+            so that a mispredicted branch of one frame does not hold back the
+            next frame's choice by a load. *)
+
+  val pp_decision : Format.formatter -> decision -> unit
+  (** [pp_decision ppf d] prints [d] on one line, its tests as
+      {!Wire.Private.Types.pp_expr} does. *)
+
+  val decisions :
+    ?target:target ->
+    ?fields:string list ->
+    ?step:string ->
+    'r Wire.Codec.t ->
+    decision list
+  (** [decisions ?target ?fields ?step c] is the decisions
+      [scanner ?target ?fields ?step ~codec c] takes, in the order it writes
+      them, each case of an optional field included. A [window] is the variable
+      holding the window's length: the frame's, or a region's size. Raises
+      [Invalid_argument] as {!scanner} does. *)
+
   val outputs : t -> output list
   (** [outputs t] is the outputs of [t], in declaration order. *)
 
@@ -243,6 +436,21 @@ module Plan : sig
       [fields] does, in declaration order; all of them for [None]. Raises
       [Invalid_argument] naming a name that no output has. *)
 
+  val slot_depth : int
+  (** [slot_depth] is 4: realistic codecs nest optional fields at most that
+      deep, and up to it immutable bindings are faster on OCaml without flambda.
+  *)
+
+  val slots : t -> output list -> output list
+  (** [slots t outputs] is the outputs among [outputs] under more than
+      {!slot_depth} optional fields nested inside each other, the presence of
+      the innermost included. A walk binds each once, where it starts, to its
+      absent value ([false], zero) in a mutable variable that it assigns where
+      its field is present, so an absent field and the code after one write
+      nothing for them. Any other output is immutable: bound where its field is
+      read, to its absent value where the field is absent, and handed to the
+      code after the field. *)
+
   val live : t -> output list -> string -> bool
   (** [live t outputs v] is [true] when a walk handing out [outputs] binds the
       variable [v]: one of [outputs], or one a check, a size or a condition
@@ -250,6 +458,16 @@ module Plan : sig
 
   val conditions : field -> bool Wire.Private.Types.expr list
   (** [conditions f] is the conditions of [f]'s checks. *)
+
+  val word_range :
+    field ->
+    field ->
+    ((int * Wire.Private.Types.bitfield_base) * int * int) option
+  (** [word_range f g] is [Some (word, lo, hi)] when [f] is the top bits of the
+      word at [word] (its offset in the prefix and its base), [g] the bits right
+      below, and their checks [f = c] and [g >= d] hold exactly when the word
+      lies in [lo, hi]. A backend that names no failed field can test the word
+      once. *)
 
   val range : t -> int Wire.Private.Types.expr -> int * int
   (** [range t e] bounds the values [e] takes, from the ranges of its variables;

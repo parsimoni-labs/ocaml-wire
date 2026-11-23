@@ -325,9 +325,9 @@ let rejects what subs f =
             Alcotest.failf "%s: %S does not mention %S" what msg sub)
         subs
 
-(* The record labels fold case and escape OCaml's keywords with a trailing
-   underscore, so two field names can become one label: [X] and [x] are both
-   [x], [done] and [done_] both [done_]. *)
+(* The record labels fold case, so two field names can become one label: [X]
+   and [x] are both [x]. The keyword escape is injective: [done] and [done_]
+   are [done_] and [done__]. *)
 let test_ml_labels_clash () =
   let both a b =
     let s = struct_ "Clash" [ field a uint8; field b uint8 ] in
@@ -339,8 +339,11 @@ let test_ml_labels_clash () =
       (fun () -> Wire_stubs.to_ml_stub s)
   in
   both "X" "x";
-  both "done" "done_";
-  both "local_" "local__"
+  let s = struct_ "Esc" [ field "done" uint8; field "done_" uint8 ] in
+  let ml = Wire_stubs.to_ml_stubs [ s ] in
+  Alcotest.(check bool)
+    "done and done_ apart" true
+    (contains ~sub:"done_ :" ml && contains ~sub:"done__ :" ml)
 
 (* [check_names] answers up front whether generating would refuse a struct's
    field names, for each namespace the names reach. *)
@@ -351,12 +354,11 @@ let test_check_names () =
       (List.map (Fmt.str "%S") names)
       (fun () -> Wire_stubs.check_names (s names))
   in
-  refused "one 3D name" [ "end"; "end_" ];
-  refused "one plug member" [ "restrict"; "restrict_" ];
   refused "one plug macro and label" [ "X"; "x" ];
-  refused "one record label" [ "local_"; "local__" ];
   refused "not an identifier" [ "a-b" ];
-  Wire_stubs.check_names (s [ "end"; "int"; "typeof"; "done"; "local_"; "X" ])
+  Wire_stubs.check_names (s [ "end"; "int"; "typeof"; "done"; "local_"; "X" ]);
+  Wire_stubs.check_names
+    (s [ "end"; "end_"; "restrict"; "restrict_"; "local_"; "local__" ])
 
 (* A label that is a keyword of OCaml, or of OxCaml, is escaped, so the stub
    compiles on either compiler; the C side reads the plug member, which escapes
@@ -408,7 +410,15 @@ let test_codec_names_clash () =
   in
   both "foo" "FOO";
   both "FooBar" "Foobar";
-  both "Type" "Type_"
+  (* The keyword escape is injective, so [Type] and [Type_] stay apart. *)
+  let structs =
+    List.map (fun n -> struct_ n [ field "x" uint8 ]) [ "Type"; "Type_" ]
+  in
+  let ml = Wire_stubs.to_ml_stubs structs in
+  Alcotest.(check bool)
+    "Type and Type_ apart" true
+    (contains ~sub:"type type_ = {" ml && contains ~sub:"type type__ = {" ml);
+  ignore (Wire_stubs.to_c_stubs structs)
 
 (* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
 

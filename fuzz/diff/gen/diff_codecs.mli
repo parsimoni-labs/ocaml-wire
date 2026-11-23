@@ -70,8 +70,24 @@ type scan_case =
       -> scan_case
 
 val scan_cases : scan_case list
-(** The structured cases: regions, optional fields, tags, bitfield tests and the
+(** The structured cases: regions, of a size a field gives or of a constant size
+    holding a record, optional fields, tags, bitfield tests and the
     {!Packet_stack} codec. *)
+
+val packet_bounds : (string * bytes * bool) list
+(** [packet_bounds] is frames of {!Packet_stack.codec} at the edge of each bound
+    its scanners check. Each bound has a frame that fits exactly and one that is
+    a byte over, with whether the codec accepts it. *)
+
+val packet_versions : (string * bytes * bool) list
+(** [packet_versions] is IPv4 fragments of {!Packet_stack.codec} that differ
+    only in their version and header length byte, around the accepted range
+    [0x45] to [0x4f], with whether the codec accepts them. *)
+
+val packet_payload_corpus : unit -> bytes list
+(** [packet_payload_corpus ()] is long TCP and UDP packets, with options and
+    fragments, of Ethernet frame lengths 1500, 9000, 65535 and 65549 bytes, each
+    with its truncation by one byte. *)
 
 type c_oracle = {
   fields : (string * int) list;

@@ -79,8 +79,9 @@
     ./fuzz.exe
     @@))))
 
-; The EverParse validators of the structured cases (Diff_codecs.scan_cases),
-; which the scanner lanes compare with: acceptance, and the bytes consumed.
+; The EverParse validators of the structured cases (Diff_codecs.scan_cases)
+; and of every sampled shape the scanners take, which the scanner lanes
+; compare with: acceptance, the bytes consumed and the plug's scalars.
 
 (rule
  (enabled_if

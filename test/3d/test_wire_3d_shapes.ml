@@ -7,13 +7,9 @@ open Wire.Everparse.Raw
    [Test_wire_3d]. *)
 let needs_3d_exe () = if not (Wire_3d.has_3d_exe ()) then Alcotest.skip ()
 
-let read_file path =
-  let ic = open_in path in
-  let n = in_channel_length ic in
-  let buf = Bytes.create n in
-  really_input ic buf 0 n;
-  close_in ic;
-  Bytes.unsafe_to_string buf
+(* Binary mode: on Windows a text channel drops each CR, so it yields fewer
+   bytes than [in_channel_length] counts. *)
+let read_file path = In_channel.with_open_bin path In_channel.input_all
 
 (* -- Adversarial projection tests for 3D-shape transformations -- *)
 
@@ -329,7 +325,8 @@ let test_extern_names_wrapped () =
       (struct_ base [ field "f0" uint16be; field "f1" uint8 ])
   in
   let setters = Wire.Everparse.plug_setters schema in
-  let symbol i = Fmt.str "%sSetter%d" base i in
+  (* EverParse changes the case of a setter's name, nothing else. *)
+  let symbol i = String.lowercase_ascii (fst (List.nth setters i)) in
   let wrapped =
     String.concat ""
       (List.mapi
@@ -371,6 +368,49 @@ let test_extern_names_wrapped () =
       Alcotest.(check bool)
         "the failure names the header it could not read" true
         (contains msg (base ^ "_ExternalAPI.h"))
+
+(* Since v2026.10, EverParse does not declare the extern setters in the order
+   the schema references them, and it CamelCases a snake-case schema name in
+   them. Each setter of the plug takes the declared name equal to its own up to
+   case and underscores, and with it its own value type. *)
+let test_extern_names_by_name () =
+  let schema =
+    Wire.Everparse.Raw.project_struct ~mode:`Ffi
+      (struct_ "order_by_name" [ field "f0" uint16be; field "f1" uint8 ])
+  in
+  let setters = Wire.Everparse.plug_setters schema in
+  Alcotest.(check int) "two setters to pair" 2 (List.length setters);
+  let declared name =
+    String.lowercase_ascii (String.concat "" (String.split_on_char '_' name))
+  in
+  let header =
+    String.concat ""
+      (List.rev_map
+         (fun (name, c_type) ->
+           Fmt.str "extern void %s(WIRECTX *x0, uint32_t x1, %s x2);\n"
+             (declared name) c_type)
+         setters)
+  in
+  let dir = Filename.temp_dir "wire_3d_order" "" in
+  let impl =
+    Fun.protect
+      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      (fun () ->
+        Out_channel.with_open_bin
+          (Filename.concat dir "Order_by_name_ExternalAPI.h") (fun oc ->
+            Out_channel.output_string oc header);
+        Wire_3d.write_fields ~outdir:dir [ schema ];
+        read_file (Filename.concat dir "Order_by_name_Fields.c"))
+  in
+  List.iter
+    (fun (name, c_type) ->
+      Alcotest.(check bool)
+        (Fmt.str "%s takes %s" name c_type)
+        true
+        (contains impl
+           (Fmt.str "void %s(WIRECTX *ctx, uint32_t idx, %s v)" (declared name)
+              c_type)))
+    setters
 
 (* The default plug of a schema, written next to a stand-in for the
    [_ExternalAPI.h] 3d.exe would emit, which declares each setter under its
@@ -417,9 +457,9 @@ let plug_of fields =
       (header, read_file (Filename.concat dir "Kw_Fields.c"), compiles))
 
 (* The plug names a field three ways: the [_IDX_] macro upper-cases it, so [X]
-   and [x] would define one macro twice; the struct member escapes C's
-   keywords with a trailing underscore, so [restrict] and [restrict_] would be
-   one member. Both are refused naming the two fields. *)
+   and [x] would define one macro twice, which is refused naming the two
+   fields. The struct member escapes C's keywords injectively, so [restrict]
+   and [restrict_] are the members [restrict_] and [restrict__]. *)
 let test_plug_names () =
   let rejects what subs fields =
     match plug_of fields with
@@ -434,9 +474,6 @@ let test_plug_names () =
   rejects "X and x"
     [ "\"X\""; "\"x\""; "KW_IDX_X" ]
     [ field "X" uint8; field "x" uint8 ];
-  rejects "restrict and restrict_"
-    [ "\"restrict\""; "\"restrict_\"" ]
-    [ field "restrict" uint8; field "restrict_" uint8 ];
   rejects "a-b" [ "\"a-b\""; "identifier" ] [ field "a-b" uint8 ];
   let header, impl, compiles =
     plug_of
@@ -446,6 +483,7 @@ let test_plug_names () =
         field "typeof" uint8;
         field "NULL" uint8;
         field "end" uint8;
+        field "restrict_" uint8;
       ]
   in
   List.iter
@@ -454,7 +492,7 @@ let test_plug_names () =
         ("member " ^ m) true
         (contains header (Fmt.str " %s;" m));
       Alcotest.(check bool) ("set " ^ m) true (contains impl ("f->" ^ m ^ " ")))
-    [ "int_"; "restrict_"; "typeof_"; "NULL_"; "end" ];
+    [ "int_"; "restrict_"; "typeof_"; "NULL_"; "end"; "restrict__" ];
   Alcotest.(check bool)
     "macro keeps the field name" true
     (contains header "#define KW_IDX_RESTRICT 1");
@@ -495,6 +533,8 @@ let suite =
     [
       Alcotest.test_case "extern names across a wrapped declaration" `Quick
         test_extern_names_wrapped;
+      Alcotest.test_case "extern names paired by name, not order" `Quick
+        test_extern_names_by_name;
       Alcotest.test_case "projection: var inlines into uses" `Quick
         test_var_inlines;
       Alcotest.test_case "projection: var scoping inside if" `Quick

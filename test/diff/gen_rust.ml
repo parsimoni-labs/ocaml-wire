@@ -265,6 +265,7 @@ let schemas =
     ("overflow", scanners ~validate:true ~label:"overflow" Schemas.overflow);
     ("shared", scanners ~validate:true ~label:"shared" Schemas.shared);
     ("skipped", scanners ~validate:true ~label:"skipped" Schemas.skipped);
+    ("bigspan", scanners ~validate:true ~label:"bigspan" Schemas.bigspan);
   ]
 
 let contains s sub =

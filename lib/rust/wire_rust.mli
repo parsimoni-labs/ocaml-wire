@@ -10,7 +10,7 @@
     The module has [SIZE], the record's size; [DIGEST], {!digest} of the codec,
     for a build to check the code against the codec it comes from; a [Record]
     struct of the field values; [validate buf off] and [decode buf off], which
-    check the record as {!Wire.Codec.validate} does, with the checks, their
+    check the record as {!Wire.Codec.validate_exn} does, with the checks, their
     order and their arithmetic taken from {!Wire_ocaml.Plan}, as {!scanner}'s
     are; [write buf off v1 ... vn] and [encode r buf off], which refuse a value
     that does not fit its field before writing and a record that breaks its
@@ -62,9 +62,9 @@ val scanner : ?fields:string list -> codec:string -> 'r Wire.Codec.t -> string
     anonymous one is checked but is no output. [fields] selects the outputs by
     those names; every check stays. Each region is a slice of exactly its bytes,
     so no read leaves it; every load indexes an array [split_first_chunk]
-    returned. The module needs nothing but [core] and forbids unsafe code. The
-    code after an optional field is written once, so its size grows linearly
-    with the number of optional fields.
+    returned. The module needs nothing but [core] and forbids unsafe code. [n]
+    optional fields give code linear in [n], whether they follow each other or
+    nest, and whatever outputs are selected.
 
     Raises [Invalid_argument] for what [Wire_ocaml.scanner] refuses (a map among
     them), for a name in [fields] that is no output, and naming both outputs

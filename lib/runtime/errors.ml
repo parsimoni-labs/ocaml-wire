@@ -22,7 +22,7 @@ let comma ppf () =
   Format.pp_print_space ppf ()
 
 let dot ppf () = str ppf "."
-let pp_ints = Format.pp_print_list ~pp_sep:comma Format.pp_print_int
+let pp_ints ppf l = Format.pp_print_list ~pp_sep:comma Format.pp_print_int ppf l
 
 let pp_predicate ppf (p : predicate) =
   match p with
@@ -171,3 +171,14 @@ let[@inline never] enum_encode ~name ~valid v =
       "], got ";
       int v;
     ]
+
+let check_unsigned ~bits v =
+  let out_of_range = if bits >= Sys.int_size then v < 0 else v lsr bits <> 0 in
+  if out_of_range then unsigned_too_wide ~bits v
+
+let check_length ~expected s =
+  let actual = String.length s in
+  if actual <> expected then byte_length ~expected ~actual
+
+let check_enum ~name ~valid v =
+  if not (List.exists (Int.equal v) valid) then enum_encode ~name ~valid v

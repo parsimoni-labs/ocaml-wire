@@ -154,7 +154,7 @@ let rec apply_struct_field acc inner_struct =
         ( sz,
           Dynamic
             (fun runtime input_end buf base ->
-              prev_end runtime input_end buf base + sz) )
+              offset_add (prev_end runtime input_end buf base) sz) )
     | _, Variable { min_size; compute } ->
         ( min_size,
           Dynamic
@@ -284,6 +284,12 @@ let wire_size_info_of_validator (v : validator) =
   | Variable { compute; _ } ->
       `Variable
         (fun buf off -> compute no_runtime (Input_end.of_bytes buf) buf off)
+
+(* The fields a [writer] takes, in the order its arguments come. Declared
+   before [fields], so a list literal with no type to go by stays a [fields]. *)
+type ('f, 'r) args =
+  | [] : (unit, 'r) args
+  | ( :: ) : ('a, 'r) field * ('f, 'r) args -> ('a -> 'f, 'r) args
 
 (* Heterogeneous field list. [] seals the view; (::) adds a field.
    Tracks the constructor type: ('a -> 'b -> 'r, 'r) matches a
@@ -520,6 +526,11 @@ let embed_validate_ctx (t : 'r t) runtime input_end buf off =
 let embed_validate_sized_ctx (t : 'r t) runtime input_end buf off end_off =
   (compiled t).validate_sized runtime input_end buf off end_off
 
+let embed_check_end (t : 'r t) input_end buf off =
+  (compiled t).check_end input_end buf off
+
+let embed_walk (t : 'r t) = (compiled t).walk
+
 let wire_size_info_ctx (t : _ t) =
   match (compiled t).wire_size with
   | Fixed n -> `Fixed n
@@ -665,7 +676,7 @@ let decode_first consume e t buf off =
   | None, `Prefix, Some decode -> decode buf off
   | _ -> decode_slow consume e t c buf off
 
-let decode_exn ?(consume = `Prefix) ?env:e t buf off =
+let decode_general consume e t buf off =
   match Atomic.get t.compiled with
   | None -> decode_first consume e t buf off
   | Some c -> (
@@ -673,9 +684,22 @@ let decode_exn ?(consume = `Prefix) ?env:e t buf off =
       | None, `Prefix, Some decode -> decode buf off
       | _ -> decode_slow consume e t c buf off)
 
+(* The common call, no [consume] and no [env] on a compiled codec without
+   params, is one test before its decoder runs. *)
+let decode_exn ?consume ?env:e t buf off =
+  match (consume, e, Atomic.get t.compiled) with
+  | None, None, Some { plain_decode = Some decode; _ } -> decode buf off
+  | _ -> decode_general (Option.value consume ~default:`Prefix) e t buf off
+
 let decode ?consume ?env t buf off =
   try Ok (decode_exn ?consume ?env t buf off)
   with Types.Parse_error e -> Error e
+
+let decoder t =
+  let c = compiled t in
+  match c.plain_decode with
+  | Some decode -> Staged.stage decode
+  | None -> Staged.stage (fun buf off -> decode_slow `Prefix None t c buf off)
 
 let encode_slow e t v buf off =
   if off < 0 then
@@ -704,6 +728,12 @@ let encode ?env:e t v buf off =
       | _ -> encode_slow e t v buf off)
   | _ -> encode_slow e t v buf off
 
+let encoder t =
+  let c = compiled t in
+  match c.plain_encode with
+  | Some f when t.n_params = 0 -> Staged.stage f
+  | _ -> Staged.stage (fun v buf off -> encode_slow None t v buf off)
+
 let collect_params name (fields : Types.field list) where =
   collect_param_handles name fields where
   |> List.map (fun (Param.Pack p) ->
@@ -717,16 +747,21 @@ let to_struct t =
 
 let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
 
+(* [valid] inlines this, so the error stays a call. *)
 let validate_fixed min_size pass buf off =
   let input_end = Input_end.of_bytes buf in
   if off < 0 || off > Input_end.to_int input_end - min_size then
-    min_bounds_error min_size buf off
+    (min_bounds_error [@inlined never]) min_size buf off
   else
     match pass with
     | No_checks -> ()
+    | Word { q; l; r; m; lo; hi; _ }
+      when Codec_intervals.within buf off q l r m lo hi ->
+        ()
+    | Intervals { words = Some f; _ } when f buf off -> ()
     | _ -> run_plain_pass pass input_end buf off
 
-let validate ?env:e (t : _ t) buf off =
+let validate_exn ?env:e (t : _ t) buf off =
   match e with
   | None when t.n_params = 0 -> (
       match Atomic.get t.compiled with
@@ -736,14 +771,19 @@ let validate ?env:e (t : _ t) buf off =
           else c.plain_validate buf off
       | None -> validate_first t buf off)
   | _ ->
-      require_env ~op:"validate" t e;
+      require_env ~op:"validate_exn" t e;
       let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
       (compiled t).validate ?env_slots buf off
+
+let validate ?env t buf off =
+  match validate_exn ?env t buf off with
+  | () -> Ok ()
+  | exception Types.Parse_error e -> Error e
 
 let encode_fresh ~op ?env t v =
   let buf = Bytes.create (size_of_value ?env t v) in
   encode ?env t v buf 0;
-  (try validate ?env t buf 0
+  (try validate_exn ?env t buf 0
    with Types.Parse_error e ->
      Fmt.invalid_arg
        "Codec.%s %s: the encoded record is rejected by validation (%a)" op
@@ -978,12 +1018,7 @@ let rec build_immediate_staged_writer : type a.
   match (typ, access) with
   | Bits _, Bitfield { base; byte_off; shift; width } ->
       Some (build_bf_accessor_writer base byte_off shift width)
-  | _, Fixed off -> (
-      match build_immediate_encoder typ with
-      | None -> None
-      | Some write ->
-          Some
-            (fun buf base value -> ignore (write buf (base + off) value : int)))
+  | _, Fixed off -> build_immediate_setter typ off
   | Where { inner; _ }, _ -> build_immediate_staged_writer inner access
   | Enum { base; _ }, _ -> build_immediate_staged_writer base access
   | Map { inner; encode; _ }, _ -> (
@@ -1070,27 +1105,129 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
   | Some write -> Staged.stage write
   | None -> Staged.stage (fun buf off value -> write rt buf off value)
 
+(* {1 Writers} *)
+
+open Codec_run
+
+let slot_of : type a r. n:int -> r t -> (a, r) field -> a slot option =
+ fun ~n codec f ->
+  let s eq ~at ~nb ~sh ~w ~bits = Some (slot eq ~n ~at ~nb ~s:sh ~w ~bits) in
+  match (field_access ~op:"Codec.writer" codec f, f.typ) with
+  | Bitfield { base = U8; byte_off; shift; width }, Bits _ ->
+      s Type.Equal ~at:byte_off ~nb:1 ~sh:shift ~w:width ~bits:true
+  | Bitfield { base = U16 Big; byte_off; shift; width }, Bits _ ->
+      s Type.Equal ~at:byte_off ~nb:2 ~sh:shift ~w:width ~bits:true
+  | Bitfield { base = U32 Big; byte_off; shift; width }, Bits _ ->
+      s Type.Equal ~at:byte_off ~nb:4 ~sh:shift ~w:width ~bits:true
+  | Fixed at, Uint8 -> s UInt8.int_eq ~at ~nb:1 ~sh:0 ~w:8 ~bits:false
+  | Fixed at, Int8 -> s SInt8.int_eq ~at ~nb:1 ~sh:0 ~w:8 ~bits:false
+  | Fixed at, Uint16 Big -> s UInt16.int_eq ~at ~nb:2 ~sh:0 ~w:16 ~bits:false
+  | Fixed at, Int16 Big -> s SInt16.int_eq ~at ~nb:2 ~sh:0 ~w:16 ~bits:false
+  | Fixed at, Uint32 Big -> (
+      match UInt32.int_eq with
+      | Some eq -> s eq ~at ~nb:4 ~sh:0 ~w:32 ~bits:false
+      | None -> None)
+  | Fixed at, Int32 Big -> (
+      match SInt32.int_eq with
+      | Some eq -> s eq ~at ~nb:4 ~sh:0 ~w:32 ~bits:false
+      | None -> None)
+  | _ -> None
+
+(* Each field of [args] once. *)
+let rec wfields : type f r.
+    fast:bool -> n:int -> r t -> (f, r) args -> int list -> (f, r) wlist =
+ fun ~fast ~n codec args seen ->
+  match args with
+  | [] -> WNil
+  | f :: rest ->
+      if List.mem f.id seen then
+        Fmt.invalid_arg "Codec.writer: field %S is written twice" f.name;
+      let w =
+        match if fast then slot_of ~n codec f else None with
+        | Some s -> Slot s
+        | None -> Setter (Staged.unstage (set codec f))
+      in
+      WCons (w, wfields ~fast ~n codec rest (f.id :: seen))
+
+let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
+    (bytes -> int -> f) Staged.t =
+  let n =
+    match (compiled codec).wire_size with
+    | Fixed n -> n
+    | Variable _ ->
+        Fmt.invalid_arg "Codec.writer: codec %S is not of a fixed size"
+          codec.name
+  in
+  require_env ~op:"writer" codec None;
+  let b = Bytes.create n in
+  encode codec template b 0;
+  let fast = n <= 7 && Sys.int_size >= 63 in
+  let ws = wfields ~fast ~n codec args [] in
+  if fast && all_slots ws then
+    let t = clear_slots ws (run_of_bytes b n) in
+    Staged.stage (run_writer ~name:codec.name ~n t ws)
+  else
+    let ws =
+      if all_slots ws then wfields ~fast:false ~n codec args [] else ws
+    in
+    Staged.stage (set_writer ~name:codec.name ~n b ws)
+
 type 'r valid = { buf : bytes; off : int; codec : int }
 
-let valid_slow env (t : 'r t) buf off =
-  validate ?env t buf off;
-  { buf; off; codec = t.id }
+(* The proof of a check that failed: no codec has its id, so every reader
+   refuses it. *)
+let failed = { buf = Bytes.empty; off = 0; codec = -1 }
 
-let valid ?env (t : 'r t) buf off =
+(* A pass made of more than interval tests, answered without its error. *)
+let[@inline never] steps_pass pass input_end buf off =
+  match run_plain_pass pass input_end buf off with
+  | () -> true
+  | exception Types.Parse_error _ -> false
+
+let[@inline] passes pass input_end buf off =
+  match pass with
+  | No_checks -> true
+  | Word { q; l; r; m; lo; hi; _ } ->
+      Codec_intervals.within buf off q l r m lo hi
+  | Intervals { words = Some f; _ } -> f buf off
+  | Intervals { flat; tables; words = None; _ } ->
+      Codec_intervals.scan_intervals flat tables buf off (Array.length flat) 0
+      < 0
+  | Steps _ -> steps_pass pass input_end buf off
+
+let[@inline never] accepts_slow env (t : 'r t) buf off =
+  off >= 0
+  &&
+  match validate_exn ?env t buf off with
+  | () -> true
+  | exception Types.Parse_error _ -> false
+
+(* Whether the record at [off] passes [validate], without its error. Small
+   enough to inline: the frame and the tests of a fixed-size codec, every
+   other codec out of line. *)
+let[@inline] accepts ?env (t : 'r t) buf off =
   match env with
   | None when t.n_params = 0 -> (
       match Atomic.get t.compiled with
       | Some c when c.fixed_frame >= 0 ->
-          validate_fixed c.fixed_frame c.plain_pass buf off;
-          { buf; off; codec = t.id }
-      | _ -> valid_slow env t buf off)
-  | _ -> valid_slow env t buf off
+          let input_end = Input_end.of_bytes buf in
+          off >= 0
+          && off <= Input_end.to_int input_end - c.fixed_frame
+          && passes c.plain_pass input_end buf off
+      | _ -> accepts_slow env t buf off)
+  | _ -> accepts_slow env t buf off
 
-let wrong_valid name =
+let check ?env t buf off =
+  if accepts ?env t buf off then { buf; off; codec = t.id } else failed
+
+let ok v = v.codec >= 0
+
+let[@inline never] wrong_valid name =
   Fmt.invalid_arg "Codec.read: the value was not validated by codec %S" name
 
 (* One closure per kind, chosen when the reader is staged, so a read is the
-   codec check and one load. *)
+   codec check and one load. [wrong_valid] stays out of line: inlined, its
+   format call gives every reader a stack frame. *)
 let valid_reader : type a r. id:int -> name:string -> a scalar -> r valid -> a =
  fun ~id ~name s ->
   match s with
@@ -1315,6 +1452,43 @@ let[@inline always] extract (bf : bitfield) (word : Optint.t) =
   | False ->
       Optint.to_int
         (Optint.logand (Optint.shift_right_logical word bf.bf_shift) bf.bf_mask)
+
+(* -- Record words -- *)
+
+type 'r word = 'r Codec_run.word
+type ('a, 'r) part = ('a, 'r) Codec_run.part
+
+let word_size ~op (codec : _ t) =
+  match (compiled codec).wire_size with
+  | Fixed n when 8 * n < Sys.int_size -> n
+  | Fixed n ->
+      Fmt.invalid_arg "%s: codec %S has %d bytes, more than an int holds" op
+        codec.name n
+  | Variable _ ->
+      Fmt.invalid_arg "%s: codec %S is not of a fixed size" op codec.name
+
+type 'r word_reader = 'r Codec_run.reader
+
+let word_reader (codec : 'r t) : 'r word_reader =
+  reader (word_size ~op:"Codec.word_reader" codec)
+
+let read_word = Codec_run.read_word
+
+let word_part (type a r) (codec : r t) (f : (a, r) field) : (a, r) part =
+  let n = word_size ~op:"Codec.word_part" codec in
+  match slot_of ~n codec f with
+  | None ->
+      Fmt.invalid_arg
+        "Codec.word_part: field %S of codec %S is not a big-endian integer or \
+         a bitfield of a byte or a big-endian 16- or 32-bit word"
+        f.name codec.name
+  | Some s ->
+      let signed =
+        match f.typ with Int8 | Int16 _ | Int32 _ -> true | _ -> false
+      in
+      Codec_run.part s.eq ~pos:s.pos ~width:s.width ~signed
+
+let of_word = Codec_run.of_word
 
 (* -- Snapshot: batch bitfield access -- *)
 
@@ -1569,6 +1743,7 @@ module Testing = struct
       {
         c with
         plain_decode = None;
+        walk = None;
         plain_encode = None;
         fixed_frame = -1;
         plain_validate = (fun buf off -> c.validate buf off);
@@ -1604,12 +1779,70 @@ module Testing = struct
     c.paths @ if t.n_params = 0 then read_paths t c else []
 
   let all_paths : string list =
-    [ "decode.fixed"; "decode.variable"; "decode.layout" ]
+    [ "decode.fixed"; "decode.variable"; "decode.layout"; "decode.walk" ]
     @ List.concat_map
         (fun p ->
-          [ p ^ ".none"; p ^ ".steps"; p ^ ".interval"; p ^ ".byte_table" ])
+          [ p ^ ".none"; p ^ ".steps"; p ^ ".interval"; p ^ ".byte_table" ]
+          (* The tests read words where an int holds one. *)
+          @ if Sys.int_size >= 63 then [ p ^ ".words" ] else [])
         [ "pass"; "layout" ]
     @ List.init 4 (fun i -> Fmt.str "encode.staged.%d" (i + 1))
     @ ([ "encode.staged.rows"; "encode.plain"; "encode.blit"; "read.scalar" ]
         : string list)
+end
+
+module Make (C : sig
+  type r
+
+  val codec : r t
+end) =
+struct
+  type t = C.r
+
+  let min_size = min_wire_size C.codec
+  let decode buf off = decode C.codec buf off
+  let decode_exn buf off = decode_exn C.codec buf off
+  let encode r buf off = encode C.codec r buf off
+  let validate buf off = validate C.codec buf off
+  let validate_exn buf off = validate_exn C.codec buf off
+
+  (* A negative offset holds no record, as the generated [is_valid] says,
+     where [validate] raises [Invalid_argument]. *)
+  let is_valid buf off = accepts C.codec buf off
+
+  module View = struct
+    type 'b t = int
+    type 'b check = int
+
+    let check b len off =
+      let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+      if off < 0 || off > (len : _ Wire_runtime.Buf.length :> int) - min_size
+      then -1
+      else if is_valid buf off then off
+      else -1
+
+    let at b _ off =
+      validate_exn (b : _ Wire_runtime.Buf.t :> bytes) off;
+      off
+
+    let ok c = c >= 0
+
+    let get c =
+      if c < 0 then invalid_arg (name C.codec ^ ".View.get: the check failed")
+      else c
+  end
+
+  module Field = struct
+    type 'a t = {
+      get : bytes -> int -> 'a;
+      view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
+    }
+  end
+
+  let field f =
+    let read = Staged.unstage (get C.codec f) in
+    {
+      Field.get = read;
+      view = (fun b v -> read (b : _ Wire_runtime.Buf.t :> bytes) (v : int));
+    }
 end
