@@ -279,7 +279,8 @@ let text w e =
 let cond_text w facts c =
   w.used <- Sset.union w.used (refs c);
   let c = T.subst_expr w.views c in
-  expr_text w.m ~ranges:w.ranges (simplify facts (bit_predicate w.words c))
+  expr_text w.m ~ranges:w.ranges
+    (simplify facts (Bit_tests.bit_predicate w.words c))
 
 (* Bytes known to be in the buffer from [p]'s variable, and from [p]. *)
 let known_from w var =
@@ -338,7 +339,7 @@ let wide_words w p ~size fields =
     let shifted =
       List.map (fun (f : field) -> { f with offset = p.at + f.offset }) fields
     in
-    let ws = words w.m.num ~size shifted in
+    let ws = Wide_loads.words ~unboxed:(w.m.num = Unboxed) ~size shifted in
     List.iter
       (fun a ->
         if not (List.mem a w.wide_words) then begin
@@ -622,6 +623,7 @@ let result_mode target =
     ahead = Sset.empty;
     fail = (fun _ -> "");
     decide = ignore;
+    note = ignore;
   }
 
 (* On OxCaml an accessor holds the values its tests read as the check does,
@@ -645,6 +647,7 @@ let mode target =
     ahead = Sset.empty;
     fail = (fun _ -> "");
     decide = ignore;
+    note = ignore;
   }
 
 let bad_raise ~at ~need =

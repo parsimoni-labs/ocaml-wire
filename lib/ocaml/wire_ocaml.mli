@@ -277,6 +277,31 @@ val scanner_views : 'r Wire.Codec.t -> view
 (** [scanner_views c] is the views {!scanner} writes for [c]. Raises
     [Invalid_argument] as {!scanner} does. *)
 
+val fstar :
+  ?fields:string list ->
+  codec:string ->
+  'r Wire.Codec.t ->
+  (string * string) list
+(** [fstar ?fields ~codec c] is the F* proof that the [fold] of
+    [scanner ?fields ~codec c] answers what the parser EverParse writes for the
+    3D projection of [c] answers on the same bytes: each F* file of the proof,
+    by name. [<codec>.Scan.fst] is that [fold], from the walk that writes the
+    OCaml, its operations and loads written as calls into the primitives
+    [WireGen.OCaml]; [<codec>.Flat.fst] reads the record field by field and
+    proves that reading equal to the parser; [<codec>.Proof.fst] proves
+    [fold_is_3d]: on a window inside the buffer,
+    [fold buf off len ~invalid ~valid] is [valid] applied to the outputs of the
+    value the parser reads from the window's bytes, or [invalid ()] where it
+    reads none.
+
+    The proof is checked with the F* and Z3 that ship with EverParse, against
+    the F* module [codec] that 3d.exe writes from the [.3d] of
+    [Wire.Everparse.write ~mode:`Standalone ~name:codec], and the library
+    [proofs/fstar-gen/lib] of this repository. It covers records of a fixed
+    layout whose fields are unsigned big-endian integers of up to 32 bits,
+    bitfields of such words and byte arrays, with constraints; it raises
+    [Invalid_argument] for any other codec. *)
+
 (** {1 The plan}
 
     The checked plan both generators print, for backends of other languages:

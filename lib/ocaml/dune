@@ -6,9 +6,12 @@
   decision
   dispatch_tree
   lines
+  bit_tests
+  wide_loads
   emitter
   record_module
   scan_module
   view_module
+  fstar_module
   interface)
  (libraries wire fmt))

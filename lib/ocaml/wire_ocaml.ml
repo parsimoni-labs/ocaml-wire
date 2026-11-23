@@ -82,6 +82,10 @@ let scanner_views c =
   in
   view "" t.root
 
+let fstar ?fields ~codec c =
+  try Fstar_module.modules ?fields ~codec c
+  with Unsupported why -> refuse ~codec why
+
 (* {1 The plan, for other backends} *)
 
 module Plan = struct

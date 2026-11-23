@@ -18,14 +18,19 @@ open Lines
 
 (* How the code holds integers. [Tagged] is [int]. [Boxed] is [int64] for
    values and [int] for positions; the stock compiler keeps such an [int64]
-   unboxed in a register. [Unboxed] is OxCaml's [int64_u]. *)
-type num = Tagged | Boxed | Unboxed
+   unboxed in a register. [Unboxed] is OxCaml's [int64_u]. [Fstar] is
+   [Tagged] written as F*: the walk takes the same decisions, and writes each
+   operation and load as a call into the module [P] of the F* primitives. *)
+type num = Tagged | Boxed | Unboxed | Fstar
 
 (* How the code holds positions, sizes and bounds: a load takes an [int]. *)
 let pos_num = function Boxed -> Tagged | num -> num
 
 (* The module of the operations on values held as [num], other than [int]. *)
-let i64_ops = function Unboxed -> "U" | Boxed | Tagged -> "Int64"
+let i64_ops = function
+  | Unboxed -> "U"
+  | Boxed | Tagged -> "Int64"
+  | Fstar -> "P"
 
 (* A 64-bit literal written as [digits], an OCaml literal without its
    suffix. *)
@@ -75,6 +80,18 @@ let bigstring_src =
     unboxed = false;
   }
 
+(* An F* walk reads a sequence of bytes through the primitives of [P]. *)
+let fstar_src =
+  {
+    typ = "P.buf";
+    u = "P";
+    len = "P.length";
+    checked = "P";
+    brand = "P";
+    buf = "buf";
+    unboxed = false;
+  }
+
 (* On OxCaml a function that reads or writes [buf] without keeping it takes it
    [local], so a caller may pass a buffer on its stack. *)
 let local_bytes_src =
@@ -102,9 +119,21 @@ type pos = Decision.pos = { var : string option; at : int }
 
 (* How a walk of [num] holds integer values. *)
 let values : num -> Decision.values = function
-  | Tagged -> `Int
+  | Tagged | Fstar -> `Int
   | Boxed -> `Int64
   | Unboxed -> `Int64_u
+
+(* What an F* walk states of the code it writes, in bytes of the window:
+   a binding and, when it reads bytes, the value it holds, or a fact a test
+   relies on. [known] is the bytes known to be in the window there. *)
+type note =
+  | Let of { var : string; rhs : string; holds : string option; known : int }
+  | Holds of { fact : string; known : int }
+
+(* The [n] bytes at [k] from [o], read big-endian, as F* states them. *)
+let window_bytes ~o ~k n =
+  if k = 0 then Fmt.str "be buf %s %d" o n
+  else Fmt.str "be buf (%s + %d) %d" o k n
 
 type mode = {
   num : num;
@@ -124,6 +153,7 @@ type mode = {
          walk reads instead of loading them. *)
   fail : failure -> string;
   decide : Decision.t -> unit;
+  note : note -> unit;
 }
 
 type cuts = {
@@ -132,6 +162,9 @@ type cuts = {
   taken : (string, unit) Hashtbl.t;
   poly : string;
   reserve : int;
+  trace : bool -> bool;
+      (* Each choice to cut or not, in the order the walk makes them: an F*
+         walk, whose text is longer, takes those of the OCaml walk. *)
 }
 
 (* The text written so far in the current function, on all its paths: what
@@ -269,6 +302,7 @@ let output_value m (o : output) =
 let lit num n =
   match num with
   | Tagged -> int_lit n
+  | Fstar -> if n < 0 then Fmt.str "(%d)" n else string_of_int n
   | Boxed -> if n < 0 then Fmt.str "(%dL)" n else Fmt.str "%dL" n
   | Unboxed ->
       if n < 0 then Fmt.str "(-#%LdL)" (Int64.neg (Int64.of_int n))
@@ -283,15 +317,31 @@ let unboxed_op = function
   | "lxor" -> "logxor"
   | op -> invalid_arg op
 
+(* The primitive of [P] an F* walk calls for the OCaml operator [op]. *)
+let fstar_op = function
+  | "+" -> "add"
+  | "-" -> "sub"
+  | "*" -> "mul"
+  | ("land" | "lsr" | "lsl") as op -> op
+  | "<" -> "lt"
+  | "<=" -> "le"
+  | ">" -> "gt"
+  | ">=" -> "ge"
+  | "=" -> "eq"
+  | "<>" -> "ne"
+  | op -> fail_unsupported "the F* rendering of %s" op
+
 let binop num op a b =
   match num with
   | Tagged -> Fmt.str "(%s %s %s)" a op b
+  | Fstar -> Fmt.str "(P.%s %s %s)" (fstar_op op) a b
   | Boxed | Unboxed -> Fmt.str "(%s.%s %s %s)" (i64_ops num) (unboxed_op op) a b
 
 (* The type annotation lets the stock compiler compare two [int64] inline. *)
 let relation num op a b =
   match num with
   | Tagged -> Fmt.str "((%s : int) %s %s)" a op b
+  | Fstar -> Fmt.str "(P.%s %s %s)" (fstar_op op) a b
   | Boxed -> Fmt.str "((%s : int64) %s %s)" a op b
   | Unboxed -> Fmt.str "(U.compare %s %s %s 0)" a b op
 
@@ -303,7 +353,7 @@ let outside_range num v ~lo ~hi =
   | Unboxed ->
       let d = if lo = 0 then v else binop num "-" v (lit num lo) in
       Fmt.str "(B.unsigned_compare %s %s > 0)" d (lit num (hi - lo))
-  | Tagged | Boxed ->
+  | Tagged | Boxed | Fstar ->
       Fmt.str "%s || %s"
         (relation num "<" v (lit num lo))
         (relation num ">" v (lit num hi))
@@ -355,7 +405,9 @@ let rec expr : type a. w -> a T.expr -> string =
           true
       | _ -> false
     in
-    if is_bool a then Fmt.str "((%s : bool) %s %s)" (p a) op (p b)
+    if is_bool a then
+      if num = Fstar then Fmt.str "(%s %s %s)" (p a) op (p b)
+      else Fmt.str "((%s : bool) %s %s)" (p a) op (p b)
     else
       match (as_int a, as_int b) with
       | Some x, Some y when past_native w.ranges x || past_native w.ranges y ->
@@ -375,16 +427,20 @@ let rec expr : type a. w -> a T.expr -> string =
   | T.Add (a, b) -> arith_op "+" a b
   | T.Sub (a, b) -> arith_op "-" a b
   | T.Mul (a, b) -> arith_op "*" a b
+  | (T.Lor _ | T.Lxor _ | T.Cast _) when num = Fstar ->
+      fail_unsupported "the F* rendering of %a" T.pp_expr e
   | T.Land (a, b) -> binop num "land" (p a) (p b)
   | T.Lor (a, b) -> binop num "lor" (p a) (p b)
   | T.Lxor (a, b) -> binop num "lxor" (p a) (p b)
   | T.Lnot a -> (
       match num with
       | Tagged -> Fmt.str "(lnot %s)" (p a)
+      | Fstar -> fail_unsupported "the F* rendering of lnot"
       | Boxed | Unboxed -> Fmt.str "(%s.lognot %s)" (i64_ops num) (p a))
   | T.Lsl (a, b) -> (
       match num with
       | Tagged -> Fmt.str "(%s lsl %s)" (p a) (p b)
+      | Fstar -> binop num "lsl" (p a) (p b)
       | Boxed | Unboxed ->
           let v =
             Fmt.str "(%s.shift_left %s %s)" (i64_ops num) (p a) (distance b)
@@ -393,6 +449,7 @@ let rec expr : type a. w -> a T.expr -> string =
   | T.Lsr (a, b) -> (
       match num with
       | Tagged -> Fmt.str "(%s lsr %s)" (p a) (p b)
+      | Fstar -> binop num "lsr" (p a) (p b)
       | Boxed | Unboxed ->
           let u = i64_ops num in
           let nonnegative = fst (range w.ranges a) >= 0 in
@@ -426,12 +483,14 @@ let rec expr : type a. w -> a T.expr -> string =
    stays below [2^64]: its variables are below [2^32], so [Int64]'s operations
    compute it exactly. *)
 and wide w (e : int T.expr) =
+  if w.m.num = Fstar then
+    fail_unsupported "the F* rendering of arithmetic past the native int";
   let r = wide w in
   let op f a b = Fmt.str "(Int64.%s %s %s)" f (r a) (r b) in
   let distance (b : int T.expr) =
     match (w.m.num, b) with
     | _, T.Int n -> string_of_int n
-    | Tagged, _ -> expr w b
+    | (Tagged | Fstar), _ -> expr w b
     | (Boxed | Unboxed), _ ->
         Fmt.str "(%s.to_int %s)" (i64_ops w.m.num) (expr w b)
   in
@@ -439,7 +498,7 @@ and wide w (e : int T.expr) =
   | T.Int n -> Fmt.str "%dL" n
   | T.Ref _ -> (
       match w.m.num with
-      | Tagged -> Fmt.str "(Int64.of_int %s)" (expr w e)
+      | Tagged | Fstar -> Fmt.str "(Int64.of_int %s)" (expr w e)
       | Boxed -> expr w e
       | Unboxed -> Fmt.str "(U.to_int64 %s)" (expr w e))
   | T.Add (a, b) -> op "add" a b
@@ -470,6 +529,7 @@ let addr num o k =
     match num with
     | Tagged | Boxed -> Fmt.str "(%s + %d)" o k
     | Unboxed -> Fmt.str "(U.add %s #%dL)" o k
+    | Fstar -> binop Fstar "+" o (string_of_int k)
 
 (* A load at [o + k]. An [int64_u] position is the offset of the wider loads
    as it is: the address is the buffer plus the position, with the distance
@@ -489,10 +549,13 @@ let load m ~o ~k ~bytes ~endian =
       | 2 -> Fmt.str "(%s.u16%s_at buf %s)" m.src.u e at
       | 4 -> Fmt.str "(%s.i32%s_at buf %s)" m.src.u e at
       | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
-  | (Tagged | Boxed), _ | Unboxed, 1 -> (
+  | Fstar, (2 | 4) when endian = T.Little ->
+      fail_unsupported "the F* rendering of a little-endian load"
+  | (Tagged | Boxed | Fstar), _ | Unboxed, 1 -> (
       let at =
         match m.num with
         | Tagged | Boxed -> addr Tagged o k
+        | Fstar -> addr Fstar o k
         | Unboxed when k = 0 -> Fmt.str "(B.offset %s)" o
         | Unboxed -> Fmt.str "(B.offset %s + %d)" o k
       in
@@ -508,46 +571,6 @@ let load m ~o ~k ~bytes ~endian =
       | 4 -> Fmt.str "(%s.i32%s_at buf %s)" m.src.u e at
       | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
 
-(* The 64-bit words of a prefix of [size] bytes worth loading once: those
-   holding two or more of [fields] a shift takes out. An [int64_u] position
-   reads a byte by a 16-bit load that needs no swap, which a test or an
-   offset of the byte has sooner than a shift of a swapped word, so a byte is
-   not taken from a word. *)
-let in_word num f =
-  match f.store with
-  | Int { width = 8; _ } | Bits { base = T.U8; _ } -> num <> Unboxed
-  | Int { width = 16 | 32; endian = T.Big; _ } -> true
-  | Bits { base = T.U16 T.Big | T.U32 T.Big; _ } -> true
-  | _ -> false
-
-let covers a f = a <= f.offset && f.offset + width_bytes f.store <= a + 8
-
-(* One 64-bit load serves every field it holds, as the load combining of Go's
-   [memcombine] pass turns adjacent narrow loads into a wide one. A word
-   starts at a multiple of 8, or ends with the prefix. Candidates are computed
-   from the fields, so the cost does not grow with [size]. *)
-let words num ~size fields =
-  if size < 8 then []
-  else
-    let last = size - 8 in
-    List.concat_map
-      (fun f ->
-        if not (in_word num f) then []
-        else
-          List.filter
-            (fun a -> covers a f)
-            [ min (f.offset / 8 * 8) last; last ])
-      fields
-    |> List.sort_uniq Int.compare
-    |> List.filter (fun a ->
-        let held =
-          List.filter_map
-            (fun f ->
-              if in_word num f && covers a f then Some f.offset else None)
-            fields
-        in
-        List.length (List.sort_uniq Int.compare held) > 1)
-
 (* A 16-bit field read through the 32-bit load that ends or starts on it, when
    that load stays in a prefix of [size] bytes: one load and one byte swap,
    with none of the 16-bit sign and zero extensions a 16-bit swap costs. Only
@@ -560,7 +583,7 @@ let u16_in_word m ~lo ~size ~raw ~o ~k ~endian =
   let i32 = i32 m.src in
   let low, high =
     match m.num with
-    | Tagged | Boxed ->
+    | Tagged | Boxed | Fstar ->
         let mask v =
           if raw then Fmt.str "(%s)" v else Fmt.str "(%s land 0xffff)" v
         in
@@ -595,6 +618,19 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
   let mask32 v = if raw then v else Fmt.str "(%s land mask32)" v in
   let word = List.find_opt (fun a -> a <= k && k + bytes <= a + 8) words in
   match (m.num, word) with
+  | Fstar, Some a when bytes = 1 || endian = T.Big ->
+      let shift = 8 * (a + 8 - k - bytes) in
+      let v =
+        if shift = 0 then Fmt.str "(P.to_int w%d)" a
+        else Fmt.str "(P.to_int (P.shift_right_logical w%d %d))" a shift
+      in
+      if a = k || raw then v
+      else if bytes = 4 then binop Fstar "land" v "mask32"
+      else binop Fstar "land" v (Fmt.str "0x%x" ((1 lsl (8 * bytes)) - 1))
+  | Fstar, _ when bytes = 4 ->
+      let v = Fmt.str "(P.int32_to_int %s)" (load m ~o ~k ~bytes ~endian) in
+      if raw then v else binop Fstar "land" v "mask32"
+  | Fstar, _ -> load m ~o ~k ~bytes ~endian
   | Tagged, Some a when bytes = 1 || endian = T.Big ->
       let i64 = i64 m.src and shift = 8 * (a + 8 - k - bytes) in
       let v =
@@ -674,6 +710,7 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
 let value m ?size ?lo ?bitword ~o ~words ~k f =
   let sign v width =
     match m.num with
+    | Fstar -> fail_unsupported "the F* rendering of a signed field"
     | Tagged ->
         Fmt.str "((%s lsl (Sys.int_size - %d)) asr (Sys.int_size - %d))" v width
           width
@@ -698,6 +735,16 @@ let value m ?size ?lo ?bitword ~o ~words ~k f =
             if shift = 0 then word else Fmt.str "(%s lsr %d)" word shift
           in
           if whole then v else Fmt.str "(%s land %s)" v (mask width)
+      | Fstar ->
+          let v =
+            if shift = 0 then word
+            else binop Fstar "lsr" word (string_of_int shift)
+          in
+          let mask =
+            if width <= 30 then mask width
+            else binop Fstar "lsr" "mask32" (string_of_int (32 - width))
+          in
+          if whole then v else binop Fstar "land" v mask
       | Boxed | Unboxed ->
           let u = i64_ops m.num in
           let v =
@@ -720,6 +767,8 @@ let value m ?size ?lo ?bitword ~o ~words ~k f =
           ~endian ()
       in
       if signed then sign v width else v
+  | Bytes _ when m.num = Fstar ->
+      fail_unsupported "the F* rendering of a byte string"
   | Bytes n ->
       Fmt.str "(%s.sub_string buf %s %d)" m.src.checked
         (addr Tagged o (k + f.offset))
@@ -745,10 +794,18 @@ let check w failure (cond : bool T.expr) =
    type a function cut out of it writes for it, when inference needs one. *)
 
 let num_type w =
-  match w.m.num with Unboxed -> Some "int64_u" | Tagged | Boxed -> None
+  match w.m.num with
+  | Unboxed -> Some "int64_u"
+  | Fstar -> Some "P.int"
+  | Tagged | Boxed -> None
 
 let bind ?ty w v = { w with scope = (v, ty) :: w.scope }
 let bind_num w v = bind ?ty:(num_type w) w v
+
+(* [let var = rhs in], noted with the value it [holds] in bytes. *)
+let write_let ?holds w var rhs =
+  pf w "let %s = %s in@\n" var rhs;
+  w.m.note (Let { var; rhs; holds; known = w.known })
 
 (* The text of the value of [o]: its literal where it is settled. An integer
    output is only ever settled absent. *)
@@ -787,10 +844,11 @@ let can_cut w =
 let over w opens =
   match w.cuts with
   | Some c when can_cut w ->
-      w.fn.chars > 0
-      && (w.depth + opens > max_depth
-         || w.fn.decisions + opens > max_decisions
-         || w.fn.chars > room c)
+      c.trace
+        (w.fn.chars > 0
+        && (w.depth + opens > max_depth
+           || w.fn.decisions + opens > max_decisions
+           || w.fn.chars > room c))
   | _ -> false
 
 (* The name of a function cut out under [label]: no more than four
@@ -813,6 +871,36 @@ let function_name c label =
     end
   in
   go 1
+
+(* The function [name] of an F* walk, whose body is [lines]: an [unfold let],
+   so that a proof sees one function, which takes its [params] in order. The
+   window it reads lies in the buffer, and holds the bytes known there. *)
+let fstar_cut w c ~name ~params lines =
+  let has v = List.mem_assoc v params in
+  let refine v =
+    match v with
+    | "stop" when has "buf" && has "base" ->
+        if w.known > 0 then
+          Fmt.str "{window buf base stop /\\ stop >= %d}" w.known
+        else "{window buf base stop}"
+    | "base" when has "buf" && not (has "stop") ->
+        Fmt.str "{0 <= base /\\ base + %d <= P.length buf}" w.known
+    | _ -> ""
+  in
+  let param (v, ty) =
+    match ty with
+    | Some t -> Fmt.str "(%s:%s%s)" v t (refine v)
+    | None -> fail_unsupported "the F* rendering of %s, which has no type" v
+  in
+  let formal, actual =
+    if params = [] then ("(_:unit)", "()")
+    else
+      ( String.concat " " (List.map param params),
+        String.concat " " (List.map fst params) )
+  in
+  Fmt.pf (Fmt.with_buffer c.defs) "unfold let %s (#r:Type) %s : r =\n%s\n\n%!"
+    name formal (String.concat "\n" lines);
+  pf w "%s %s@\n" name actual
 
 (* [body] written as the function [label], and a call of it in its place. *)
 let cut w ~label body =
@@ -838,18 +926,22 @@ let cut w ~label body =
       in
       let name = function_name c label in
       w.m.decide (Cut { name; window = w.limit; known = w.known });
-      let param (v, ty) =
-        match ty with None -> "~" ^ v | Some t -> Fmt.str "~(%s : %s)" v t
-      in
-      let formal, actual =
-        if params = [] then ("()", "()")
-        else
-          ( String.concat " " (List.map param params),
-            String.concat " " (List.map (fun (v, _) -> "~" ^ v) params) )
-      in
-      Fmt.pf (Fmt.with_buffer c.defs) "let[@inline always] %s %s%s =\n%s\n\n%!"
-        name c.poly formal (String.concat "\n" lines);
-      pf w "%s %s@\n" name actual
+      if w.m.num = Fstar then fstar_cut w c ~name ~params lines
+      else begin
+        let param (v, ty) =
+          match ty with None -> "~" ^ v | Some t -> Fmt.str "~(%s : %s)" v t
+        in
+        let formal, actual =
+          if params = [] then ("()", "()")
+          else
+            ( String.concat " " (List.map param params),
+              String.concat " " (List.map (fun (v, _) -> "~" ^ v) params) )
+        in
+        Fmt.pf (Fmt.with_buffer c.defs)
+          "let[@inline always] %s %s%s =\n%s\n\n%!" name c.poly formal
+          (String.concat "\n" lines);
+        pf w "%s %s@\n" name actual
+      end
   | _ -> body w
 
 (* The ranges and facts passed checks establish, for the code after them. *)
@@ -906,77 +998,11 @@ let address w p =
       pf w "let %s = %s in@\n" o (binop (pos_num w.m.num) "+" w.base v);
       (bind_num w o, o, w.disp + p.at)
 
-(* Bitfields read through their word, by the variable holding it: a test of
-   several bitfields of one word becomes one test of the word. *)
-let rec masked words (e : int T.expr) =
-  match e with
-  | T.Ref (T.I, name) ->
-      Option.map (fun mask -> (name, 0, mask)) (List.assoc_opt name words)
-  | T.Land (a, T.Int n) | T.Land (T.Int n, a) ->
-      Option.map
-        (fun (word, shift, mask) -> (word, shift, mask land n))
-        (masked words a)
-  | T.Land (a, T.Lnot (T.Int n)) | T.Land (T.Lnot (T.Int n), a) ->
-      Option.map
-        (fun (word, shift, mask) -> (word, shift, mask land lnot n))
-        (masked words a)
-  | T.Lsr (a, T.Int n) when n >= 0 && n < Sys.int_size ->
-      Option.bind (masked words a) (fun (word, shift, mask) ->
-          let mask = mask lsr n in
-          if mask = 0 then Some (word, 0, 0)
-          else if shift + n < Sys.int_size then Some (word, shift + n, mask)
-          else None)
-  | T.Cast (`U8, a) -> masked words (T.Land (a, T.Int 255))
-  | T.Cast (`U16, a) -> masked words (T.Land (a, T.Int 65535))
-  | _ -> None
-
-let zero_test words (e : bool T.expr) =
-  let extract zero a =
-    Option.map
-      (fun (word, shift, mask) ->
-        (word, (if mask = 0 then 0 else mask lsl shift), zero))
-      (masked words a)
-  in
-  match e with
-  | T.Eq (a, T.Int 0) -> extract true a
-  | T.Eq (T.Int 0, a) -> extract true a
-  | T.Ne (a, T.Int 0) -> extract false a
-  | T.Ne (T.Int 0, a) -> extract false a
-  | _ -> None
-
-let mask_test word mask zero : bool T.expr =
-  let bits = T.Land (T.Ref (T.I, word), T.Int mask) in
-  if mask = 0 then T.Bool zero
-  else if zero then T.Eq (bits, T.Int 0)
-  else T.Ne (bits, T.Int 0)
-
-let rec bit_predicate words (e : bool T.expr) : bool T.expr =
-  let each = bit_predicate words in
-  let combine want make a b =
-    let a = each a and b = each b in
-    match (zero_test words a, zero_test words b) with
-    | Some (x, m, p), Some (y, n, q) when x = y && p = want && q = want ->
-        mask_test x (m lor n) want
-    | _ -> make a b
-  in
-  match e with
-  | T.And (a, b) -> combine true (fun a b -> T.And (a, b)) a b
-  | T.Or (a, b) -> combine false (fun a b -> T.Or (a, b)) a b
-  | T.Not a -> (
-      let a = each a in
-      match zero_test words a with
-      | Some (word, mask, zero) -> mask_test word mask (not zero)
-      | None -> T.Not a)
-  | _ -> (
-      match zero_test words e with
-      | Some (word, mask, zero) -> mask_test word mask zero
-      | None -> e)
-
 (* A gate's condition, simplified by the facts, its bitfields read through
    their words. *)
 let lower w cond =
   let c = T.subst_expr w.views (simplify w.facts cond) in
-  simplify w.facts (bit_predicate w.words c)
+  simplify w.facts (Bit_tests.bit_predicate w.words c)
 
 (* The variable [v] holding the word of the bitfields at [base], whose range
    and mask the views of those bitfields read. *)
@@ -991,63 +1017,15 @@ let bind_bitword w ((_, base), v) =
     }
   else w
 
-(* The words a prefix loads with [Boxed], where a word costs one load and a
-   field a shift and a mask. A word is loaded when it holds two or more
-   fields that no word of [held] holds, counting the fields of the later
-   prefixes, [later]. It starts at the first such field, moved back to stay
-   between [lo] and [hi], the bytes known to be in the window. The fields are
-   sorted by offset and scanned once, so the cost is linear in their number. *)
-let shared_words ~held ~lo ~hi ~later live =
-  let worded = List.filter (in_word Boxed) in
-  let by_offset = List.sort (fun a b -> Int.compare a.offset b.offset) in
-  let live = by_offset (worded live) in
-  let candidates = Array.of_list (by_offset (live @ worded later)) in
-  let starts = Hashtbl.create 16 in
-  List.iter (fun a -> Hashtbl.replace starts a ()) held;
-  let unheld g =
-    let last = g.offset and first = g.offset + width_bytes g.store - 8 in
-    let rec free a =
-      a > last || ((not (Hashtbl.mem starts a)) && free (a + 1))
-    in
-    free (max 0 first)
-  in
-  let next = ref 0 in
-  List.fold_left
-    (fun chosen f ->
-      let a = max lo (min f.offset (hi - 8)) in
-      while !next < Array.length candidates && candidates.(!next).offset < a do
-        incr next
-      done;
-      let rec served i acc =
-        if i >= Array.length candidates || candidates.(i).offset >= a + 8 then
-          acc
-        else
-          let g = candidates.(i) in
-          served (i + 1)
-            (if covers a g && unheld g && not (List.mem g.offset acc) then
-               g.offset :: acc
-             else acc)
-      in
-      if
-        unheld f
-        && a + 8 <= hi
-        && covers a f
-        && List.compare_length_with (served !next []) 1 > 0
-      then begin
-        Hashtbl.replace starts a ();
-        a :: chosen
-      end
-      else chosen)
-    [] live
-  |> List.rev
-
-(* The words [loads] {!shared_words} chose for the [fields] of a prefix at
+(* The words [loads] {!Wide_loads.shared_words} chose for the [fields] of a prefix at
    [k], between [lo] and [hi], as a decision. *)
 let shared w ~k ~constant ~lo ~hi ~held fields loads =
   let fields =
     List.filter_map
       (fun f ->
-        if in_word Boxed f then Some (f.offset, width_bytes f.store) else None)
+        if Wide_loads.in_word ~unboxed:false f then
+          Some (f.offset, width_bytes f.store)
+        else None)
       fields
   in
   Shared_words
@@ -1090,6 +1068,29 @@ let high_byte_words w fields live =
         | _ -> None)
       live
 
+(* The word of each live bitfield of a prefix at [o + k] of [size] bytes, by
+   its offset and base: from the 64-bit [words] that hold it or, for one of
+   the [high] words, by the 16-bit load that ends on its high byte. *)
+let load_bitwords w ~o ~k ~size ~words ~high live =
+  List.filter_map
+    (fun f ->
+      match f.store with Bits { base; _ } -> Some (f.offset, base) | _ -> None)
+    live
+  |> List.sort_uniq compare
+  |> List.map (fun (at, base) ->
+      let v = w.fresh "bw" in
+      let bytes = Bitfield.byte_size base in
+      if List.mem (at, base) high && k + at - 1 >= w.disp then
+        write_let w v
+          (Fmt.str "(U.of_int %s)"
+             (load w.m ~o ~k:(k + at - 1) ~bytes:2 ~endian:T.Little))
+      else
+        write_let w v
+          ~holds:(window_bytes ~o ~k:(k + at) bytes)
+          (unsigned w.m ~size:(k + size) ~lo:w.disp ~o ~words ~k:(k + at) ~bytes
+             ~endian:(bit_endian base) ());
+      ((at, base), v))
+
 (* The words a prefix at [o + k] of [size] bytes loads once: the 64-bit ones
    two or more live fields share, then each word of a live bitfield, which
    the bitfields' views read. With [Boxed], the words are [shared_words]
@@ -1112,41 +1113,25 @@ let load_words w ~o ~k ~size ~constant ~lo ~hi ~later ~fields live =
     | Boxed ->
         let at f = { f with offset = extent k f.offset } in
         let fields = List.map at worded in
-        let fresh = shared_words ~held ~lo ~hi ~later fields in
+        let fresh = Wide_loads.shared_words ~held ~lo ~hi ~later fields in
         m.decide (shared w ~k ~constant ~lo ~hi ~held fields fresh);
         fresh
-    | Tagged | Unboxed -> List.map (fun a -> k + a) (words m.num ~size worded)
+    | Tagged | Unboxed | Fstar ->
+        List.map
+          (fun a -> k + a)
+          (Wide_loads.words ~unboxed:(m.num = Unboxed) ~size worded)
   in
   let w =
     List.fold_left
       (fun w a ->
-        let v = load m ~o ~k:a ~bytes:8 ~endian:T.Big in
         let name = Fmt.str "w%d" a in
-        pf w "let %s = %s in@\n" name v;
-        bind_num w name)
+        write_let w name (load m ~o ~k:a ~bytes:8 ~endian:T.Big);
+        if m.num = Fstar then bind ~ty:"P.int64" w name else bind_num w name)
       w fresh
   in
   let words = held @ fresh in
   let w = if constant && m.num = Boxed then { w with held = words } else w in
-  let bitwords =
-    List.filter_map
-      (fun f ->
-        match f.store with
-        | Bits { base; _ } -> Some (f.offset, base)
-        | _ -> None)
-      live
-    |> List.sort_uniq compare
-    |> List.map (fun (at, base) ->
-        let v = w.fresh "bw" in
-        pf w "let %s = %s in@\n" v
-          (if List.mem (at, base) high && k + at - 1 >= w.disp then
-             Fmt.str "(U.of_int %s)"
-               (load m ~o ~k:(k + at - 1) ~bytes:2 ~endian:T.Little)
-           else
-             unsigned m ~size:(k + size) ~lo:w.disp ~o ~words ~k:(k + at)
-               ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ());
-        ((at, base), v))
-  in
+  let bitwords = load_bitwords w ~o ~k ~size ~words ~high live in
   (List.fold_left bind_bitword w bitwords, words, bitwords)
 
 (* The checks of the field [f], and what they establish after them. *)
@@ -1186,13 +1171,24 @@ let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
   let is_live = Sset.mem f.id m.live in
   let shifted = { f with offset = k + f.offset } in
   let typed = match f.store with Bytes _ -> None | _ -> num_type w in
+  (* What the field's value is in bytes of the window, for an F* walk. *)
+  let holds =
+    match f.store with
+    | Int { width; signed = false; _ } ->
+        Some (window_bytes ~o ~k:shifted.offset (width / 8))
+    | Bits { base; shift; width } ->
+        Option.map
+          (fun v -> Fmt.str "P.bits %s %d %d" v shift width)
+          (List.assoc_opt (f.offset, base) bitwords)
+    | Int _ | Bytes _ -> None
+  in
   let bind_field w v =
     if is_slot m f.id then begin
       pf w "%s@\n" (slot_assign m.num ~is_bool:false f.id v);
       w
     end
     else begin
-      if not (Sset.mem f.id m.ahead) then pf w "let %s = %s in@\n" f.id v;
+      if not (Sset.mem f.id m.ahead) then write_let ?holds w f.id v;
       bind ?ty:typed w f.id
     end
   in
@@ -1246,6 +1242,39 @@ let field_label w f =
   let own = if f.name = "" then f.label else label f.name in
   if w.section = "" then own else w.section ^ "_" ^ own
 
+(* That the test [test] of a word fails exactly when the [conditions] on the
+   bitfields [fields] of the word do not all hold, each bitfield read as
+   [P.bits] of the word. *)
+let range_fact w bitwords fields test conditions =
+  let views =
+    List.filter_map
+      (fun f ->
+        match f.store with
+        | Bits { base; shift; width } ->
+            Option.map
+              (fun v ->
+                (f.id, T.Ref (T.I, Fmt.str "(P.bits %s %d %d)" v shift width)))
+              (List.assoc_opt (f.offset, base) bitwords)
+        | _ -> None)
+      fields
+  in
+  let conds = List.map (fun c -> expr w (T.subst_expr views c)) conditions in
+  Fmt.str "((%s) <==> not (%s))" test
+    (if conds = [] then "true" else String.concat " && " conds)
+
+(* The checks of the bitfields [f] and [g] as one test that their word
+   lies between [lo] and [hi]. *)
+let range_check w bitwords f g (word, lo, hi) =
+  let num = w.m.num in
+  let test = outside_range num word ~lo ~hi in
+  pf w "if %s then %s else@\n" test (w.m.fail Bounds);
+  let conditions = List.map (fun c -> c.cond) (f.checks @ g.checks) in
+  if num = Fstar then begin
+    let fact = range_fact w bitwords [ f; g ] test conditions in
+    w.m.note (Holds { fact; known = w.known })
+  end;
+  refine { w with depth = w.depth + 1 } conditions
+
 (* [Planner.word_range f g] over the variable that holds the shared word,
    when the walk is [ranged]. *)
 let word_range w bitwords f g =
@@ -1258,30 +1287,6 @@ let word_range w bitwords f g =
    one range [lo, hi] of their word, as a decision. *)
 let word_range_decision w p f g lo hi =
   Word_range { at = p; window = w.limit; first = f.id; second = g.id; lo; hi }
-
-(* The live fields that start before [until] in the prefixes of [nodes], at
-   constant offsets from [at]. The prefix that starts each optional field of
-   a following run counts too. *)
-let rec following live ~until at nodes =
-  if at >= until then []
-  else
-    match nodes with
-    | Prefix (fields, n) :: rest ->
-        List.filter_map
-          (fun f ->
-            let offset = extent at f.offset in
-            if Sset.mem f.id live && offset < until then Some { f with offset }
-            else None)
-          fields
-        @ following live ~until (extent at n) rest
-    | Test _ :: rest -> following live ~until at rest
-    | Gate _ :: _ as gates -> starts live ~until at gates
-    | (Span _ | Region _) :: _ | [] -> []
-
-and starts live ~until at = function
-  | Gate (_, _, _, body) :: rest ->
-      following live ~until at body @ starts live ~until at rest
-  | _ -> []
 
 (* The bytes known to be in the window after a prefix of [size] bytes; a
    count past any buffer stays there. *)
@@ -1302,7 +1307,8 @@ let prefix w fields size p ~need ~after k =
   (* A word that holds a field of this prefix ends within 8 bytes of it. *)
   let ends = extent at size in
   let later =
-    if constant then following w.m.live ~until:(extent ends 8) ends after
+    if constant then
+      Wide_loads.following w.m.live ~until:(extent ends 8) ends after
     else []
   in
   let w, words, bitwords =
@@ -1320,17 +1326,10 @@ let prefix w fields size p ~need ~after k =
           cut w ~label:(field_label w f) (fun w -> go w fields)
         else
           begin match (range, rest) with
-          | Some (word, lo, hi), g :: rest ->
+          | Some ((_, lo, hi) as range), g :: rest ->
               w.m.decide (word_range_decision w p f g lo hi);
               let w = field ~checked:false (field ~checked:false w f) g in
-              let num = w.m.num in
-              pf w "if %s then %s else@\n"
-                (outside_range num word ~lo ~hi)
-                (w.m.fail Bounds);
-              let conditions =
-                List.map (fun c -> c.cond) (f.checks @ g.checks)
-              in
-              go (refine { w with depth = w.depth + 1 } conditions) rest
+              go (range_check w bitwords f g range) rest
           | _ -> go (field w f) rest
           end
   in
@@ -1505,7 +1504,7 @@ let jump w ~j ~exported gates ~fired p =
      a call that is not a tail call may apply: the compiler still makes the
      join a jump. *)
   pf w "%s %a %s%s@\n" j pp_list args (pos_expr num p)
-    (match num with Unboxed -> " [@nontail]" | Tagged | Boxed -> "")
+    (match num with Unboxed -> " [@nontail]" | Tagged | Boxed | Fstar -> "")
 
 (* The outputs of [gates] a copied continuation reads: those of the case
    [fired], or of none, are absent. A walk cut into functions writes them as

@@ -34,6 +34,7 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     ahead = Sset.empty;
     fail = (fun _ -> fail);
     decide = ignore;
+    note = ignore;
   }
 
 let cold ~src ~live =
@@ -53,6 +54,7 @@ let cold ~src ~live =
       | Check (f, c) -> raise_check f c
       | Where -> errors ^ ".where_clause ~at:off");
     decide = ignore;
+    note = ignore;
   }
 
 (* A fixed record's walk at [off], whose frame is checked before it. *)

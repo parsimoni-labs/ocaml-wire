@@ -42,7 +42,7 @@ let slots (plan : plan) selected =
   in
   List.filter (fun (o : output) -> Sset.mem o.id deep) selected
 
-let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
+let scan_mode ?(decide = ignore) ?(note = ignore) (plan : plan) ~num selected =
   let ids = List.map (fun (o : output) -> o.id) in
   {
     num;
@@ -51,6 +51,7 @@ let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
          runtime's [Target.Local]. *)
       (match num with
       | Unboxed -> { local_bytes_src with u = "L"; checked = "L" }
+      | Fstar -> fstar_src
       | Tagged | Boxed -> bytes_src);
     ox = false;
     raw32 = false;
@@ -61,11 +62,14 @@ let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
     ahead = Sset.empty;
     fail = (fun _ -> "");
     decide;
+    note;
   }
 
-(* The labelled arguments [valid] receives. *)
-let pp_args ~conv ppf outputs =
+(* The labelled arguments [valid] receives; an F* [valid] takes them in
+   order. *)
+let pp_args ~fstar ~conv ppf outputs =
   if outputs = [] then Fmt.pf ppf "()"
+  else if fstar then pp_list ppf (List.map conv outputs)
   else
     pp_list ppf
       (List.map (fun (o : output) -> Fmt.str "~%s:%s" o.name (conv o)) outputs)
@@ -86,7 +90,9 @@ let to_int (w : w) ~unboxed ~step (o : output) =
 (* The call of [valid] with the outputs, where the walk [w] ends. With
    [step], [valid] is the consumer of the step functions and takes [int64]. *)
 let call ?(step = false) s ~unboxed valid (w : w) =
-  pf w "%s %a@\n" valid (pp_args ~conv:(to_int w ~unboxed ~step)) s.selected
+  pf w "%s %a@\n" valid
+    (pp_args ~fstar:(w.m.num = Fstar) ~conv:(to_int w ~unboxed ~step))
+    s.selected
 
 (* The functions cut out of [name] are named after it, without [fold_]. *)
 let cut_prefix name =
@@ -99,7 +105,7 @@ let cut_prefix name =
 (* [write s] writes one function of the scanner, [name], with [cuts], the
    functions its walk is cut into, before it; none in a scanner with slots,
    whose walk stays one function. *)
-let with_cuts ?(poly = "") s name write =
+let with_cuts ?(poly = "") ?(trace = Fun.id) s name write =
   Hashtbl.replace s.taken name ();
   if not (Sset.is_empty s.m.slots) then write s None
   else begin
@@ -118,6 +124,7 @@ let with_cuts ?(poly = "") s name write =
         taken = s.taken;
         poly;
         reserve;
+        trace;
       }
     in
     write { s with ppf } (Some cuts);
@@ -132,6 +139,7 @@ let scope s names =
   let num, buf =
     match s.m.num with
     | Unboxed -> (Some "int64_u", Some "bytes @ local")
+    | Fstar -> (Some "P.int", Some "P.buf")
     | Tagged | Boxed -> (None, None)
   in
   List.rev ([ ("buf", buf); ("base", num); ("stop", num) ] @ names)
@@ -187,7 +195,8 @@ let checks_len plan =
    [len > length - off] rejects an [off] past the buffer. [length] is the
    length of [buf], an [int64_u] with [unboxed_length]: the bounds are then
    tested on the [int64_u] position and length, as the sign of one [logor],
-   where an [int] holds no 64-bit difference of them that could wrap. *)
+   where an [int] holds no 64-bit difference of them that could wrap. An F*
+   walk tests them through [P] on [P.length buf]. *)
 let pp_entry ?cuts ?(length = "Bytes.length buf") ?(unboxed_length = false)
     ~name ~scope s ~reject ~accept =
   let unboxed = s.m.num = Unboxed in
@@ -201,8 +210,12 @@ let pp_entry ?cuts ?(length = "Bytes.length buf") ?(unboxed_length = false)
       length reject
   else begin
     Fmt.pf s.ppf "if %s then %s else@\n"
-      (if checks_len s.plan then Fmt.str "off < 0 || len > %s - off" length
-       else Fmt.str "off < 0 || len < 0 || len > %s - off" length)
+      (match (s.m.num, checks_len s.plan) with
+      | Fstar, true -> "P.lt off 0 || P.gt len (P.sub (P.length buf) off)"
+      | Fstar, false ->
+          "P.lt off 0 || P.lt len 0 || P.gt len (P.sub (P.length buf) off)"
+      | _, true -> Fmt.str "off < 0 || len > %s - off" length
+      | _, false -> Fmt.str "off < 0 || len < 0 || len > %s - off" length)
       reject;
     Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
       (if unboxed then "U.of_int off" else "off")
@@ -541,14 +554,25 @@ let pp_frames ?step s ~unboxed =
       Fmt.pf ppf ";@\n%sacc@\n@\n" read)
 
 (* [fold], or [fold_unboxed], whose consumer takes the outputs unboxed. *)
-let pp_fold s ~unboxed =
+let pp_fold ?trace s ~unboxed =
   let name = if unboxed then "fold_unboxed" else "fold" in
-  with_cuts s name (fun s cuts ->
-      Fmt.pf s.ppf "let[@inline always] %s %s off len ~invalid ~valid =@\n" name
-        s.m.src.buf;
-      pp_entry ?cuts ~name
-        ~scope:(scope s [ ("invalid", None); ("valid", None) ])
-        s ~reject:"invalid ()" ~accept:(call s ~unboxed "valid");
+  with_cuts ?trace s name (fun s cuts ->
+      let callbacks =
+        if s.m.num = Fstar then begin
+          Fmt.pf s.ppf
+            "let %s (#r:Type) (buf:P.buf) (off:P.int) (len:P.int) \
+             (invalid:unit -> r) (valid:valid_t r) : r =@\n"
+            name;
+          [ ("invalid", Some "unit -> r"); ("valid", Some "valid_t r") ]
+        end
+        else begin
+          Fmt.pf s.ppf "let[@inline always] %s %s off len ~invalid ~valid =@\n"
+            name s.m.src.buf;
+          [ ("invalid", None); ("valid", None) ]
+        end
+      in
+      pp_entry ?cuts ~name ~scope:(scope s callbacks) s ~reject:"invalid ()"
+        ~accept:(call s ~unboxed "valid");
       Fmt.pf s.ppf "@\n")
 
 (* The length of [buf] as [step_within] takes it: an [int64_u] where values
@@ -829,7 +853,8 @@ let pp_decoder s =
     zero;
   Fmt.pf s.ppf
     "let[@inline always] decode_accepted %a : t = {ok = true;%a}@\n@\n"
-    (pp_args ~conv:output_id) s.selected (pp_fields s) output_id;
+    (pp_args ~fstar:false ~conv:output_id)
+    s.selected (pp_fields s) output_id;
   Fmt.pf s.ppf
     "let[@inline always] decode %s off len : t =@\n\
      fold buf off len ~invalid:(fun () -> decode_rejected) \
@@ -873,7 +898,8 @@ let pp_unboxed_decoder s =
     "let[@inline always][@zero_alloc] decode_unboxed %s off len : unboxed =@\n"
     s.m.src.buf;
   Fmt.pf s.ppf "let invalid () = #{ok = false;%a} in@\n" (pp_fields s) zero;
-  Fmt.pf s.ppf "let valid %a = #{ok = true;%a} in@\n" (pp_args ~conv:output_id)
+  Fmt.pf s.ppf "let valid %a = #{ok = true;%a} in@\n"
+    (pp_args ~fstar:false ~conv:output_id)
     s.selected (pp_fields s) output_id;
   pp_entry ~name:"decode_unboxed" ~scope:(scope s []) s ~reject:"invalid ()"
     ~accept:(call s ~unboxed:true "valid")
@@ -1014,3 +1040,82 @@ let scanner ?decide ?(target = `OCaml) ?fields ?step ~codec c =
       (fun ppf () -> pp_wide ppf ~codec ~wide:plan.wide ~uses)
       () body
   with Unsupported why -> refuse ~codec why
+
+(* {1 The F* rendering} *)
+
+type fstar = {
+  body : string;
+  functions : string list;
+  notes : note list;
+  handed_out : output list;
+  prefix_fields : field list;
+  need : int;
+}
+
+(* The F* rendering covers a record of prefixes and where clauses: its walk
+   is straight-line code over bytes at constant offsets. *)
+let fixed_layout (plan : plan) =
+  List.iter
+    (function
+      | Prefix _ | Test _ -> ()
+      | Span _ -> fail_unsupported "the F* rendering of a variable-size field"
+      | Region _ -> fail_unsupported "the F* rendering of a sized region"
+      | Gate _ -> fail_unsupported "the F* rendering of an optional field")
+    plan.nodes
+
+(* The name [unfold let name ...] defines. *)
+let fstar_function line =
+  let prefix = "unfold let " in
+  if String.starts_with ~prefix line then
+    let rest =
+      String.sub line (String.length prefix)
+        (String.length line - String.length prefix)
+    in
+    Some (List.hd (String.split_on_char ' ' rest))
+  else None
+
+let fstar ?fields c =
+  let plan = scan_plan c in
+  fixed_layout plan;
+  let selected = selected plan fields in
+  let walk ~trace ~num ~note =
+    let b = Buffer.create 4096 in
+    let ppf = Format.formatter_of_buffer b in
+    let s =
+      {
+        plan;
+        selected;
+        m = scan_mode ~note plan ~num selected;
+        ppf;
+        taken = Hashtbl.create 16;
+      }
+    in
+    pp_fold ~trace s ~unboxed:false;
+    Format.pp_print_flush ppf ();
+    Buffer.contents b
+  in
+  (* The F* walk cuts where the OCaml walk does, whose text merlint
+     measures. *)
+  let choices = Queue.create () in
+  let record b =
+    Queue.push b choices;
+    b
+  in
+  ignore (walk ~trace:record ~num:Tagged ~note:ignore);
+  let replay _ =
+    match Queue.take_opt choices with
+    | Some b -> b
+    | None -> invalid_arg "Wire_ocaml.fstar: the F* walk left the OCaml one"
+  in
+  let notes = ref [] in
+  let text =
+    walk ~trace:replay ~num:Fstar ~note:(fun n -> notes := n :: !notes)
+  in
+  {
+    body = text;
+    functions = List.filter_map fstar_function (String.split_on_char '\n' text);
+    notes = List.rev !notes;
+    handed_out = selected;
+    prefix_fields = fields_of plan.nodes;
+    need = fixed_need plan.nodes;
+  }

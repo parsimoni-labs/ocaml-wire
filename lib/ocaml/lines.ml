@@ -92,6 +92,7 @@ let reads x line =
 let is_function line =
   String.starts_with ~prefix:"let[@inline always]" line
   || String.starts_with ~prefix:"let[@inline never]" line
+  || String.starts_with ~prefix:"unfold let " line
 
 let rec prune lines =
   let lines = Array.of_list lines in
