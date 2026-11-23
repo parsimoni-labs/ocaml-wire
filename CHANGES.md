@@ -221,6 +221,13 @@
   buffer, so `decode` and `validate` refused it in a region shorter than the
   buffer (#522, @samoht)
 
+- A constraint that compares a signed field from another field, or from a
+  `where` clause, gives the generated C's answer. 3D reads a signed field as
+  its unsigned bit pattern, so `a < v` with `a = -1` held in OCaml and failed
+  in the C. A comparison of the signed field with an integer literal now
+  projects in two's-complement form, as on the field itself, and any other
+  comparison of it is refused by `Wire.Codec.v` (#526, @samoht)
+
 - A constraint or `where` clause over a `uint64`, `int64` or `float64` field
   reads the field's full 64 bits, as the generated C does. It used to drop the
   top bit or read zero for a value above 2^62, so `decode`, `validate` and

@@ -1103,9 +1103,10 @@ let rewrite_signed_eq : type x.
   | _ ->
       if mentions_field name a || mentions_field name b then
         Fmt.invalid_arg
-          "Wire: signed field %S has an equality constraint that is not a \
-           plain comparison with an integer literal, so it cannot be projected \
-           to 3D faithfully; compare the field directly to a constant"
+          "Wire: signed field %S is tested for equality with something other \
+           than an integer literal, and 3D reads it as its unsigned bit \
+           pattern, so it cannot be projected faithfully; compare the field \
+           directly to a constant"
           name
       else orig
 
@@ -1144,9 +1145,10 @@ let rewrite_signed_ordering : type x.
   | _ ->
       if mentions_field name a || mentions_field name b then
         Fmt.invalid_arg
-          "Wire: signed field %S has an ordering constraint that is not a \
-           plain comparison with an integer literal, so it cannot be projected \
-           to 3D faithfully; compare the field directly to a constant"
+          "Wire: signed field %S is ordered against something other than an \
+           integer literal, and 3D reads it as its unsigned bit pattern, so it \
+           cannot be projected faithfully; compare the field directly to a \
+           constant"
           name
       else orig
 
@@ -1174,6 +1176,37 @@ let translate_signed_refinement ~name ~width (cond : bool expr) : bool expr =
     | _ -> e
   in
   xform cond
+
+(* A signed 64-bit field equals a non-negative literal exactly when its bit
+   pattern does, so that comparison projects unchanged; equality with anything
+   else compares a signed value in OCaml with an unsigned one in 3D. *)
+let reject_wide_signed_eq ~name cond =
+  let plain : type x. x expr -> x expr -> unit =
+   fun a b ->
+    match (a, b) with
+    | Ref (_, n), Int _ when String.equal n name -> ()
+    | Int _, Ref (_, n) when String.equal n name -> ()
+    | Ref (_, n), Int64 _ when String.equal n name -> ()
+    | Int64 _, Ref (_, n) when String.equal n name -> ()
+    | _ ->
+        if mentions_field name a || mentions_field name b then
+          Fmt.invalid_arg
+            "Wire: signed field %S is tested for equality with something other \
+             than an integer literal, and 3D reads it as its unsigned bit \
+             pattern, so it cannot be projected faithfully; compare the field \
+             directly to a constant"
+            name
+  in
+  let rec walk : bool expr -> unit = function
+    | And (a, b) | Or (a, b) ->
+        walk a;
+        walk b
+    | Not a -> walk a
+    | Eq (a, b) -> plain a b
+    | Ne (a, b) -> plain a b
+    | _ -> ()
+  in
+  walk cond
 
 (* A float ordering refinement has no faithful unsigned projection (IEEE bit
    patterns do not order as unsigned), so it is rejected; a signed field's
@@ -1210,6 +1243,7 @@ let project_refinement ~name ~kind (cond : bool expr) : bool expr =
         "Wire: a float field ordering constraint has no 3D projection (IEEE \
          bit patterns compare as unsigned)"
   | `Signed 64 ->
+      reject_wide_signed_eq ~name cond;
       reject_orderings
         "Wire: a signed 64-bit field ordering constraint cannot be projected \
          to 3D"
@@ -1425,13 +1459,23 @@ let rec reject_wide_add : type a. string -> string list -> a expr -> unit =
   | Field_pos ->
       ()
 
-type arith = { widenable : string list; wide : string list }
+type arith = {
+  widenable : string list;
+  wide : string list;
+  signed : (string * int) list;
+}
 
-let no_arith = { widenable = []; wide = [] }
+let no_arith = { widenable = []; wide = []; signed = [] }
 
 let arith fields =
   List.fold_right
     (fun (Field f) acc ->
+      let acc =
+        match (f.field_name, scalar_kind f.field_typ) with
+        | Some n, `Signed width ->
+            { acc with signed = (n, width) :: acc.signed }
+        | _ -> acc
+      in
       match f.field_name with
       | Some n when widenable_unsigned f.field_typ ->
           { acc with widenable = n :: acc.widenable }
@@ -1440,9 +1484,18 @@ let arith fields =
     fields no_arith
 
 (* The refinement 3D checks for [cond], before the widening of its additions;
-   what [Codec.v] refuses when the codec is built. *)
+   what [Codec.v] refuses when the codec is built. 3D reads every signed field
+   as its unsigned bit pattern, so a signed field [cond] names is projected as
+   the field's own refinement would be, whichever field carries [cond]. *)
 let refinement ~name ~arith typ cond =
   let cond = project_refinement ~name ~kind:(scalar_kind typ) cond in
+  let cond =
+    List.fold_left
+      (fun cond (other, width) ->
+        if String.equal other name || not (mentions_field other cond) then cond
+        else project_refinement ~name:other ~kind:(`Signed width) cond)
+      cond arith.signed
+  in
   reject_wide_add name arith.wide cond;
   cond
 

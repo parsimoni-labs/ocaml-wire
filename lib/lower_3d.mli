@@ -93,10 +93,11 @@ val project_refinement :
   kind:[ `Signed of int | `Float | `Other ] ->
   bool expr ->
   bool expr
-(** [project_refinement ~name ~kind cond] rewrites a signed field's refinement
-    to the two's-complement form its unsigned projection reads, and raises
-    [Invalid_argument] for a float or signed 64-bit ordering, which has no
-    faithful projection. *)
+(** [project_refinement ~name ~kind cond] rewrites the comparisons of field
+    [name] in [cond] to the two's-complement form its unsigned projection reads
+    when [kind] is signed, and raises [Invalid_argument] for one with no
+    faithful projection: a float or signed 64-bit ordering, or a signed field
+    compared with anything other than an integer literal. *)
 
 val widenable_unsigned : 'a typ -> bool
 (** [widenable_unsigned t] is [true] when [t] is an unsigned scalar at most 32
@@ -134,10 +135,10 @@ val project_constraint :
 val check_constraints : bool expr option -> field list -> unit
 (** [check_constraints where fields] raises [Invalid_argument] where
     {!project_constraint} does when the struct is projected, before it widens
-    the arithmetic: for a float or signed ordering {!project_refinement}
-    refuses, or an addition over a 64-bit field, in a constraint of [fields] or
-    a [where] that names them. A field subtraction or multiplication is still
-    refused at projection only. *)
+    the arithmetic: for a comparison {!project_refinement} refuses, of the
+    constrained field or of any signed field of [fields], or an addition over a
+    64-bit field, in a constraint of [fields] or a [where] that names them. A
+    field subtraction or multiplication is still refused at projection only. *)
 
 val collect_refs : 'a expr -> string list
 (** Field-reference names occurring in an expression, including nested terms. *)
