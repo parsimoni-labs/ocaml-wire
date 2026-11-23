@@ -36,11 +36,27 @@ let interp : list string = [
   `%EverParse3d.Prelude.parse____UINT64BE;
 ]
 
-let unfold_3d (names:list string) : T.Tac unit =
+(* For a Flat lemma: the 3D parser against the field-by-field reading. *)
+let unfold_flat (names:list string) : T.Tac unit =
   T.norm [delta_only (names @ interp); zeta; iota; primops];
   T.smt ()
 
-let debug_3d (names:list string) : T.Tac unit =
-  T.norm [delta_only (names @ interp); zeta; iota; primops];
-  T.dump "after unfold";
+(* For a Proof lemma: the rendering against the Flat reading, with the
+   rules of WireGen.OCaml at the emitter's literals. *)
+let unfold_scan (names:list string) : T.Tac unit =
+  ignore (T.pose_lemma (`WireGen.Tables.tables ()));
+  T.norm [delta_only names; zeta; iota; primops];
+  T.smt ()
+
+(* The same, with the facts of a lemma [lets buf base] about each let of
+   the walk posed instead of the tables: the variables of the goal named
+   [buf] and [base] are its arguments. *)
+let unfold_lets (lets:T.term) (names:list string) : T.Tac unit =
+  let rec pick (n:string) (bs:list T.binding) : T.Tac T.term =
+    match bs with
+    | b :: rest -> if T.unseal b.ppname = n then T.binding_to_term b else pick n rest
+    | [] -> T.fail ("no variable " ^ n) in
+  let find (n:string) : T.Tac T.term = pick n (List.Tot.rev (T.cur_vars ())) in
+  ignore (T.pose_lemma (T.mk_e_app lets [find "buf"; find "base"]));
+  T.norm [delta_only names; zeta; iota; primops];
   T.smt ()

@@ -9,7 +9,7 @@ EVERPARSE ?= $(HOME)/.local/everparse
 OUT ?= $(or $(TMPDIR),/tmp)/wire-fstar-gen
 ROOT := $(abspath ../..)
 CODECS = Tiny Ethernet IPv4
-LIB = ../fstar/Plan.Word.fst WireGen.Lib.fst WireGen.Lib3d.fst WireGen.Tac.fst WireGen.OCaml.fst
+LIB = ../fstar/Plan.Word.fst WireGen.Lib.fst WireGen.Lib3d.fst WireGen.OCaml.fst WireGen.Tables.fst WireGen.Tac.fst
 
 .PHONY: all $(CODECS)
 all: $(CODECS)
@@ -27,7 +27,7 @@ $(OUT)/%.3d.done: $(OUT)/gen/%.3d
 	touch $@
 
 $(CODECS): %: $(OUT)/%.3d.done
-	@for m in $(LIB) $*.Scan.fst $*.Proof.fst; do \
+	@for m in $(LIB) $*.Scan.fst $*.Flat.fst $*.Proof.fst; do \
 	  echo "$$m"; \
 	  python3 -I ./measure.py ./fstar.sh $(OUT)/$* $$m 2>&1 | \
 	    grep -E '^\* Error|wall' || exit 1; \

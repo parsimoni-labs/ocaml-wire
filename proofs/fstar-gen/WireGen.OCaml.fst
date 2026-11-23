@@ -16,15 +16,20 @@ open WireGen.Lib
 module U = FStar.UInt
 module M = FStar.Math.Lemmas
 
-let min_int : Prims.int = - pow2 62
-let max_int : Prims.int = pow2 62 - 1
+let min_int : Prims.int = -4611686018427387904
+let max_int : Prims.int = 4611686018427387903
+
+let int_range () : Lemma (min_int == - pow2 62 /\ max_int == pow2 62 - 1 /\
+                          144115188075855863 == pow2 57 - 9)
+  = assert_norm (min_int == - pow2 62 /\ max_int == pow2 62 - 1 /\
+                 144115188075855863 == pow2 57 - 9)
 let fits (x:Prims.int) : bool = min_int <= x && x <= max_int
 
 (* OCaml's int. *)
 type int = x:Prims.int{fits x}
 
 (* Sys.max_string_length on a 64-bit host. *)
-let max_string_length : Prims.int = pow2 57 - 9
+let max_string_length : Prims.int = 144115188075855863
 
 (* A Bytes.t: no longer than Sys.max_string_length. *)
 type buf = s:bytes{Seq.length s <= max_string_length}
@@ -61,8 +66,10 @@ let to_int (w:int64) : int = of_pattern (w % pow2 63)
 (* {1 What the walk reads these as} once proved, as rewrite rules. *)
 
 let pow2_small (k:nat)
-  : Lemma (requires k <= 62) (ensures 1 <= pow2 k /\ pow2 k <= pow2 62) [SMTPat (pow2 k)]
-  = M.pow2_le_compat 62 k
+  : Lemma (requires k <= 62)
+          (ensures 1 <= pow2 k /\ pow2 k <= pow2 62 /\ pow2 k - 1 <= max_int /\ pow2 62 == max_int + 1)
+          [SMTPat (pow2 k)]
+  = M.pow2_le_compat 62 k; int_range ()
 
 let of_pattern_small (r:nat{r < pow2 63})
   : Lemma (requires r < pow2 62) (ensures of_pattern r == r) [SMTPat (of_pattern r)]
@@ -105,3 +112,58 @@ let land_to_int_mask (w:int64) (k:nat)
 let to_int_small (w:int64)
   : Lemma (requires w < pow2 62) (ensures to_int w == w) [SMTPat (to_int w)]
   = M.pow2_lt_compat 63 62; M.small_mod w (pow2 63)
+
+let land_lit (k:nat) (m:Prims.int)
+  : Lemma (requires 1 <= k /\ k <= 62 /\ m == pow2 k - 1)
+          (ensures (forall (a:int). {:pattern (land a m)} a >= 0 ==> land a m == a % pow2 k) /\
+                   (forall (w:int64). {:pattern (land (to_int w) m)} land (to_int w) m == w % pow2 k))
+  = let aux (a:int) : Lemma (a >= 0 ==> land a m == a % pow2 k) =
+      if a >= 0 then land_mask a k in
+    FStar.Classical.forall_intro aux;
+    FStar.Classical.forall_intro (fun (w:int64) -> land_to_int_mask w k)
+
+(* The [m] bytes at [o + k] out of the big-endian word at [o]. *)
+let word_bytes (b:bytes) (o:nat) (k:nat) (m:nat)
+  : Lemma (requires 1 <= m /\ m <= 7 /\ k + m <= 8)
+          (ensures (be b o 8 / pow2 (8 * (8 - k - m))) % pow2 (8 * m) == be b (o + k) m /\
+                   (k == 0 ==> be b o 8 / pow2 (8 * (8 - k - m)) == be b o m))
+  = Plan.Word.word_field (byte b) o (o + k) m;
+    let w = be b o 8 in
+    let s = 8 * (8 - k - m) in
+    M.pow2_modulo_modulo_lemma_1 (w / pow2 s) (8 * m) 63;
+    if k = 0 then begin
+      M.lemma_div_lt_nat w 64 s;
+      M.pow2_le_compat 63 (64 - s);
+      M.small_mod (w / pow2 s) (pow2 63);
+      M.small_mod (be b o m) (pow2 (8 * m))
+    end
+
+let word_lit (k:nat) (m:nat) (sh:nat) (p:pos)
+  : Lemma (requires 1 <= m /\ m <= 7 /\ k + m <= 8 /\ sh == 8 * (8 - k - m) /\ p == pow2 (8 * m))
+          (ensures (forall (b:buf) (o:int). {:pattern (shift_right_logical (i64be b o) sh)}
+                     (0 <= o /\ o + 8 <= length b) ==>
+                     (shift_right_logical (i64be b o) sh % p == be b (o + k) m /\
+                      (k == 0 ==> shift_right_logical (i64be b o) sh == be b o m))))
+  = let aux (b:buf) (o:int) : Lemma ((0 <= o /\ o + 8 <= length b) ==>
+                     (shift_right_logical (i64be b o) sh % p == be b (o + k) m /\
+                      (k == 0 ==> shift_right_logical (i64be b o) sh == be b o m))) =
+      if 0 <= o && o + 8 <= length b then word_bytes b o k m in
+    FStar.Classical.forall_intro_2 aux
+
+(* {1 The 3D value as ints} for the statement: a scanner output is the
+   value 3d.exe parses, or bits of it. *)
+
+let of_u8 (x:FStar.UInt8.t) : int = M.pow2_lt_compat 62 8; FStar.UInt8.v x
+let of_u16 (x:FStar.UInt16.t) : int = M.pow2_lt_compat 62 16; FStar.UInt16.v x
+let of_u32 (x:FStar.UInt32.t) : int = M.pow2_lt_compat 62 32; FStar.UInt32.v x
+
+(* The [w] bits from bit [lo] up of a value that is not negative, bit 0
+   the least significant (0 for a negative one, which no 3D value is). *)
+let bits (x:int) (lo:nat) (w:nat) : int =
+  if x < 0 then 0 else begin
+    M.lemma_div_le x max_int (pow2 lo);
+    M.lemma_mod_lt (x / pow2 lo) (pow2 w);
+    M.modulo_range_lemma (x / pow2 lo) (pow2 w);
+    if x / pow2 lo < pow2 w then (M.small_mod (x / pow2 lo) (pow2 w); x / pow2 lo)
+    else (x / pow2 lo) % pow2 w
+  end
