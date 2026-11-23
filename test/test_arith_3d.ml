@@ -201,8 +201,19 @@ let test_arith_presence_and_size () =
     (per_byte Expr.(fun b -> b - int 1 <= int 200));
   check_refused "a guarded per-byte subtraction" false
     (per_byte Expr.(fun b -> b >= int 1 && b - int 1 <= int 200));
-  check_refused "a per-byte sum past the native int" true
-    (per_byte Expr.(fun b -> b + int Stdlib.(max_int - 5) <> int max_int))
+  (* Past the native int, a per-byte condition is computed on 64 bits, as 3D
+     computes it at its [UINT64]: [b + k] reaches [max_int] at [b = 5] only. *)
+  let past =
+    per_byte Expr.(fun b -> b + int Stdlib.(max_int - 5) <> int max_int)
+  in
+  check_refused "a per-byte sum past the native int" false past;
+  let accepts b =
+    Result.is_ok (Codec.decode (past ()) (Bytes.make 4 (Char.chr b)) 0)
+  in
+  Alcotest.(check bool) "b = 4" true (accepts 4);
+  Alcotest.(check bool) "b = 5" false (accepts 5);
+  Alcotest.(check bool) "b = 6" true (accepts 6);
+  Alcotest.(check bool) "b = 255" true (accepts 255)
 
 (* A value past the native int is computed on 64 bits, unsigned, at the type 3D
    gives it: [a + k] with [k] near [max_int] passes [max_int] once [a > 5], and

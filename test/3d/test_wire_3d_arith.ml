@@ -50,9 +50,40 @@ let test_assignments () =
          ])
     [ Wire_3d.pack assign_codec ]
 
+(* A per-byte condition past the native int, which 3D computes at its [UINT64]
+   and the codec on 64 bits: [b + k] reaches [max_int] at [b = 5] only. *)
+let per_byte_codec =
+  Codec.v "PerByteWide" Fun.id
+    Codec.
+      [
+        Field.v "d"
+          (byte_array_where ~size:(int 4)
+             ~per_byte:
+               Expr.(fun b -> b + int Stdlib.(max_int - 5) <> int max_int))
+        $ Fun.id;
+      ]
+
+let test_per_byte () =
+  needs_3d_exe ();
+  let line = Agree.corpus_line "PerByteWide" per_byte_codec in
+  Agree.differential_ok ~name:"perbytespec" ~package:"per-byte-doc"
+    ~corpus:
+      (`Lines
+         [
+           line "04040404" true;
+           line "05050505" false;
+           line "06060606" true;
+           line "ff04ff04" true;
+           line "04050404" false;
+         ])
+    [ Wire_3d.pack per_byte_codec ]
+
 let suite =
   ( "wire_3d_arith",
     [
       Alcotest.test_case "assignments to outputs (needs 3d.exe)" `Quick
         test_assignments;
+      Alcotest.test_case
+        "per-byte conditions past the native int (needs 3d.exe)" `Quick
+        test_per_byte;
     ] )
