@@ -695,6 +695,43 @@ let test_casetype_reject_unprojectable_tag () =
     (raises_invalid (fun () ->
          one_case ~index:(UInt8.v 1) (enum "TagLe" [ ("A", 0); ("B", 1) ] uint8)))
 
+(* 3D computes a constraint at the field's own width and must prove it does
+   not overflow: [v + 1] over a [UINT64BE] fails to verify, while over a
+   [UINT32BE] the projection widens it to 64 bits and it verifies. 3D has no
+   signed type, so an ordering on an [int64] has no projection, while an
+   equality does. Each refusal comes when the codec is built. *)
+let test_wide_constraint_rejected () =
+  let one typ f () =
+    Codec.v "Wide" Fun.id Codec.[ Field.v "v" ~self_constraint:f typ $ Fun.id ]
+  in
+  let check what want f = Alcotest.(check bool) what want (raises_invalid f) in
+  check "uint64 v + 1 refused" true
+    (one uint64be Expr.(fun v -> v + int 1 <= int 5));
+  check "uint64 (v land 255) + 1 refused" true
+    (one uint64be Expr.(fun v -> (v land int 255) + int 1 <= int 5));
+  check "uint32 v + 1 accepted" false
+    (one uint32be Expr.(fun v -> v + int 1 <= int 5));
+  check "uint64 v <= 5 accepted" false (one uint64be Expr.(fun v -> v <= int 5));
+  let a = Field.v "a" uint8 in
+  check "uint64 v + a refused" true (fun () ->
+      Codec.v "WideCross"
+        (fun a v -> (a, v))
+        Codec.
+          [
+            a $ fst;
+            Field.v "v" uint64be ~self_constraint:(fun v ->
+                Expr.(v + Field.ref a <= int 5))
+            $ snd;
+          ]);
+  check "int64 v < 5 refused" true (one int64be Expr.(fun v -> v < int 5));
+  check "int64 v = 5 accepted" false (one int64be Expr.(fun v -> v = int 5));
+  let s = Field.v "s" int64be in
+  check "int64 ordering in where refused" true (fun () ->
+      Codec.v "WideWhere"
+        ~where:Expr.(Field.ref s >= int 0)
+        Fun.id
+        Codec.[ s $ Fun.id ])
+
 let suite =
   ( "codec_projection",
     [
@@ -761,4 +798,6 @@ let suite =
         test_casetype_case_requires_index;
       Alcotest.test_case "casetype rejects unprojectable tag" `Quick
         test_casetype_reject_unprojectable_tag;
+      Alcotest.test_case "constraint: wide arithmetic and signed ordering"
+        `Quick test_wide_constraint_rejected;
     ] )
