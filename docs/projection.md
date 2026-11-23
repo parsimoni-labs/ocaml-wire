@@ -35,6 +35,61 @@ combinator must reject when it is built. The README's
   action cannot pass a constant to a big-endian setter: the validator
   cannot clear the plug members of an absent optional.
 
+## Arithmetic
+
+3D computes every integer expression in a fixed-width unsigned type and F*
+must prove each operation stays inside it, where the OCaml decoder computes
+with exact integers. 3d.exe (EverParse v2026.10.27) types an expression as
+follows:
+
+- A literal has the smallest of `UINT8`, `UINT16`, `UINT32` and `UINT64`
+  that holds it (`300` is a `UINT16`, `4294967296` a `UINT64`). There are no
+  negative literals.
+- A field has its declared type, read as an unsigned bit pattern: a signed
+  field reads as its two's complement, a float as its IEEE 754 bits. F*
+  knows a bitfield's bit width (`UINT8 a:4` holds `0..15`).
+- `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^` and `?:` have the wider type of
+  their operands. `<<`, `>>` and `~` have the type of their left operand. A
+  cast `(UINTn) e` has type `UINTn`. A comparison accepts operands of any
+  two types.
+- F* must prove that `+`, `-` and `*` stay inside the type ("Cannot verify
+  u8 addition"), that a divisor is not zero, that a shift amount is less than
+  the width of the type, and that a narrowing cast loses no bits. `<<` and
+  `~` are not checked: the C masks the result to the type, so `a << 2` over a
+  `UINT8` wraps at 256.
+- The proof knows each field's type and bounds a shift or a division by a
+  constant, `?:`, `+`, `-` and `*`, but nothing of `&`, `|` or `^` beyond
+  their type: `(v & 255) + 1` over a `UINT64` does not verify.
+- It also knows the refinements of the fields before an expression, the
+  `where` clause, and the conditions the expression is guarded by: the left
+  side of `&&`, the negated left side of `||` and the condition of `?:` in
+  each branch (`a >= 1 && l >= a - 1` verifies; `l >= a - 1` alone does not).
+- A byte size or an array length must have a type of at most 32 bits.
+
+`Wire.Codec.v` computes the type and the range of every subexpression of a
+constraint, `where` clause, size and presence condition by these rules, and
+the projection emits what it computed, so the two cannot differ. An addition,
+multiplication or left shift whose range does not fit the type 3D would give
+it has its operands cast to the narrowest type that holds it (`IHL * 4` over
+a 4-bit field stays as written, `a << 2` over a `UINT8` becomes
+`((UINT16) a) << 2`), and the C then computes the value OCaml does. The codec
+is refused when 3d.exe would reject it: a range past 64 bits, a subtraction
+that can go below zero, a divisor that can be zero, a shift amount that can
+reach the width of its type, a narrowing cast that can lose bits, a negative
+literal, `field_pos`. It is also refused where the C and OCaml would
+disagree: `lnot`, which 3D complements within its type and OCaml over a
+native int, except in `x land lnot m` with `x` inside the type of `m`; any
+use of a signed field but a comparison with a literal, which projects in
+two's-complement form (`a < 5` over an `int8` is `(a ^ 128) < 133`); an
+ordering of a float field or of a 64-bit signed one; and a range past OCaml's
+native `int` in an expression that reads no field the native int cannot hold,
+where OCaml would overflow and the C would not.
+
+The expressions of a declaration the projection synthesises (an optional
+region, a sized wrapper) read the enclosing struct's fields through `UINT32`
+parameters. They are the enclosing struct's expressions, checked there, and
+project as written.
+
 ## The FFI plug
 
 `Everparse.project ~mode:`Ffi` gives the entrypoint a `ctx` parameter and
