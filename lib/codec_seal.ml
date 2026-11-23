@@ -466,6 +466,26 @@ let moving : type a.
   | Codec { codec_walk = Some w; _ } -> Codec_walk.sub ~name w
   | _ -> raise Exit
 
+(* [moving] under the gate [present], in the closures of the field. *)
+let gated_moving : type a.
+    name:string option ->
+    frame:int ->
+    (string * packed_scalar) list ->
+    (cursor -> bool) ->
+    a typ ->
+    a option Types.walk =
+ fun ~name ~frame prefix present typ ->
+  let size = Codec_walk.size ~size:frame prefix in
+  match typ with
+  | Byte_slice { size = e } -> Codec_walk.gated_span present Slice_span (size e)
+  | Byte_array { size = e } ->
+      Codec_walk.gated_span present String_span (size e)
+  | Single_elem { size = e; elem = Codec { codec_walk = Some w; _ }; at_most }
+    ->
+      Codec_walk.gated_region present ~at_most ~name (size e) w
+  | Codec { codec_walk = Some w; _ } -> Codec_walk.gated_sub present ~name w
+  | _ -> raise Exit
+
 (* The checks of a field at a fixed offset, its value read from the buffer:
    the set its constraint and type allow, or its conditions. The same checks as
    [field_steps], on [prefix], the fields up to this one. *)
@@ -549,9 +569,7 @@ let field_walk : type a f r.
           let present, gates =
             Codec_walk.gate ~size:min_wire_size ~gates r.prefix present
           in
-          ( Walk
-              (Codec_walk.gated present
-                 (moving ~name ~frame:min_wire_size r.prefix inner)),
+          ( Walk (gated_moving ~name ~frame:min_wire_size r.prefix present inner),
             [],
             gates,
             Some present )

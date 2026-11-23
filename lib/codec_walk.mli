@@ -73,9 +73,33 @@ val span : 'a span -> (Types.cursor -> int) -> 'a Types.walk
 (** [span kind size] walks the span of [size c] bytes at the cursor [c]. Raises
     [Parse_error] when it does not fit before the cursor's [wend]. *)
 
-val gated : (Types.cursor -> bool) -> 'a Types.walk -> 'a option Types.walk
-(** [gated present item] walks [item] when [present c] holds; an absent field
-    takes no bytes. *)
+val gated_span :
+  (Types.cursor -> bool) ->
+  'a span ->
+  (Types.cursor -> int) ->
+  'a option Types.walk
+(** [gated_span present kind size] walks {!span}[ kind size] at the cursor [c]
+    when [present c] holds, in one closure with the test; an absent field takes
+    no bytes, here and in the two below. *)
+
+val gated_region :
+  (Types.cursor -> bool) ->
+  at_most:bool ->
+  name:string option ->
+  (Types.cursor -> int) ->
+  'a Types.walk ->
+  'a option Types.walk
+(** [gated_region present ~at_most ~name size sub] walks
+    {!region}[ ~at_most ~name size sub] at the cursor [c] when [present c]
+    holds, in one closure with the test. *)
+
+val gated_sub :
+  (Types.cursor -> bool) ->
+  name:string option ->
+  'a Types.walk ->
+  'a option Types.walk
+(** [gated_sub present ~name w] walks {!sub}[ ~name w] when [present c] holds,
+    in one closure with the test. *)
 
 val region :
   at_most:bool ->

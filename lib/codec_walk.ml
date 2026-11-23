@@ -519,29 +519,25 @@ let gate ~size ~gates prefix e =
 type _ span = Slice_span : Slice.t span | String_span : string span
 
 (* A byte span of [size] bytes, which must fit before [wend]. *)
-let span (type a) (kind : a span) size : a Types.walk =
-  let[@inline] bound c =
-    let cur = c.wpos and sz = size c in
-    if sz < 0 || cur > Input_end.to_int c.wend - sz then
-      Codec_leaf.check_span_bounds c.wend ~first:cur ~sz;
-    c.wpos <- cur + sz;
-    sz
-  in
-  let wvalue c : a =
-    let cur = c.wpos in
-    let sz = bound c in
-    match kind with
-    | Slice_span ->
-        if sz = 0 then Slice.eod else Slice.make c.wbuf ~first:cur ~length:sz
-    | String_span -> Bytes.sub_string c.wbuf cur sz
-  in
-  { wvalue; wskip = (fun c -> ignore (bound c : int)) }
+let[@inline] bound size c =
+  let cur = c.wpos and sz = size c in
+  if sz < 0 || cur > Input_end.to_int c.wend - sz then
+    Codec_leaf.check_span_bounds c.wend ~first:cur ~sz;
+  c.wpos <- cur + sz;
+  sz
 
-(* A field present when [present] holds; an absent one takes no bytes. *)
-let gated present (item : 'a Types.walk) : 'a option Types.walk =
+let[@inline] span_value (type a) (kind : a span) size c : a =
+  let cur = c.wpos in
+  let sz = bound size c in
+  match kind with
+  | Slice_span ->
+      if sz = 0 then Slice.eod else Slice.make c.wbuf ~first:cur ~length:sz
+  | String_span -> Bytes.sub_string c.wbuf cur sz
+
+let span kind size : _ Types.walk =
   {
-    wvalue = (fun c -> if present c then Some (item.wvalue c) else None);
-    wskip = (fun c -> if present c then item.wskip c);
+    wvalue = (fun c -> span_value kind size c);
+    wskip = (fun c -> ignore (bound size c : int));
   }
 
 let with_name name (e : parse_error) =
@@ -563,42 +559,68 @@ let named name (w : 'a Types.walk) : 'a Types.walk =
 (* A sub-codec in a region of [size] bytes, checked against the region's end,
    which it must reach unless [at_most]; the cursor goes on at the region's
    end. *)
+let[@inline] inside ~at_most size c run =
+  let cur = c.wpos and sz = size c and stop = c.wend and base = c.wbase in
+  let gates = c.wgates in
+  if sz < 0 || cur > Input_end.to_int stop - sz then
+    Codec_leaf.check_span_bounds stop ~first:cur ~sz;
+  c.wend <- Input_end.narrow stop (cur + sz);
+  let v = run c in
+  let n = c.wpos - cur in
+  if n > sz || ((not at_most) && n <> sz) then
+    raise_eof ~at:(cur + min n sz) ~expected:sz ~got:n;
+  c.wbase <- base;
+  c.wgates <- gates;
+  c.wend <- stop;
+  c.wpos <- cur + sz;
+  v
+
 let region ~at_most ~name size (sub : 'a Types.walk) : 'a Types.walk =
-  let[@inline] inside c run =
-    let cur = c.wpos and sz = size c and stop = c.wend and base = c.wbase in
-    let gates = c.wgates in
-    if sz < 0 || cur > Input_end.to_int stop - sz then
-      Codec_leaf.check_span_bounds stop ~first:cur ~sz;
-    c.wend <- Input_end.narrow stop (cur + sz);
-    let v = run c in
-    let n = c.wpos - cur in
-    if n > sz || ((not at_most) && n <> sz) then
-      raise_eof ~at:(cur + min n sz) ~expected:sz ~got:n;
-    c.wbase <- base;
-    c.wgates <- gates;
-    c.wend <- stop;
-    c.wpos <- cur + sz;
-    v
-  in
   named name
     {
-      wvalue = (fun c -> inside c sub.wvalue);
-      wskip = (fun c -> inside c sub.wskip);
+      wvalue = (fun c -> inside ~at_most size c sub.wvalue);
+      wskip = (fun c -> inside ~at_most size c sub.wskip);
     }
 
 (* A sub-codec measuring itself. *)
+let[@inline] keep c run =
+  let base = c.wbase and gates = c.wgates in
+  let v = run c in
+  c.wbase <- base;
+  c.wgates <- gates;
+  v
+
 let sub ~name (sub : 'a Types.walk) : 'a Types.walk =
-  let[@inline] keep c run =
-    let base = c.wbase and gates = c.wgates in
-    let v = run c in
-    c.wbase <- base;
-    c.wgates <- gates;
-    v
-  in
   named name
     {
       wvalue = (fun c -> keep c sub.wvalue);
       wskip = (fun c -> keep c sub.wskip);
+    }
+
+(* The same fields present when [present] holds, each one closure with its
+   gate; an absent one takes no bytes. *)
+let gated_span present kind size : _ option Types.walk =
+  {
+    wvalue =
+      (fun c -> if present c then Some (span_value kind size c) else None);
+    wskip = (fun c -> if present c then ignore (bound size c : int));
+  }
+
+let gated_region present ~at_most ~name size (sub : 'a Types.walk) :
+    'a option Types.walk =
+  named name
+    {
+      wvalue =
+        (fun c ->
+          if present c then Some (inside ~at_most size c sub.wvalue) else None);
+      wskip = (fun c -> if present c then inside ~at_most size c sub.wskip);
+    }
+
+let gated_sub present ~name (sub : 'a Types.walk) : 'a option Types.walk =
+  named name
+    {
+      wvalue = (fun c -> if present c then Some (keep c sub.wvalue) else None);
+      wskip = (fun c -> if present c then keep c sub.wskip);
     }
 
 (* A sub-codec at offset [off] of the record, in a region of [size] bytes when
@@ -770,10 +792,6 @@ let stage : type mid result.
    ([fail]), which finds the first field to fail, and a condition that raises
    leaves the record to the general path. *)
 
-let rec holds_all holds c i =
-  i >= Array.length holds
-  || ((Array.unsafe_get holds i) c && holds_all holds c (i + 1))
-
 (* The error of the record at [base], which the walk did not accept, from its
    check pass; [Unwalked] if that pass accepts it. *)
 let settle fail c base =
@@ -790,12 +808,16 @@ let record_walk ~min_size ~start ~fail ~where checks body =
          (function Within (s, set) -> Some (s, set) | Holds _ -> None)
          checks)
   and holds =
-    Array.of_list
-      (List.filter_map
-         (function Holds f -> Some (f ~size:min_size) | Within _ -> None)
-         checks)
+    match
+      List.filter_map
+        (function Holds f -> Some (f ~size:min_size) | Within _ -> None)
+        checks
+    with
+    | [] -> None
+    | [ f ] -> Some f
+    | fs -> Some (fun c -> List.for_all (fun f -> f c) fs)
   in
-  let has_holds = Array.length holds > 0 and has_where = Option.is_some where in
+  let has_where = Option.is_some where in
   let where =
     match where with Some f -> f ~size:min_size | None -> fun _ -> true
   in
@@ -807,7 +829,7 @@ let record_walk ~min_size ~start ~fail ~where checks body =
   in
   let[@inline] rest c base =
     c.wbase <- base;
-    if has_holds && not (holds_all holds c 0) then settle fail c base;
+    (match holds with Some f when not (f c) -> settle fail c base | _ -> ());
     c.wpos <- base + start;
     let v = body c in
     if has_where && not (where c) then raise_constraint ~at:base ~which:Where ();
@@ -839,13 +861,31 @@ let record_walk ~min_size ~start ~fail ~where checks body =
             then settle fail c base;
             rest c base)
 
+(* The walks of a list in order, one closure per four. *)
 let rec seq = function
   | [] -> fun _ -> ()
   | [ a ] -> a
-  | a :: rest ->
+  | [ a; b ] ->
+      fun c ->
+        a c;
+        b c
+  | [ a; b; d ] ->
+      fun c ->
+        a c;
+        b c;
+        d c
+  | [ a; b; d; e ] ->
+      fun c ->
+        a c;
+        b c;
+        d c;
+        e c
+  | a :: b :: d :: rest ->
       let rest = seq rest in
       fun c ->
         a c;
+        b c;
+        d c;
         rest c
 
 (* The checks of the fields of [places], in field order: those of each field
@@ -864,15 +904,21 @@ let places ~start places =
           match (p.pskip, p.pgate) with
           | None, None -> acc
           | _ ->
-              let walk = skips (List.rev before) in
               let at =
-                match p.pgate with
-                | None ->
+                match
+                  (List.filter_map (fun p -> p.pskip) (List.rev before), p.pgate)
+                with
+                | [], None -> fun c -> c.wbase + start
+                | [], Some gate ->
+                    fun c -> if gate c then c.wbase + start else -1
+                | walks, None ->
+                    let walk = seq walks in
                     fun c ->
                       c.wpos <- c.wbase + start;
                       walk c;
                       c.wpos
-                | Some gate ->
+                | walks, Some gate ->
+                    let walk = seq walks in
                     fun c ->
                       c.wpos <- c.wbase + start;
                       walk c;

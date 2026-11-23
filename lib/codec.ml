@@ -1463,6 +1463,17 @@ module View = struct
      view reads its fields there with no check of their own. A record whose
      bytes changed since may move the sub-record or raise in the reads that
      place it; it is then refused. *)
+  let[@inline] walked at buf r =
+    at
+      {
+        wbuf = buf;
+        wbase = r;
+        wpos = r;
+        wend = Input_end.of_bytes buf;
+        wgates = 0;
+        wnamed = false;
+      }
+
   let[@inline never] enter_slow s buf len r =
     let input_end = Input_end.of_bytes buf in
     match
@@ -1470,18 +1481,16 @@ module View = struct
       | Some present, _ when not (present s.rt input_end buf r) -> -1
       | _, At off -> r + off
       | _, Locate fn -> r + fn s.rt input_end buf r
-      | _, Walked at ->
-          at
-            {
-              wbuf = buf;
-              wbase = r;
-              wpos = r;
-              wend = input_end;
-              wgates = 0;
-              wnamed = false;
-            }
+      | _, Walked at -> walked at buf r
     with
     | o -> if o >= 0 && o <= len - s.sub_frame then o else -1
+    | exception (Types.Parse_error _ | Types.Unwalked) -> -1
+
+  (* A sub-record the walk places, which has no gate of its own: one call
+     with no dispatch. *)
+  let[@inline never] enter_walked at buf len r frame =
+    match walked at buf r with
+    | o -> if o >= 0 && o <= len - frame then o else -1
     | exception (Types.Parse_error _ | Types.Unwalked) -> -1
 
   let[@inline] enter s b len r =
@@ -1490,6 +1499,7 @@ module View = struct
     | At off, None ->
         let o = r + off in
         if o <= len - s.sub_frame then o else -1
+    | Walked at, None -> enter_walked at buf len r s.sub_frame
     | _ -> enter_slow s buf len r
 end
 
