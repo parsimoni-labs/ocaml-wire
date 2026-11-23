@@ -22,7 +22,12 @@
 
     An expression in a constraint or a [where] clause that can leave the native
     int is computed on 64 bits, as unsigned integers, as the codec and 3D
-    compute it.
+    compute it. The generator runs with the 63-bit ints of a 64-bit host and
+    decides which expressions can leave them there. That decision holds wherever
+    the module loads: a module that holds a value of more than 31 bits, a 32-bit
+    field or arithmetic past [2^30], raises [Invalid_argument] when it loads on
+    a target whose ints have 32 bits or fewer, and any other computes the same
+    values in every [int].
 
     A generator executable, run by a dune rule, prints the module for a codec
     with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)], and its
