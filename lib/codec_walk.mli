@@ -12,10 +12,17 @@ val unwalked : unit -> 'a
 (** [unwalked ()] raises {!Types.Unwalked}. *)
 
 val size :
-  (string * packed_scalar) list -> int Types.expr -> Types.cursor -> int
-(** [size prefix e c] is [e] over the fixed-offset fields [prefix] names, in the
-    record at [c], as the layout pass evaluates a size. [size prefix e] raises
-    [Exit] when [e] reads anything else. *)
+  size:int ->
+  (string * packed_scalar) list ->
+  int Types.expr ->
+  Types.cursor ->
+  int
+(** [size ~size prefix e c] is [e] over the fixed-offset fields [prefix] names,
+    in the record at [c], whose frame of [size] bytes the walk has checked, as
+    the layout pass evaluates a size. An unsigned big-endian field of a frame of
+    at least 8 bytes is read as bits of a word of the frame, in the operator
+    that reads it. [size ~size prefix e] raises [Exit] when [e] reads anything
+    else. *)
 
 type gates = (bool Types.expr * int) list
 (** The gates of a record evaluated so far, in field order. *)
@@ -24,22 +31,38 @@ val no_gates : gates
 (** [no_gates] is the gates of a record before its first. *)
 
 val gate :
+  size:int ->
   gates:gates ->
   (string * packed_scalar) list ->
   bool Types.expr ->
   (Types.cursor -> bool) * gates
-(** [gate ~gates prefix e] is [(g, gates')]: [g c] is {!size} for the presence
-    condition [e], reading the answer of each gate of [gates] it holds from the
-    cursor's {!Types.field-wgates} rather than evaluating it again, and
+(** [gate ~size ~gates prefix e] is [(g, gates')]: [g c] is {!size} for the
+    presence condition [e], reading the answer of each gate of [gates] it holds
+    from the cursor's {!Types.field-wgates} rather than evaluating it again, and
     recording its own answer there; [gates'] is [gates] with [e]. Every gate of
     a record is evaluated in field order, so a gate is evaluated before any
     other reads its answer. *)
 
 val cond :
-  (string * packed_scalar) list -> bool Types.expr -> Types.cursor -> bool
-(** [cond prefix e c] is a constraint or a [where] clause over the fields
-    [prefix] names, in the record at [c]. [cond prefix e] raises [Exit] when [e]
-    reads anything else, a [sizeof] included. *)
+  size:int ->
+  (string * packed_scalar) list ->
+  bool Types.expr ->
+  Types.cursor ->
+  bool
+(** [cond ~size prefix e c] is a constraint or a [where] clause over the fields
+    [prefix] names, in the record at [c], read as {!size} reads them.
+    [cond ~size prefix e] raises [Exit] when [e] reads anything else, a [sizeof]
+    included. *)
+
+val cond_at :
+  (string * packed_scalar) list ->
+  bool Types.expr ->
+  size:int ->
+  Types.cursor ->
+  bool
+(** [cond_at prefix e ~size c] is [cond ~size prefix e c], for a record whose
+    frame size is known later. [cond_at prefix e] raises [Exit] where {!cond}
+    does. *)
 
 (** The kind of value a byte span reads as. *)
 type _ span =

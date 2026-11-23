@@ -143,14 +143,16 @@ type items = { walk : item list; extent : eitem list option }
 
 (* The extent walk's items of a layout given in reverse field order, compiled
    in field order, so a gate can reuse the answers of the gates before it. *)
-let extent_items prefix layout =
+let extent_items ~min_size prefix layout =
   let rec extent_item gates = function
     | Lfix k -> (EFix k, gates)
     | Lspan e | Lregion { size = e; _ } ->
-        (ESpan (Codec_walk.size prefix e), gates)
+        (ESpan (Codec_walk.size ~size:min_size prefix e), gates)
     | Lrest -> (ERest, gates)
     | Lopt (present, i) ->
-        let present, gates = Codec_walk.gate ~gates prefix present in
+        let present, gates =
+          Codec_walk.gate ~size:min_size ~gates prefix present
+        in
         let i, gates = extent_item gates i in
         (EOpt (present, i), gates)
     | Lsub sub -> (ESub sub, gates)
@@ -173,7 +175,7 @@ let extent_items prefix layout =
    variable fields are byte spans, gated fields and sub-codecs sized by earlier
    fixed-offset fields, in field order, adjacent widths merged; [None] when a
    field is outside that shape. *)
-let layout_items prefix layout =
+let layout_items ~min_size prefix layout =
   let unplanned _ = raise Exit in
   let leaves : (bytes, int, unit, unit) Expr_compiler.leaves =
     {
@@ -215,7 +217,7 @@ let layout_items prefix layout =
       | exception Exit -> None
       | walk ->
           let extent =
-            match extent_items prefix layout with
+            match extent_items ~min_size prefix layout with
             | items -> Some items
             | exception Exit -> None
           in

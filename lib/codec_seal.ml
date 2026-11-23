@@ -450,16 +450,19 @@ let field_put : type a r.
 (* A field the cursor moves over: a byte span, a sub-codec in a region, or one
    measuring itself, each with a walk of its own. *)
 let moving : type a.
-    name:string option -> (string * packed_scalar) list -> a typ -> a Types.walk
-    =
- fun ~name prefix typ ->
+    name:string option ->
+    frame:int ->
+    (string * packed_scalar) list ->
+    a typ ->
+    a Types.walk =
+ fun ~name ~frame prefix typ ->
+  let size = Codec_walk.size ~size:frame prefix in
   match typ with
-  | Byte_slice { size } ->
-      Codec_walk.span Slice_span (Codec_walk.size prefix size)
-  | Byte_array { size } ->
-      Codec_walk.span String_span (Codec_walk.size prefix size)
-  | Single_elem { size; elem = Codec { codec_walk = Some w; _ }; at_most } ->
-      Codec_walk.region ~at_most ~name (Codec_walk.size prefix size) w
+  | Byte_slice { size = e } -> Codec_walk.span Slice_span (size e)
+  | Byte_array { size = e } -> Codec_walk.span String_span (size e)
+  | Single_elem { size = e; elem = Codec { codec_walk = Some w; _ }; at_most }
+    ->
+      Codec_walk.region ~at_most ~name (size e) w
   | Codec { codec_walk = Some w; _ } -> Codec_walk.sub ~name w
   | _ -> raise Exit
 
@@ -487,7 +490,7 @@ let fixed_checks prefix ~min_wire_size (cf : (_, _) compiled_field)
       | Some c -> (
           match self_set fld.name c with
           | Some cset -> within ps (cset :: typ_sets)
-          | None -> Holds (Codec_walk.cond prefix c) :: within ps typ_sets))
+          | None -> Holds (Codec_walk.cond_at prefix c) :: within ps typ_sets))
   | Some _ | None ->
       if conds = [] && not (field_reader_validates fld.typ) then []
       else raise Exit
@@ -543,12 +546,20 @@ let field_walk : type a f r.
   | _, Dynamic _ when field_conds fld = [] -> (
       match fld.typ with
       | Optional { present; inner } ->
-          let present, gates = Codec_walk.gate ~gates r.prefix present in
-          ( Walk (Codec_walk.gated present (moving ~name r.prefix inner)),
+          let present, gates =
+            Codec_walk.gate ~size:min_wire_size ~gates r.prefix present
+          in
+          ( Walk
+              (Codec_walk.gated present
+                 (moving ~name ~frame:min_wire_size r.prefix inner)),
             [],
             gates,
             Some present )
-      | typ -> (Walk (moving ~name r.prefix typ), [], gates, None))
+      | typ ->
+          ( Walk (moving ~name ~frame:min_wire_size r.prefix typ),
+            [],
+            gates,
+            None ))
   | _ -> raise Exit
 
 (* The variables [fld]'s action assigns, and the context its constraint and
@@ -1834,7 +1845,8 @@ let encode_check_of ~scratch ~n_total ~param_base ~param_handles ~populate
    by their walk when it has some. *)
 let layout_and_size ~n_params ~min_size prefix layout_rev next_off =
   let items =
-    if n_params = 0 then Codec_layout.layout_items prefix layout_rev else None
+    if n_params = 0 then Codec_layout.layout_items ~min_size prefix layout_rev
+    else None
   in
   let wire_size_info =
     match next_off with

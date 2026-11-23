@@ -28,8 +28,42 @@ let leaf : type a. a scalar -> cursor -> int = function
   | Bits16be { off; shift; mask } ->
       fun c -> (Unchecked.u16be c.wbuf (c.wbase + off) lsr shift) land mask
 
+(* {1 Expressions}
+
+   An expression compiles to as few closures as its shape allows, each reading
+   the fields it needs itself: a call costs more than a read, so the number of
+   calls is the cost. A field of the frame, scaled and offset ([ihl * 4 - 20]),
+   is read in the closure of the operator that uses it; a conjunction of
+   interval tests of fields is the staged word test of the check pass, one
+   closure; the answers of earlier gates are bits of the cursor, tested
+   together. *)
+
+(* How a field of a frame of at least 8 bytes reads on a target whose [int]
+   holds 63 bits: the 8-byte word at [q] of the record, shifted right by [s]
+   and masked by [m]. *)
+type word = { q : int; s : int; m : int }
+
+let[@inline] word_value c q s m =
+  Int64.to_int (Int64.shift_right_logical (Codec_words.load c.wbuf c.wbase q) s)
+  land m
+
+(* An integer operand: a literal, a fixed-offset field [f] of the record as
+   [(f lsl k) + a], or a closure. A field holds at most 32 bits, [k] is at
+   most 16 and [abs a] under [2^40], so the value lies far inside the native
+   int and the checked arithmetic it stands for cannot overflow. *)
+type operand =
+  | Const of int
+  | Lin of { f : packed_scalar; w : word option; k : int; a : int }
+  | Fn of (cursor -> int)
+
+let max_shift = 16
+let small n = n > -(1 lsl 40) && n < 1 lsl 40
+
 type env = {
   prefix : (string * packed_scalar) list;
+  size : int;
+      (* The bytes of the record's frame, which the walk checks before any
+         expression reads a field. *)
   sizeof : bool;
   known : (bool expr * int) list;
       (* The gates of the record evaluated before, each with its bit of
@@ -37,96 +71,275 @@ type env = {
   mutable checked : bool;  (** Whether an operation can raise. *)
 }
 
+let word env (Ps s) =
+  match Codec_view.bits_of_scalar s with
+  | Some { o; n; s; w; _ }
+    when Sys.int_size >= 63 && env.size >= 8 && w > 0 && w <= 32 && o >= 0
+         && o + n <= env.size ->
+      let { Codec_words.q; l; r; m; _ } =
+        Codec_words.word ~size:env.size o ~bytes:n ~s ~w ~signed:false
+      in
+      Some { q; s = r - l; m }
+  | _ -> None
+
+let lin env f = Lin { f; w = word env f; k = 0; a = 0 }
+
+let lin_fn (Ps s) w k a =
+  match (w, k, a) with
+  | Some { q; s; m }, 0, 0 -> fun c -> word_value c q s m
+  | Some { q; s; m }, _, _ -> fun c -> (word_value c q s m lsl k) + a
+  | None, 0, 0 -> leaf s
+  | None, _, _ ->
+      let l = leaf s in
+      fun c -> (l c lsl k) + a
+
+let fn = function
+  | Const n -> fun _ -> n
+  | Lin { f; w; k; a } -> lin_fn f w k a
+  | Fn f -> f
+
 let field env name =
   match List.assoc_opt name env.prefix with
-  | Some (Ps s) -> leaf s
+  | Some p -> lin env p
   | None -> raise Exit
 
-(* The operators of [Expr_compiler], on the cursor. A leaf is a field at a
-   fixed offset, read from the buffer; a [sizeof] is the type's width, as the
-   layout pass reads it. Any other leaf, and a 64-bit operand, raises [Exit]:
-   the record then has no walk. A literal operand is applied in place, as
-   [Expr_compiler] does. *)
-let rec int_expr env (e : int expr) : cursor -> int =
+let add env o n =
+  match o with
+  | Const m when small m && small n -> Const (m + n)
+  | Lin l when small n && small (l.a + n) -> Lin { l with a = l.a + n }
+  | o ->
+      env.checked <- true;
+      let f = fn o in
+      Fn (fun c -> checked_add (f c) n)
+
+let shift o n =
+  match o with
+  | Lin l when l.a = 0 && n >= 0 && l.k + n <= max_shift ->
+      Lin { l with k = l.k + n }
+  | o ->
+      let f = fn o in
+      Fn (fun c -> f c lsl n)
+
+let rec log2 n = if n <= 1 then 0 else 1 + log2 (n lsr 1)
+
+let mul env o n =
+  match o with
+  | Lin l
+    when l.a = 0 && n > 0 && n land (n - 1) = 0 && l.k + log2 n <= max_shift ->
+      Lin { l with k = l.k + log2 n }
+  | o ->
+      env.checked <- true;
+      let f = fn o in
+      Fn (fun c -> checked_mul (f c) n)
+
+(* [f land n] as a field of its own, when [f] is unsigned and the bits [n]
+   keeps of it are its lowest. *)
+let masked (Ps s) n =
+  let bits m = if m land (m + 1) = 0 then Some m else None in
+  match s with
+  | Byte off ->
+      Option.map
+        (fun mask -> Ps (Bits8 { off; shift = 0; mask }))
+        (bits (0xff land n))
+  | U16be off ->
+      Option.map
+        (fun mask -> Ps (Bits16be { off; shift = 0; mask }))
+        (bits (0xffff land n))
+  | Bits8 { off; shift; mask } ->
+      Option.map
+        (fun mask -> Ps (Bits8 { off; shift; mask }))
+        (bits (mask land n))
+  | Bits16be { off; shift; mask } ->
+      Option.map
+        (fun mask -> Ps (Bits16be { off; shift; mask }))
+        (bits (mask land n))
+  | _ -> None
+
+let mask env o n =
+  match o with
+  | Lin { f; k = 0; a = 0; _ } when n >= 0 -> (
+      match masked f n with
+      | Some (Ps (Bits8 { mask = 0; _ } | Bits16be { mask = 0; _ })) -> Const 0
+      | Some f -> lin env f
+      | None ->
+          let f = fn o in
+          Fn (fun c -> f c land n))
+  | o ->
+      let f = fn o in
+      Fn (fun c -> f c land n)
+
+(* [a + b] or [a - b] of two fields read as words: plain arithmetic, their
+   bounds keeping it exact. *)
+let sum env ~neg a b checked =
+  match (a, b) with
+  | ( Lin { w = Some { q = q1; s = s1; m = m1 }; k = k1; a = a1; _ },
+      Lin { w = Some { q = q2; s = s2; m = m2 }; k = k2; a = a2; _ } ) ->
+      if neg then
+        Fn
+          (fun c ->
+            (word_value c q1 s1 m1 lsl k1)
+            + a1
+            - ((word_value c q2 s2 m2 lsl k2) + a2))
+      else
+        Fn
+          (fun c ->
+            (word_value c q1 s1 m1 lsl k1)
+            + a1
+            + (word_value c q2 s2 m2 lsl k2)
+            + a2)
+  | _ ->
+      env.checked <- true;
+      let fa = fn a and fb = fn b in
+      Fn (fun c -> checked (fa c) (fb c))
+
+let binary op a b =
+  let fa = fn a and fb = fn b in
+  Fn (fun c -> op (fa c) (fb c))
+
+let checked_binary env op a b =
+  env.checked <- true;
+  binary op a b
+
+(* A condition: a literal; whether the answers of earlier gates in [mask] are
+   not all false ([set]) or all false; a conjunction of interval tests of
+   fixed-offset fields, each one interval; or a closure. *)
+type test =
+  | Is of bool
+  | Gates of { mask : int; set : bool }
+  | Intervals of (packed_scalar * (int * int) array) list
+  | Cond of (cursor -> bool)
+
+let max_tests = 8
+
+(* The answer [v] of a condition, recorded as the bit [i] of [wgates] when it
+   is a gate's ([i >= 0]). *)
+let[@inline] answer (c : cursor) i v =
+  if i >= 0 then
+    c.wgates <- c.wgates land lnot (1 lsl i) lor (Bool.to_int v lsl i);
+  v
+
+let[@inline] load (c : cursor) q = Codec_words.load c.wbuf c.wbase q
+let holds = Codec_intervals.holds
+
+(* The interval tests [tests] as tests of words of the frame, one closure of
+   the cursor, which records its answer as the bit [gate] when it is not
+   negative; [None] when a test is not one of a word. One row per number of
+   tests; the formatter would staircase them. *)
+let staged ~gate ~size tests =
+  match Codec_intervals.word_tests ~size tests with
+  | Some [ (_, q1, s1, m1, lo1, n1) ] ->
+      Some (fun c -> answer c gate (holds (load c q1) s1 m1 lo1 n1))
+  | Some [ (_, q1, s1, m1, lo1, n1); (k2, q2, s2, m2, lo2, n2) ] ->
+      Some (fun c -> let x1 = load c q1 in answer c gate (holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else load c q2 in holds x2 s2 m2 lo2 n2))
+  | Some [ (_, q1, s1, m1, lo1, n1); (k2, q2, s2, m2, lo2, n2); (k3, q3, s3, m3, lo3, n3) ] ->
+      Some (fun c -> let x1 = load c q1 in answer c gate (holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else load c q2 in holds x2 s2 m2 lo2 n2 && let x3 = if k3 then x2 else load c q3 in holds x3 s3 m3 lo3 n3))
+  | Some _ ->
+      Option.map
+        (fun st c -> answer c gate (st c.wbuf c.wbase))
+        (Codec_intervals.staged ~size tests)
+  | None -> None
+[@@ocamlformat "disable"]
+
+let test env = function
+  | Is b -> fun _ -> b
+  | Gates { mask; set = true } -> fun (c : cursor) -> c.wgates land mask <> 0
+  | Gates { mask; set = false } -> fun (c : cursor) -> c.wgates land mask = 0
+  | Intervals tests -> (
+      match staged ~gate:(-1) ~size:env.size (Array.of_list tests) with
+      | Some st -> st
+      | None ->
+          let one (Ps s, set) =
+            let l = leaf s in
+            fun c -> Codec_intervals.in_set set (l c)
+          in
+          List.fold_right
+            (fun t rest ->
+              let t = one t in
+              fun c -> t c && rest c)
+            tests
+            (fun _ -> true))
+  | Cond f -> f
+
+let negate env = function
+  | Is b -> Is (not b)
+  | Gates b -> Gates { b with set = not b.set }
+  | t ->
+      let f = test env t in
+      Cond (fun c -> not (f c))
+
+let range v lo hi =
+  match v with
+  | Const n -> Is (n >= lo && n <= hi)
+  | Lin { f; k = 0; a = 0; _ } -> Intervals [ (f, [| (lo, hi) |]) ]
+  | v ->
+      let f = fn v in
+      Cond
+        (fun c ->
+          let x = f c in
+          x >= lo && x <= hi)
+
+(* How two operands compare. *)
+type order = Lt | Ge | Eq | Ne
+
+let[@inline] ordered op (x : int) y =
+  match op with Lt -> x < y | Ge -> x >= y | Eq -> x = y | Ne -> x <> y
+
+let compare op a b =
+  match (a, b) with
+  | ( Lin { w = Some { q = q1; s = s1; m = m1 }; k = k1; a = a1; _ },
+      Lin { w = Some { q = q2; s = s2; m = m2 }; k = k2; a = a2; _ } ) ->
+      Cond
+        (fun c ->
+          ordered op
+            ((word_value c q1 s1 m1 lsl k1) + a1)
+            ((word_value c q2 s2 m2 lsl k2) + a2))
+  | _ ->
+      let fa = fn a and fb = fn b in
+      Cond (fun c -> ordered op (fa c) (fb c))
+
+let rec int_expr env (e : int expr) : operand =
   let rec_ = int_expr env in
   match e with
-  | Int n -> fun _ -> n
+  | Int n -> Const n
   | Ref (I, name) -> field env name
   | Sizeof t when env.sizeof ->
-      let n = Option.value ~default:0 (field_wire_size t) in
-      fun _ -> n
+      Const (Option.value ~default:0 (field_wire_size t))
   | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> raise Exit
-  | Add (a, Int k) ->
-      env.checked <- true;
-      let fa = rec_ a in
-      fun c -> checked_add (fa c) k
-  | Sub (a, Int k) ->
-      env.checked <- true;
-      let fa = rec_ a in
-      fun c -> checked_sub (fa c) k
-  | Mul (a, Int k) ->
-      env.checked <- true;
-      let fa = rec_ a in
-      fun c -> checked_mul (fa c) k
-  | Land (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> fa c land k
-  | Lsl (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> fa c lsl k
+  | Add (a, Int k) -> add env (rec_ a) k
+  | Sub (a, Int k) when k <> min_int -> add env (rec_ a) (-k)
+  | Mul (a, Int k) -> mul env (rec_ a) k
+  | Lsl (a, Int k) -> shift (rec_ a) k
+  | Land (a, Int k) -> mask env (rec_ a) k
   | Lsr (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> fa c lsr k
-  | Add (a, b) ->
-      env.checked <- true;
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_add (fa c) (fb c)
-  | Sub (a, b) ->
-      env.checked <- true;
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_sub (fa c) (fb c)
-  | Mul (a, b) ->
-      env.checked <- true;
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_mul (fa c) (fb c)
-  | Div (a, b) ->
-      env.checked <- true;
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_div (fa c) (fb c)
-  | Mod (a, b) ->
-      env.checked <- true;
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_mod (fa c) (fb c)
-  | Land (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c land fb c
-  | Lor (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lor fb c
-  | Lxor (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lxor fb c
+      let fa = fn (rec_ a) in
+      Fn (fun c -> fa c lsr k)
+  | Add (a, b) -> sum env ~neg:false (rec_ a) (rec_ b) checked_add
+  | Sub (a, b) -> sum env ~neg:true (rec_ a) (rec_ b) checked_sub
+  | Mul (a, b) -> checked_binary env checked_mul (rec_ a) (rec_ b)
+  | Div (a, b) -> checked_binary env checked_div (rec_ a) (rec_ b)
+  | Mod (a, b) -> checked_binary env checked_mod (rec_ a) (rec_ b)
+  | Land (a, b) -> binary ( land ) (rec_ a) (rec_ b)
+  | Lor (a, b) -> binary ( lor ) (rec_ a) (rec_ b)
+  | Lxor (a, b) -> binary ( lxor ) (rec_ a) (rec_ b)
   | Lnot a ->
-      let fa = rec_ a in
-      fun c -> lnot (fa c)
-  | Lsl (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lsl fb c
-  | Lsr (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lsr fb c
+      let fa = fn (rec_ a) in
+      Fn (fun c -> lnot (fa c))
+  | Lsl (a, b) -> binary ( lsl ) (rec_ a) (rec_ b)
+  | Lsr (a, b) -> binary ( lsr ) (rec_ a) (rec_ b)
   | Cast (w, a) -> (
-      let fa = rec_ a in
+      let fa = fn (rec_ a) in
       match w with
-      | `U8 -> fun c -> fa c land 0xFF
-      | `U16 -> fun c -> fa c land 0xFFFF
-      | `U32 -> fun c -> fa c land UInt32.mask32
-      | `U64 -> fa)
+      | `U8 -> Fn (fun c -> fa c land 0xFF)
+      | `U16 -> Fn (fun c -> fa c land 0xFFFF)
+      | `U32 -> Fn (fun c -> fa c land UInt32.mask32)
+      | `U64 -> Fn fa)
   | If_then_else (b, t, e) ->
-      let fb = bool_expr env b and ft = rec_ t and fe = rec_ e in
-      fun c -> if fb c then ft c else fe c
+      let fb = test env (bool_expr env b)
+      and ft = fn (rec_ t)
+      and fe = fn (rec_ e) in
+      Fn (fun c -> if fb c then ft c else fe c)
 
-and as_int : type a. env -> a expr -> (cursor -> int) option =
+and as_int : type a. env -> a expr -> operand option =
  fun env e ->
   let go e = Some (int_expr env e) in
   match e with
@@ -151,7 +364,7 @@ and as_int : type a. env -> a expr -> (cursor -> int) option =
   | If_then_else _ as e -> go e
   | _ -> None
 
-and as_bool : type a. env -> a expr -> (cursor -> bool) option =
+and as_bool : type a. env -> a expr -> test option =
  fun env e ->
   let go e = Some (bool_expr env e) in
   match e with
@@ -173,80 +386,101 @@ and int_operands : type a. env -> a expr -> a expr -> _ =
   | Some fa, Some fb -> (fa, fb)
   | _ -> raise Exit
 
-and bool_expr env (e : bool expr) : cursor -> bool =
+and bool_expr env (e : bool expr) : test =
   match List.assq_opt e env.known with
-  | Some i ->
-      let bit = 1 lsl i in
-      fun c -> c.wgates land bit <> 0
+  | Some i -> Gates { mask = 1 lsl i; set = true }
   | None -> bool_cases env e
 
-and bool_cases env (e : bool expr) : cursor -> bool =
+and bools : type a. env -> a expr -> a expr -> same:bool -> test option =
+ fun env a b ~same ->
+  match (as_bool env a, as_bool env b) with
+  | Some ta, Some tb ->
+      let fa = test env ta and fb = test env tb in
+      Some
+        (if same then Cond (fun c -> fa c = fb c)
+         else Cond (fun c -> fa c <> fb c))
+  | _ -> None
+
+and bool_cases env (e : bool expr) : test =
+  let int a = int_expr env a in
   match e with
-  | Bool b -> fun _ -> b
-  | Eq (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c = k
-  | Ne (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c <> k
+  | Bool b -> Is b
+  | Eq (a, Int k) -> range (int a) k k
+  | Ne (a, Int k) -> negate env (range (int a) k k)
   | Lt (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c < k
-  | Le (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c <= k
+      if k = min_int then Is false else range (int a) min_int (k - 1)
+  | Le (a, Int k) -> range (int a) min_int k
   | Gt (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c > k
-  | Ge (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c >= k
+      if k = max_int then Is false else range (int a) (k + 1) max_int
+  | Ge (a, Int k) -> range (int a) k max_int
   | Eq (a, b) -> (
-      match (as_bool env a, as_bool env b) with
-      | Some fa, Some fb -> fun c -> fa c = fb c
-      | _ ->
-          let fa, fb = int_operands env a b in
-          fun c -> fa c = fb c)
+      match bools env a b ~same:true with
+      | Some t -> t
+      | None ->
+          let a, b = int_operands env a b in
+          compare Eq a b)
   | Ne (a, b) -> (
-      match (as_bool env a, as_bool env b) with
-      | Some fa, Some fb -> fun c -> fa c <> fb c
-      | _ ->
-          let fa, fb = int_operands env a b in
-          fun c -> fa c <> fb c)
+      match bools env a b ~same:false with
+      | Some t -> t
+      | None ->
+          let a, b = int_operands env a b in
+          compare Ne a b)
   | Lt (a, b) ->
-      let fa, fb = int_operands env a b in
-      fun c -> fa c < fb c
+      let a, b = int_operands env a b in
+      compare Lt a b
   | Le (a, b) ->
-      let fa, fb = int_operands env a b in
-      fun c -> fa c <= fb c
+      let a, b = int_operands env a b in
+      compare Ge b a
   | Gt (a, b) ->
-      let fa, fb = int_operands env a b in
-      fun c -> fa c > fb c
+      let a, b = int_operands env a b in
+      compare Lt b a
   | Ge (a, b) ->
-      let fa, fb = int_operands env a b in
-      fun c -> fa c >= fb c
-  | And (a, b) ->
-      let fa = bool_expr env a and fb = bool_expr env b in
-      fun c -> fa c && fb c
-  | Or (a, b) ->
-      let fa = bool_expr env a and fb = bool_expr env b in
-      fun c -> fa c || fb c
-  | Not a ->
-      let fa = bool_expr env a in
-      fun c -> not (fa c)
+      let a, b = int_operands env a b in
+      compare Ge a b
+  | And (a, b) -> (
+      match (bool_expr env a, bool_expr env b) with
+      | Is false, _ -> Is false
+      | Is true, t | t, Is true -> t
+      | Intervals ta, Intervals tb
+        when List.length ta + List.length tb <= max_tests ->
+          Intervals (ta @ tb)
+      | Gates { mask = m1; set = false }, Gates { mask = m2; set = false } ->
+          Gates { mask = m1 lor m2; set = false }
+      | ta, tb ->
+          let fa = test env ta and fb = test env tb in
+          Cond (fun c -> fa c && fb c))
+  | Or (a, b) -> (
+      match (bool_expr env a, bool_expr env b) with
+      | Is true, _ -> Is true
+      | Is false, t | t, Is false -> t
+      | Gates { mask = m1; set = true }, Gates { mask = m2; set = true } ->
+          Gates { mask = m1 lor m2; set = true }
+      | ta, tb ->
+          let fa = test env ta and fb = test env tb in
+          Cond (fun c -> fa c || fb c))
+  | Not a -> negate env (bool_expr env a)
   | Ref _ -> .
 
-let size prefix e =
-  int_expr { prefix; sizeof = true; known = []; checked = false } e
+let env ?(sizeof = false) ?(known = []) ~size prefix =
+  { prefix; size; sizeof; known; checked = false }
+
+let size ~size prefix e = fn (int_expr (env ~sizeof:true ~size prefix) e)
 
 (* A condition that raises leaves the record to the general path, whose check
    pass names its error at the field it constrains; a size that raises names
    its own, rebased to the record by [decode]. *)
-let cond prefix e =
-  let env = { prefix; sizeof = false; known = []; checked = false } in
-  let f = bool_expr env e in
+let guard env f =
   if not env.checked then f
   else fun c -> match f c with b -> b | exception Parse_error _ -> unwalked ()
+
+let cond ~size prefix e =
+  let env = env ~size prefix in
+  let f = test env (bool_expr env e) in
+  guard env f
+
+let cond_at prefix e =
+  ignore (cond ~size:0 prefix e : cursor -> bool);
+  fun ~size -> cond ~size prefix e
 
 (* The gates a record has evaluated so far, each the bit of [wgates] that holds
    its answer, while there are bits. *)
@@ -254,22 +488,25 @@ type gates = (bool expr * int) list
 
 let no_gates = []
 
-let gate ~gates prefix e =
-  let env = { prefix; sizeof = true; known = gates; checked = false } in
+let gate ~size ~gates prefix e =
+  let env = env ~sizeof:true ~known:gates ~size prefix in
   let g = bool_expr env e in
-  let g =
-    if not env.checked then g
-    else fun c ->
-      match g c with b -> b | exception Parse_error _ -> unwalked ()
-  in
   let i = List.length gates in
-  if List.memq e (List.map fst gates) || i >= Sys.int_size - 1 then (g, gates)
+  if List.memq e (List.map fst gates) || i >= Sys.int_size - 1 then
+    (guard env (test env g), gates)
   else
-    let bit = 1 lsl i in
-    ( (fun c ->
-        let v = g c in
-        c.wgates <- (if v then c.wgates lor bit else c.wgates land lnot bit);
-        v),
+    let staged =
+      match g with
+      | Intervals tests -> staged ~gate:i ~size:env.size (Array.of_list tests)
+      | _ -> None
+    in
+    ( (match (staged, g) with
+      | Some st, _ -> st
+      | None, Gates { mask; set } ->
+          fun c -> answer c i (c.wgates land mask <> 0 = set)
+      | None, _ ->
+          let g = guard env (test env g) in
+          fun c -> answer c i (g c)),
       (e, i) :: gates )
 
 (* {1 Fields the cursor moves over}
@@ -554,10 +791,14 @@ let record_walk ~min_size ~start ~fail ~where checks body =
          checks)
   and holds =
     Array.of_list
-      (List.filter_map (function Holds f -> Some f | Within _ -> None) checks)
+      (List.filter_map
+         (function Holds f -> Some (f ~size:min_size) | Within _ -> None)
+         checks)
   in
   let has_holds = Array.length holds > 0 and has_where = Option.is_some where in
-  let where = Option.value where ~default:(fun _ -> true) in
+  let where =
+    match where with Some f -> f ~size:min_size | None -> fun _ -> true
+  in
   let[@inline] frame c =
     let base = c.wpos and stop = c.wend in
     if base < 0 || base > Input_end.to_int stop - min_size then
@@ -580,11 +821,12 @@ let record_walk ~min_size ~start ~fail ~where checks body =
           settle fail c base;
         rest c base
   | None -> (
-      match Codec_intervals.staged ~size:min_size within with
+      match staged ~gate:(-1) ~size:min_size within with
       | Some test ->
           fun c ->
             let base = frame c in
-            if not (test c.wbuf base) then settle fail c base;
+            c.wbase <- base;
+            if not (test c) then settle fail c base;
             rest c base
       | None ->
           let flat, tables = Codec_intervals.flatten_intervals within in
@@ -646,7 +888,7 @@ let places ~start places =
    and its [where] clause reads only fixed-offset fields. *)
 let record ~n_params ~min_size ~prefix ~where ~fail make = function
   | Some w when n_params = 0 -> (
-      match Option.map (cond prefix) where with
+      match Option.map (cond_at prefix) where with
       | exception Exit -> None
       | where -> (
           let start = Option.value ~default:min_size w.wstart in

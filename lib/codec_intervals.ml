@@ -222,7 +222,7 @@ let stage_tests tests =
   | _ -> None
 [@@ocamlformat "disable"]
 
-let staged ~size tests =
+let word_tests ~size tests =
   if Sys.int_size < 63 || size < 8 || Array.length tests = 0 then None
   else
     let rec words prev = function
@@ -233,4 +233,6 @@ let staged ~size tests =
           | Some ((_, q, _, _, _, _) as w) ->
               Option.map (fun ws -> w :: ws) (words q ts))
     in
-    Option.bind (words (-1) (Array.to_list tests)) stage_tests
+    words (-1) (Array.to_list tests)
+
+let staged ~size tests = Option.bind (word_tests ~size tests) stage_tests

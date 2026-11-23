@@ -966,10 +966,11 @@ type (_, _) walk_readers =
       -> ('full, 'rest) walk_readers
 
 (* A check the walk makes before it reads: a field at a fixed offset within a
-   set, or a condition on such fields. *)
+   set, or a condition on such fields, compiled for the record's frame of
+   [size] bytes. *)
 type walk_check =
   | Within of packed_scalar * (int * int) array
-  | Holds of (Types.cursor -> bool)
+  | Holds of (size:int -> Types.cursor -> bool)
 
 (* A field of the walk: its name, the checks the walk makes of it when it is
    one the cursor walks, and its gate. *)

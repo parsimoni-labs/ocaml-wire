@@ -11,13 +11,14 @@ type items
 (** A record's layout, compiled for the walks. *)
 
 val layout_items :
+  min_size:int ->
   (string * Codec_repr.packed_scalar) list ->
   Codec_repr.layout list option ->
   items option
-(** [layout_items prefix layout] compiles the layout of a record, given in
-    reverse field order, reading sizes and gates from the fixed-offset fields
-    [prefix] names. [None] when the record has no layout or a size or gate reads
-    anything else. *)
+(** [layout_items ~min_size prefix layout] compiles the layout of a record of at
+    least [min_size] bytes, given in reverse field order, reading sizes and
+    gates from the fixed-offset fields [prefix] names. [None] when the record
+    has no layout or a size or gate reads anything else. *)
 
 val build_layout :
   min_size:int -> items option -> (Input_end.t -> bytes -> int -> int) option
