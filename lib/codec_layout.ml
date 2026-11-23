@@ -150,7 +150,7 @@ let extent_items ~min_size prefix layout =
         (ESpan (Codec_walk.size ~size:min_size prefix e), gates)
     | Lrest -> (ERest, gates)
     | Lopt (present, i) ->
-        let present, gates =
+        let present, _, gates =
           Codec_walk.gate ~size:min_size ~gates prefix present
         in
         let i, gates = extent_item gates i in

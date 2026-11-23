@@ -345,10 +345,20 @@ type walk_check =
   | Within of packed_scalar * (int * int) array
   | Holds of (size:int -> Types.cursor -> bool)
 
+(** How the cursor goes past a field once the record's checks have passed: it
+    stays at a field of fixed offset, moves by the bytes a span or a region
+    takes with no test of their bounds, or walks a sub-codec that measures
+    itself. *)
+type walk_move =
+  | Stays
+  | Moves of (Types.cursor -> int)
+  | Walks of (Types.cursor -> unit)
+
 type walk_place = {
   pname : string;
   pskip : (Types.cursor -> unit) option;
       (** The checks of a field the cursor walks. *)
+  pmove : walk_move;  (** How the cursor goes past it. *)
   pgate : (Types.cursor -> bool) option;  (** The gate of an optional field. *)
 }
 (** A field of a walk. *)

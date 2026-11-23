@@ -211,13 +211,14 @@ type test =
 
 let max_tests = 8
 
-(* The answer [v] of a condition, recorded as the bit [i] of [wgates] when it
-   is a gate's ([i >= 0]). *)
-let[@inline] answer (c : cursor) i v =
-  if i >= 0 then
-    c.wgates <- c.wgates land lnot (1 lsl i) lor (Bool.to_int v lsl i);
+(* The answer [v] of a condition, recorded in [wgates] as the bit [bit] when
+   it is a gate's ([bit <> 0]). *)
+let[@inline] answer (c : cursor) bit v =
+  if bit <> 0 then
+    c.wgates <- c.wgates land lnot bit lor (-Bool.to_int v land bit);
   v
 
+let bit i = if i >= 0 then 1 lsl i else 0
 let[@inline] load (c : cursor) q = Codec_words.load c.wbuf c.wbase q
 let holds = Codec_intervals.holds
 
@@ -226,6 +227,7 @@ let holds = Codec_intervals.holds
    negative; [None] when a test is not one of a word. One row per number of
    tests; the formatter would staircase them. *)
 let staged ~gate ~size tests =
+  let gate = bit gate in
   match Codec_intervals.word_tests ~size tests with
   | Some [ (_, q1, s1, m1, lo1, n1) ] ->
       Some (fun c -> answer c gate (holds (load c q1) s1 m1 lo1 n1))
@@ -499,21 +501,22 @@ let gate ~size ~gates prefix e =
   let env = env ~sizeof:true ~known:gates ~size prefix in
   let g = bool_expr env e in
   let i = List.length gates in
+  let plain = guard env (test env g) in
   if List.memq e (List.map fst gates) || i >= Sys.int_size - 1 then
-    (guard env (test env g), gates)
+    (plain, plain, gates)
   else
     let staged =
       match g with
       | Intervals tests -> staged ~gate:i ~size:env.size (Array.of_list tests)
       | _ -> None
     in
+    let b = bit i in
     ( (match (staged, g) with
       | Some st, _ -> st
       | None, Gates { mask; set } ->
-          fun c -> answer c i (c.wgates land mask <> 0 = set)
-      | None, _ ->
-          let g = guard env (test env g) in
-          fun c -> answer c i (g c)),
+          fun c -> answer c b (c.wgates land mask <> 0 = set)
+      | None, _ -> fun c -> answer c b (plain c)),
+      plain,
       (e, i) :: gates )
 
 (* {1 Fields the cursor moves over}
@@ -629,6 +632,53 @@ let gated_sub present ~name (sub : 'a Types.walk) : 'a option Types.walk =
       wvalue = (fun c -> if present c then Some (keep c sub.wvalue) else None);
       wskip = (fun c -> if present c then keep c sub.wskip);
     }
+
+(* The bytes a field takes under its gate [present]: none when it is
+   absent. *)
+let gated_moves present size = Moves (fun c -> if present c then size c else 0)
+
+(* A field the cursor moves over: a byte span, a sub-codec in a region, or one
+   measuring itself, each with a walk of its own. *)
+let moving : type a.
+    name:string option ->
+    frame:int ->
+    (string * packed_scalar) list ->
+    a typ ->
+    a Types.walk * walk_move =
+ fun ~name ~frame prefix typ ->
+  let size = size ~size:frame prefix in
+  match typ with
+  | Byte_slice { size = e } -> (span Slice_span (size e), Moves (size e))
+  | Byte_array { size = e } -> (span String_span (size e), Moves (size e))
+  | Single_elem { size = e; elem = Codec { codec_walk = Some w; _ }; at_most }
+    ->
+      (region ~at_most ~name (size e) w, Moves (size e))
+  | Codec { codec_walk = Some w; _ } ->
+      let w = sub ~name w in
+      (w, Walks w.wskip)
+  | _ -> raise Exit
+
+(* [moving] under the gate [present], in the closures of the field. *)
+let gated_moving : type a.
+    name:string option ->
+    frame:int ->
+    (string * packed_scalar) list ->
+    (cursor -> bool) ->
+    a typ ->
+    a option Types.walk * walk_move =
+ fun ~name ~frame prefix present typ ->
+  let size = size ~size:frame prefix in
+  let moves e = gated_moves present (size e) in
+  match typ with
+  | Byte_slice { size = e } -> (gated_span present Slice_span (size e), moves e)
+  | Byte_array { size = e } -> (gated_span present String_span (size e), moves e)
+  | Single_elem { size = e; elem = Codec { codec_walk = Some w; _ }; at_most }
+    ->
+      (gated_region present ~at_most ~name (size e) w, moves e)
+  | Codec { codec_walk = Some w; _ } ->
+      let w = gated_sub present ~name w in
+      (w, Walks w.wskip)
+  | _ -> raise Exit
 
 (* A sub-codec at offset [off] of the record, in a region of [size] bytes when
    [size >= 0], which it must not pass, nor fall short of unless [at_most]:
@@ -919,9 +969,80 @@ let rec seq = function
    place, whose checks the record's frame and tests make. *)
 let skips places = seq (List.filter_map (fun p -> p.pskip) places)
 
+(* The offset [o], not negative, moved by a size [s] a check has passed: a
+   negative one, which the bytes give when they changed since, refuses the
+   place, and a sum past [max_int] is [max_int], past any buffer. *)
+let[@inline] moved o s =
+  if s < 0 then unwalked ()
+  else
+    let o = o + s in
+    if o < 0 then max_int else o
+
+(* The offset after the fields that take [sizes] bytes, from [o]: a closed
+   form, one closure. *)
+let rec advance = function
+  | [] -> fun _ o -> o
+  | [ f ] -> fun c o -> moved o (f c)
+  | [ f; g ] -> fun c o -> moved (moved o (f c)) (g c)
+  | f :: g :: rest ->
+      let rest = advance rest in
+      fun c o -> rest c (moved (moved o (f c)) (g c))
+
 (* Where each field the cursor walks, or a gate guards, starts in the record at
-   the cursor's [wbase]: the walk of the fields before it, then its gate. The
-   record's checks have passed, so these find what the walk found. *)
+   the cursor's [wbase]: past the fields before it, then its gate. The
+   record's checks have passed, so the cursor moves over a span or a region
+   by its size, with no test of its bounds, and walks only a sub-codec that
+   measures itself; [enter] tests that the place's frame lies in the
+   buffer. *)
+let place ~start before gate =
+  let moves =
+    List.filter
+      (fun p -> match p.pmove with Stays -> false | Moves _ | Walks _ -> true)
+      before
+    |> List.map (fun p -> p.pmove)
+  in
+  let sizes =
+    List.filter_map
+      (function Moves f -> Some f | Stays | Walks _ -> None)
+      moves
+  in
+  if List.length sizes = List.length moves then
+    match (sizes, gate) with
+    | [], None -> fun c -> c.wbase + start
+    | [], Some gate -> fun c -> if gate c then c.wbase + start else -1
+    | [ f ], None -> fun c -> moved (c.wbase + start) (f c)
+    | [ f ], Some gate ->
+        fun c ->
+          let o = moved (c.wbase + start) (f c) in
+          if gate c then o else -1
+    | [ f; g ], Some gate ->
+        fun c ->
+          let o = moved (moved (c.wbase + start) (f c)) (g c) in
+          if gate c then o else -1
+    | sizes, None ->
+        let adv = advance sizes in
+        fun c -> adv c (c.wbase + start)
+    | sizes, Some gate ->
+        let adv = advance sizes in
+        fun c ->
+          let o = adv c (c.wbase + start) in
+          if gate c then o else -1
+  else
+    let walk =
+      seq
+        (List.map
+           (function
+             | Moves f -> fun c -> c.wpos <- moved c.wpos (f c)
+             | Walks w -> w
+             | Stays -> fun _ -> ())
+           moves)
+    in
+    let gate = Option.value gate ~default:(fun _ -> true) in
+    fun c ->
+      c.wpos <- c.wbase + start;
+      walk c;
+      if gate c then c.wpos else -1
+
 let places ~start places =
   let rec go before acc = function
     | [] -> List.rev acc
@@ -929,28 +1050,7 @@ let places ~start places =
         let acc =
           match (p.pskip, p.pgate) with
           | None, None -> acc
-          | _ ->
-              let at =
-                match
-                  (List.filter_map (fun p -> p.pskip) (List.rev before), p.pgate)
-                with
-                | [], None -> fun c -> c.wbase + start
-                | [], Some gate ->
-                    fun c -> if gate c then c.wbase + start else -1
-                | walks, None ->
-                    let walk = seq walks in
-                    fun c ->
-                      c.wpos <- c.wbase + start;
-                      walk c;
-                      c.wpos
-                | walks, Some gate ->
-                    let walk = seq walks in
-                    fun c ->
-                      c.wpos <- c.wbase + start;
-                      walk c;
-                      if gate c then c.wpos else -1
-              in
-              (p.pname, at) :: acc
+          | _ -> (p.pname, place ~start (List.rev before) p.pgate) :: acc
         in
         go (p :: before) acc rest
   in

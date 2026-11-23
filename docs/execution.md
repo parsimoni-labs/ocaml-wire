@@ -60,9 +60,11 @@ value built and no field read but those a check, a size or a gate reads.
 `View.enter` then reaches a sub-record of a view without checking it again:
 the walk of the record around it finds where it starts, or that its gate
 leaves it absent, and `enter` tests only that the sub-record's frame lies in
-the buffer, so its fields read in place as those of any view. A record whose
+the buffer, so its fields read in place as those of any view. The walk goes
+past a span or a region by its size, with no test of its bounds, which the
+check made, and walks only a sub-codec that measures itself. A record whose
 bytes changed after its check can move a sub-record, never out of the
-buffer.
+buffer: a negative size refuses it, and a sum past `max_int` is `max_int`.
 
 ## Invariants
 

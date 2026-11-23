@@ -694,6 +694,102 @@ let test_region_bounds_nested () =
     (String.concat " / " [ expected; expected ])
     (answer (stack_frame (int 64) "StackRegionFrame") short)
 
+(* Each sub-record [View.enter] places past regions, spans and sub-codecs
+   that measure themselves, present or absent: it reads the fields [decode]
+   gives, and an absent one is refused. *)
+let test_enter_past_regions () =
+  let module V = Codec.View in
+  let k = Field.v "k" uint8 in
+  let k_f = Codec.(k $ fun k -> UInt8.v k) in
+  let inner =
+    Codec.v "Inner"
+      (fun k _ -> UInt8.to_int k)
+      Codec.
+        [
+          (k $ fun k -> UInt8.v k);
+          (Field.v "body" (byte_slice ~size:(Field.ref k)) $ fun _ -> Slice.eod);
+        ]
+  in
+  let g = Field.v "g" uint8 and r = Field.v "r" uint8 in
+  let bit n = Expr.(Field.ref g land int n = int n) in
+  let a =
+    Codec.(
+      Field.optional "a" ~present:(bit 1)
+        (nested_at_most ~size:(Field.ref r) (codec inner))
+      $ fun (_, _, a, _, _, _, _) -> a)
+  and b = Codec.(Field.v "b" (codec inner) $ fun (_, _, _, b, _, _, _) -> b)
+  and c =
+    Codec.(
+      Field.optional "c" ~present:(bit 2) (codec inner)
+      $ fun (_, _, _, _, _, c, _) -> c)
+  and d = Codec.(Field.v "d" (codec inner) $ fun (_, _, _, _, _, _, d) -> d) in
+  let outer =
+    Codec.v "Outer"
+      (fun g r a b _ c d -> (g, r, a, b, (), c, d))
+      Codec.
+        [
+          (g $ fun (g, _, _, _, _, _, _) -> g);
+          (r $ fun (_, r, _, _, _, _, _) -> r);
+          a;
+          b;
+          (Field.v "s" (byte_slice ~size:(Field.ref r)) $ fun _ -> Slice.eod);
+          c;
+          d;
+        ]
+  in
+  Alcotest.(check bool)
+    "walks" true
+    (List.mem "decode.walk" (Private.Testing.paths outer));
+  let module O = (val V.codec outer) in
+  let module I = (val V.codec inner) in
+  let in_a = V.sub_option O.codec I.codec a
+  and in_b = V.sub O.codec I.codec b
+  and in_c = V.sub_option O.codec I.codec c
+  and in_d = V.sub O.codec I.codec d
+  and vk = V.field I.codec k_f in
+  let show (_, _, a, b, _, c, d) =
+    let o = Option.fold ~none:"-" ~some:string_of_int in
+    Fmt.str "%s %d %s %d" (o a) b (o c) d
+  in
+  let viewed input =
+    let (Buf.Any buf) = Buf.v input in
+    let len = Buf.length buf in
+    let ck = V.check O.codec buf len 0 in
+    if not (V.ok ck) then None
+    else
+      let o = V.get ck in
+      let read e =
+        if V.ok e then Some (UInt8.to_int (V.read vk buf (V.get e))) else None
+      in
+      let get e = Option.get (read e) in
+      Some
+        (show
+           ( (),
+             (),
+             read (V.enter in_a buf len o),
+             get (V.enter in_b buf len o),
+             (),
+             read (V.enter in_c buf len o),
+             get (V.enter in_d buf len o) ))
+  in
+  let decoded input =
+    match Codec.decode outer input 0 with
+    | Ok v -> Some (show v)
+    | Error _ -> None
+  in
+  let rnd = Random.State.make [| 11 |] in
+  for i = 1 to 5_000 do
+    let input =
+      Bytes.init
+        (2 + Random.State.int rnd 14)
+        (fun j ->
+          Char.chr
+            (if j = 0 then Random.State.int rnd 4 else Random.State.int rnd 4))
+    in
+    Alcotest.(check (option string))
+      (Fmt.str "input %d" i) (decoded input) (viewed input)
+  done
+
 let suite =
   ( "codec_stack",
     [
@@ -703,6 +799,8 @@ let suite =
         test_walk_trailer;
       Alcotest.test_case "stack: decode walks each layer once" `Quick
         test_stack_walks;
+      Alcotest.test_case "view: enter past regions and sub-codecs" `Quick
+        test_enter_past_regions;
       Alcotest.test_case "stack: views read what decode reads" `Quick
         test_stack_views;
       Alcotest.test_case "stack: every entry point's answers are pinned" `Quick

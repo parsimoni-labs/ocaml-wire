@@ -35,11 +35,12 @@ val gate :
   gates:gates ->
   (string * packed_scalar) list ->
   bool Types.expr ->
-  (Types.cursor -> bool) * gates
-(** [gate ~size ~gates prefix e] is [(g, gates')]: [g c] is {!size} for the
-    presence condition [e], reading the answer of each gate of [gates] it holds
-    from the cursor's {!Types.field-wgates} rather than evaluating it again, and
-    recording its own answer there; [gates'] is [gates] with [e]. Every gate of
+  (Types.cursor -> bool) * (Types.cursor -> bool) * gates
+(** [gate ~size ~gates prefix e] is [(g, plain, gates')]: [g c] is {!size} for
+    the presence condition [e], reading the answer of each gate of [gates] it
+    holds from the cursor's {!Types.field-wgates} rather than evaluating it
+    again, and recording its own answer there; [plain] is [g] recording nothing,
+    for a test no later gate reads; [gates'] is [gates] with [e]. Every gate of
     a record is evaluated in field order, so a gate is evaluated before any
     other reads its answer. *)
 
@@ -100,6 +101,29 @@ val gated_sub :
   'a option Types.walk
 (** [gated_sub present ~name w] walks {!sub}[ ~name w] when [present c] holds,
     in one closure with the test. *)
+
+val moving :
+  name:string option ->
+  frame:int ->
+  (string * packed_scalar) list ->
+  'a Types.typ ->
+  'a Types.walk * walk_move
+(** [moving ~name ~frame prefix typ] is the walk of a field of type [typ] the
+    cursor moves over, a byte span, a sub-codec in a region or one measuring
+    itself, in a record of frame [frame] whose fixed-offset fields are [prefix],
+    and how the cursor goes past it once the record's checks have passed. A
+    region or a sub-codec names its errors with [name], as {!region} does.
+    Raises [Exit] for any other type. *)
+
+val gated_moving :
+  name:string option ->
+  frame:int ->
+  (string * packed_scalar) list ->
+  (Types.cursor -> bool) ->
+  'a Types.typ ->
+  'a option Types.walk * walk_move
+(** [gated_moving ~name ~frame prefix present typ] is {!moving} under the gate
+    [present]: an absent field takes no bytes. *)
 
 val region :
   at_most:bool ->
