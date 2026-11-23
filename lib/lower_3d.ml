@@ -579,6 +579,10 @@ let rec optional_region : type a. a typ -> bool = function
 
 let optional_region_name inner = "OptRegion_" ^ wrap_tag inner
 
+let region_bound : type a. a typ -> bool expr option * a typ = function
+  | Where { cond; inner = Single_elem _ as region } -> (Some cond, region)
+  | t -> (None, t)
+
 (* Primitive scalars have a fixed extent. Lower their sized regions to a
    guarded scalar plus padding instead of retaining a generic exact-parser
    combinator, whose erased parser-kind metadata can leak into C extraction. *)
@@ -762,12 +766,20 @@ let emit_wrapper seen acc name elem =
     | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
     | None -> ());
     acc :=
-      (let where =
-         match elem with
+      (let bound, region = region_bound elem in
+       let sub =
+         match region with
          | Single_elem { size = Sub (a, b); _ } -> Some (Ge (a, b))
          | _ -> None
        in
-       typedef (param_struct name (wrap_formals elem) ?where [ field "v" elem ]))
+       let where =
+         match (bound, sub) with
+         | Some b, Some s -> Some (And (b, s))
+         | Some c, None | None, Some c -> Some c
+         | None, None -> None
+       in
+       typedef
+         (param_struct name (wrap_formals elem) ?where [ field "v" region ]))
       :: !acc
   end
 

@@ -796,9 +796,10 @@ let collect_params name (fields : Types.field list) where =
 
 let to_struct t =
   let formals = collect_params t.name t.struct_fields t.where in
+  let fields = bound_regions ~params:formals t.where t.struct_fields in
   match (formals, t.where) with
-  | [], None -> struct' t.name t.struct_fields
-  | _ -> param_struct t.name formals ?where:t.where t.struct_fields
+  | [], None -> struct' t.name fields
+  | _ -> param_struct t.name formals ?where:t.where fields
 
 let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
 

@@ -113,6 +113,11 @@ val index_bound_elt : 'a typ -> (string * bool expr) option
 (** [index_bound_elt elem] is [Some (elt_var, cond)] when [elem] is a 1-byte
     element carrying a lookup's index bound: it projects as a refined byte. *)
 
+val region_bound : 'a typ -> bool expr option * 'a typ
+(** [region_bound t] is the bound an optional region's declaration states on the
+    formals it reads, and the region: a [Where] directly over a region is that
+    bound ({!Arith_3d.bounded}). [(None, t)] for any other [t]. *)
+
 val optional_region : 'a typ -> bool
 (** [optional_region t] is [true] when [t] is a single-element region, which
     under an optional stays behind a gate and a named wrapper rather than

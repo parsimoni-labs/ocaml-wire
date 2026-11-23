@@ -1120,6 +1120,10 @@ val check_where_encode : bool expr -> bool -> unit
 val pp_action : Format.formatter -> action -> unit
 (** Pretty-print an action block. *)
 
+val bound_regions :
+  ?params:param list -> bool expr option -> field list -> field list
+(** {!Pp_3d.bound_regions}. *)
+
 val check_fields : bool expr option -> field list -> unit
 (** [check_fields where fields] raises [Invalid_argument] where projecting a
     struct of [fields] and [where] would: for a constraint, size, presence

@@ -27,6 +27,12 @@ val envs :
     struct that applies it passes values it has checked; an expression over one
     projects as written. *)
 
+val bounded : env -> field -> field
+(** [bounded env f] is [f], or, when [f] is an optional region whose size
+    verifies only under the bounds [env] proves of the fields it reads, [f] with
+    its region under a [Where] stating them: the region's declaration states it
+    as its [where], and its name records it. *)
+
 val refinement : env -> name:string -> 'a typ -> bool expr -> bool expr
 (** [refinement env ~name t cond] is the refinement 3D checks for [cond] on the
     field [name] of type [t]. *)

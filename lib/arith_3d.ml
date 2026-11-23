@@ -725,32 +725,42 @@ let rec typ : type a. env -> a typ -> a typ =
   | Optional { present; inner } ->
       let present = checked env present (bool_ env) in
       if Lower_3d.optional_region inner || not (has_wire_size_expr inner) then begin
-        region env inner;
+        region inner;
         Optional { present; inner }
       end
       else Optional { present; inner = typ env inner }
   | Optional_or r -> Optional_or { r with inner = typ env r.inner }
   | t -> t
 
-(* The body of an optional region or casetype is declared on its own, reading each field it names
-   through a [UINT32] formal, under the [where] its declaration states for a
-   size [a - b]: 3D checks its expressions there, as written. *)
-and region : type a. env -> a typ -> unit =
- fun env inner ->
-  let leaves = List.map (fun (n, _) -> (n, Unsigned (full T32))) env.leaves in
-  let region = { empty with leaves; written = true } in
-  let region =
-    match inner with
-    | Single_elem { size = Sub (a, b); _ } -> ge region a b
-    | _ -> region
+(* The body of an optional region or casetype is declared on its own, reading
+   each field it names through a [UINT32] formal, under the [where] its
+   declaration states: the bound {!bounded} gives it, and [a >= b] for a size
+   [a - b]. 3D checks its expressions there, as written. *)
+and region_check : type a. a typ -> unit =
+ fun inner ->
+  let bound, body = Lower_3d.region_bound inner in
+  let leaves =
+    List.map
+      (fun (p : param) -> (p.param_name, Unsigned (full T32)))
+      (Lower_3d.wrap_formals inner)
   in
-  match typ region inner with
-  | (_ : a typ) -> ()
-  | exception Invalid_argument m ->
-      Fmt.invalid_arg
-        "%s, in an optional field, whose 3D declaration reads each field it \
-         names as a UINT32"
-        m
+  let env = { empty with leaves; written = true } in
+  let env =
+    match body with
+    | Single_elem { size = Sub (a, b); _ } -> ge env a b
+    | _ -> env
+  in
+  let env = match bound with Some c -> assume env c true | None -> env in
+  ignore (typ env body : a typ)
+
+and region : type a. a typ -> unit =
+ fun inner ->
+  try region_check inner
+  with Invalid_argument m ->
+    Fmt.invalid_arg
+      "%s, in an optional field, whose 3D declaration reads each field it \
+       names as a UINT32 bounded by what the record proves of it"
+      m
 
 (* An action's integer expression: a literal or a field as written, which 3D
    copies, any other as {!int_} checks it. *)
@@ -827,6 +837,44 @@ let field env (Field f) =
   | exception Invalid_argument m ->
       Fmt.invalid_arg "%s (in field %S)" m
         (Option.value ~default:"_" f.field_name)
+
+(* The bounds the record proves of the fields an optional region reads,
+   where its size verifies only under them: [a * 4] over a [uint8] reads [a]
+   as a [UINT32], where it verifies under [a <= 255]. *)
+let region_bounds env inner =
+  List.concat_map
+    (fun (p : param) ->
+      let n : int expr = Ref (I, p.param_name) in
+      match List.assoc_opt p.param_name env.leaves with
+      | Some (Unsigned r) ->
+          (if ult 0L r.lo && ule r.lo native then
+             [ Ge (n, Int (Int64.to_int r.lo)) ]
+           else [])
+          @
+          if ult r.hi (top T32) && ule r.hi native then
+            [ Le (n, Int (Int64.to_int r.hi)) ]
+          else []
+      | _ -> [])
+    (Lower_3d.wrap_formals inner)
+
+(* [f] with the region of its optional under a [Where] stating those bounds,
+   which the region's declaration takes as its [where] and its name records,
+   when the region verifies only under them. *)
+let bounded env (Field f as field) =
+  match f.field_typ with
+  | Optional { present; inner = Single_elem _ as inner } -> (
+      match region_check inner with
+      | () -> field
+      | exception Invalid_argument _ -> (
+          match region_bounds env inner with
+          | [] -> field
+          | b :: bs -> (
+              let cond = List.fold_left (fun a c -> And (a, c)) b bs in
+              let inner = Where { cond; inner } in
+              match region_check inner with
+              | () -> Field { f with field_typ = Optional { present; inner } }
+              | exception Invalid_argument _ -> field)))
+  | _ -> field
 
 let refinement env ~name t cond =
   let env =

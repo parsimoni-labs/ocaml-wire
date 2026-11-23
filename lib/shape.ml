@@ -209,5 +209,5 @@ let reject_invalid_codec_shape ?where name fields =
   reject_zeroterm_with_sibling name fields;
   reject_nested_where name fields;
   reject_refined_non_scalar name fields;
-  try check_fields where fields
+  try check_fields where (bound_regions where fields)
   with Invalid_argument msg -> Fmt.invalid_arg "Codec.v %S: %s" name msg

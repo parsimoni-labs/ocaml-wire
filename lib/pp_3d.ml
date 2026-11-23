@@ -1019,14 +1019,35 @@ let guard_subtraction_sizes fields =
 (* A struct's fields as 3D checks them, each with the environment its
    expressions are typed in, and its [where] once the fields it names have
    taken it: what [pp_struct] prints and what [Codec.v] refuses. *)
-let projected_fields ?(params = []) where fields =
+let field_envs ?(params = []) where fields =
   let fields = reorder_bit_groups_for_3d fields in
   let where, fields = lower_where_to_field_constraint where fields in
   let fields = guard_subtraction_sizes fields in
   let formals = List.map (fun (p : param) -> p.param_name) params in
   let outer, envs = Arith_3d.envs ~formals ?where fields in
+  (outer, where, List.combine envs fields)
+
+let projected_fields ?params where fields =
+  let outer, where, fields = field_envs ?params where fields in
   ( Option.map (Arith_3d.condition outer) where,
-    List.map2 (fun env f -> (env, Arith_3d.field env f)) envs fields )
+    List.map (fun (env, f) -> (env, Arith_3d.field env f)) fields )
+
+(* Each optional region of [fields] under the bounds its use site proves, where
+   its size verifies only under them ({!Arith_3d.bounded}). *)
+let bound_regions ?params where fields =
+  let _, _, envs = field_envs ?params where fields in
+  let env_of name =
+    List.find_map
+      (fun (env, Field f) ->
+        if f.field_name = Some name then Some env else None)
+      envs
+  in
+  List.map
+    (fun (Field f as field) ->
+      match Option.bind f.field_name env_of with
+      | Some env -> Arith_3d.bounded env field
+      | None -> field)
+    fields
 
 let pp_struct ppf (s : struct_) =
   check_3d_names s;
