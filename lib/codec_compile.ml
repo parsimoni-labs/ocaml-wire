@@ -812,7 +812,8 @@ let check_var_span : type a. a typ -> Input_end.t -> first:int -> sz:int -> unit
 (* The reader of a [byte_array_where] span, its refinement compiled once. *)
 let refined_reader : type a. a typ -> bytes -> first:int -> len:int -> string =
   function
-  | Byte_array_where { elt_var; cond; _ } -> refined_span_reader ~elt_var ~cond
+  | Byte_array_where { elt_var; cond; test; _ } ->
+      refined_span_reader ~elt_var ~cond ~test
   | _ -> fun buf ~first ~len -> Bytes.sub_string buf first len
 
 let var_bytes_reader : type a.
@@ -871,8 +872,8 @@ let var_bytes_reader : type a.
 let span_check : type a.
     a typ -> (Input_end.t -> bytes -> first:int -> len:int -> unit) option =
   function
-  | Byte_array_where { elt_var; cond; _ } ->
-      let check = refined_span_check ~elt_var ~cond in
+  | Byte_array_where { elt_var; cond; test; _ } ->
+      let check = refined_span_check ~elt_var ~cond ~test in
       Some
         (fun input_end buf ~first ~len ->
           check_span_bounds input_end ~first ~sz:len;
@@ -1007,8 +1008,8 @@ let var_bytes_write_str buf write_off s =
 
 (* The per-byte refinement a [byte_array_where] writer checks, compiled once. *)
 let refined_check : type a. a typ -> string -> unit = function
-  | Byte_array_where { elt_var; cond; _ } ->
-      Eval.check_byte_refinement ~elt_var ~cond
+  | Byte_array_where { elt_var; cond; test; _ } ->
+      Eval.check_byte_refinement ~elt_var ~cond ~test
   | _ -> ignore
 
 let write_zeroterm_at_most size_fn runtime buf base write_off s =

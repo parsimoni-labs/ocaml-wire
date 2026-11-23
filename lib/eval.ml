@@ -96,7 +96,7 @@ and compare_int64_expr : ctx -> int64 expr -> int64 expr -> int =
 (* A per-byte condition reads the byte [elt_var] alone, and is computed at the
    width 3D gives it: in the native int, or on 64 bits, unsigned, where its
    value can leave the native int ({!Types.wide_expr}). *)
-let byte_test ~elt_var cond =
+let compile_byte_test ~elt_var cond =
   let unbound name _ () () () = lookup name [] in
   let leaves : (int, unit, unit, unit) Expr_compiler.leaves =
     {
@@ -134,18 +134,28 @@ let byte_test ~elt_var cond =
    or writes one decides it here: the compiled codec, the direct parser, both
    encoders and the EverParse validator built from the same schema all admit
    exactly the same bytes. *)
-let bad_byte ~elt_var ~cond =
-  let test = byte_test ~elt_var cond in
-  fun buf ~first ~len ->
-    let rec scan i =
-      if i >= len then -1
-      else if test (Bytes.get_uint8 buf (first + i)) then scan (i + 1)
-      else i
-    in
-    scan 0
+let byte_test ~elt_var ~cond test =
+  match Atomic.get test with
+  | Some f -> f
+  | None ->
+      let f = compile_byte_test ~elt_var cond in
+      Atomic.set test (Some f);
+      f
 
-let check_byte_refinement ~elt_var ~cond =
-  let bad = bad_byte ~elt_var ~cond in
+let rec scan test buf first len i =
+  if i >= len then -1
+  else if test (Bytes.get_uint8 buf (first + i)) then
+    scan test buf first len (i + 1)
+  else i
+
+let first_bad test buf ~first ~len = scan test buf first len 0
+
+let bad_byte ~elt_var ~cond ~test =
+  let test = byte_test ~elt_var ~cond test in
+  fun buf ~first ~len -> first_bad test buf ~first ~len
+
+let check_byte_refinement ~elt_var ~cond ~test =
+  let bad = bad_byte ~elt_var ~cond ~test in
   fun s ->
     let len = String.length s in
     (* [bad] only reads, so the aliased bytes never escape as mutable. *)

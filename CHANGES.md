@@ -194,6 +194,10 @@
 
 ### Changed
 
+- A `byte_array_where` per-byte condition is compiled once per type: a
+  nested refined span and `Wire.of_string` compiled it on every call, and
+  now spend 30% fewer instructions on a 32-byte span (@samoht)
+
 - Arithmetic past OCaml's native int is computed on 64 bits, as unsigned
   integers, as the generated C computes it: `self + int (max_int - 5)` over a
   `uint32`, the square of a `uint32` field, or the same sum in a

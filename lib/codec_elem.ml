@@ -511,8 +511,10 @@ let rec read_elem : type a. a typ -> runtime -> Input_end.t -> bytes -> int -> a
   (* Fixed-size byte spans as repeat / array elements: a list of n-byte
      chunks. The size is the element's own constant width. *)
   | Byte_array { size = Int n } -> Bytes.sub_string buf off n
-  | Byte_array_where { size = Int n; elt_var; cond } ->
-      refined_span_reader ~elt_var ~cond buf ~first:off ~len:n
+  | Byte_array_where { size = Int n; elt_var; cond; test } ->
+      refined_span_read
+        (Eval.byte_test ~elt_var ~cond test)
+        buf ~first:off ~len:n
   | Byte_slice { size = Int n } -> Slice.make_or_eod buf ~first:off ~length:n
   (* A lone bitfield occupies its base word; extract the value at its bit
      offset. *)

@@ -281,6 +281,9 @@ and _ typ =
       size : int expr;
       elt_var : string;
       cond : bool expr;
+      test : (int -> bool) option Atomic.t;
+          (* [cond] compiled, on first use, for the readers and writers that
+             walk the type on each call rather than staging it. *)
     }
       -> string typ
   | Byte_slice : { size : int expr } -> Bytesrw.Bytes.Slice.t typ
@@ -1222,7 +1225,12 @@ let byte_array_where ~size ~per_byte =
   let elt_var = elt_var_prefix ^ string_of_int n in
   let cond = per_byte (Ref (I, elt_var)) in
   Byte_array_where
-    { size = literal_size ~combinator:"byte_array_where" size; elt_var; cond }
+    {
+      size = literal_size ~combinator:"byte_array_where" size;
+      elt_var;
+      cond;
+      test = Atomic.make None;
+    }
 
 (* The 3D synthesized typedef name derived from an elt_var. The element
    field inside the synthesized struct keeps the elt_var as its name so the

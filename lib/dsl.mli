@@ -316,6 +316,8 @@ and _ typ =
       size : int expr;
       elt_var : string;
       cond : bool expr;
+      test : (int -> bool) option Atomic.t;
+          (** [cond] compiled on first use, by {!Eval.byte_test}. *)
     }
       -> string typ
       (** Byte span with a per-byte refinement: each decoded byte must satisfy

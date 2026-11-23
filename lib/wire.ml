@@ -395,10 +395,14 @@ let rec parse_direct : type a.
       let n = Eval.expr Eval.empty size in
       check_span len ~off ~n;
       (Bytes.sub_string buf off n, off + n)
-  | Byte_array_where { size; elt_var; cond } ->
+  | Byte_array_where { size; elt_var; cond; test } ->
       let n = Eval.expr Eval.empty size in
       check_span len ~off ~n;
-      let bad = Eval.bad_byte ~elt_var ~cond buf ~first:off ~len:n in
+      let bad =
+        Eval.first_bad
+          (Eval.byte_test ~elt_var ~cond test)
+          buf ~first:off ~len:n
+      in
       if bad >= 0 then raise_constraint ~at:(off + bad) ~which:Per_byte ();
       (Bytes.sub_string buf off n, off + n)
   | Byte_slice { size } ->
@@ -957,9 +961,9 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Byte_array { size } ->
       check_byte_field_size size ~actual:(String.length v);
       write_string enc v
-  | Byte_array_where { size; elt_var; cond } ->
+  | Byte_array_where { size; elt_var; cond; test } ->
       check_byte_field_size size ~actual:(String.length v);
-      Eval.check_byte_refinement ~elt_var ~cond v;
+      Eval.check_byte_refinement ~elt_var ~cond ~test v;
       write_string enc v
   | Byte_slice { size } ->
       let src = Slice.bytes v in

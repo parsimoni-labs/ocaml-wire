@@ -55,21 +55,29 @@ val zeroterm_nul_pos : bytes -> first:int -> limit:int -> int
 val refined_span_check :
   elt_var:string ->
   cond:bool Types.expr ->
+  test:(int -> bool) option Atomic.t ->
   bytes ->
   first:int ->
   len:int ->
   unit
-(** [refined_span_check ~elt_var ~cond buf ~first ~len] raises a per-byte
-    constraint error at the first byte of the span that fails [cond]. *)
+(** [refined_span_check ~elt_var ~cond ~test buf ~first ~len] raises a per-byte
+    constraint error at the first byte of the span that fails [cond], compiled
+    once into [test] ({!Eval.byte_test}). *)
+
+val refined_span_read : (int -> bool) -> bytes -> first:int -> len:int -> string
+(** [refined_span_read test buf ~first ~len] is the span, after raising a
+    per-byte constraint error at its first byte that fails [test]. *)
 
 val refined_span_reader :
   elt_var:string ->
   cond:bool Types.expr ->
+  test:(int -> bool) option Atomic.t ->
   bytes ->
   first:int ->
   len:int ->
   string
-(** [refined_span_reader] runs {!refined_span_check} and copies the span. *)
+(** [refined_span_reader ~elt_var ~cond ~test buf ~first ~len] is
+    {!refined_span_read} of the compiled [cond]. *)
 
 val all_zeros_check : bytes -> first:int -> len:int -> unit
 (** [all_zeros_check buf ~first ~len] raises a non-zero-padding error at the

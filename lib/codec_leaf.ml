@@ -105,17 +105,21 @@ let zeroterm_nul_pos buf ~first ~limit = nul_scan buf ~at:first ~limit first
    path that yields the span runs it, so [Codec.decode] and [Codec.validate_exn]
    reject the same bytes as [Wire.of_string] and as the EverParse validator
    built from the same schema. *)
-let refined_span_check ~elt_var ~cond =
-  let bad_byte = Eval.bad_byte ~elt_var ~cond in
+let refined_span_check ~elt_var ~cond ~test =
+  let bad_byte = Eval.bad_byte ~elt_var ~cond ~test in
   fun buf ~first ~len ->
     let bad = bad_byte buf ~first ~len in
     if bad >= 0 then raise_constraint ~at:(first + bad) ~which:Per_byte ()
 
-let refined_span_reader ~elt_var ~cond =
-  let check = refined_span_check ~elt_var ~cond in
-  fun buf ~first ~len ->
-    check buf ~first ~len;
-    Bytes.sub_string buf first len
+(* The span read with [test] already compiled, for a reader that walks the type
+   on each call. *)
+let refined_span_read test buf ~first ~len =
+  let bad = Eval.first_bad test buf ~first ~len in
+  if bad >= 0 then raise_constraint ~at:(first + bad) ~which:Per_byte ();
+  Bytes.sub_string buf first len
+
+let refined_span_reader ~elt_var ~cond ~test =
+  refined_span_read (Eval.byte_test ~elt_var ~cond test)
 
 (* Index of the first byte of [buf.[first .. first + len - 1]] that is not NUL,
    or [-1] when the span is all zeros. Scans the buffer where it lies, so the
@@ -141,8 +145,8 @@ let all_zeros_reader buf ~first ~len =
    bytes its own decoder (and the EverParse validator built from the same
    schema) rejects. One helper per refined type, so the encoder dispatch below
    stays a flat table. *)
-let refined_bytes_encoder n ~elt_var ~cond =
-  let check = Eval.check_byte_refinement ~elt_var ~cond in
+let refined_bytes_encoder n ~elt_var ~cond ~test =
+  let check = Eval.check_byte_refinement ~elt_var ~cond ~test in
   fun buf off v ->
     check v;
     blit_string_exact n buf off v
@@ -298,8 +302,8 @@ and build_field_encoder_ctx : type a.
       fun _runtime buf off v -> uint_var_field_encoder endian n buf off v
   | Byte_array { size = Int n } ->
       fun _runtime buf off v -> blit_string_exact n buf off v
-  | Byte_array_where { size = Int n; elt_var; cond } ->
-      let encode = refined_bytes_encoder n ~elt_var ~cond in
+  | Byte_array_where { size = Int n; elt_var; cond; test } ->
+      let encode = refined_bytes_encoder n ~elt_var ~cond ~test in
       fun _runtime buf off v -> encode buf off v
   | Byte_slice { size = Int n } ->
       fun _runtime buf off v -> blit_slice_exact n buf off v
@@ -464,8 +468,8 @@ let rec build_field_reader_ctx : type a.
   | Byte_array { size = Int n } ->
       const_span_reader ~field_off n (fun _runtime _input_end buf base ->
           Bytes.sub_string buf (base + field_off) n)
-  | Byte_array_where { size = Int n; elt_var; cond } ->
-      let read = refined_span_reader ~elt_var ~cond in
+  | Byte_array_where { size = Int n; elt_var; cond; test } ->
+      let read = refined_span_reader ~elt_var ~cond ~test in
       const_span_reader ~field_off n (fun _runtime _input_end buf base ->
           read buf ~first:(base + field_off) ~len:n)
   | Byte_slice { size = Int n } ->
