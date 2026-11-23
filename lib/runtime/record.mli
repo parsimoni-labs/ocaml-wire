@@ -46,7 +46,7 @@ module type S = sig
     (** [check b len off] checks the record at [off] without raising. *)
 
     val ok : 'b check -> bool
-    (** [ok c] is [true] when the check passed. *)
+    (** [ok c] is [true] iff the check passed. *)
 
     val get : 'b check -> 'b t
     (** [get c] is the record of a check that passed. Raises [Invalid_argument]
