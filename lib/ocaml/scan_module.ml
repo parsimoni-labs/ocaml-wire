@@ -1111,6 +1111,7 @@ let fstar ?fields c =
   let text =
     walk ~trace:replay ~num:Fstar ~note:(fun n -> notes := n :: !notes)
   in
+  let text = without_dead_bindings text in
   {
     body = text;
     functions = List.filter_map fstar_function (String.split_on_char '\n' text);
