@@ -676,8 +676,7 @@ let apply_compiled : type a f r.
   in
   Record
     {
-      name = r.name;
-      make = r.make;
+      r with
       readers = Snoc (r.readers, read);
       checked_readers = Snoc (r.checked_readers, checked_read);
       writers_rev = (cf.raw_writer :: cf.extra_writers) @ r.writers_rev;
@@ -688,8 +687,6 @@ let apply_compiled : type a f r.
       size_of_value_rev = field_size_of_value fld cf :: r.size_of_value_rev;
       min_wire_size;
       next_off = cf.next_off;
-      fixed_prefix = r.fixed_prefix;
-      used_slots = r.used_slots;
       validators_rev =
         List.map
           (fun step -> (byte_off, step))
@@ -711,10 +708,7 @@ let apply_compiled : type a f r.
       field_access_rev =
         (fld.name, (fld.id, cf.field_access)) :: r.field_access_rev;
       field_readers = new_field_readers;
-      where = r.where;
-      doc = r.doc;
-      param_slots = r.param_slots;
-      wide_slots = r.wide_slots;
+      wide_readers = extend_wide fld.name fld.typ raw_reader r.wide_readers;
     }
 
 let add_field : type a f r. (a -> f, r) record -> (a, r) field -> (f, r) record

@@ -248,6 +248,11 @@
   for `uint32`, `int32`, `float32` and `uint` fields on js_of_ocaml and
   wasm_of_ocaml (#524, @samoht)
 
+- The presence condition of an optional field reads a `uint64`, `int64` or
+  `float64` field at its full 64 bits too. `decode`, `validate` and `check`
+  failed with `value out of range` on a value of 2^62 or more, which the
+  generated C reads in full (#526, @samoht)
+
 - On wasm_of_ocaml, `validate` and `check` refused a negative value of a
   signed field whose constraint is an interval, in a record of interval
   checks only. They now accept it, as `decode` does (#521, @samoht)

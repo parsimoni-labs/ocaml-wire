@@ -43,6 +43,7 @@ type validator_acc = {
   checkers_rev :
     (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
   field_readers : field_reader list;
+  wide_readers : wide_reader list;
   field_access_rev : (string * field_access) list;
   n_fields : int;
   n_array_slots : int;
@@ -59,6 +60,7 @@ let empty_validator_acc () =
     validators_rev = [];
     checkers_rev = [];
     field_readers = [];
+    wide_readers = [];
     field_access_rev = [];
     n_fields = 0;
     n_array_slots = 0;
@@ -76,6 +78,7 @@ let layout_ctx_of_validator_acc acc =
     fixed_prefix = acc.fixed_prefix;
     bf = acc.bf;
     field_readers = acc.field_readers;
+    wide_readers = acc.wide_readers;
     field_at =
       (fun name ->
         Option.map access_at (List.assoc_opt name acc.field_access_rev));
@@ -168,6 +171,7 @@ let rec apply_struct_field acc inner_struct =
     validators_rev = (static_off, validator) :: acc.validators_rev;
     checkers_rev = (static_off, validator) :: acc.checkers_rev;
     field_readers = acc.field_readers;
+    wide_readers = acc.wide_readers;
     field_access_rev = acc.field_access_rev;
     n_fields = acc.n_fields;
     n_array_slots = acc.n_array_slots;
@@ -211,6 +215,8 @@ and apply_field_to_validator_acc acc (Types.Field f) =
         validators_rev = (cf.validator_off, full) :: acc.validators_rev;
         checkers_rev = (cf.validator_off, check_only) :: acc.checkers_rev;
         field_readers = new_field_readers;
+        wide_readers =
+          extend_wide name f.field_typ cf.raw_reader acc.wide_readers;
         field_access_rev = (name, cf.field_access) :: acc.field_access_rev;
         n_fields = List.length new_field_readers;
         n_array_slots = List.length new_field_readers + n_extra_vars;

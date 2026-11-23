@@ -187,8 +187,26 @@ val compile_expr :
 (** [compile_expr env e runtime input_end buf base] evaluates [e] for the record
     at [base], resolving field references through [env]. *)
 
+type wide_reader =
+  string
+  * Expr_compiler.wide
+  * (runtime -> Input_end.t -> bytes -> int -> int64)
+(** The full-width reader of a field declared earlier, under its name, for a
+    field whose type is {!wide_kind}. *)
+
+val extend_wide :
+  string ->
+  'a Types.typ ->
+  (runtime -> Input_end.t -> bytes -> int -> 'a) ->
+  wide_reader list ->
+  wide_reader list
+(** [extend_wide name typ reader prev] is [prev] with the field [name] of [typ],
+    decoded by [reader], read at full width when {!wide_kind} says it is, and
+    any earlier field [name] hidden. *)
+
 val compile_bool_expr :
   ?sizeof_this:(runtime -> Input_end.t -> bytes -> int -> int) ->
+  ?wide:wide_reader list ->
   field_reader list ->
   bool Types.expr ->
   runtime ->
@@ -196,7 +214,8 @@ val compile_bool_expr :
   bytes ->
   int ->
   bool
-(** [compile_bool_expr] is {!compile_expr} for a condition. *)
+(** [compile_bool_expr] is {!compile_expr} for a condition. A field of [wide] is
+    read at full width. *)
 
 type idx = string -> int
 (** Slot index of a field or action-local name. *)
@@ -362,6 +381,7 @@ type ('f, 'r) record =
       where : bool Types.expr option;
       doc : string option;
       field_readers : field_reader list;
+      wide_readers : wide_reader list;
       param_slots : (string, int) Hashtbl.t;
       wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
     }

@@ -28,6 +28,8 @@ type layout_ctx = {
   fixed_prefix : int ref;
   bf : bf_codec_state option;
   field_readers : field_reader list;
+  wide_readers : wide_reader list;
+      (** The earlier fields a presence condition reads at full width. *)
   field_at : string -> (runtime -> Input_end.t -> bytes -> int -> int) option;
       (** Where an earlier field's bytes start, by name. *)
   n_fields : int;

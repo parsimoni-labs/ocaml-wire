@@ -104,18 +104,51 @@ let raise_field_constraint ~field_idx ~at arr =
    values on this platform: EverParse reads its whole bit pattern, so a
    constraint over it is evaluated on 64 bits from the [int64s] slot
    ([Expr_compiler.wide]). A float is its IEEE 754 bit pattern, as in 3D. *)
-let rec wide_kind : type a. a typ -> Expr_compiler.wide option = function
-  | Uint64 _ | Float64 _ -> Some Unsigned
-  | Int64 _ -> Some Signed
-  | Uint32 _ | Float32 _ -> if Sys.int_size > 32 then None else Some Unsigned
-  | Int32 _ -> if Sys.int_size > 32 then None else Some Signed
-  | Uint_var _ -> if Sys.int_size >= 63 then None else Some Unsigned
-  | Where { inner; _ } -> wide_kind inner
-  | Enum { base; _ } -> wide_kind base
-  | Map { inner; _ } -> wide_kind inner
-  | Optional { inner; _ } -> wide_kind inner
-  | Optional_or { inner; _ } -> wide_kind inner
+let float32_bits v = Int64.logand (Int64.of_int32 v) 0xFFFF_FFFFL
+
+(* The kind, and the 64 bits a decoded value reads as; an absent optional reads
+   as zero, as its slots do. *)
+let rec wide_of : type a. a typ -> (Expr_compiler.wide * (a -> int64)) option =
+  function
+  | Uint64 _ -> Some (Unsigned, UInt64.to_int64)
+  | Float64 _ -> Some (Unsigned, Int64.bits_of_float)
+  | Int64 _ -> Some (Signed, Fun.id)
+  | Uint32 _ when Sys.int_size <= 32 ->
+      Some
+        ( Unsigned,
+          fun v ->
+            Int64.logand (Int64.of_int32 (UInt32.to_int32 v)) 0xFFFF_FFFFL )
+  | Float32 _ when Sys.int_size <= 32 ->
+      Some (Unsigned, fun v -> float32_bits (Int32.bits_of_float v))
+  | Int32 _ when Sys.int_size <= 32 ->
+      Some (Signed, fun v -> Int64.of_int32 (SInt32.to_int32 v))
+  | Uint_var _ when Sys.int_size < 63 -> Some (Unsigned, Optint.Int63.to_int64)
+  | Where { inner; _ } -> wide_of inner
+  | Enum { base; _ } -> wide_of base
+  | Map { inner; encode; _ } ->
+      Option.map (fun (k, f) -> (k, fun v -> f (encode v))) (wide_of inner)
+  | Optional { inner; _ } ->
+      Option.map
+        (fun (k, f) -> (k, function Some v -> f v | None -> 0L))
+        (wide_of inner)
+  | Optional_or { inner; _ } -> wide_of inner
   | _ -> None
+
+let wide_kind typ = Option.map fst (wide_of typ)
+
+type wide_reader =
+  string
+  * Expr_compiler.wide
+  * (runtime -> Input_end.t -> bytes -> int -> int64)
+
+(* [prev] with field [name] read through [reader], at full width when its type
+   is [wide_kind]; a later field of the same name hides the earlier one. *)
+let extend_wide name typ reader prev =
+  let prev = List.filter (fun (n, _, _) -> not (String.equal n name)) prev in
+  match wide_of typ with
+  | None -> prev
+  | Some (kind, int64) ->
+      (name, kind, fun rt ie buf base -> int64 (reader rt ie buf base)) :: prev
 
 (* A [wide_kind] field fills its [int64s] slot with the value it reads at full
    width, and its int slot with that value when the int holds it. *)
@@ -180,7 +213,6 @@ let populate_uint16 idx reader slots runtime input_end buf base =
    the int64 slot with it, which its predicates read. The user-facing reader
    still returns the [float], reinterpreted via [Int*.float_of_bits]
    elsewhere. *)
-let float32_bits v = Int64.logand (Int64.of_int32 v) 0xFFFF_FFFFL
 
 let populate_float32 idx read =
   if Sys.int_size > 32 then fun slots _runtime _input_end buf base ->
@@ -627,8 +659,9 @@ type field_reader =
    through the operation's immutable evaluation context. *)
 let bytes_leaves
     ?(sizeof_this : runtime -> Input_end.t -> bytes -> int -> int =
-      fun _ _ _ _ -> 0) (env : field_reader list) :
+      fun _ _ _ _ -> 0) ?(wide = []) (env : field_reader list) :
     (runtime, Input_end.t, bytes, int) Expr_compiler.leaves =
+  let find name = List.find_opt (fun (n, _, _) -> String.equal n name) wide in
   {
     ref_ =
       (fun name ->
@@ -638,12 +671,15 @@ let bytes_leaves
             Fmt.invalid_arg "Codec: unbound field ref %S in size expression"
               name);
     i64 =
-      (fun name _ _ _ _ ->
-        Fmt.invalid_arg
-          "Codec: full-width field ref %S is only available in field \
-           constraints"
-          name);
-    wide = (fun _ -> None);
+      (fun name ->
+        match find name with
+        | Some (_, _, reader) -> reader
+        | None ->
+            Fmt.invalid_arg
+              "Codec: full-width field ref %S is only available in field \
+               constraints and presence conditions"
+              name);
+    wide = (fun name -> Option.map (fun (_, k, _) -> k) (find name));
     param_ref =
       (fun (Expr_compiler.Pack_param p) rt _ _ _ -> Types.eval_param rt p.name);
     sizeof_typ =
@@ -667,8 +703,8 @@ let compile_expr ?sizeof_this env e =
   fun runtime input_end buf base ->
     eval_buffer_expr f runtime input_end buf base
 
-let compile_bool_expr ?sizeof_this env e =
-  let f = Expr_compiler.compile_bool (bytes_leaves ?sizeof_this env) e in
+let compile_bool_expr ?sizeof_this ?wide env e =
+  let f = Expr_compiler.compile_bool (bytes_leaves ?sizeof_this ?wide env) e in
   fun runtime input_end buf base ->
     eval_buffer_expr f runtime input_end buf base
 
@@ -995,6 +1031,9 @@ type ('f, 'r) record =
       where : bool expr option;
       doc : string option;
       field_readers : field_reader list;
+      wide_readers : wide_reader list;
+          (* The full-width readers of the [wide_kind] fields among
+             [field_readers], for a presence condition. *)
       param_slots : (string, int) Hashtbl.t;
           (* Per-codec param name to decode-array slot, filled at seal. *)
       wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
@@ -1170,6 +1209,7 @@ let record_start ?where ?doc name make =
       r_bf = None;
       field_access_rev = [];
       field_readers = [];
+      wide_readers = [];
       where;
       param_slots = Hashtbl.create 4;
       wide_slots = Hashtbl.create 4;

@@ -45,6 +45,7 @@ type layout_ctx = {
   fixed_prefix : int ref;
   bf : bf_codec_state option;
   field_readers : field_reader list;
+  wide_readers : wide_reader list;
   field_at : string -> (runtime -> Input_end.t -> bytes -> int -> int) option;
       (* Where an earlier field's bytes start, by name: what a field that
          rejects another field's value reports as the place of the failure. *)
@@ -58,6 +59,7 @@ let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
     fixed_prefix = r.fixed_prefix;
     bf = r.r_bf;
     field_readers = r.field_readers;
+    wide_readers = r.wide_readers;
     field_at =
       (fun name ->
         Option.map
@@ -1620,7 +1622,9 @@ and compile_optional : type a r.
         ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
         ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
   | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.field_readers present in
+      let present_fn =
+        compile_bool_expr ~wide:ctx.wide_readers ctx.field_readers present
+      in
       let readable = present_in_bounds ctx present_fn fsize in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let inner_populate =
@@ -1658,7 +1662,9 @@ and compile_optional_variable : type a r.
     a typ ->
     (a option, r) compiled_field =
  fun ctx fld present inner ->
-  let present_fn = compile_bool_expr ctx.field_readers present in
+  let present_fn =
+    compile_bool_expr ~wide:ctx.wide_readers ctx.field_readers present
+  in
   let get = fld.get in
   let inner_fld =
     {
@@ -1724,7 +1730,9 @@ and compile_optional_or : type a r.
         ~populate ()
   | Bool false, _ -> absent_optional_or ctx inner default
   | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.field_readers present in
+      let present_fn =
+        compile_bool_expr ~wide:ctx.wide_readers ctx.field_readers present
+      in
       let readable = present_in_bounds ctx present_fn fsize in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
@@ -1769,7 +1777,9 @@ and compile_optional_or_variable : type a r.
     a ->
     (a, r) compiled_field =
  fun ctx fld present inner default ->
-  let present_fn = compile_bool_expr ctx.field_readers present in
+  let present_fn =
+    compile_bool_expr ~wide:ctx.wide_readers ctx.field_readers present
+  in
   let inner_fld =
     {
       id = fld.id;
