@@ -31,6 +31,9 @@ type ('c1, 'c2, 'c3, 'c4) leaves = {
   wide : string -> wide option;
       (** [wide name] is how field [name] reads at full width, from {!i64}, when
           a native int cannot always hold it. *)
+  wide_expr : int Types.expr -> bool;
+      (** [wide_expr e] is [true] when [e] is evaluated on 64 bits, unsigned,
+          because its value can leave the native int ({!Types.wide_expr}). *)
   param_ref : packed_param -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
   sizeof_typ : Types.packed_typ -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
   sizeof_this : 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;

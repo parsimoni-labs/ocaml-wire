@@ -53,7 +53,6 @@ let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
       | Unboxed -> { local_bytes_src with u = "L"; checked = "L" }
       | Tagged | Boxed -> bytes_src);
     ox = false;
-    cold = false;
     raw32 = false;
     ranged = true;
     live = live plan ~outputs:(ids selected);
@@ -61,7 +60,6 @@ let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
     slots = Sset.of_list (ids (slots plan selected));
     ahead = Sset.empty;
     fail = (fun _ -> "");
-    overflowed = (fun _ _ -> "");
     decide;
   }
 
@@ -144,9 +142,7 @@ let scope s names =
    a closure. *)
 let pp_scan ?cuts ?(known = 0) ~name ~scope s ~reject ~accept =
   pp_slots s.m s.ppf s.selected;
-  let m =
-    { s.m with fail = (fun _ -> reject); overflowed = (fun _ _ -> reject) }
-  in
+  let m = { s.m with fail = (fun _ -> reject) } in
   start ?cuts ~scope
     ?first:(Option.map (fun _ -> "record") cuts)
     ~name ~m ~ppf:s.ppf ~ranges:s.plan.ranges ~base:"base" ~limit:"stop" ~known

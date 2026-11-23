@@ -18,6 +18,7 @@ type ('c1, 'c2, 'c3, 'c4) leaves = {
   ref_ : string -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
   i64 : string -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int64;
   wide : string -> wide option;
+  wide_expr : int expr -> bool;
   param_ref : packed_param -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
   sizeof_typ : packed_typ -> 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
   sizeof_this : 'c1 -> 'c2 -> 'c3 -> 'c4 -> int;
@@ -58,7 +59,9 @@ let try_int64 : type a c1 c2 c3 c4.
 (* A field a native int cannot always hold is read at its full width, as
    EverParse reads it: an int expression over one is evaluated on 64 bits,
    unsigned when any such field is unsigned, and an overflow, an underflow or a
-   negative operand of an unsigned expression is [Value_out_of_range]. *)
+   negative operand of an unsigned expression is [Value_out_of_range]. So is
+   one whose value can leave the native int ([wide_expr]), unsigned, as 3D
+   computes it at the type that holds it. *)
 let join a b =
   match (a, b) with
   | Some Unsigned, _ | _, Some Unsigned -> Some Unsigned
@@ -85,6 +88,11 @@ let rec wide_of : type c1 c2 c3 c4.
   | If_then_else (_, a, b) ->
       join (w a) (w b)
   | Lnot a | Cast (_, a) -> w a
+
+let width l e =
+  match wide_of l e with
+  | Some w -> Some w
+  | None -> if l.wide_expr e then Some Unsigned else None
 
 let out_of_range v = raise_out_of_range ~at:0 v
 
@@ -177,7 +185,7 @@ let as_int : type a. a expr -> int expr option = function
 let rec compile_int : type c1 c2 c3 c4.
     (c1, c2, c3, c4) leaves -> int expr -> c1 -> c2 -> c3 -> c4 -> int =
  fun l e ->
-  match wide_of l e with
+  match width l e with
   | None -> compile_narrow l e
   | Some w ->
       let f = compile_wide l w e in
@@ -321,7 +329,7 @@ and compare_at : type a c1 c2 c3 c4.
  fun l a b ->
   match (as_int a, as_int b) with
   | Some a, Some b -> (
-      match join (wide_of l a) (wide_of l b) with
+      match join (width l a) (width l b) with
       | None -> None
       | Some w -> Some (compile_wide l w a, compile_wide l w b, compare_wide w))
   | _ -> None

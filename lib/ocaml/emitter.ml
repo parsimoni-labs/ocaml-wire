@@ -51,7 +51,6 @@ let i32 src = if src.unboxed then "Int32_u" else "Int32"
 let i64 src = if src.unboxed then "Int64_u" else "Int64"
 let rt = "Wire_runtime"
 let errors = rt ^ ".Errors"
-let arith = rt ^ ".Arith"
 
 let bytes_src =
   {
@@ -112,9 +111,6 @@ type mode = {
   ox : bool;
       (* A 16-bit field is read through a 32-bit load: flambda2 keeps the
          [int32] unboxed, where the stock compiler would box it. *)
-  cold : bool;
-      (* The walk raises the codec's errors, and its arithmetic the codec's
-         overflow. *)
   raw32 : bool; (* A 32-bit field is bound as its [int32] too. *)
   ranged : bool;
       (* Whether two bitfields of a word may be tested as one range of the
@@ -126,8 +122,6 @@ type mode = {
       (* The variables of fields the caller loaded before the walk, which the
          walk reads instead of loading them. *)
   fail : failure -> string;
-  overflowed : failure -> string -> string;
-      (* What a cold walk raises for an overflow, given the exception. *)
   decide : Decision.t -> unit;
 }
 
@@ -383,28 +377,32 @@ let normalise63 num v =
   let u = i64_ops num in
   Fmt.str "(%s.shift_right (%s.shift_left %s 1) 1)" u u v
 
-(* [e] as OCaml over the variables bound so far. [ov] is set when it holds an
-   operation that may overflow, which then raises: [Arith.Overflow] in a walk
-   that only accepts or rejects, the codec's error in a cold one. *)
-let rec expr : type a. w -> bool ref -> a T.expr -> string =
- fun w ov e ->
-  let p : type b. b T.expr -> string = fun x -> expr w ov x in
+(* [e] as an [int] expression when it is one. *)
+let as_int : type a. a T.expr -> int T.expr option = function
+  | T.Int _ as e -> Some e
+  | T.Ref (T.I, _) as e -> Some e
+  | T.Add _ as e -> Some e
+  | T.Sub _ as e -> Some e
+  | T.Mul _ as e -> Some e
+  | T.Land _ as e -> Some e
+  | T.Lor _ as e -> Some e
+  | T.Lxor _ as e -> Some e
+  | T.Lnot _ as e -> Some e
+  | T.Lsl _ as e -> Some e
+  | T.Lsr _ as e -> Some e
+  | T.Cast _ as e -> Some e
+  | T.If_then_else _ as e -> Some e
+  | _ -> None
+
+(* [e] as OCaml over the variables bound so far. A comparison of an integer
+   expression that can leave the native int ([past_native]) compares the two
+   sides on 64 bits, unsigned ([wide]); any other arithmetic stays inside the
+   native int. *)
+let rec expr : type a. w -> a T.expr -> string =
+ fun w e ->
+  let p : type b. b T.expr -> string = fun x -> expr w x in
   let num = w.m.num in
-  let arith_op op fn sym a b =
-    if fits w.ranges op a b then binop num sym (p a) (p b)
-    else begin
-      ov := true;
-      let fn =
-        Fmt.str "%s.%s%s" arith (if w.m.cold then "checked_" else "") fn
-      in
-      match num with
-      | Tagged -> Fmt.str "(%s %s %s)" fn (p a) (p b)
-      | Boxed | Unboxed ->
-          let u = i64_ops num in
-          Fmt.str "(%s.of_int (%s (%s.to_int %s) (%s.to_int %s)))" u fn u (p a)
-            u (p b)
-    end
-  in
+  let arith_op sym a b = binop num sym (p a) (p b) in
   (* A shift's distance is an [int]. With [Boxed], a literal is written as
      is. *)
   let distance (b : int T.expr) =
@@ -421,7 +419,11 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
       | _ -> false
     in
     if is_bool a then Fmt.str "((%s : bool) %s %s)" (p a) op (p b)
-    else relation num op (p a) (p b)
+    else
+      match (as_int a, as_int b) with
+      | Some x, Some y when past_native w.ranges x || past_native w.ranges y ->
+          Fmt.str "(Int64.unsigned_compare %s %s %s 0)" (wide w x) (wide w y) op
+      | _ -> relation num op (p a) (p b)
   in
   match e with
   | T.Int n -> lit num n
@@ -433,9 +435,9 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
       | None when num = Boxed && Sset.mem v w.ints ->
           Fmt.str "(Int64.of_int %s)" v
       | None -> v)
-  | T.Add (a, b) -> arith_op T.checked_add "add" "+" a b
-  | T.Sub (a, b) -> arith_op T.checked_sub "sub" "-" a b
-  | T.Mul (a, b) -> arith_op T.checked_mul "mul" "*" a b
+  | T.Add (a, b) -> arith_op "+" a b
+  | T.Sub (a, b) -> arith_op "-" a b
+  | T.Mul (a, b) -> arith_op "*" a b
   | T.Land (a, b) -> binop num "land" (p a) (p b)
   | T.Lor (a, b) -> binop num "lor" (p a) (p b)
   | T.Lxor (a, b) -> binop num "lxor" (p a) (p b)
@@ -481,6 +483,42 @@ let rec expr : type a. w -> bool ref -> a T.expr -> string =
   | T.Cast (`U16, a) -> binop num "land" (p a) (lit num 0xffff)
   | T.If_then_else (c, a, b) ->
       Fmt.str "(if %s then %s else %s)" (p c) (p a) (p b)
+  | _ -> fail_unsupported "expression %a" T.pp_expr e
+
+(* [e] as an [int64] holding its value as an unsigned integer, which 3D proves
+   stays below [2^64]: its variables are below [2^32], so [Int64]'s operations
+   compute it exactly. *)
+and wide w (e : int T.expr) =
+  let r = wide w in
+  let op f a b = Fmt.str "(Int64.%s %s %s)" f (r a) (r b) in
+  let distance (b : int T.expr) =
+    match (w.m.num, b) with
+    | _, T.Int n -> string_of_int n
+    | Tagged, _ -> expr w b
+    | (Boxed | Unboxed), _ ->
+        Fmt.str "(%s.to_int %s)" (i64_ops w.m.num) (expr w b)
+  in
+  match e with
+  | T.Int n -> Fmt.str "%dL" n
+  | T.Ref _ -> (
+      match w.m.num with
+      | Tagged -> Fmt.str "(Int64.of_int %s)" (expr w e)
+      | Boxed -> expr w e
+      | Unboxed -> Fmt.str "(U.to_int64 %s)" (expr w e))
+  | T.Add (a, b) -> op "add" a b
+  | T.Sub (a, b) -> op "sub" a b
+  | T.Mul (a, b) -> op "mul" a b
+  | T.Land (a, b) -> op "logand" a b
+  | T.Lor (a, b) -> op "logor" a b
+  | T.Lxor (a, b) -> op "logxor" a b
+  | T.Lnot a -> Fmt.str "(Int64.lognot %s)" (r a)
+  | T.Lsl (a, b) -> Fmt.str "(Int64.shift_left %s %s)" (r a) (distance b)
+  | T.Lsr (a, b) ->
+      Fmt.str "(Int64.shift_right_logical %s %s)" (r a) (distance b)
+  | T.Cast (`U8, a) -> Fmt.str "(Int64.logand %s 0xffL)" (r a)
+  | T.Cast (`U16, a) -> Fmt.str "(Int64.logand %s 0xffffL)" (r a)
+  | T.If_then_else (c, a, b) ->
+      Fmt.str "(if %s then %s else %s)" (expr w c) (r a) (r b)
   | _ -> fail_unsupported "expression %a" T.pp_expr e
 
 (* {2 Loads} *)
@@ -746,24 +784,10 @@ let pos_expr num p =
   | None -> lit num p.at
   | Some v -> if p.at = 0 then v else binop num "+" v (lit num p.at)
 
-(* A check that runs [fail] when [cond] is false; an overflow in [cond]
-   fails too. The code after it is one condition deeper. *)
+(* A check that runs [fail] when [cond] is false. The code after it is one
+   condition deeper. *)
 let check w failure (cond : bool T.expr) =
-  let ov = ref false in
-  let s = expr w ov cond in
-  if not !ov then pf w "if not %s then %s else@\n" s (w.m.fail failure)
-  else if w.m.cold then
-    pf w
-      "if not (match %s with b -> b | exception %s.Parse_error e -> %s) then \
-       %s else@\n"
-      s errors
-      (w.m.overflowed failure "e")
-      (w.m.fail failure)
-  else
-    pf w
-      "if not (match %s with b -> b | exception %s.Overflow -> false) then %s \
-       else@\n"
-      s arith (w.m.fail failure);
+  pf w "if not %s then %s else@\n" (expr w cond) (w.m.fail failure);
   { w with depth = w.depth + 1 }
 
 (* {3 Scope}
@@ -1400,10 +1424,8 @@ let cancelled w size p =
       match sum_fails d with
       | None -> None
       | Some (lhs, rhs) ->
-          let ov = ref false in
-          ignore (expr w ov lhs);
-          ignore (expr w ov rhs);
-          if !ov then None else Some (lhs, rhs))
+          if past_native w.ranges lhs || past_native w.ranges rhs then None
+          else Some (lhs, rhs))
   | _ -> None
 
 (* The test that a span of [n] bytes at [p] ends past the window, as
@@ -1419,9 +1441,7 @@ let outside w ~negative ~cancelled p n =
   let room = if p.at = 0 then room else binop num "-" room (lit num p.at) in
   let upper =
     match cancelled with
-    | Some (lhs, rhs) ->
-        let ov = ref false in
-        relation w.m.num ">" (expr w ov lhs) (expr w ov rhs)
+    | Some (lhs, rhs) -> relation w.m.num ">" (expr w lhs) (expr w rhs)
     | None -> relation num ">" n room
   in
   if not negative then upper
@@ -1441,9 +1461,9 @@ let end_range w n_range p =
   Option.bind pos (fun r -> corners T.checked_add r n_range)
 
 (* [w] after binding the size [n] and the end [e] of a span at [p]. It records
-   their ranges and, unless the size may overflow, the end as a sum. An end
-   that was checked is not negative. *)
-let bind_span w ~ov ~implied ~n_range ~ends size p n e =
+   their ranges and the end as a sum. An end that was checked is not
+   negative. *)
+let bind_span w ~implied ~n_range ~ends size p n e =
   let w = bind_num (bind_num w n) e in
   let e_range =
     match ends with
@@ -1452,10 +1472,8 @@ let bind_span w ~ov ~implied ~n_range ~ends size p n e =
     | None -> (0, max_int)
   in
   let sum =
-    if ov then None
-    else
-      Option.bind (pos_sum w ~expand:true p) (fun pos ->
-          Option.bind (sum_of size) (sum_add pos))
+    Option.bind (pos_sum w ~expand:true p) (fun pos ->
+        Option.bind (sum_of size) (sum_add pos))
   in
   {
     w with
@@ -1472,15 +1490,9 @@ let bind_span w ~ov ~implied ~n_range ~ends size p n e =
    and Sarkar, PLDI 2000). *)
 let span ?(implied = false) w size p =
   let num = pos_num w.m.num in
-  let ov = ref false in
-  let s = expr w ov size in
-  let ov = !ov in
   let n = w.fresh "n" in
-  if ov then
-    pf w "let %s = match %s with n -> n | exception %s.Overflow -> %s in@\n" n s
-      arith (lit w.m.num (-1))
-  else pf w "let %s = %s in@\n" n s;
-  let nonnegative = (not ov) && nonnegative w size in
+  pf w "let %s = %s in@\n" n (expr w size);
+  let nonnegative = nonnegative w size in
   let lo, hi = range w.ranges size in
   let n_range = (max 0 lo, max 0 hi) in
   let ends = end_range w n_range p in
@@ -1488,16 +1500,10 @@ let span ?(implied = false) w size p =
   let bound =
     if implied then Next
     else if List.mem (span_bound w size p) w.bounded then Hoisted
-    else
-      Checked
-        {
-          negative = not nonnegative;
-          cancelled = (if ov then None else cancelled w size p);
-        }
+    else Checked { negative = not nonnegative; cancelled = cancelled w size p }
   in
   w.m.decide
-    (Span_bound
-       { size; at = p; window = w.limit; size_var = n; overflows = ov; bound });
+    (Span_bound { size; at = p; window = w.limit; size_var = n; bound });
   (match bound with
   | Checked { negative; cancelled } ->
       pf w "if %s then %s else@\n"
@@ -1508,7 +1514,7 @@ let span ?(implied = false) w size p =
   (* With [Boxed], the end is a position, so an [int]. *)
   let n_int = if w.m.num = Boxed then Fmt.str "(Int64.to_int %s)" n else n in
   pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n_int);
-  let w = bind_span w ~ov ~implied ~n_range ~ends size p n e in
+  let w = bind_span w ~implied ~n_range ~ends size p n e in
   ({ w with known = 0; depth = w.depth + 1 }, n, { var = Some e; at = 0 })
 
 (* The bytes a run of prefixes and tests from here needs, checked at once. *)
@@ -1623,20 +1629,12 @@ let literal_test w atom =
   | _ -> None
 
 (* The test [atom], then [yes] where it holds and [no] where it does not. An
-   atom that may overflow rejects. An atom on a variable that it fixes makes
-   the variable that constant under [yes]. *)
+   atom on a variable that it fixes makes the variable that constant under
+   [yes]. *)
 let pp_branch w atom ~yes ~no =
-  let ov = ref false in
   let literal = literal_test w atom in
-  let s = match literal with Some (_, _, Some s) -> s | _ -> expr w ov atom in
-  if !ov then begin
-    pf w "match %s with@\n| true -> (@\n" s;
-    yes ();
-    pf w ")@\n| false -> (@\n";
-    no ();
-    pf w ")@\n| exception %s.Overflow -> %s@\n" arith (w.m.fail Bounds)
-  end
-  else begin
+  let s = match literal with Some (_, _, Some s) -> s | _ -> expr w atom in
+  begin
     pf w "if %s then (@\n" s;
     (match literal with
     | Some (id, c, _) ->
@@ -1766,10 +1764,9 @@ let region_start w p =
   | Some v -> (
       match Option.bind (List.assoc_opt v w.sums) sum_offset with
       | Some (e, c) when c + p.at > 0 ->
-          let ov = ref false in
-          let s = expr w ov e in
-          if !ov then whole
+          if past_native w.ranges e then whole
           else
+            let s = expr w e in
             let s =
               if w.m.num = Boxed && num <> Boxed then
                 Fmt.str "(Int64.to_int %s)" s

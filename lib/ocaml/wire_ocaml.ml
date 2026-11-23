@@ -117,7 +117,6 @@ module Plan = struct
         at : pos;
         window : string;
         size_var : string;
-        overflows : bool;
         bound : bound;
       }
     | Shared_words of {
@@ -187,14 +186,7 @@ module Plan = struct
       { ranges; facts }
 
     let range s e = range s.ranges e
-
-    let checked s (e : int T.expr) =
-      match e with
-      | T.Add (a, b) -> not (fits s.ranges T.checked_add a b)
-      | T.Sub (a, b) -> not (fits s.ranges T.checked_sub a b)
-      | T.Mul (a, b) -> not (fits s.ranges T.checked_mul a b)
-      | _ -> false
-
+    let wide s e = past_native s.ranges e
     let nonnegative s e = nonnegative_in s.ranges s.facts e
   end
 

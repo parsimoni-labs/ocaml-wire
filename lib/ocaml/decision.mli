@@ -36,7 +36,6 @@ type t =
       at : pos;
       window : string;
       size_var : string;
-      overflows : bool;
       bound : bound;
     }
   | Shared_words of {

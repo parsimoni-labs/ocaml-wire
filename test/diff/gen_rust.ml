@@ -96,7 +96,6 @@ macro_rules! error {
                     res[2] = $index(field);
                     3
                 }
-                $m::Error::Overflow => 4,
                 $m::Error::OutOfRange { field, value } => {
                     res[1] = value;
                     res[2] = $index(field);

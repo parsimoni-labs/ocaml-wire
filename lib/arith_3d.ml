@@ -31,8 +31,9 @@ let above k t =
     [ T8; T16; T32; T64 ]
 
 (* What an integer subexpression can be, as F* knows it: its 3D type, its
-   unsigned bounds, and whether OCaml evaluates it on 64 bits because it reads
-   a field a native int cannot hold ([Expr_compiler.wide_of]). *)
+   unsigned bounds, and whether OCaml evaluates it on 64 bits ([wide]): it
+   reads a field a native int cannot hold, or it or a subexpression can leave
+   the native int or shifts by an amount the native int cannot. *)
 type range = { ty : ty; lo : int64; hi : int64; wide : bool }
 
 let full ?(wide = false) ty = { ty; lo = 0L; hi = top ty; wide }
@@ -84,14 +85,33 @@ let rec leaf : type a. a typ -> leaf = function
   | _ -> Opaque
 
 (* The leaves of a struct, and what the conditions an expression sits under
-   prove: [ge] holds the pairs [(a, b)] with [a >= b]. *)
+   prove: [ge] holds the pairs [(a, b)] with [a >= b]; [a > b] is
+   [a >= b + 1]. *)
 type env = {
   leaves : (string * leaf) list;
   ge : (packed_expr * packed_expr) list;
   formals : bool;
+  trusted : bool;
+  written : bool;
+  in_action : bool;
 }
 
-let empty = { leaves = []; ge = []; formals = false }
+let empty =
+  {
+    leaves = [];
+    ge = [];
+    formals = false;
+    trusted = false;
+    written = false;
+    in_action = false;
+  }
+
+(* A [trusted] environment computes how wide an expression the struct's own
+   environment has checked: it knows no refinement or condition, so it bounds
+   what it cannot prove by the type, and refuses nothing. A [written] one checks
+   an expression 3D computes as written, at its operands' type: it casts
+   nothing. One [in_action] checks an action's expression, where the field
+   position exists. *)
 
 let rec pp : type a. a expr Fmt.t =
  fun ppf e ->
@@ -130,6 +150,9 @@ let rec pp : type a. a expr Fmt.t =
   | Cast (t, a) -> Fmt.pf ppf "(to_uint%d %a)" (bits (of_cast t)) pp a
   | If_then_else (c, a, b) ->
       Fmt.pf ppf "(if %a then %a else %a)" pp c pp a pp b
+
+(* What a [trusted] environment cannot bound. *)
+exception Unknown
 
 let fail e fmt = Fmt.kstr (fun r -> Fmt.invalid_arg "Wire: %a %s" pp e r) fmt
 let key e = Fmt.str "%a" pp e
@@ -196,6 +219,29 @@ let proves_ge env a b =
       String.equal (key x) a && String.equal (key y) b)
     env.ge
 
+(* [e] as an [int expr] when it is one. *)
+let as_int : type a. a expr -> int expr option = function
+  | Int _ as e -> Some e
+  | Ref (I, _) as e -> Some e
+  | Param_ref _ as e -> Some e
+  | Sizeof _ as e -> Some e
+  | Sizeof_this as e -> Some e
+  | Field_pos as e -> Some e
+  | Add _ as e -> Some e
+  | Sub _ as e -> Some e
+  | Mul _ as e -> Some e
+  | Div _ as e -> Some e
+  | Mod _ as e -> Some e
+  | Land _ as e -> Some e
+  | Lor _ as e -> Some e
+  | Lxor _ as e -> Some e
+  | Lnot _ as e -> Some e
+  | Lsl _ as e -> Some e
+  | Lsr _ as e -> Some e
+  | Cast _ as e -> Some e
+  | If_then_else _ as e -> Some e
+  | _ -> None
+
 (* [env] once [cond] is known to be [holds]: what 3D's proof knows under the
    left side of [&&], the negated left side of [||] and each branch of [?:]. *)
 let rec assume env (cond : bool expr) holds =
@@ -208,10 +254,18 @@ let rec assume env (cond : bool expr) holds =
       | Int k, Ref (I, n) -> narrow env n (mirror op) k
       | _ -> env
     in
+    let gt rel (a : x expr) (b : x expr) =
+      match as_int b with
+      | Some b' -> ge (ge rel a b) a (Add (b', Int 1))
+      | None -> ge rel a b
+    in
     match (op, a, b) with
-    | (`Ge | `Gt), a, b -> ge rel a b
-    | (`Le | `Lt), a, b -> ge rel b a
-    | _ -> rel
+    | `Ge, a, b -> ge rel a b
+    | `Gt, a, b -> gt rel a b
+    | `Le, a, b -> ge rel b a
+    | `Lt, a, b -> gt rel b a
+    | `Eq, a, b -> ge (ge rel a b) b a
+    | `Ne, _, _ -> rel
   in
   match cond with
   | And (a, b) -> if holds then assume (assume env a true) b true else env
@@ -251,15 +305,11 @@ let constant r = Int64.equal r.lo r.hi
 let shr_u a k = if k >= 64 then 0L else Int64.shift_right_logical a k
 let to_shift k = if ule k 64L then Int64.to_int k else 64
 let native = Int64.of_int max_int
+let native_shift = Int64.of_int Sys.int_size
 
-(* A value OCaml computes in a native int must fit one. *)
-let in_native e r =
-  if r.wide || ule r.hi native then r
-  else
-    fail e
-      "can exceed OCaml's native int, which OCaml would overflow where the C \
-       does not"
-
+(* OCaml evaluates on 64 bits a value that can leave its native int, as the C
+   does at the 3D type that holds it. *)
+let past_native r = if ule r.hi native then r else { r with wide = true }
 let cast ty r e = if r.ty = ty then e else Cast (cast_of_ty ty, e)
 
 (* The operands of [a OP b] in type [ty]. A literal beside a cast operand is
@@ -273,6 +323,8 @@ let operands ty ra (a : int expr) rb (b : int expr) =
 let read env e n =
   match List.assoc_opt n env.leaves with
   | Some (Unsigned r) | Some (Float r) -> r
+  | Some (Signed w) when env.trusted -> full (smallest (ones w))
+  | (Some Opaque | None) when env.trusted -> raise Unknown
   | Some (Signed 64) ->
       fail e
         "reads the signed 64-bit field %S other than in an equality with a \
@@ -294,7 +346,8 @@ let param : type a k. (a, k) param_handle -> range =
  fun p ->
   match leaf p.typ with
   | Unsigned r | Float r -> r
-  | Signed _ | Opaque | Formal -> full T64
+  | Signed w -> full (smallest (ones w))
+  | Opaque | Formal -> full T64
 
 let formal env e =
   List.exists
@@ -341,8 +394,19 @@ let signed_literal n width (op : op) k : bool expr =
     | `Gt -> Gt (flipped, c)
     | `Ge -> Ge (flipped, c)
 
+(* What a [trusted] environment knows of a value past 64 bits, which the
+   struct's own environment bounds. *)
+let past_64 env e =
+  if env.trusted then full ~wide:true T64
+  else fail e "can exceed 64 bits, which no 3D type holds"
+
+(* A position in a buffer, as [sizeof (this)] and [field_pos] are. *)
+let position =
+  { (full T32) with hi = umin (top T32) (Int64.of_int Sys.max_string_length) }
+
 let rec int_ env (e : int expr) : int expr * range =
   match e with
+  | Int n when n < 0 && env.trusted -> raise Unknown
   | Int n ->
       if n < 0 then fail e "is a negative literal, which 3D cannot write"
       else (e, exact (Int64.of_int n))
@@ -352,7 +416,8 @@ let rec int_ env (e : int expr) : int expr * range =
       match Lower_3d.inner_wire_size t with
       | Some s -> (e, { (exact (Int64.of_int s)) with ty = T32 })
       | None -> (e, full T32))
-  | Sizeof_this -> (e, full T32)
+  | Sizeof_this -> (e, position)
+  | Field_pos when env.trusted || env.in_action -> (e, position)
   | Field_pos ->
       fail e "has no 3D projection: the field position exists only in an action"
   | Add (a, b) -> grow env e (fun a b -> Add (a, b)) add_u a b
@@ -372,6 +437,9 @@ let rec int_ env (e : int expr) : int expr * range =
   | Land (a, b) -> bitwise env a b (fun a b -> Land (a, b))
   | Lor (a, b) -> bitwise env a b (fun a b -> Lor (a, b))
   | Lxor (a, b) -> bitwise env a b (fun a b -> Lxor (a, b))
+  | Lnot a when env.trusted ->
+      let a', ra = int_ env a in
+      (Lnot a', full ra.ty)
   | Lnot _ ->
       fail e
         "has no faithful 3D projection: 3D complements within the operand's \
@@ -381,10 +449,11 @@ let rec int_ env (e : int expr) : int expr * range =
   | Cast (w, a) ->
       let a', ra = int_ env a in
       let ty = of_cast w in
-      if bits ty < bits ra.ty && not (fits ty ra.hi) then
+      if bits ty < bits ra.ty && (not (fits ty ra.hi)) && not env.trusted then
         fail e "narrows a value that can exceed %s, which 3d.exe cannot verify"
           (type_name ty);
-      (Cast (w, a'), { ra with ty })
+      ( Cast (w, a'),
+        { ra with ty; lo = umin ra.lo (top ty); hi = umin ra.hi (top ty) } )
   | If_then_else (c, t, f) ->
       let c' = bool_ env c in
       let t', rt = int_ (assume env c true) t in
@@ -398,13 +467,16 @@ let rec int_ env (e : int expr) : int expr * range =
         } )
 
 (* A subtraction 3D verifies: its left side is known to be at least its
-   right side, from the ranges or from a condition it sits under. *)
+   right side, from the ranges or from a condition it sits under, or is the
+   same expression. *)
 and subtract env e a b =
   let a', ra = int_ env a in
   let b', rb = int_ env b in
   let lo =
     if ule rb.hi ra.lo then Int64.sub ra.lo rb.hi
-    else if proves_ge env a b then 0L
+    else if proves_ge env a (Add (b, Int 1)) then 1L
+    else if String.equal (key a) (key b) || proves_ge env a b || env.trusted
+    then 0L
     else
       fail e
         "can go below zero, which no 3D type holds and 3d.exe cannot verify; \
@@ -417,63 +489,68 @@ and shift_left env e a b =
   let a', ra = int_ env a in
   let b', rb = int_ env b in
   let k = to_shift rb.hi in
-  let hi =
-    match shl_u ra.hi k with
-    | Some v when k < 64 -> v
-    | _ -> fail e "can exceed 64 bits, which no 3D type holds"
-  in
-  let ty = above rb.hi (wider ra.ty (smallest hi)) in
-  let r =
-    if constant rb then
-      let lo = Option.value ~default:0L (shl_u ra.lo k) in
-      { ty; lo; hi; wide = ra.wide || rb.wide }
-    else { (full ty) with wide = ra.wide || rb.wide }
-  in
-  (Lsl (cast ty ra a', b'), in_native e r)
+  match shl_u ra.hi k with
+  | _ when env.written ->
+      if not (ult rb.hi (Int64.of_int (bits ra.ty))) then
+        fail e "can shift by the width of its operand or more";
+      (Lsl (a', b'), { (full ra.ty) with wide = ra.wide || rb.wide })
+  | Some hi when k < 64 ->
+      let ty = above rb.hi (wider ra.ty (smallest hi)) in
+      let wide = ra.wide || rb.wide || not (ult rb.hi native_shift) in
+      let r =
+        if constant rb then
+          let lo = Option.value ~default:0L (shl_u ra.lo k) in
+          { ty; lo; hi; wide }
+        else { (full ty) with wide }
+      in
+      (Lsl (cast ty ra a', b'), past_native r)
+  | _ -> (Lsl (a', b'), past_64 env e)
 
 and shift_right env e a b =
   let a', ra = int_ env a in
   let b', rb = int_ env b in
-  if
-    (not (ult rb.hi 64L))
-    || (not (ra.wide || rb.wide))
-       && not (ult rb.hi (Int64.of_int Sys.int_size))
-  then fail e "can shift by the width of its operand or more";
-  let ty = above rb.hi ra.ty in
-  let wide = ra.wide || rb.wide in
-  let r =
-    if constant rb then
-      let k = to_shift rb.hi in
-      { ty; lo = shr_u ra.lo k; hi = shr_u ra.hi k; wide }
-    else { (full ty) with wide }
-  in
-  (Lsr (cast ty ra a', b'), r)
+  if not (ult rb.hi 64L) then
+    if env.trusted then (Lsr (a', b'), full ~wide:true T64)
+    else fail e "can shift by the width of its operand or more"
+  else if env.written && not (ult rb.hi (Int64.of_int (bits ra.ty))) then
+    fail e "can shift by the width of its operand or more"
+  else
+    let ty = above rb.hi ra.ty in
+    let wide = ra.wide || rb.wide || not (ult rb.hi native_shift) in
+    let r =
+      if constant rb then
+        let k = to_shift rb.hi in
+        { ty; lo = shr_u ra.lo k; hi = shr_u ra.hi k; wide }
+      else { (full ty) with wide }
+    in
+    (Lsr (cast ty ra a', b'), r)
 
 (* An addition or multiplication, computed in the narrowest type that holds its
    range: its operands are cast there when their own type does not. *)
 and grow env e mk f a b =
   let a', ra = int_ env a in
   let b', rb = int_ env b in
-  let hi =
-    match f ra.hi rb.hi with
-    | Some v -> v
-    | None -> fail e "can exceed 64 bits, which no 3D type holds"
-  in
-  let lo = Option.value ~default:hi (f ra.lo rb.lo) in
-  let natural = wider ra.ty rb.ty in
-  let ty = wider natural (smallest hi) in
-  let r = in_native e { ty; lo; hi; wide = ra.wide || rb.wide } in
-  let a', b' = if ty = natural then (a', b') else operands ty ra a' rb b' in
-  (mk a' b', r)
+  match f ra.hi rb.hi with
+  | None -> (mk a' b', past_64 env e)
+  | Some hi ->
+      let lo = Option.value ~default:hi (f ra.lo rb.lo) in
+      let natural = wider ra.ty rb.ty in
+      if env.written && not (fits natural hi) then
+        fail e "can exceed %s, which 3d.exe cannot verify" (type_name natural);
+      let ty = wider natural (smallest hi) in
+      let r = past_native { ty; lo; hi; wide = ra.wide || rb.wide } in
+      let a', b' = if ty = natural then (a', b') else operands ty ra a' rb b' in
+      (mk a' b', r)
 
 and divide env e a b mk f =
   let a', ra = int_ env a in
   let b', rb = int_ env b in
-  if Int64.equal rb.lo 0L then
+  let zero = Int64.equal rb.lo 0L in
+  if zero && not env.trusted then
     fail e "can divide by zero, which 3d.exe cannot verify";
   let ty = wider ra.ty rb.ty and wide = ra.wide || rb.wide in
   let r =
-    if constant rb then
+    if constant rb && not zero then
       let lo, hi = f ra rb in
       { ty; lo; hi; wide }
     else { (full ty) with wide }
@@ -492,7 +569,7 @@ and bitwise env a b mk =
 and clear env e a m mk =
   let a', ra = int_ env a in
   let m', rm = int_ env m in
-  if not (fits rm.ty ra.hi) then
+  if (not (fits rm.ty ra.hi)) && not env.trusted then
     fail e
       "clears bits with lnot, which 3D complements within %s, narrower than \
        the value it masks"
@@ -615,20 +692,52 @@ let checked env e f = if env.formals && formal env e then e else f e
 let size env e =
   checked env e @@ fun e ->
   let e', r = int_ env e in
-  if r.ty = T64 && Lower_3d.collect_refs e <> [] then
+  if r.ty = T64 then
     fail e
-      "has the 3D type UINT64, and 3D types a size as a 32-bit integer; read \
-       the size from a field of at most 32 bits"
+      "has the 3D type UINT64, and 3D types a size as a 32-bit integer: keep \
+       it below 2^32 and read it from fields of at most 32 bits"
   else e'
 
 let packed env (Pack_expr e) = Pack_expr (checked env e (operand env))
+
+(* Whether a comparison of [e] reads a side OCaml computes on 64 bits. *)
+let rec reads_wide : type a. env -> a expr -> bool =
+ fun env e ->
+  let side : type x. x expr -> bool =
+   fun x ->
+    match as_int x with
+    | Some x -> (snd (int_ { env with trusted = true } x)).wide
+    | None -> reads_wide env x
+  in
+  match e with
+  | And (a, b) | Or (a, b) -> reads_wide env a || reads_wide env b
+  | Not a -> reads_wide env a
+  | Eq (a, b) -> side a || side b
+  | Ne (a, b) -> side a || side b
+  | Lt (a, b) -> side a || side b
+  | Le (a, b) -> side a || side b
+  | Gt (a, b) -> side a || side b
+  | Ge (a, b) -> side a || side b
+  | _ -> false
+
+(* A per-byte condition, over the byte [elt_var] alone, as its synthesised
+   struct checks it. The codec evaluates it in the native int. *)
+let per_byte elt_var cond =
+  let env = { empty with leaves = [ (elt_var, leaf Uint8) ] } in
+  ignore (bool_ env cond : bool expr);
+  if reads_wide env cond then
+    fail cond
+      "is a per-byte condition that computes past OCaml's native int, where \
+       the codec evaluates a per-byte condition"
 
 let rec typ : type a. env -> a typ -> a typ =
  fun env t ->
   match t with
   | Byte_array { size = s } -> Byte_array { size = size env s }
   | Byte_slice { size = s } -> Byte_slice { size = size env s }
-  | Byte_array_where r -> Byte_array_where { r with size = size env r.size }
+  | Byte_array_where r ->
+      per_byte r.elt_var r.cond;
+      Byte_array_where { r with size = size env r.size }
   | Single_elem r -> Single_elem { r with size = size env r.size }
   | Zeroterm_at_most { size = s } -> Zeroterm_at_most { size = size env s }
   | Uint_var r -> Uint_var { r with size = size env r.size }
@@ -640,14 +749,87 @@ let rec typ : type a. env -> a typ -> a typ =
   | Apply { typ = t; args } ->
       Apply { typ = typ env t; args = List.map (packed env) args }
   | Optional { present; inner } ->
-      Optional
-        { present = checked env present (bool_ env); inner = typ env inner }
+      let present = checked env present (bool_ env) in
+      if Lower_3d.optional_region inner || not (has_wire_size_expr inner) then begin
+        region env inner;
+        Optional { present; inner }
+      end
+      else Optional { present; inner = typ env inner }
   | Optional_or r -> Optional_or { r with inner = typ env r.inner }
   | t -> t
 
+(* The body of an optional region or casetype is declared on its own, reading each field it names
+   through a [UINT32] formal, under the [where] its declaration states for a
+   size [a - b]: 3D checks its expressions there, as written. *)
+and region : type a. env -> a typ -> unit =
+ fun env inner ->
+  let leaves = List.map (fun (n, _) -> (n, Unsigned (full T32))) env.leaves in
+  let region = { empty with leaves; written = true } in
+  let region =
+    match inner with
+    | Single_elem { size = Sub (a, b); _ } -> ge region a b
+    | _ -> region
+  in
+  match typ region inner with
+  | (_ : a typ) -> ()
+  | exception Invalid_argument m ->
+      Fmt.invalid_arg
+        "%s, in an optional field, whose 3D declaration reads each field it \
+         names as a UINT32"
+        m
+
+(* An action's integer expression: a literal or a field as written, which 3D
+   copies, any other as {!int_} checks it. *)
+let value env (x : int expr) =
+  match x with
+  | Int _ | Ref (I, _) -> (
+      match int_ env x with
+      | r -> r
+      | exception Invalid_argument _ -> (x, full T64))
+  | _ -> int_ env x
+
+(* The value an action assigns to an output, which the codec stores in a
+   native int. *)
+let assigned env (x : int expr) =
+  match x with
+  | Int _ | Ref (I, _) -> x
+  | _ ->
+      checked env x @@ fun x ->
+      let x', r = int_ env x in
+      if not (ule r.hi native) then
+        fail x
+          "assigns a value past OCaml's native int, which the codec cannot \
+           store";
+      x'
+
+(* An action's expressions as 3D checks them. A [var] is the range of its
+   expression to the statements after it. *)
+let rec stmts env = function
+  | [] -> []
+  | Assign (p, x) :: rest -> Assign (p, assigned env x) :: stmts env rest
+  | Field_assign (ptr, name, x) :: rest ->
+      Field_assign (ptr, name, checked env x (fun x -> fst (value env x)))
+      :: stmts env rest
+  | Return c :: rest -> Return (checked env c (bool_ env)) :: stmts env rest
+  | If (c, t, e) :: rest ->
+      If
+        ( checked env c (bool_ env),
+          stmts (assume env c true) t,
+          Option.map (stmts (assume env c false)) e )
+      :: stmts env rest
+  | Var (n, x) :: rest ->
+      let x', r = value env x in
+      Var (n, x')
+      :: stmts { env with leaves = (n, Unsigned r) :: env.leaves } rest
+  | ((Extern_call _ | Abort) as s) :: rest -> s :: stmts env rest
+
+let action env a =
+  let env = { env with in_action = true } in
+  match a with Success l -> Success (stmts env l) | Act l -> Act (stmts env l)
+
 let field env (Field f) =
-  match typ env f.field_typ with
-  | field_typ -> Field { f with field_typ }
+  match (typ env f.field_typ, Option.map (action env) f.action) with
+  | field_typ, action -> Field { f with field_typ; action }
   | exception Invalid_argument m ->
       Fmt.invalid_arg "%s (in field %S)" m
         (Option.value ~default:"_" f.field_name)
@@ -687,3 +869,15 @@ let envs ?(formals = []) ?where fields =
       (first, []) fields
   in
   (outer, List.rev before)
+
+let leaf_of (Pack_typ t) = leaf t
+
+let wide typ_of e =
+  let leaves =
+    List.filter_map
+      (fun n -> Option.map (fun t -> (n, leaf_of t)) (typ_of n))
+      (Lower_3d.collect_refs e)
+  in
+  match int_ { empty with leaves; trusted = true } e with
+  | _, r -> r.wide
+  | exception (Unknown | Invalid_argument _) -> false

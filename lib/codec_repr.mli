@@ -187,26 +187,27 @@ val compile_expr :
 (** [compile_expr env e runtime input_end buf base] evaluates [e] for the record
     at [base], resolving field references through [env]. *)
 
-type wide_reader =
+type typed_reader =
   string
-  * Expr_compiler.wide
-  * (runtime -> Input_end.t -> bytes -> int -> int64)
-(** The full-width reader of a field declared earlier, under its name, for a
-    field whose type is {!wide_kind}. *)
+  * Types.packed_typ
+  * (Expr_compiler.wide * (runtime -> Input_end.t -> bytes -> int -> int64))
+    option
+(** A field declared earlier, under its name: its type, and its full-width
+    reader when its type is {!wide_kind}. *)
 
-val extend_wide :
+val extend_typed :
   string ->
   'a Types.typ ->
   (runtime -> Input_end.t -> bytes -> int -> 'a) ->
-  wide_reader list ->
-  wide_reader list
-(** [extend_wide name typ reader prev] is [prev] with the field [name] of [typ],
-    decoded by [reader], read at full width when {!wide_kind} says it is, and
-    any earlier field [name] hidden. *)
+  typed_reader list ->
+  typed_reader list
+(** [extend_typed name typ reader prev] is [prev] with the field [name] of
+    [typ], decoded by [reader], read at full width when {!wide_kind} says it is,
+    and any earlier field [name] hidden. *)
 
 val compile_bool_expr :
   ?sizeof_this:(runtime -> Input_end.t -> bytes -> int -> int) ->
-  ?wide:wide_reader list ->
+  ?wide:typed_reader list ->
   field_reader list ->
   bool Types.expr ->
   runtime ->
@@ -215,7 +216,8 @@ val compile_bool_expr :
   int ->
   bool
 (** [compile_bool_expr] is {!compile_expr} for a condition. A field of [wide] is
-    read at full width. *)
+    read at full width, and an expression {!Types.wide_expr} finds over the
+    types of [wide] is evaluated on 64 bits. *)
 
 type idx = string -> int
 (** Slot index of a field or action-local name. *)
@@ -225,7 +227,7 @@ type compile_ctx = {
   sizeof_this : int ref;
   field_pos : int;
   param_slots : (string, int) Hashtbl.t;
-  wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
+  slot_typs : (int, Types.packed_typ) Hashtbl.t;
 }
 (** What compiling an expression onto the scratch resolves names against. *)
 
@@ -233,19 +235,19 @@ val mk_ctx :
   ?sizeof_this:int ref ->
   ?field_pos:int ->
   param_slots:(string, int) Hashtbl.t ->
-  wide_slots:(int, Expr_compiler.wide) Hashtbl.t ->
+  slot_typs:(int, Types.packed_typ) Hashtbl.t ->
   idx ->
   compile_ctx
-(** [mk_ctx ~param_slots ~wide_slots idx] is a compile context. *)
+(** [mk_ctx ~param_slots ~slot_typs idx] is a compile context. *)
 
 val wide_kind : 'a Types.typ -> Expr_compiler.wide option
 (** [wide_kind typ] is how a field of [typ] reads at full width when a native
     int cannot hold all its values on this platform, [None] when it can. *)
 
-val note_wide :
-  (int, Expr_compiler.wide) Hashtbl.t -> int -> 'a Types.typ -> unit
-(** [note_wide wide_slots slot typ] records in [wide_slots] that the field of
-    [typ] at [slot] reads at full width, when {!wide_kind} says it does. *)
+val note_typ : (int, Types.packed_typ) Hashtbl.t -> int -> 'a Types.typ -> unit
+(** [note_typ slot_typs slot typ] records in [slot_typs] that the field at
+    [slot] has type [typ]: it reads at full width when {!wide_kind} says it
+    does. *)
 
 (** A comparison operator. *)
 type cmp = Eq | Ne | Lt | Le | Gt | Ge
@@ -319,6 +321,10 @@ and sub = {
 
 (** A scalar of any type. *)
 type packed_scalar = Ps : 'a scalar -> packed_scalar
+
+val prefix_wide : (string * packed_scalar) list -> int Types.expr -> bool
+(** [prefix_wide prefix e] is {!Types.wide_expr} over the fields [prefix] reads:
+    whether [e] is evaluated on 64 bits. *)
 
 (** How the walk reads a field: in place at a fixed offset of the record, inside
     the frame the walk has checked, or as the cursor moves over it. *)
@@ -402,9 +408,9 @@ type ('f, 'r) record =
       where : bool Types.expr option;
       doc : string option;
       field_readers : field_reader list;
-      wide_readers : wide_reader list;
+      typed_readers : typed_reader list;
       param_slots : (string, int) Hashtbl.t;
-      wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
+      slot_typs : (int, Types.packed_typ) Hashtbl.t;
     }
       -> ('f, 'r) record
 

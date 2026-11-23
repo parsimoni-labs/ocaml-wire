@@ -109,6 +109,7 @@ let span_size prefix leaves (e : int expr) =
   in
   let general () = Expr_compiler.compile_int leaves e in
   match e with
+  | _ when leaves.wide_expr e -> general ()
   | Ref (I, a) -> (
       match field a with
       | Some r -> fun buf off () () -> r buf off
@@ -186,6 +187,7 @@ let layout_items ~min_size prefix layout =
           | None -> raise Exit);
       i64 = unplanned;
       wide = (fun _ -> None);
+      wide_expr = prefix_wide prefix;
       param_ref = unplanned;
       sizeof_typ =
         (fun (Pack_typ t) ->

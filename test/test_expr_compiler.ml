@@ -30,6 +30,7 @@ let leaves : (ints, i64s, int, int) Expr_compiler.leaves =
     ref_ = (fun name ints _ _ _ -> List.assoc name ints);
     i64 = (fun name _ i64s _ _ -> List.assoc name i64s);
     wide = (fun _ -> None);
+    wide_expr = (fun _ -> false);
     param_ref =
       (fun (Expr_compiler.Pack_param p) ints _ _ _ ->
         List.assoc p.Types.name ints);

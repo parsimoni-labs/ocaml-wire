@@ -64,10 +64,16 @@ follows:
   `where` clause, and the conditions the expression is guarded by: the left
   side of `&&`, the negated left side of `||` and the condition of `?:` in
   each branch (`a >= 1 && l >= a - 1` verifies; `l >= a - 1` alone does not).
-- A byte size or an array length must have a type of at most 32 bits.
+  A strict comparison gives one more (`l > a && l - a - 1 <= 5` and
+  `l > a && l - (a + 1) <= 5` verify), as do an equality (`l == a && l - a
+  == 0`) and `a - a`.
+- A byte size or an array length must have a type of at most 32 bits, a
+  constant one too (`[:byte-size 4294967296]` is an error: "has type UINT64
+  instead of UInt32").
 
 `Wire.Codec.v` computes the type and the range of every subexpression of a
-constraint, `where` clause, size and presence condition by these rules, and
+constraint, `where` clause, size, presence condition, `byte_array_where`
+per-byte condition and action by these rules, and
 the projection emits what it computed, so the two cannot differ. An addition,
 multiplication or left shift whose range does not fit the type 3D would give
 it has its operands cast to the narrowest type that holds it (`IHL * 4` over
@@ -80,15 +86,29 @@ literal, `field_pos`. It is also refused where the C and OCaml would
 disagree: `lnot`, which 3D complements within its type and OCaml over a
 native int, except in `x land lnot m` with `x` inside the type of `m`; any
 use of a signed field but a comparison with a literal, which projects in
-two's-complement form (`a < 5` over an `int8` is `(a ^ 128) < 133`); an
-ordering of a float field or of a 64-bit signed one; and a range past OCaml's
-native `int` in an expression that reads no field the native int cannot hold,
-where OCaml would overflow and the C would not.
+two's-complement form (`a < 5` over an `int8` is `(a ^ 128) < 133`); and an
+ordering of a float field or of a 64-bit signed one.
+
+An expression whose range passes OCaml's native `int`, or that shifts by
+`Sys.int_size` or more, is computed on 64 bits as unsigned integers, as the
+C computes it at the `UINT64` it has (`a + 4611686018427387898` over a
+`UINT32BE`, `((UINT64) a) * a`): `Wire.Codec`, the OCaml `Wire_ocaml`
+generates and the Rust `Wire_rust` generates compare such an expression on 64
+bits, and keep every other one in the native int, so a narrow expression
+costs what it did. A `byte_array_where` per-byte condition that would need 64
+bits is refused, since the codec evaluates it in the native int.
 
 The expressions of a declaration the projection synthesises (an optional
 region, a sized wrapper) read the enclosing struct's fields through `UINT32`
-parameters. They are the enclosing struct's expressions, checked there, and
-project as written.
+parameters, and project as written. The body of an optional region or
+casetype is checked there too, as 3D computes it: at the type of its operands,
+each field a `UINT32` it knows nothing more of than the `where` its
+declaration states for a size `a - b`. `nested ~size:(a * 4)` over a `uint8`
+projects as `((UINT16) a) * 4` in the record, but under an `optional` it is
+refused, since `a * 4` over a `UINT32` does not verify. An action assigns its
+value as 3D computes it, widened like a constraint's (`*out = (((UINT16) a) *
+4)`); 3D refuses an assignment of a value wider than its output
+("Expected type UINT8"), which `Wire.Codec.v` does not check yet.
 
 ## The FFI plug
 

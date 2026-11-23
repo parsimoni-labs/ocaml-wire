@@ -43,7 +43,7 @@ type validator_acc = {
   checkers_rev :
     (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
   field_readers : field_reader list;
-  wide_readers : wide_reader list;
+  typed_readers : typed_reader list;
   field_access_rev : (string * field_access) list;
   n_fields : int;
   n_array_slots : int;
@@ -52,7 +52,7 @@ type validator_acc = {
   fixed_prefix : int ref;
   bf : bf_codec_state option;
   param_slots : (string, int) Hashtbl.t;
-  wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
+  slot_typs : (int, Types.packed_typ) Hashtbl.t;
 }
 
 let empty_validator_acc () =
@@ -60,7 +60,7 @@ let empty_validator_acc () =
     validators_rev = [];
     checkers_rev = [];
     field_readers = [];
-    wide_readers = [];
+    typed_readers = [];
     field_access_rev = [];
     n_fields = 0;
     n_array_slots = 0;
@@ -69,7 +69,7 @@ let empty_validator_acc () =
     fixed_prefix = Stdlib.ref 0;
     bf = None;
     param_slots = Hashtbl.create 4;
-    wide_slots = Hashtbl.create 4;
+    slot_typs = Hashtbl.create 4;
   }
 
 let layout_ctx_of_validator_acc acc =
@@ -78,7 +78,7 @@ let layout_ctx_of_validator_acc acc =
     fixed_prefix = acc.fixed_prefix;
     bf = acc.bf;
     field_readers = acc.field_readers;
-    wide_readers = acc.wide_readers;
+    typed_readers = acc.typed_readers;
     field_at =
       (fun name ->
         Option.map access_at (List.assoc_opt name acc.field_access_rev));
@@ -133,7 +133,7 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   let idx = build_idx cc_readers in
   let cc =
     mk_ctx ~sizeof_this:acc.fixed_prefix ~field_pos:acc.n_fields
-      ~param_slots:acc.param_slots ~wide_slots:acc.wide_slots idx
+      ~param_slots:acc.param_slots ~slot_typs:acc.slot_typs idx
   in
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
@@ -171,7 +171,7 @@ let rec apply_struct_field acc inner_struct =
     validators_rev = (static_off, validator) :: acc.validators_rev;
     checkers_rev = (static_off, validator) :: acc.checkers_rev;
     field_readers = acc.field_readers;
-    wide_readers = acc.wide_readers;
+    typed_readers = acc.typed_readers;
     field_access_rev = acc.field_access_rev;
     n_fields = acc.n_fields;
     n_array_slots = acc.n_array_slots;
@@ -180,7 +180,7 @@ let rec apply_struct_field acc inner_struct =
     fixed_prefix = acc.fixed_prefix;
     bf = None;
     param_slots = acc.param_slots;
-    wide_slots = acc.wide_slots;
+    slot_typs = acc.slot_typs;
   }
 
 and apply_field_to_validator_acc acc (Types.Field f) =
@@ -201,7 +201,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
       in
       let layout = layout_ctx_of_validator_acc acc in
       let cf = compile_field layout codec_field in
-      note_wide acc.wide_slots acc.n_fields f.field_typ;
+      note_typ acc.slot_typs acc.n_fields f.field_typ;
       let full, check_only, n_extra_vars =
         build_field_checks acc
           ~populate:(guarded_populate cf f.field_typ)
@@ -215,8 +215,8 @@ and apply_field_to_validator_acc acc (Types.Field f) =
         validators_rev = (cf.validator_off, full) :: acc.validators_rev;
         checkers_rev = (cf.validator_off, check_only) :: acc.checkers_rev;
         field_readers = new_field_readers;
-        wide_readers =
-          extend_wide name f.field_typ cf.raw_reader acc.wide_readers;
+        typed_readers =
+          extend_typed name f.field_typ cf.raw_reader acc.typed_readers;
         field_access_rev = (name, cf.field_access) :: acc.field_access_rev;
         n_fields = List.length new_field_readers;
         n_array_slots = List.length new_field_readers + n_extra_vars;
@@ -228,7 +228,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
         fixed_prefix = acc.fixed_prefix;
         bf = cf.bf_after;
         param_slots = acc.param_slots;
-        wide_slots = acc.wide_slots;
+        slot_typs = acc.slot_typs;
       }
 
 and validator_of_struct (s : Types.struct_) : validator =
@@ -247,7 +247,7 @@ and validator_of_struct (s : Types.struct_) : validator =
   fill_param_slots acc.param_slots param_base param_handles;
   let n_total = param_base + n_params in
   let compiled_where =
-    compile_where_clause ~wide_slots:acc.wide_slots acc.param_slots
+    compile_where_clause ~slot_typs:acc.slot_typs acc.param_slots
       acc.field_readers s.where
   in
   let validate_arr, _populate, _validate, _clear, _ =

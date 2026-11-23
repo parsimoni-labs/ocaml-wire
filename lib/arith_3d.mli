@@ -37,3 +37,14 @@ val condition : env -> bool expr -> bool expr
 val field : env -> field -> field
 (** [field env f] is [f] with its sizes and presence conditions as 3D checks
     them. Its refinement is left to {!refinement}. *)
+
+val wide : (string -> packed_typ option) -> int expr -> bool
+(** [wide typ_of e] is [true] when OCaml computes [e] on 64 bits, as unsigned
+    integers, rather than in its native int: [e] reads a field the native int
+    cannot hold, or it or one of its subexpressions can take a value past
+    [max_int] or shifts by [Sys.int_size] or more. 3D computes it at a type that
+    holds each of those values, so the two agree. [typ_of n] is the type of the
+    field [n]. [e] is an expression of a struct {!envs} has checked: what its
+    refinements and conditions prove is not known here, so a value it bounds is
+    bounded by its type instead. [false] when [e] reads a name [typ_of] does not
+    know. *)

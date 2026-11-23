@@ -306,7 +306,12 @@ let compare op a b =
       let fa = fn a and fb = fn b in
       Cond (fun c -> ordered op (fa c) (fb c))
 
-let rec int_expr env (e : int expr) : operand =
+(* An expression [Expr_compiler] evaluates on 64 bits raises [Exit]: the record
+   then has no walk. *)
+let rec root env (e : int expr) : operand =
+  if prefix_wide env.prefix e then raise Exit else int_expr env e
+
+and int_expr env (e : int expr) : operand =
   let rec_ = int_expr env in
   match e with
   | Int n -> Const n
@@ -350,7 +355,7 @@ let rec int_expr env (e : int expr) : operand =
 
 and as_int : type a. env -> a expr -> operand option =
  fun env e ->
-  let go e = Some (int_expr env e) in
+  let go e = Some (root env e) in
   match e with
   | Int _ as e -> go e
   | Ref (I, _) as e -> go e
@@ -411,7 +416,7 @@ and bools : type a. env -> a expr -> a expr -> same:bool -> test option =
   | _ -> None
 
 and bool_cases env (e : bool expr) : test =
-  let int a = int_expr env a in
+  let int a = root env a in
   match e with
   | Bool b -> Is b
   | Eq (a, Int k) -> range (int a) k k
@@ -473,7 +478,7 @@ and bool_cases env (e : bool expr) : test =
 let env ?(sizeof = false) ?(known = []) ~size prefix =
   { prefix; size; sizeof; known; checked = false }
 
-let size ~size prefix e = fn (int_expr (env ~sizeof:true ~size prefix) e)
+let size ~size prefix e = fn (root (env ~sizeof:true ~size prefix) e)
 
 (* A condition that raises leaves the record to the general path, whose check
    pass names its error at the field it constrains; a size that raises names

@@ -20,8 +20,9 @@
     checks it against the codec when it loads, for a program that links [wire]
     anyway.
 
-    A [+], [-] or [*] in a constraint or a [where] clause is checked as the
-    codec checks it: an overflow rejects the record with the codec's error.
+    An expression in a constraint or a [where] clause that can leave the native
+    int is computed on 64 bits, as unsigned integers, as the codec and 3D
+    compute it.
 
     A generator executable, run by a dune rule, prints the module for a codec
     with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)], and its
@@ -358,7 +359,6 @@ module Plan : sig
         at : pos;
         window : string;
         size_var : string;  (** The variable its size is bound to. *)
-        overflows : bool;  (** Its size is computed with checked arithmetic. *)
         bound : bound;
       }  (** A span or a region of [size] bytes at [at]. *)
     | Shared_words of {
@@ -499,11 +499,11 @@ module Plan : sig
     (** [range s e] bounds the values [e] takes, as {!val-range} does with the
         ranges [s] knows. *)
 
-    val checked : t -> int Wire.Private.Types.expr -> bool
-    (** [checked s e] is [true] when [e] is an addition, a subtraction or a
-        product that the ranges of its operands do not keep inside the native
-        int: the code checks it, and rejects the record where it overflows, as
-        the codec does. Any other is plain arithmetic. *)
+    val wide : t -> int Wire.Private.Types.expr -> bool
+    (** [wide s e] is [true] when [e] or one of its subexpressions can take a
+        value past the native int, or shifts by its width or more: the code
+        computes it on 64 bits, as unsigned integers, as the codec and 3D do.
+        Any other is plain arithmetic on the native int. *)
 
     val nonnegative : t -> int Wire.Private.Types.expr -> bool
     (** [nonnegative s e] is [true] when [e] cannot be negative, by its range or

@@ -1126,6 +1126,16 @@ val check_fields : bool expr option -> field list -> unit
     condition or [where] whose arithmetic 3d.exe cannot verify, or which the C
     would compute differently from OCaml (docs/projection.md, Arithmetic). *)
 
+val wide_expr : (string -> packed_typ option) -> int expr -> bool
+(** [wide_expr typ_of e] is [true] when [e] is evaluated on 64 bits, as unsigned
+    integers, rather than in the native int: it reads a field the native int
+    cannot hold, or it or a subexpression can take a value past [max_int] or
+    shifts by [Sys.int_size] or more, which 3D computes at a type that holds it.
+    [typ_of n] is the type of the field [n]. [e] belongs to a struct
+    {!check_fields} accepts; what its refinements and conditions prove is not
+    known here, so a value they bound is bounded by its type. [false] when [e]
+    reads a name [typ_of] does not know. *)
+
 val pp_module : Format.formatter -> module_ -> unit
 (** Pretty-print a module as 3D source. *)
 

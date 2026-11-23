@@ -25,7 +25,8 @@ let contains s sub =
 
 (* [Action.var name e] must not project to [var name = e;] -- 3D's [var]
    binds an atomic action, not a pure expression. The DSL combinator [Var]
-   has to be lowered by inlining the bound expression at every use site. *)
+   has to be lowered by inlining the bound expression at every use site,
+   widened as the arithmetic of its uses needs. *)
 let test_var_inlines () =
   let f_a = field "Tag" uint8 in
   let f_b = field "Value" uint16be in
@@ -51,7 +52,7 @@ let test_var_inlines () =
     "no [var x = ...] in 3D output" false (contains out "var x");
   Alcotest.(check bool)
     "x usage replaced by inlined expression" true
-    (contains out "(Tag + Value) + 1")
+    (contains out "((((UINT32) Tag) + ((UINT32) Value)) + 1)")
 
 (* Var bindings inside if-branches must not leak between sibling branches. *)
 let test_var_scoping_in_if () =
@@ -80,10 +81,10 @@ let test_var_scoping_in_if () =
   Alcotest.(check bool) "no var leak" false (contains out "var x");
   Alcotest.(check bool)
     "inlined inside then-branch" true
-    (contains out "*out = (Tag + 7);");
+    (contains out "*out = (((UINT16) Tag) + 7);");
   Alcotest.(check bool)
     "inlined inside cond" true
-    (contains out "(Tag + 7) > 100")
+    (contains out "(((UINT16) Tag) + 7) > 100")
 
 (* Struct-level [where] referencing fields must lower to a constraint on
    the latest referenced field, not stay at struct level. 3D's [where]

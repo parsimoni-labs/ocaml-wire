@@ -26,7 +26,6 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     num = Tagged;
     src;
     ox;
-    cold = false;
     raw32;
     ranged = false;
     live;
@@ -34,7 +33,6 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     slots = Sset.empty;
     ahead = Sset.empty;
     fail = (fun _ -> fail);
-    overflowed = (fun _ _ -> fail);
     decide = ignore;
   }
 
@@ -43,7 +41,6 @@ let cold ~src ~live =
     num = Tagged;
     src;
     ox = false;
-    cold = true;
     raw32 = false;
     ranged = false;
     live;
@@ -55,13 +52,6 @@ let cold ~src ~live =
       | Bounds -> "no_error ()"
       | Check (f, c) -> raise_check f c
       | Where -> errors ^ ".where_clause ~at:off");
-    overflowed =
-      (fun failure e ->
-        match failure with
-        | Check (f, _) ->
-            Fmt.str "%s.relocate ~at:(off + %d) ~field:[ %S ] %s" errors
-              f.offset f.name e
-        | Where | Bounds -> Fmt.str "%s.relocate ~at:off ~field:[] %s" errors e);
     decide = ignore;
   }
 

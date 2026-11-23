@@ -136,19 +136,24 @@ let rec wide_of : type a. a typ -> (Expr_compiler.wide * (a -> int64)) option =
 
 let wide_kind typ = Option.map fst (wide_of typ)
 
-type wide_reader =
+type typed_reader =
   string
-  * Expr_compiler.wide
-  * (runtime -> Input_end.t -> bytes -> int -> int64)
+  * packed_typ
+  * (Expr_compiler.wide * (runtime -> Input_end.t -> bytes -> int -> int64))
+    option
 
-(* [prev] with field [name] read through [reader], at full width when its type
-   is [wide_kind]; a later field of the same name hides the earlier one. *)
-let extend_wide name typ reader prev =
+(* [prev] with field [name] of [typ], read through [reader] at full width when
+   its type is [wide_kind]; a later field of the same name hides the earlier
+   one. *)
+let extend_typed name typ reader prev =
   let prev = List.filter (fun (n, _, _) -> not (String.equal n name)) prev in
-  match wide_of typ with
-  | None -> prev
-  | Some (kind, int64) ->
-      (name, kind, fun rt ie buf base -> int64 (reader rt ie buf base)) :: prev
+  let full =
+    Option.map
+      (fun (kind, int64) ->
+        (kind, fun rt ie buf base -> int64 (reader rt ie buf base)))
+      (wide_of typ)
+  in
+  (name, Pack_typ typ, full) :: prev
 
 (* A [wide_kind] field fills its [int64s] slot with the value it reads at full
    width, and its int slot with that value when the int holds it. *)
@@ -662,6 +667,7 @@ let bytes_leaves
       fun _ _ _ _ -> 0) ?(wide = []) (env : field_reader list) :
     (runtime, Input_end.t, bytes, int) Expr_compiler.leaves =
   let find name = List.find_opt (fun (n, _, _) -> String.equal n name) wide in
+  let full name = Option.bind (find name) (fun (_, _, full) -> full) in
   {
     ref_ =
       (fun name ->
@@ -672,14 +678,16 @@ let bytes_leaves
               name);
     i64 =
       (fun name ->
-        match find name with
-        | Some (_, _, reader) -> reader
+        match full name with
+        | Some (_, reader) -> reader
         | None ->
             Fmt.invalid_arg
               "Codec: full-width field ref %S is only available in field \
                constraints and presence conditions"
               name);
-    wide = (fun name -> Option.map (fun (_, k, _) -> k) (find name));
+    wide = (fun name -> Option.map fst (full name));
+    wide_expr =
+      wide_expr (fun name -> Option.map (fun (_, t, _) -> t) (find name));
     param_ref =
       (fun (Expr_compiler.Pack_param p) rt _ _ _ -> Types.eval_param rt p.name);
     sizeof_typ =
@@ -722,18 +730,23 @@ type compile_ctx = {
          array, filled at seal. Resolution lives here, not on the shared
          handle, so one handle can serve a standalone codec and an embedding
          with different slots. *)
-  wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
+  slot_typs : (int, Types.packed_typ) Hashtbl.t;
       (* Per-codec map from the slot of a [wide_kind] field to its kind. *)
 }
 
 let mk_ctx ?(sizeof_this = Stdlib.ref 0) ?(field_pos = 0) ~param_slots
-    ~wide_slots idx =
-  { idx; sizeof_this; field_pos; param_slots; wide_slots }
+    ~slot_typs idx =
+  { idx; sizeof_this; field_pos; param_slots; slot_typs }
 
-let wide_ref cc name = Hashtbl.find_opt cc.wide_slots (cc.idx name)
+let slot_typ cc name =
+  match cc.idx name with
+  | slot -> Hashtbl.find_opt cc.slot_typs slot
+  | exception Invalid_argument _ -> None
 
-let note_wide wide_slots slot typ =
-  Option.iter (Hashtbl.replace wide_slots slot) (wide_kind typ)
+let wide_ref cc name =
+  Option.bind (slot_typ cc name) (fun (Pack_typ t) -> wide_kind t)
+
+let note_typ slot_typs slot typ = Hashtbl.replace slot_typs slot (Pack_typ typ)
 
 let array_leaves (cc : compile_ctx) :
     (slots, unit, unit, unit) Expr_compiler.leaves =
@@ -747,6 +760,7 @@ let array_leaves (cc : compile_ctx) :
         let i = cc.idx name in
         fun a () () () -> a.int64s.(i));
     wide = wide_ref cc;
+    wide_expr = wide_expr (slot_typ cc);
     param_ref =
       (fun (Expr_compiler.Pack_param p) a () () () ->
         (* The per-codec slot map is filled at seal, after these leaves are
@@ -935,6 +949,31 @@ type step =
 
 type packed_scalar = Ps : 'a scalar -> packed_scalar
 
+let rec bit_length n = if n = 0 then 0 else 1 + bit_length (n lsr 1)
+
+let bits_typ base mask =
+  Pack_typ (Bits { width = bit_length mask; base; bit_order = Msb_first })
+
+(* The type of the field a scalar reads, as its expressions see it. *)
+let scalar_typ : type a. a scalar -> packed_typ = function
+  | Byte _ -> Pack_typ Uint8
+  | U16le _ -> Pack_typ (Uint16 Little)
+  | U16be _ -> Pack_typ (Uint16 Big)
+  | U32le _ -> Pack_typ (Uint32 Little)
+  | U32be _ -> Pack_typ (Uint32 Big)
+  | Sbyte _ -> Pack_typ Int8
+  | I16le _ -> Pack_typ (Int16 Little)
+  | I16be _ -> Pack_typ (Int16 Big)
+  | I32le _ -> Pack_typ (Int32 Little)
+  | I32be _ -> Pack_typ (Int32 Big)
+  | Bits8 { mask; _ } -> bits_typ U8 mask
+  | Bits16le { mask; _ } -> bits_typ (U16 Little) mask
+  | Bits16be { mask; _ } -> bits_typ (U16 Big) mask
+
+let prefix_wide prefix =
+  wide_expr (fun name ->
+      Option.map (fun (Ps s) -> scalar_typ s) (List.assoc_opt name prefix))
+
 (* How a field adds to the record's extent, for the layout pass. *)
 type layout =
   | Lfix of int
@@ -1051,12 +1090,12 @@ type ('f, 'r) record =
       where : bool expr option;
       doc : string option;
       field_readers : field_reader list;
-      wide_readers : wide_reader list;
+      typed_readers : typed_reader list;
           (* The full-width readers of the [wide_kind] fields among
              [field_readers], for a presence condition. *)
       param_slots : (string, int) Hashtbl.t;
           (* Per-codec param name to decode-array slot, filled at seal. *)
-      wide_slots : (int, Expr_compiler.wide) Hashtbl.t;
+      slot_typs : (int, Types.packed_typ) Hashtbl.t;
           (* Per-codec slot of a [wide_kind] field to its kind, filled at
              seal. *)
     }
@@ -1237,10 +1276,10 @@ let record_start ?where ?doc name make =
       r_bf = None;
       field_access_rev = [];
       field_readers = [];
-      wide_readers = [];
+      typed_readers = [];
       where;
       param_slots = Hashtbl.create 4;
-      wide_slots = Hashtbl.create 4;
+      slot_typs = Hashtbl.create 4;
     }
 
 let bind (f : 'a Field.t) get =
