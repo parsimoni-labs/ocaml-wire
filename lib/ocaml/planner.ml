@@ -518,6 +518,8 @@ and composite : type a.
   | T.Byte_slice { size } -> [ Span (bind env size) ]
   | T.Byte_array { size } -> [ Span (bind env size) ]
   | T.Unit -> []
+  | T.Optional_or _ -> fail_unsupported "an optional field with a default"
+  | T.Repeat _ -> fail_unsupported "a repeated field"
   | t -> fail_unsupported "its type, %a" T.pp_typ t
 
 and element : type a.

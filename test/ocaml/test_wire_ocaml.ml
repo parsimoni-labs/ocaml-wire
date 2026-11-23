@@ -459,10 +459,27 @@ let test_refused () =
           true (contains m "Len")
   in
   refused ~maps:[] "an unnamed map";
-  match Wire_ocaml.ml ~codec:"Schemas.variable" Schemas.variable with
+  (match Wire_ocaml.ml ~codec:"Schemas.variable" Schemas.variable with
   | _ -> Alcotest.fail "a variable-size codec was generated"
   | exception Invalid_argument m ->
-      Alcotest.(check bool) "names the field" true (contains m "Rest")
+      Alcotest.(check bool) "names the field" true (contains m "Rest"));
+  let n = Field.v "n" uint8 in
+  let decorated name field =
+    let c =
+      Codec.v "Decorated" (fun n x -> (n, x)) Codec.[ n $ fst; field $ snd ]
+    in
+    match Wire_ocaml.scanner ~codec:"c" c with
+    | _ -> Alcotest.failf "%s: generated" name
+    | exception Invalid_argument m ->
+        Alcotest.(check bool)
+          (name ^ ": names the field")
+          true (contains m "xs")
+  in
+  decorated "a repeated field" (Field.repeat "xs" ~size:(Field.ref n) uint8);
+  decorated "an optional field with a default"
+    (Field.optional_or "xs"
+       ~present:Expr.(Field.ref n <> int 0)
+       ~default:UInt8.zero uint8)
 
 (* Field names that spell one OCaml name twice, once lower-cased, escaped or
    suffixed, are refused naming both fields, as is a name the generated module
