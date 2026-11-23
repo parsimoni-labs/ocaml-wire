@@ -80,7 +80,7 @@
   `x land lnot m`), a negative literal, `field_pos`, an ordering on an
   `int64` or float field, any use of a signed field but a comparison with a
   literal, a constant size of 2^32 bytes or more, a `byte_array_where`
-  per-byte condition 3d.exe cannot verify or that needs 64 bits, an
+  per-byte condition 3d.exe cannot verify, an
   optional region whose size does not verify over `UINT32` copies of its
   fields (`a * int 4` over a `uint8`), and action arithmetic 3d.exe cannot
   verify.
@@ -196,7 +196,8 @@
 
 - Arithmetic past OCaml's native int is computed on 64 bits, as unsigned
   integers, as the generated C computes it: `self + int (max_int - 5)` over a
-  `uint32` or the square of a `uint32` field is accepted by `Wire.Codec.v`,
+  `uint32`, the square of a `uint32` field, or the same sum in a
+  `byte_array_where` per-byte condition is accepted by `Wire.Codec.v`,
   where it used to be refused, and `Wire.Codec`, `Wire_ocaml` and `Wire_rust`
   give the C's answer. The generated code has no overflow check left, and the
   Rust `Error::Overflow` variant is gone (#529, @samoht)

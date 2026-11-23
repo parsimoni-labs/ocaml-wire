@@ -9,16 +9,11 @@
 *)
 
 type ctx
-(** Top-level evaluation context. Used by [Byte_array_where]'s per-element
-    refinement, which binds the element variable to the byte value before
-    evaluating its constraint. Cross-field state lives in [Codec]'s int-array
-    machinery; at top level the binding is empty unless explicitly extended. *)
+(** Top-level evaluation context. Cross-field state lives in [Codec]'s int-array
+    machinery, so at top level it binds no field. *)
 
 val empty : ctx
 (** Empty context, no bindings. *)
-
-val bind : string -> int -> ctx -> ctx
-(** [bind name v ctx] extends [ctx] so that [Ref name] evaluates to [v]. *)
 
 val int_of : 'a Types.typ -> 'a -> int option
 (** {!Types.int_of}, re-exported: the conversion is a fold over the type
@@ -39,14 +34,16 @@ val bad_byte :
 (** [bad_byte ~elt_var ~cond buf ~first ~len] is the index within
     [buf.[first .. first + len - 1]] of the first byte that fails [cond], the
     per-byte refinement of a [byte_array_where], or [-1] when every byte
-    satisfies it. Single source of truth for the refinement: the direct parser,
-    the compiled codec and both encoders all decide it here, so they admit
-    exactly the same spans as the EverParse validator built from the same
-    schema. *)
+    satisfies it. [cond] is computed at the width 3D gives it: on 64 bits,
+    unsigned, where its value can leave the native int.
+    [bad_byte ~elt_var ~cond] compiles [cond] once, so a caller stages it.
+    Single source of truth for the refinement: the direct parser, the compiled
+    codec and both encoders all decide it here, so they admit exactly the same
+    spans as the EverParse validator built from the same schema. *)
 
 val check_byte_refinement :
   elt_var:string -> cond:bool Types.expr -> string -> unit
 (** [check_byte_refinement ~elt_var ~cond s] raises [Invalid_argument] on the
     first byte of [s] that fails [cond], the per-byte refinement of a
     [byte_array_where]. Encode-side counterpart of the decode check, so both
-    halves reject the same spans. *)
+    halves reject the same spans. It is staged as {!bad_byte} is. *)

@@ -95,8 +95,8 @@ C computes it at the `UINT64` it has (`a + 4611686018427387898` over a
 `UINT32BE`, `((UINT64) a) * a`): `Wire.Codec`, the OCaml `Wire_ocaml`
 generates and the Rust `Wire_rust` generates compare such an expression on 64
 bits, and keep every other one in the native int, so a narrow expression
-costs what it did. A `byte_array_where` per-byte condition that would need 64
-bits is refused, since the codec evaluates it in the native int.
+costs what it did. A `byte_array_where` per-byte condition is computed the
+same way, over its byte.
 
 The expressions of a declaration the projection synthesises (an optional
 region, a sized wrapper) read the enclosing struct's fields through `UINT32`

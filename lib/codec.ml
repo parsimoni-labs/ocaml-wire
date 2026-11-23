@@ -878,9 +878,10 @@ let rec build_staged_reader : type a.
         let sz = size_fn runtime input_end buf base in
         Bytes.sub_string buf (base + off) sz
   | Byte_array_where { elt_var; cond; _ }, Variable { off; size_fn } ->
+      let read = refined_span_reader ~elt_var ~cond in
       fun runtime input_end buf base ->
         let sz = size_fn runtime input_end buf base in
-        refined_span_reader ~elt_var ~cond buf ~first:(base + off) ~len:sz
+        read buf ~first:(base + off) ~len:sz
   | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
       fun runtime input_end buf base ->
         let fo = off_fn runtime input_end buf base in
@@ -893,10 +894,11 @@ let rec build_staged_reader : type a.
         Bytes.sub_string buf (base + fo) sz
   | Byte_array_where { elt_var; cond; _ }, Variable_dynamic { off_fn; size_fn }
     ->
+      let read = refined_span_reader ~elt_var ~cond in
       fun runtime input_end buf base ->
         let fo = off_fn runtime input_end buf base in
         let sz = size_fn runtime input_end buf base in
-        refined_span_reader ~elt_var ~cond buf ~first:(base + fo) ~len:sz
+        read buf ~first:(base + fo) ~len:sz
   | Where { inner; _ }, _ -> build_staged_reader inner access
   | Enum { base; cases; closed; _ }, _ ->
       let read = build_staged_reader base access in
@@ -999,11 +1001,12 @@ let rec build_staged_writer : type a.
         var_bytes_check_len size_fn runtime buf base ~actual:len;
         Bytes.blit_string s 0 buf (base + off) len
   | Byte_array_where { elt_var; cond; _ }, Variable { off; size_fn } ->
+      let check = Eval.check_byte_refinement ~elt_var ~cond in
       fun runtime buf base value ->
         let s = (value : string) in
         let len = String.length s in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
-        Eval.check_byte_refinement ~elt_var ~cond s;
+        check s;
         Bytes.blit_string s 0 buf (base + off) len
   | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
       fun runtime buf base value ->
@@ -1021,12 +1024,13 @@ let rec build_staged_writer : type a.
         Bytes.blit_string s 0 buf (base + fo) len
   | Byte_array_where { elt_var; cond; _ }, Variable_dynamic { off_fn; size_fn }
     ->
+      let check = Eval.check_byte_refinement ~elt_var ~cond in
       fun runtime buf base value ->
         let fo = off_fn runtime (Input_end.of_bytes buf) buf base in
         let s = (value : string) in
         let len = String.length s in
         var_bytes_check_len size_fn runtime buf base ~actual:len;
-        Eval.check_byte_refinement ~elt_var ~cond s;
+        check s;
         Bytes.blit_string s 0 buf (base + fo) len
   | Where { inner; _ }, _ -> build_staged_writer inner access
   | Enum { base; _ }, _ -> build_staged_writer base access

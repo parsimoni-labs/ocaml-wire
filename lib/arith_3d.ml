@@ -698,35 +698,11 @@ let size env e =
 
 let packed env (Pack_expr e) = Pack_expr (checked env e (operand env))
 
-(* Whether a comparison of [e] reads a side OCaml computes on 64 bits. *)
-let rec reads_wide : type a. env -> a expr -> bool =
- fun env e ->
-  let side : type x. x expr -> bool =
-   fun x ->
-    match as_int x with
-    | Some x -> (snd (int_ { env with trusted = true } x)).wide
-    | None -> reads_wide env x
-  in
-  match e with
-  | And (a, b) | Or (a, b) -> reads_wide env a || reads_wide env b
-  | Not a -> reads_wide env a
-  | Eq (a, b) -> side a || side b
-  | Ne (a, b) -> side a || side b
-  | Lt (a, b) -> side a || side b
-  | Le (a, b) -> side a || side b
-  | Gt (a, b) -> side a || side b
-  | Ge (a, b) -> side a || side b
-  | _ -> false
-
 (* A per-byte condition, over the byte [elt_var] alone, as its synthesised
-   struct checks it. The codec evaluates it in the native int. *)
+   struct checks it. *)
 let per_byte elt_var cond =
   let env = { empty with leaves = [ (elt_var, leaf Uint8) ] } in
-  ignore (bool_ env cond : bool expr);
-  if reads_wide env cond then
-    fail cond
-      "is a per-byte condition that computes past OCaml's native int, where \
-       the codec evaluates a per-byte condition"
+  ignore (bool_ env cond : bool expr)
 
 let rec typ : type a. env -> a typ -> a typ =
  fun env t ->
