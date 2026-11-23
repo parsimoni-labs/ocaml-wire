@@ -1565,12 +1565,12 @@ module Codec : sig
     (** [field v f] is the field [f] in the views of [v]. Make it once per
         field, not once per record.
 
-        A scalar or a byte slice of constant size, at a constant offset inside
-        the frame of [v] and without an action, is read with no bounds check; a
-        byte slice of size [0] is {!Bytesrw.Bytes.Slice.eod}. Any other field
-        (after a variable-size field, with an action, under a map) is read as
-        {!Codec.get} reads it: with its bounds check, and with its action, which
-        has already run once in {!val-check}.
+        An integer, a bitfield or a byte slice of constant size, at a constant
+        offset inside the frame of [v] and without an action, is read with no
+        bounds check; a byte slice of size [0] is {!Bytesrw.Bytes.Slice.eod}.
+        Any other field (after a variable-size field, with an action, under a
+        map) is read as {!Codec.get} reads it: with its bounds check, and with
+        its action, which has already run once in {!val-check}.
 
         Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
         codec of [v]. *)

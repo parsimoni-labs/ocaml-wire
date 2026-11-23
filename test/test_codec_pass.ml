@@ -399,6 +399,64 @@ let test_view_read () =
     "a lookalike field" true
     (raises (fun () -> Codec.View.field V.codec lookalike))
 
+(* In a frame of 4 to 7 bytes, the 4-byte word a view reads a field from
+   ends at the frame's end at most: every field of a 4-byte word of bitfields
+   and of a 6-byte header reads as [get] does, with the record at the very end
+   of the buffer. *)
+let test_view_short_frames () =
+  let check_codec (type r) name (c : r Codec.t) fields =
+    let module V = (val Codec.View.codec c) in
+    let size = Codec.wire_size c in
+    for i = 0 to 63 do
+      let buf =
+        Bytes.init (size + 3) (fun j ->
+            Char.chr (((i * 37) + (j * 91)) land 0xff))
+      in
+      let off = 3 in
+      let (Buf.Any b) = Buf.v buf in
+      let k = Codec.View.check V.codec b (Buf.length b) off in
+      if Codec.View.ok k then
+        let r = Codec.View.get k in
+        List.iter
+          (fun f ->
+            Alcotest.(check int)
+              (Fmt.str "%s %d" name i)
+              (Staged.unstage (Codec.get c f) buf off)
+              (Codec.View.read (Codec.View.field V.codec f) b r))
+          fields
+    done
+  in
+  let bit w =
+    Codec.(Field.v (Fmt.str "b%d" w) (bits ~width:w U32be) $ fun _ -> 0)
+  in
+  let b1 = bit 1
+  and b3 = bit 3
+  and b5 = bit 5
+  and b7 = bit 7
+  and b16 = bit 16 in
+  check_codec "U32be bitfields"
+    (Codec.v "Word" (fun _ _ _ _ _ -> ()) Codec.[ b1; b3; b5; b7; b16 ])
+    [ b1; b3; b5; b7; b16 ];
+  let hi = Codec.(Field.v "hi" (bits ~width:5 U16be) $ fun _ -> 0) in
+  let lo = Codec.(Field.v "lo" (bits ~width:11 U16be) $ fun _ -> 0) in
+  let mid = Codec.(Field.v "mid" uint16be $ fun _ -> UInt16.v 0) in
+  let last = Codec.(Field.v "last" uint8 $ fun _ -> UInt8.v 0) in
+  let pad = Codec.(Field.v "pad" uint8 $ fun _ -> UInt8.v 0) in
+  let c6 =
+    Codec.v "Six" (fun _ _ _ _ _ -> ()) Codec.[ hi; lo; mid; pad; last ]
+  in
+  check_codec "6-byte header bits" c6 [ hi; lo ];
+  let module V = (val Codec.View.codec c6) in
+  let buf = Bytes.of_string "\xff\xff\x12\x34\x00\xab" in
+  let (Buf.Any b) = Buf.v buf in
+  let r = Codec.View.(get (check V.codec b (Buf.length b) 0)) in
+  Alcotest.(check int)
+    "mid" 0x1234
+    (UInt16.to_int Codec.View.(read (field V.codec mid) b r));
+  Alcotest.(check int)
+    "last" 0xab
+    (UInt8.to_int Codec.View.(read (field V.codec last) b r))
+
 (* Constraints on fields that share a byte are checked together, and a failure
    still names the first field, in declaration order, whose constraint fails. *)
 let test_shared_byte_constraints () =
@@ -1050,6 +1108,8 @@ let suite =
         `Quick test_wide_constraint;
       Alcotest.test_case "encode: plain fields" `Quick test_plain_encode;
       Alcotest.test_case "view: read agrees with get" `Quick test_view_read;
+      Alcotest.test_case "view: short frames read as get" `Quick
+        test_view_short_frames;
       Alcotest.test_case "check: constraints sharing a byte" `Quick
         test_shared_byte_constraints;
       Alcotest.test_case "check: mapped and disjunctive constraints" `Quick

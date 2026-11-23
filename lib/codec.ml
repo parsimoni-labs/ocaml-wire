@@ -1303,10 +1303,19 @@ module View = struct
   (* A field is data: an unsigned field of a word of the frame reads as
      [Word], the 8-byte word at [q] shifted right by [s] and masked by [m],
      inline. Every other field is one direct call, so a read site holds one
-     test and one load: a byte slice of constant size in the frame ([Bytes])
-     is built only by the reads of that field. *)
+     test and one load: in a frame of 4 to 7 bytes an unsigned field reads as
+     [Word32], the same from the 4-byte word at [q], and a byte slice of
+     constant size in the frame ([Bytes]) is built only by the reads of that
+     field. A second inline case costs every [Word] read an instruction. *)
   type ('a, 'c) field =
     | Word : {
+        q : int;
+        s : int;
+        m : int;
+        eq : ('a, int) Type.eq;
+      }
+        -> ('a, 'c) field
+    | Word32 : {
         q : int;
         s : int;
         m : int;
@@ -1340,6 +1349,11 @@ module View = struct
   let[@inline] word_read buf p q s m =
     Int64.to_int (Int64.shift_right_logical (Codec_words.load buf p q) s) land m
 
+  (* [Int32.to_int] extends the sign, which the mask of a field of at most 32
+     bits clears. *)
+  let[@inline] word32_read buf p q s m =
+    (Int32.to_int (Unchecked.i32be buf (p + q)) lsr s) land m
+
   let[@inline] bytes_read buf p off length =
     if Int.equal length 0 then Slice.eod
     else Slice.make buf ~first:(p + off) ~length
@@ -1348,6 +1362,7 @@ module View = struct
    fun f buf off ->
     match f with
     | Word { q; s; m; eq = Type.Equal } -> word_read buf off q s m
+    | Word32 { q; s; m; eq = Type.Equal } -> word32_read buf off q s m
     | Bytes { off = o; length } -> bytes_read buf off o length
     | Scalar s -> scalar_read s buf off
     | Get get -> get buf off
@@ -1358,26 +1373,51 @@ module View = struct
     | Word { q; s; m; eq = Type.Equal } -> word_read buf r q s m
     | f -> read_other f buf r
 
-  (* The proof that an [int] holds every value of an unsigned big-endian
-     scalar. *)
-  let int_eq : type a. a scalar -> (a, int) Type.eq option = function
-    | Byte _ -> Some UInt8.int_eq
-    | U16be _ -> Some UInt16.int_eq
-    | U32be _ -> UInt32.int_eq
-    | Bits8 _ -> Some Type.Equal
-    | Bits16be _ -> Some Type.Equal
+  (* The [w] bits above bit [s] of the [n] bytes at [o] of a record, an
+     unsigned field of an [int]. *)
+  type 'a bits = { o : int; n : int; s : int; w : int; eq : ('a, int) Type.eq }
+
+  let bits_of_scalar : type a. a scalar -> a bits option = function
+    | Byte o -> Some { o; n = 1; s = 0; w = 8; eq = UInt8.int_eq }
+    | U16be o -> Some { o; n = 2; s = 0; w = 16; eq = UInt16.int_eq }
+    | U32be o ->
+        Option.map (fun eq -> { o; n = 4; s = 0; w = 32; eq }) UInt32.int_eq
+    | Bits8 { off; shift; mask } ->
+        Some
+          {
+            o = off;
+            n = 1;
+            s = shift;
+            w = Codec_words.bit_width mask;
+            eq = Type.Equal;
+          }
+    | Bits16be { off; shift; mask } ->
+        Some
+          {
+            o = off;
+            n = 2;
+            s = shift;
+            w = Codec_words.bit_width mask;
+            eq = Type.Equal;
+          }
     | Sbyte _ | I16be _ | I32be _ | U16le _ | U32le _ | I16le _ | I32le _
     | Bits16le _ ->
         None
 
-  (* The word a scalar of an [int] reads from in a frame of [size] bytes, on a
-     target whose [int] holds 63 bits. *)
-  let word_of_scalar ~size s =
-    if Sys.int_size < 63 || size < 8 then None
+  (* The word a field reads from in a frame of [size] bytes, on a target whose
+     [int] holds 63 bits: the 8-byte word {!Codec_words.word} picks in a frame
+     of at least 8 bytes, else the 4-byte word at the field's bytes or, near the
+     end of the frame, its last 4 bytes. *)
+  let word_field ~size { o; n; s; w; eq } =
+    if Sys.int_size < 63 || size < 4 then None
+    else if size >= 8 then
+      let { Codec_words.q; l; r; m; _ } =
+        Codec_words.word ~size o ~bytes:n ~s ~w ~signed:false
+      in
+      Some (Word { q; s = r - l; m; eq })
     else
-      match (int_eq s, Codec_intervals.word ~size s) with
-      | Some eq, Some w -> Some (w, eq)
-      | _ -> None
+      let q = min o (size - 4) in
+      Some (Word32 { q; s = (8 * (q + 4 - o - n)) + s; m = (1 lsl w) - 1; eq })
 
   let frame_of (c : _ compiled) =
     match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
@@ -1390,15 +1430,23 @@ module View = struct
     let scalar =
       if plain then field_scalar ~min_wire_size:size access f.typ else None
     in
+    let get () = Get (Staged.unstage (codec_get ?env:v.env v.codec f)) in
     match (scalar, f.typ, access) with
     | Some s, _, _ -> (
-        match word_of_scalar ~size s with
-        | Some ({ q; l; r; m; _ }, eq) -> Word { q; s = r - l; m; eq }
+        match Option.bind (bits_of_scalar s) (word_field ~size) with
+        | Some f -> f
         | None -> Scalar s)
+    | None, Bits _, Bitfield { base = U32 Big; byte_off = o; shift; width }
+      when plain && o >= 0 && o <= size - 4 -> (
+        match
+          word_field ~size { o; n = 4; s = shift; w = width; eq = Equal }
+        with
+        | Some f -> f
+        | None -> get ())
     | None, Byte_slice { size = Int length }, Fixed off
       when plain && off >= 0 && length >= 0 && off <= size - length ->
         Bytes { off; length }
-    | None, _, _ -> Get (Staged.unstage (codec_get ?env:v.env v.codec f))
+    | None, _, _ -> get ()
 end
 
 let name (t : _ t) = t.name
