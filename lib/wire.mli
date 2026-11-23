@@ -1204,15 +1204,15 @@ val to_string : 'a typ -> 'a -> string
     A codec is the primary way to work with a wire format. It binds
     {!module-Field} values to an OCaml record type and provides:
 
-    - {b Zero-copy field access}: {!Codec.get} and {!Codec.set} read and write
-      individual fields directly in a buffer -- no intermediate record
-      allocated.
     - {b Full-record round-trip}: {!Codec.decode} and {!Codec.encode} convert
       between bytes and OCaml values.
-    - {b Bitfield batch access}: {!Codec.load_word} reads a packed word once,
-      then {!Codec.extract} retrieves each sub-field with pure shift+mask.
+    - {b Checked views}: {!Codec.View} checks a record once, then reads its
+      fields in place with no check of their own. This is the way to read fields
+      of untrusted input.
+    - {b Field access}: {!Codec.get} and {!Codec.set} read and write one field
+      in place, for bytes the program wrote itself.
 
-    All three modes derive from the same definition, so the layout is always
+    Every mode derives from the same definition, so the layout is always
     consistent. {!Everparse.project} projects the same codec to a verified C
     parser -- no separate description to maintain. *)
 
@@ -1431,8 +1431,8 @@ module Codec : sig
       bytes in front of the field, while a same-named lookalike could interpret
       those bytes with a different wire type.
 
-      Does not check [~where] clauses or other fields' constraints -- call
-      {!validate} first on untrusted input. *)
+      Does not check [~where] clauses or other fields' constraints. On untrusted
+      input use {!View}. *)
 
   (** {2:views Checked views} *)
 
@@ -1666,7 +1666,13 @@ module Codec : sig
 
       For multiple bitfield fields sharing the same base word, {!load_word}
       reads the word once and {!extract} retrieves individual fields with pure
-      shift+mask -- no redundant memory loads. *)
+      shift+mask -- no redundant memory loads.
+
+      The word is read with a bounds check and no other check of the record; on
+      untrusted input use {!View}. These stay for unchecked reads of several
+      bitfields of one word of a record shorter than 8 bytes: on [bench/clcw]
+      (4-byte words) {!load_word} and {!extract} spend 146 instructions per word
+      where {!View} spends 263, as a view reads such a field out of line. *)
 
   type bitfield
   (** A bitfield accessor -- shift and mask for one field in a packed word. *)

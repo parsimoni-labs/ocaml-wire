@@ -39,6 +39,15 @@ a prefix of them.
 it. `encode` writes the fields and, when the codec has constraints, runs the
 checks on what it wrote.
 
+`View.check` runs the frame and the checks, as `validate` does, and keeps
+the record's offset instead of its error. A field of a view is then read
+with no bounds check when it lies at a fixed offset inside `min_size` and
+has no action. On a target whose `int` holds 63 bits, an unsigned
+big-endian integer or bitfield in a frame of at least 8 bytes is read inline,
+one 8-byte load, a shift and a mask; in a frame of 4 to 7 bytes it is read
+from a 4-byte word by one call. Any other field is one call, and a field that
+`get` reads with a check is read with that check.
+
 ## Invariants
 
 These are what the unchecked reads rely on. Each one is enforced where the
@@ -47,7 +56,7 @@ codec is built, so no input can break it.
 - **Unchecked reads stay in the frame.** A read without a bounds check is
   created only for a field whose offset and width are constants of the
   schema, with `0 <= offset` and `offset + width <= min_size` at the point
-  the field is added (`Codec.field_read`).
+  the field is added (`Codec.field_read`, `Codec.View.field`).
 - **The frame only grows.** `min_size` never decreases as fields are added,
   and never exceeds `Sys.max_string_length`, so the frame check cannot
   overflow (`Codec.add_min_size`). A codec whose fields, sub-codecs

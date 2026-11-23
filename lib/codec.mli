@@ -2,24 +2,22 @@
 
     {2 Access model}
 
-    Three ways to access decoded data, with different trade-offs:
-
     - {!decode} constructs a full record. It checks field constraints,
-      [where]-clauses, and fires field actions. This is the safest path but
-      allocates the record value.
+      [where]-clauses, and fires field actions, and allocates the record value.
 
-    - {!get} / {!set} provide zero-copy field access. {!get} fires the field's
-      [~action] (if any), so output parameters are updated. Neither checks
-      record-level [~where] clauses or other fields' [~constraint_] checks;
-      {!set} does refuse a value its own field cannot represent. Fields without
-      actions have zero overhead.
-
-    - {!validate} checks all field [~constraint_] checks and [~where] clauses
-      without constructing a record. Field [~action]s do fire, so an action that
-      rejects rejects here too and {!validate} and {!decode} agree on what is
+    - {!validate} checks a record without constructing it and answers its error.
+      Field [~action]s fire, so {!validate} and {!decode} agree on what is
       valid; nothing is written back, so the output parameters an action assigns
-      are not observable. Use it before a batch of {!get} calls on untrusted
-      input. *)
+      are not observable.
+
+    - {!View} checks a record once and reads its fields from the result. Use it
+      for untrusted input: a field is read only from a record that passed, in
+      the buffer it passed in.
+
+    - {!get} and {!set} read and write one field in place, for bytes the program
+      wrote itself. {!get} fires the field's [~action] (if any). Neither checks
+      record-level [~where] clauses or other fields' constraints; {!set} refuses
+      a value its own field cannot represent. *)
 
 type ('a, 'r) field
 (** A field bound to a record projection. The binding retains the identity of
@@ -246,7 +244,7 @@ val get :
     unbound param reads 0, which would stage the reader onto the bytes in front
     of the field, while a same-named lookalike could interpret those bytes with
     a different wire type. Does not check record-level where-clauses or other
-    fields' constraints -- call {!validate} first on untrusted input. *)
+    fields' constraints. On untrusted input use {!View}. *)
 
 val writer : 'r t -> 'r -> ('f, 'r) args -> (bytes -> int -> 'f) Staged.t
 (** [writer c template fields] is a staged writer of a record of [c]: called
@@ -570,7 +568,13 @@ val wire_size_info_of_validator :
 (** Wire-size info (parallels {!wire_size_info} for codecs). *)
 
 type bitfield
-(** A bitfield accessor -- shift and mask for one field in a packed word. *)
+(** A bitfield accessor -- shift and mask for one field in a packed word.
+
+    The word is read with a bounds check and no other check of the record; on
+    untrusted input use {!View}. These stay for unchecked reads of several
+    bitfields of one word of a record shorter than 8 bytes: on [bench/clcw]
+    (4-byte words) {!load_word} and {!extract} spend 146 instructions per word
+    where {!View} spends 263, as a view reads such a field out of line. *)
 
 val bitfield : 'r t -> (int, 'r) field -> bitfield
 (** [bitfield codec field] returns a bitfield accessor. Raises if [field] is not
