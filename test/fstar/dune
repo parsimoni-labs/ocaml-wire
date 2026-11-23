@@ -1,0 +1,17 @@
+; The F* a scanner is proved in and the OCaml that runs are one tree up to a
+; fixed token table (proofs/fstar-gen/README.md). Needs no F*.
+
+(test
+ (name test)
+ (libraries
+  proved
+  wire
+  wire.ocaml
+  headers
+  space
+  schemas
+  fuzz_gen
+  diff_codecs
+  compiler-libs.common
+  fmt
+  alcotest))

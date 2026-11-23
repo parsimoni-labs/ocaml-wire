@@ -4,12 +4,18 @@
 ; rendering calls on boundary and random operands; tables.exe prints
 ; WireGen.Tables.fst, the rules of WireGen.OCaml at the literals the emitter
 ; prints. None needs F*. prove.exe finds 3d.exe, runs F* and prunes the F*
-; cache for prove.sh; prune.t checks the pruning.
+; cache for prove.sh; prune.t checks the pruning. Proved lists the codecs,
+; which test/fstar compares too.
+
+(library
+ (name proved)
+ (modules proved)
+ (libraries wire headers space))
 
 (executable
  (name gen)
  (modules gen)
- (libraries wire wire.ocaml headers space))
+ (libraries proved wire wire.ocaml headers))
 
 (executable
  (name vectors)

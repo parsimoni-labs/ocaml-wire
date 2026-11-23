@@ -79,16 +79,50 @@ normalisation and the loads and masks by Z3.
   pattern, `Int64.to_int` keeps its low 63 bits, `Int32.to_int`
   sign-extends). `WireGen.Vectors` checks it on the operands it lists, not
   for all.
-- The printer: that `M.Scan.fst` is the OCaml `fold` with each OCaml token
-  replaced by its F* one (`a + b` by `P.add a b`, `Int64.to_int` by
-  `P.to_int`, `Wire_runtime.Unchecked.u16be` by `P.u16be`, `Int32.to_int`
-  by `P.int32_to_int`, labelled arguments by positional ones). Both come
-  from one walk, which cuts the F* where it cuts the OCaml; no test yet
-  compares the two texts.
+- The token table: `M.Scan.fst` and the OCaml `fold` are one tree up to
+  it, which `test/fstar` checks (below), so of the printer only the table
+  is trusted.
+
 - `answer`, which is part of the statement: it reads each output out of the
   3D value as the 3D language lays out a bitfield (from the least
   significant bit for `UINT8` and little-endian words, from the most
   significant for big-endian ones).
+
+## The OCaml and the F* are one tree
+
+`test/fstar` (part of `dune runtest`, no F* needed) reads the `fold` of
+`Wire_ocaml.scanner` and the functions it calls, and `M.Scan.fst`, with
+the OCaml parser: the bodies of the F* functions keep to the F* that is
+also OCaml (`let x = e in`, `if then else`, application, `&&`, `||`,
+`not`). It requires the same functions in the same order, each with the
+same parameters and the same body once the OCaml is read through this
+table, in `test/fstar/test_tree.ml`:
+
+| OCaml | F* |
+|-------|----|
+| `a + b`, `-`, `*` | `P.add a b`, `P.sub`, `P.mul` |
+| `land`, `lsr`, `lsl` | `P.land`, `P.lsr`, `P.lsl` |
+| `<`, `<=`, `>`, `>=`, `=`, `<>` | `P.lt`, `P.le`, `P.gt`, `P.ge`, `P.eq`, `P.ne` |
+| `Int64.to_int`, `Int64.shift_right_logical` | `P.to_int`, `P.shift_right_logical` |
+| `Int32.to_int`, `Bytes.length` | `P.int32_to_int`, `P.length` |
+| `Wire_runtime.Unchecked.f` | `P.f` |
+| an `int64` literal `0xFFFF_FFFFL` | `0xFFFFFFFF` |
+| `(e : int)` | `e` |
+| `f ~x:e` | `f e` |
+
+A labelled argument becomes positional only where the labels are those
+the callee declares, in order: a cut's parameters, or the outputs for
+`valid` (`Wire_ocaml.scanner_fields`). Headers differ and are not
+compared beyond the parameter names: `[@inline always]` against `unfold`,
+and the F* parameter types and refinements, which F* checks. Each binding
+`let x = e in` that `M.Proof.fst` states a fact under must be the binding
+of `x` in `M.Scan.fst`.
+
+The test runs on every codec of the test corpora the F* rendering accepts:
+the proved ones, the headers of `bench/rust` and `examples/space`, the
+schemas of `test/ocaml`, the fuzzers' registry and the codecs the
+differential fuzzer samples; 70 today. Three mutants of the IPv4 OCaml (a
+literal, an operator, two labels swapped) must fail it.
 
 ## Scope
 
@@ -101,7 +135,7 @@ writes, which has a walk of its own and stays under `make fuzz-rust`.
 
 ## Opting a codec in
 
-Add it to `scripts/fstar-gen/gen.ml` (`write dir "M" codec`), list its six files in the
+Add it to `scripts/fstar-gen/proved.ml`, list its six files in the
 targets of `dune` and add a `prove.sh codec M` rule to the `prove` alias.
 `make prove` then runs 3d.exe on `M.3d` and F* on `M.Scan`, `M.Flat` and
 `M.Proof`. The proved set is Tiny (two fields and a constraint), the

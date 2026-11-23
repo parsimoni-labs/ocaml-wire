@@ -4,17 +4,6 @@
 
 open Wire
 
-let tiny =
-  Codec.v "Tiny"
-    (fun a b -> (a, b))
-    Codec.
-      [
-        (Field.v "a" uint8 $ fun (a, _) -> a);
-        ( Field.v "b" uint16be ~self_constraint:(fun self ->
-              Expr.(self >= int 4))
-        $ fun (_, b) -> b );
-      ]
-
 let write dir name c =
   let s = Everparse.project ~mode:`Standalone c in
   Everparse.write ~mode:`Standalone ~outdir:dir ~name [ s ];
@@ -26,10 +15,7 @@ let write dir name c =
 
 let () =
   let dir = Sys.argv.(1) in
-  write dir "Tiny" tiny;
-  write dir "Ethernet" Headers.eth;
-  write dir "IPv4" Headers.ipv4;
-  write dir "Clcw" Space.clcw_codec;
+  List.iter (fun (Proved.Codec (name, c)) -> write dir name c) Proved.all;
   (* The scanner whose ihl make prove changes to three bits, which must not
      verify. *)
   write dir "IPv4Mutant" Headers.ipv4
