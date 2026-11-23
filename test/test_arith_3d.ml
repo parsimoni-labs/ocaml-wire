@@ -300,6 +300,21 @@ let test_arith_regions_and_actions () =
               (nested ~size:Expr.(Field.ref a * int 4) (codec inner))
             $ snd;
           ]);
+  let mapped () =
+    Codec.v "OptRegionMapped"
+      (fun a r -> (a, r))
+      Codec.
+        [
+          a $ fst;
+          Field.optional "r"
+            ~present:Expr.(Field.ref a > int 0)
+            (map ~decode:Fun.id ~encode:Fun.id
+               (sized Expr.(fun a -> a * int 4)))
+          $ snd;
+        ]
+  in
+  projects_to "a mapped optional region declares the bound of a uint8"
+    (mapped ()) "where ((a <= 255))";
   check_refused "a field sizing an optional region" false (optional Fun.id);
   projects_to "a product sizing a region"
     (region Expr.(fun a -> a * int 4) ())
@@ -365,8 +380,13 @@ let test_arith_assignments () =
     (after x8 (fun _ -> [ Action.assign out8 (int 300) ]));
   check_refused "7 into a uint8 output" false
     (after x8 (fun _ -> [ Action.assign out8 (int 7) ]));
-  check_refused "sizeof this into a uint8 output" true
-    (after x8 (fun _ -> [ Action.assign out8 sizeof_this ]));
+  projects_to "sizeof this into a uint8 output"
+    (after x8 (fun _ -> [ Action.assign out8 sizeof_this ]) ())
+    "*out = ((UINT8) (sizeof (this)));";
+  check_refused "sizeof this past 255 into a uint8 output" true
+    (after
+       (Field.v "x" (byte_array ~size:(int 300)))
+       (fun _ -> [ Action.assign out8 sizeof_this ]));
   projects_to "sizeof this into a uint32 output"
     (after x8 (fun _ -> [ Action.assign out32 sizeof_this ]) ())
     "*out = sizeof (this);";
@@ -375,6 +395,74 @@ let test_arith_assignments () =
   projects_to "a uint8 field into a uint32 output"
     (after x8 (fun x -> [ Action.assign out32 x ]) ())
     "*out = x;"
+
+(* A per-byte condition projects to a one-byte element struct of its own: it
+   reads its byte and no parameter or other field, and its [sizeof_this] is 1. *)
+let test_arith_per_byte () =
+  let lim = Param.input "lim" uint8 in
+  let pb per_byte () = byte_array_where ~size:(int 2) ~per_byte in
+  check_refused "a parameter in a per-byte condition" true
+    (pb Expr.(fun b -> b <= Param.expr lim));
+  check_refused "another field in a per-byte condition" true
+    (pb Expr.(fun b -> b <= Field.ref (Field.v "n" uint8)));
+  check_refused "sizeof this in a per-byte condition" false
+    (pb Expr.(fun b -> b <= sizeof_this));
+  check_refused "a per-byte b + 1 into its byte" false
+    (pb Expr.(fun b -> b + int 1 <= int 200));
+  let c =
+    Codec.v "PerByteThis" Fun.id
+      Codec.
+        [
+          Field.v "d"
+            (byte_array_where ~size:(int 2)
+               ~per_byte:Expr.(fun b -> b <= sizeof_this))
+          $ Fun.id;
+        ]
+  in
+  let accepts s = Result.is_ok (Codec.decode c (Bytes.of_string s) 0) in
+  Alcotest.(check bool) "sizeof this is 1 per byte" true (accepts "\x01\x00");
+  Alcotest.(check bool) "a byte past it" false (accepts "\x02\x00")
+
+(* 3D declares an MSB-first word's bitfields from the least significant bit, so
+   an action reads only the bitfields the codec declares after its own. *)
+let test_arith_bit_actions () =
+  let out = Param.output "out" uint8 in
+  let a = Field.v "a" (bits ~width:4 U8) in
+  let b = Field.v "b" (bits ~width:4 U8) in
+  let word act_a act_b () =
+    Codec.v "BitActs"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          Field.v "a" (bits ~width:4 U8) ?action:act_a $ fst;
+          Field.v "b" (bits ~width:4 U8) ?action:act_b $ snd;
+        ]
+  in
+  let assign e = Some (Action.on_act [ Action.assign out e ]) in
+  check_refused "an action reading the bitfield 3D declares after it" true
+    (word None (assign (Field.ref a)));
+  check_refused "an action reading its own bitfield" false
+    (word None (assign (Field.ref b)));
+  check_refused "two act blocks in one word" false
+    (word (assign (Field.ref a)) (assign (Field.ref b)));
+  check_refused "an on_success block beside another action in one word" true
+    (word
+       (Some (Action.on_success [ Action.assign out (Field.ref a) ]))
+       (assign (Field.ref b)));
+  check_refused "an on_success block alone in its word" false
+    (word (Some (Action.on_success [ Action.assign out (Field.ref a) ])) None);
+  projects_to "an if in a bitfield's act block"
+    (word
+       (Some
+          (Action.on_act
+             [
+               Action.if_
+                 Expr.(Field.ref a > int 3)
+                 [ Action.assign out (Field.ref a) ]
+                 None;
+             ]))
+       None ())
+    "if ((a > 3)) { *out = a;"
 
 let suite =
   ( "arith_3d",
@@ -390,4 +478,6 @@ let suite =
       Alcotest.test_case "optional regions and actions" `Quick
         test_arith_regions_and_actions;
       Alcotest.test_case "assignments to outputs" `Quick test_arith_assignments;
+      Alcotest.test_case "per-byte conditions" `Quick test_arith_per_byte;
+      Alcotest.test_case "bitfield actions" `Quick test_arith_bit_actions;
     ] )

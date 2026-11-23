@@ -367,6 +367,65 @@ let test_embed_output_param () =
        (decode_ok (Codec.decode ~env outer (Bytes.of_string "\x2A") 0)));
   Alcotest.(check int) "forwarded output" 42 (UInt8.to_int (Param.get env out))
 
+(* An output keeps every bit of the value assigned to it, past the native int:
+   [x] is a [uint64] (and a [uint32] on 32-bit targets) the C stores whole. *)
+let wide_codec name out typ =
+  let x = Field.v "x" typ in
+  Codec.v name Fun.id
+    Codec.
+      [
+        Field.v "x" typ
+          ~action:(Action.on_success [ Action.assign out (Field.ref x) ])
+        $ Fun.id;
+      ]
+
+let wide_out64 = Param.output "wide_out64" uint64be
+let wide_out32 = Param.output "wide_out32" uint32be
+let wide_signed = Param.output "wide_signed" int64be
+let wide64 = wide_codec "WideOut64" wide_out64 uint64be
+let wide32 = wide_codec "WideOut32" wide_out32 uint32be
+
+let wide_embed =
+  Codec.v "WideOutOuter" Fun.id Codec.[ Field.v "sub" (codec wide64) $ Fun.id ]
+
+let wide_bits = [ 0x4000_0000_0000_0000L; 0x8000_0000_0000_0001L; -1L ]
+
+let bytes64 v =
+  let b = Bytes.create 8 in
+  Bytes.set_int64_be b 0 v;
+  b
+
+let test_output_wide () =
+  List.iter
+    (fun v ->
+      let name = Fmt.str "%Lx" v in
+      let env = Codec.env wide64 in
+      let x = decode_ok (Codec.decode ~env wide64 (bytes64 v) 0) in
+      Alcotest.(check int64) (name ^ " decoded") v (UInt64.to_int64 x);
+      Alcotest.(check int64)
+        (name ^ " output") v
+        (UInt64.to_int64 (Param.get env wide_out64));
+      let env = Codec.env wide_embed in
+      ignore (decode_ok (Codec.decode ~env wide_embed (bytes64 v) 0));
+      Alcotest.(check int64)
+        (name ^ " forwarded output")
+        v
+        (UInt64.to_int64 (Param.get env wide_out64));
+      let signed = wide_codec "WideSigned" wide_signed uint64be in
+      let env = Codec.env signed in
+      ignore (decode_ok (Codec.decode ~env signed (bytes64 v) 0));
+      Alcotest.(check int64)
+        (name ^ " signed output") v
+        (Param.get env wide_signed))
+    wide_bits;
+  let env = Codec.env wide32 in
+  ignore
+    (decode_ok
+       (Codec.decode ~env wide32 (Bytes.of_string "\xff\xff\xff\xfe") 0));
+  Alcotest.(check int32)
+    "uint32 output" 0xffff_fffel
+    (UInt32.to_int32 (Param.get env wide_out32))
+
 (* A list of param-constrained sub-records within a byte budget, the param
    forwarded through the repeat (the shape that first exposed the gap). *)
 let test_embed_param_repeat () =
@@ -894,6 +953,8 @@ let suite =
         test_embed_output_param;
       Alcotest.test_case "embed: param forwarded through repeat" `Quick
         test_embed_param_repeat;
+      Alcotest.test_case "action: an output holds a 64-bit value" `Quick
+        test_output_wide;
       Alcotest.test_case "action: output only" `Quick
         test_get_action_output_only;
       Alcotest.test_case "action: var then assign" `Quick
