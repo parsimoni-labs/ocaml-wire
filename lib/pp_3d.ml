@@ -894,16 +894,77 @@ let pad_reversed_group total used base native reversed =
     :: reversed
   else reversed
 
+let rec stmt_refs = function
+  | Assign (_, e) | Var (_, e) | Field_assign (_, _, e) -> collect_refs e
+  | Return e -> collect_refs e
+  | If (c, t, e) ->
+      collect_refs c
+      @ List.concat_map stmt_refs t
+      @ Option.fold ~none:[] ~some:(List.concat_map stmt_refs) e
+  | Extern_call _ | Abort -> []
+
+let action_refs = function Success l | Act l -> List.concat_map stmt_refs l
+
+(* An action stays on its field, where 3D runs it, so in a reversed group it
+   sees only the bitfields 3D declares before it: refuse one that reads a
+   bitfield of the group the codec declares before it. *)
+let rec check_reversed_actions = function
+  | [] -> ()
+  | Field f :: later ->
+      (match f.action with
+      | None -> ()
+      | Some a ->
+          let later_names =
+            List.filter_map (fun (Field g) -> g.field_name) later
+          in
+          List.iter
+            (fun n ->
+              if List.mem n later_names then
+                Fmt.invalid_arg
+                  "the action of bitfield %S reads bitfield %S of the same \
+                   word, which 3D declares after it: 3D lists a word's \
+                   bitfields from its least significant bit, the reverse of \
+                   their bit order here, and an action reads only the fields \
+                   before its own"
+                  (Option.value ~default:"_" f.field_name)
+                  n)
+            (action_refs a));
+      check_reversed_actions later
+
+(* 3d.exe refuses a word with an [on_success] action, which may fail, beside
+   any other action on its bitfields. *)
+let check_word_actions group =
+  match List.filter (fun (Field f) -> Option.is_some f.action) group with
+  | [] | [ _ ] -> ()
+  | acted ->
+      if
+        List.exists
+          (fun (Field f) ->
+            match f.action with Some (Success _) -> true | _ -> false)
+          acted
+      then
+        Fmt.invalid_arg
+          "bitfields %s of one word carry actions, one of them on_success, \
+           which can fail: 3d.exe supports no other action beside it on a \
+           word's bitfields; use on_act"
+          (String.concat ", "
+             (List.map
+                (fun (Field f) ->
+                  Fmt.str "%S" (Option.value ~default:"_" f.field_name))
+                acted))
+
 let reorder_bit_group base bit_order f0 rest =
   let total = bitfield_base_bits base in
   let native = native_bit_order base in
   let used, group, rest' = collect_bit_group base bit_order total f0 rest in
+  check_word_actions group;
   let emitted =
     if equal_bit_order bit_order native then group
     else
       (* Backward references in reversed order would break: fields now
          come before the values their constraints read. Collapse all
          constraints onto the last reversed field. *)
+      let () = check_reversed_actions (List.rev group) in
       let reversed = collapse_constraints_into_last (List.rev group) in
       pad_reversed_group total used base native reversed
   in
@@ -1066,6 +1127,12 @@ let pp_struct ppf (s : struct_) =
   Fmt.pf ppf "@]@,} %s" name
 
 let check_fields where fields =
+  if
+    List.exists
+      (fun (Field f) ->
+        Option.is_some f.action && Option.is_some (unwrap_bits f.field_typ))
+      fields
+  then ignore (reorder_bit_groups_for_3d fields : field list);
   let _, fields = projected_fields where fields in
   List.iter
     (fun (env, Field f) ->

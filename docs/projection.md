@@ -124,7 +124,10 @@ constant F* knows: it is narrowed the same way when the bytes of the fields
 before the first of variable size fit the output (a bitfield counts its whole
 word, so this bounds it from above), and refused past them. No
 expression reads an output, which 3D holds as a pointer, nor `field_pos`,
-which 3D reads only into a `var`. A 3D `if` ends its action, so the
+which 3D reads only into a `var`. 3D declares the bitfields of a word from
+its least significant bit, so where the codec's bit order is the reverse an
+action reads only the bitfields the codec declares after its own, and one that
+reads an earlier one is refused. A 3D `if` ends its action, so the
 statements after it are written into both of its branches. An output whose
 type a native int cannot hold (a `uint64`, or a `uint32` on a 32-bit target)
 receives the 64 bits the C stores.

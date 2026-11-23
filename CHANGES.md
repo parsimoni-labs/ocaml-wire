@@ -262,6 +262,11 @@
   buffer, so `decode` and `validate` refused it in a region shorter than the
   buffer (#522, @samoht)
 
+- `Wire.Codec.v` refuses an action on a bitfield of a word whose bit order
+  3D reverses that reads a bitfield declared before it in the word: 3D
+  declares that bitfield after the action's own and 3d.exe rejected the
+  projection (@samoht)
+
 - `Wire.byte_array_where` refuses a per-byte condition that reads a
   parameter or another field, or whose arithmetic 3d.exe cannot verify, when
   the type is built. `Wire.Codec.decode` raised `Invalid_argument` on such a
