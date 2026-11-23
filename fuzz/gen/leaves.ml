@@ -124,16 +124,30 @@ let float_boundaries =
     Float.nan;
   ]
 
+(* A float under js_of_ocaml is a JS number, and V8 resets a NaN stored in an
+   array of numbers to the default NaN, so the payload of a decoded NaN is not
+   kept there. *)
+let nan_payload_kept =
+  match Sys.backend_type with
+  | Sys.Other "js_of_ocaml" -> false
+  | Sys.Native | Sys.Bytecode | Sys.Other _ -> true
+
 (* Equality on floats compares bit patterns so NaN round-trips check
-   bit-identity, not [Float.equal]. *)
-let float64_bits_equal a b =
-  Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
+   bit-identity, not [Float.equal]; where NaN payloads are not kept, any NaN
+   equals any NaN. *)
+let float_equal bits a b =
+  if Float.is_nan a && not nan_payload_kept then Float.is_nan b else bits a b
+
+let float64_bits_equal =
+  float_equal (fun a b ->
+      Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b))
 
 (* Float32 encodes through Int32 bits, which truncates a 64-bit float's
    mantissa. Round-trip equality has to compare the value as it would
    look after that truncation. *)
-let float32_bits_equal a b =
-  Int32.equal (Int32.bits_of_float a) (Int32.bits_of_float b)
+let float32_bits_equal =
+  float_equal (fun a b ->
+      Int32.equal (Int32.bits_of_float a) (Int32.bits_of_float b))
 
 let float32_truncate x = Int32.float_of_bits (Int32.bits_of_float x)
 let float32_value_gen = Alcobar.map Alcobar.[ Alcobar.float ] float32_truncate

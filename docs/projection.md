@@ -189,3 +189,9 @@ through `Int32` literals, `u63` and `uint` through `Int64` and
 and `Gc.minor_words` checks skipped on `Sys.Other` backends.
 `make test-wasm` fails on integer-overflow warnings except optint's
 known `0x7fffffff`/`0x40000000`.
+
+On js_of_ocaml a decoded `float64` or `float32` NaN may lose its payload:
+the float is a JS number, and V8 resets a NaN it stores in an array of
+numbers to the default NaN, which is what it then re-encodes as. Read a field as `uint64` or `uint32` to keep a NaN
+payload bit-exact. wasm_of_ocaml keeps the payload. The fuzz suite compares
+NaNs by NaN-ness on js_of_ocaml and by bit pattern elsewhere.

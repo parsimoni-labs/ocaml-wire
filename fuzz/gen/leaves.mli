@@ -62,7 +62,8 @@ val int64be : int64 t
 
 val float64_bits_equal : float -> float -> bool
 (** [float64_bits_equal a b] compares the bit patterns of [a] and [b], so NaN
-    equals itself. *)
+    equals itself. On js_of_ocaml, which does not keep NaN payloads, a NaN
+    equals any NaN. *)
 
 val float32 : float t
 (** [float32] generates for {!Wire.float32}. *)

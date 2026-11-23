@@ -258,6 +258,10 @@
   position: the first field to fail in field order, each against its own
   bounds, with the `where` clause last (#522, @samoht)
 
+- On js_of_ocaml, a decoded `float64` or `float32` NaN may lose its payload
+  and re-encode as the default NaN, because V8 does not keep NaN payloads.
+  Read the field as `uint64` or `uint32` to keep the bits (#523, @samoht)
+
 ### Fixed
 
 - `decode`, `validate` and the code `Wire_ocaml` and `Wire_rust` generate
