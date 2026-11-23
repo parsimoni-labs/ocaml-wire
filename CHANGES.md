@@ -77,6 +77,12 @@
   field. They used to fail only in `Everparse.project` or in 3d.exe
   (#526, @samoht)
 
+- `Wire.Codec.v` refuses a size or array length that reads a `uint64`,
+  `int64` or `float64` field, even cast or masked. 3D types a size as a
+  32-bit integer and 3d.exe rejected the generated schema. A comparison of
+  such a field, which only picks between the branches of an `if_then_else`,
+  is still accepted (#526, @samoht)
+
 ### Added
 
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an

@@ -516,24 +516,6 @@ let test_field_ref_through_optional () =
   Alcotest.(check (option int)) "x" (Some 0x80) (Option.map UInt8.to_int r.x);
   Alcotest.(check int) "check" 0x7F (UInt8.to_int r.check)
 
-let test_uint64_in_size_expr () =
-  let f_len = Field.v "Len" uint64be in
-  let codec =
-    let open Codec in
-    v "U64Ref"
-      (fun len data -> (len, data))
-      [
-        (f_len $ fun (l, _) -> l);
-        (Field.v "Data" (byte_array ~size:(Field.ref f_len)) $ fun (_, d) -> d);
-      ]
-  in
-  let buf = Bytes.create 11 in
-  Bytes.set_int64_be buf 0 3L;
-  Bytes.blit_string "ABC" 0 buf 8 3;
-  let len, data = decode_ok (Codec.decode codec buf 0) in
-  Alcotest.(check int64) "len" 3L (UInt64.to_int64 len);
-  Alcotest.(check string) "data" "ABC" data
-
 let suite =
   ( "codec_optional",
     [
@@ -588,5 +570,4 @@ let suite =
         test_optional_lor_predicate;
       Alcotest.test_case "optional: Field.ref reads inner value" `Quick
         test_field_ref_through_optional;
-      Alcotest.test_case "uint64 in size expr" `Quick test_uint64_in_size_expr;
     ] )

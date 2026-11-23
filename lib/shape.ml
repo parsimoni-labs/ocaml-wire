@@ -201,9 +201,12 @@ let rec check_byte_size_expr name fields sized_field : int expr -> unit =
       check_byte_size_expr name fields sized_field b
   | Int _ | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> ()
 
-let rec check_byte_size_typ : type a.
-    string -> Types.field list -> string -> a Types.typ -> unit =
- fun name fields sized_field -> function
+(* Every size expression of a field type, through the wrappers the projection
+   sees through: [f ~count size] for each, [count] when it counts elements
+   ([array]) rather than bytes. *)
+let rec iter_sizes : type a.
+    (count:bool -> int expr -> unit) -> a Types.typ -> unit =
+ fun f -> function
   | Uint_var { size; _ }
   | Byte_array { size }
   | Byte_array_where { size; _ }
@@ -211,20 +214,73 @@ let rec check_byte_size_typ : type a.
   | Single_elem { size; _ }
   | Zeroterm_at_most { size }
   | Repeat { size; _ } ->
-      check_byte_size_expr name fields sized_field size
-  | Map { inner; _ } -> check_byte_size_typ name fields sized_field inner
-  | Where { inner; _ } -> check_byte_size_typ name fields sized_field inner
-  | Apply { typ; _ } -> check_byte_size_typ name fields sized_field typ
-  | Optional { inner; _ } -> check_byte_size_typ name fields sized_field inner
-  | Optional_or { inner; _ } ->
-      check_byte_size_typ name fields sized_field inner
+      f ~count:false size
+  | Array { len; _ } -> f ~count:true len
+  | Map { inner; _ } -> iter_sizes f inner
+  | Where { inner; _ } -> iter_sizes f inner
+  | Apply { typ; _ } -> iter_sizes f typ
+  | Optional { inner; _ } -> iter_sizes f inner
+  | Optional_or { inner; _ } -> iter_sizes f inner
   | _ -> ()
 
 let reject_certain_byte_size_mul name fields =
   List.iter
     (fun (Types.Field f) ->
-      check_byte_size_typ name fields
-        (Option.value ~default:"<anon>" f.field_name)
+      let sized_field = Option.value ~default:"<anon>" f.field_name in
+      iter_sizes
+        (fun ~count size ->
+          if not count then check_byte_size_expr name fields sized_field size)
+        f.field_typ)
+    fields
+
+(* The 64-bit field a size reads as a value, if any. A comparison only picks
+   between the branches, so the condition of an [if_then_else] is not read. *)
+let rec wide_size_ref wide : int expr -> string option = function
+  | Ref (I, n) when List.mem n wide -> Some n
+  | Add (a, b)
+  | Sub (a, b)
+  | Mul (a, b)
+  | Div (a, b)
+  | Mod (a, b)
+  | Land (a, b)
+  | Lor (a, b)
+  | Lxor (a, b)
+  | Lsl (a, b)
+  | Lsr (a, b)
+  | If_then_else (_, a, b) -> (
+      match wide_size_ref wide a with
+      | Some _ as r -> r
+      | None -> wide_size_ref wide b)
+  | Lnot a | Cast (_, a) -> wide_size_ref wide a
+  | Int _ | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> None
+
+(* 3D types a size as a 32-bit integer, and an expression reading a 64-bit
+   field has that field's type, cast or masked: 3d.exe refuses it ("Array
+   expression n has type UINT64BE instead of UInt32"), so the codec would
+   have no validator. *)
+let reject_wide_size name fields =
+  let wide =
+    List.filter_map
+      (fun (Types.Field f) ->
+        match f.field_name with
+        | Some n when Types.width64 f.field_typ -> Some n
+        | _ -> None)
+      fields
+  in
+  List.iter
+    (fun (Types.Field f) ->
+      iter_sizes
+        (fun ~count:_ size ->
+          match wide_size_ref wide size with
+          | None -> ()
+          | Some n ->
+              Fmt.invalid_arg
+                "Codec.v %S: the size of field %S reads the 64-bit field %S, \
+                 and 3D types a size as a 32-bit integer, so it has no 3D \
+                 projection; read the size from a field of at most 32 bits"
+                name
+                (Option.value ~default:"<anon>" f.field_name)
+                n)
         f.field_typ)
     fields
 
@@ -305,5 +361,6 @@ let reject_invalid_codec_shape ?where name fields =
   reject_nested_where name fields;
   reject_refined_non_scalar name fields;
   reject_certain_byte_size_mul name fields;
+  reject_wide_size name fields;
   try check_constraints where fields
   with Invalid_argument msg -> Fmt.invalid_arg "Codec.v %S: %s" name msg

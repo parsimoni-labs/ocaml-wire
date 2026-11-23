@@ -103,6 +103,10 @@ val widenable_unsigned : 'a typ -> bool
 (** [widenable_unsigned t] is [true] when [t] is an unsigned scalar at most 32
     bits wide, so an [Add] over it can be widened without overflow. *)
 
+val width64 : 'a typ -> bool
+(** [width64 t] is [true] when [t] is a 64-bit scalar, seen through the
+    transparent wrappers. *)
+
 val project_field_arith : string -> string list -> 'a expr -> 'a expr
 (** [project_field_arith name widenable cond] rejects a field subtraction or
     multiplication in [cond] (no sound narrow-width projection), then widens

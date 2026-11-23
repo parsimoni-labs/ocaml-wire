@@ -1122,6 +1122,10 @@ val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
 (** [to_3d_file path m] writes module [m] to a [.3d] file at [path]. See
     {!to_3d} for [enum_as_type]. *)
 
+val width64 : 'a typ -> bool
+(** [width64 t] is [true] when [t] is a 64-bit scalar, seen through the
+    transparent wrappers. *)
+
 val check_constraints : bool expr option -> field list -> unit
 (** [check_constraints where fields] raises [Invalid_argument], as {!to_3d} does
     when it renders the struct, for a comparison with no faithful 3D projection
