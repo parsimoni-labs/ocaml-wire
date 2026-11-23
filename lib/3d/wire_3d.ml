@@ -1496,40 +1496,56 @@ let emit_agree_preamble ppf base ~has_params =
     pr "}"
   end
 
+(* The call of a codec with parameters: an input takes the corpus's next
+   value; an output points at a cell of its own type, printed after an
+   accepted input as [out <codec> <hex> <value>,...]. *)
+let emit_agree_call ppf cname check ptypes =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  let args, outputs, inputs, _ =
+    List.fold_left
+      (fun (args, outputs, i, o) -> function
+        | `Input t -> (Fmt.str "(%s) p[%d]" t i :: args, outputs, i + 1, o)
+        | `Output t -> (Fmt.str "&o%d" o :: args, (o, t) :: outputs, i, o + 1))
+      ([], [], 0, 0) ptypes
+  in
+  let outputs = List.rev outputs in
+  pr "  if (strcmp(name, \"%s\") == 0) {" cname;
+  if inputs > 0 then begin
+    pr "    unsigned long p[%d];" inputs;
+    pr "    parse_params(params, p, %d);" inputs
+  end;
+  List.iter (fun (o, t) -> pr "    %s o%d = 0;" t o) outputs;
+  pr "    int ok = %s(%s, base, len) ? 1 : 0;" check
+    (String.concat ", " (List.rev args));
+  if outputs <> [] then begin
+    pr "    if (ok) {";
+    pr "      printf(\"out %%s %%s\", name, hex);";
+    List.iteri
+      (fun k (o, _) ->
+        pr "      printf(\"%s%%llu\", (unsigned long long) o%d);"
+          (if k = 0 then " " else ",")
+          o)
+      outputs;
+    pr "      printf(\"\\n\");";
+    pr "    }"
+  end;
+  pr "    return ok;";
+  pr "  }"
+
 let emit_agree_run ppf triples =
   let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
   pr "";
   pr
-    "static int run(const char *name, const char *params, uint8_t *base, \
-     uint32_t len) {";
+    "static int run(const char *name, const char *params, const char *hex, \
+     uint8_t *base, uint32_t len) {";
   pr "  (void) params;";
+  pr "  (void) hex;";
   List.iter
     (fun (cname, check, ptypes) ->
       if ptypes = [] then
         pr "  if (strcmp(name, \"%s\") == 0) return %s(base, len) ? 1 : 0;"
           cname check
-      else begin
-        (* An input takes the corpus's next value; an output points at a
-           64-bit cell of its own, which holds any output type. *)
-        let n = List.length (List.filter_map Fun.id ptypes) in
-        let args, _, _ =
-          List.fold_left
-            (fun (args, i, o) -> function
-              | Some t -> (Fmt.str "(%s) p[%d]" t i :: args, i + 1, o)
-              | None -> (Fmt.str "(void *) &o[%d]" o :: args, i, o + 1))
-            ([], 0, 0) ptypes
-        in
-        let outputs = List.length ptypes - n in
-        pr "  if (strcmp(name, \"%s\") == 0) {" cname;
-        if n > 0 then begin
-          pr "    unsigned long p[%d];" n;
-          pr "    parse_params(params, p, %d);" n
-        end;
-        if outputs > 0 then pr "    uint64_t o[%d] = { 0 };" outputs;
-        pr "    return %s(%s, base, len) ? 1 : 0;" check
-          (String.concat ", " (List.rev args));
-        pr "  }"
-      end)
+      else emit_agree_call ppf cname check ptypes)
     triples;
   pr "  fprintf(stderr, \"agree: unknown codec '%%s'\\n\", name);";
   pr "  exit(3);";
@@ -1600,7 +1616,7 @@ let emit_agree_main ppf =
     "  while (fscanf(fp, \"%%255s %%4095s %%131072s %%ld\", name, params, hex, \
      &verdict) == 4) {";
   emit_agree_decode ppf;
-  pr "    int accept = run(name, params, buf, len);";
+  pr "    int accept = run(name, params, hex, buf, len);";
   pr "    total++;";
   pr "    if (accept != (int) verdict) {";
   pr "      mismatch++;";
@@ -1653,7 +1669,8 @@ let generate_agree ?name ~outdir ~package codecs =
   in
   let has_params =
     List.exists
-      (fun (_, _, ptypes) -> List.exists Option.is_some ptypes)
+      (fun (_, _, ptypes) ->
+        List.exists (function `Input _ -> true | `Output _ -> false) ptypes)
       triples
   in
   let oc = open_out (Filename.concat outdir "agree.c") in

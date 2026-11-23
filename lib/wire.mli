@@ -2118,10 +2118,11 @@ module Everparse : sig
         wrapper takes, so a caller can build the wrapper call without reading
         the generated header. *)
 
-    val param_c_types : struct_ -> string option list
+    val param_c_types : struct_ -> [ `Input of string | `Output of string ] list
     (** [param_c_types s] is, for each parameter of [s] in declaration order,
-        the C type of an input ({!input_param_c_types}) and [None] for an
-        output, which the generated validator wrapper takes as a pointer. *)
+        its C type: an input's is the type the generated validator wrapper takes
+        ({!input_param_c_types}), an output's the type of the cell the wrapper
+        takes a pointer to. *)
 
     val struct_typ : struct_ -> unit typ
     (** View a 3D struct as a wire description. *)

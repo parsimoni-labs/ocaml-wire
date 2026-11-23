@@ -276,7 +276,8 @@
   which 3d.exe verifies it, and `Wire.Codec.v` accepts it (@samoht)
 
 - `Wire_3d.generate_agree` builds for a codec with output parameters: the
-  harness passes each output a cell of its own, where the C did not compile
+  harness passes each output a cell of its own type, where the C did not
+  compile, and prints the values they hold after each input it accepts
   (@samoht)
 
 - Action arithmetic projects widened as a constraint's does
