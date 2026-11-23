@@ -618,9 +618,9 @@ type bitfield
 
     The word is read with a bounds check and no other check of the record; on
     untrusted input use {!View}. These stay for unchecked reads of several
-    bitfields of one word of a record shorter than 8 bytes: on [bench/clcw]
-    (4-byte words) {!load_word} and {!extract} spend 146 instructions per word
-    where {!View} spends 263, as a view reads such a field out of line. *)
+    bitfields of one word of a record shorter than 8 bytes, such as the 4-byte
+    words of [bench/clcw]: a view reads such a field out of line, where
+    {!extract} is a shift and a mask. *)
 
 val bitfield : 'r t -> (int, 'r) field -> bitfield
 (** [bitfield codec field] returns a bitfield accessor. Raises if [field] is not
@@ -646,10 +646,10 @@ type 'r word_reader
 
     The record is read with a bounds check and no other check; on untrusted
     input use {!View}. The word readers stay for unchecked reads of short fixed
-    headers: on [bench/routing] (6-byte space packet headers) they spend 101
-    instructions per packet where {!View} spends 152, and on [bench/gateway]
-    (6-byte frame and packet headers) 1237 per frame where {!View} spends 2251,
-    as a view reads a field of a frame shorter than 8 bytes out of line. *)
+    headers, such as the 6-byte space packet and frame headers of
+    [bench/routing] and [bench/gateway]: a view reads a field of a frame shorter
+    than 8 bytes out of line, where a word reader reads the header once and
+    takes each field from it inline. *)
 
 val word_reader : 'r t -> 'r word_reader
 (** [word_reader c] reads the records of [c] with {!read_word}. Raises

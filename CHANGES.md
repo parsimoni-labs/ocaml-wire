@@ -103,7 +103,7 @@
   an absent sub-record. `View.check` of a codec of variable size makes its
   checks without decoding: an Ethernet, IPv4 and TCP or UDP stack is checked
   and its headers read in about 2460 instructions per packet, against 3000
-  for `decode` (@samoht)
+  for `decode` (#528, @samoht)
 
 - `Wire.Codec.decoder` and `Wire.Codec.encoder`: decode and encode prepared
   once, for a loop over many records (#496, @samoht)
