@@ -411,10 +411,10 @@ let v : type f r.
   (* Check the description now, so a malformed codec fails where it is built.
      The compile waits for the first operation that needs it. *)
   let scope = check_field_refs name flds in
+  check_where_refs name scope where;
   let struct_fields = struct_fields flds in
   Shape.reject_invalid_codec_shape ?where name struct_fields;
   let param_handles = collect_param_handles name struct_fields where in
-  check_where_refs name scope where;
   let compile name =
     let rec add : type g. (g, r) record -> (g, r) fields -> r compiled =
      fun r flds ->

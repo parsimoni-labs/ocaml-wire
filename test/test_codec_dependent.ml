@@ -316,107 +316,40 @@ let test_dep_codec_ref () =
     "ref data[4]" 0x14
     (Bytes.get_uint8 (Bs.bytes data) (Bs.first data + 4))
 
-let overflowing_span_codec name size =
+(* A size that can pass 64 bits, go below zero, or divide by zero has no 3D
+   projection: 3d.exe cannot verify it, so the codec is refused when it is
+   built. *)
+let span_codec name size () =
   let f_len = Field.v "Len" uint8 in
   let f_data = Field.v "Data" (byte_array ~size:(size (Field.ref f_len))) in
   Codec.v name (fun len data -> (len, data)) Codec.[ f_len $ fst; f_data $ snd ]
 
 let test_dep_size_arithmetic_overflow () =
   let int = Wire.int in
-  let codecs =
-    [
-      ( "Add",
-        overflowing_span_codec "AddOverflow" (fun n -> Expr.(n + int max_int))
-      );
-      ( "Sub",
-        overflowing_span_codec "SubOverflow" (fun n ->
-            Expr.(n - int min_int + int 1)) );
-      ( "Mul",
-        overflowing_span_codec "MulOverflow" (fun n -> Expr.(n * int max_int))
-      );
-    ]
-  in
-  let base = 5 in
-  let buf = Bytes.make (base + 2) '\000' in
-  Bytes.set_uint8 buf base 2;
   List.iter
-    (fun (name, codec) ->
-      (match Codec.decode codec buf base with
-      | Error { at; kind = Value_out_of_range _; _ } ->
-          Alcotest.(check int) (name ^ " decode offset") base at
-      | Error e ->
-          Alcotest.failf "%s decode: expected Value_out_of_range, got %a" name
-            pp_parse_error e
-      | Ok _ -> Alcotest.failf "%s decode: accepted the wrapped span" name);
-      match Codec.validate_exn codec buf base with
-      | () -> Alcotest.failf "%s validate: accepted the wrapped span" name
-      | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
-          Alcotest.(check int) (name ^ " validate offset") base at)
-    codecs
+    (fun (name, mk) ->
+      Alcotest.(check bool) (name ^ " refused") true (raises_invalid mk))
+    [
+      ("past 64 bits", span_codec "Wide" (fun n -> Expr.(n * int max_int * n)));
+      ( "negative literal",
+        span_codec "Negative" (fun n -> Expr.(n - int min_int + int 1)) );
+      ("below zero", span_codec "Below" (fun n -> Expr.(int 1 - n)));
+      ("divided by zero", span_codec "DivZero" (fun n -> Expr.(int 8 / n)));
+      ("modulo zero", span_codec "ModZero" (fun n -> Expr.(int 8 mod n)));
+    ]
 
+(* A [where] that adds a literal near [max_int] to two fields can pass OCaml's
+   native int where the C computes it in 64 bits: refused when built. *)
 let test_where_arithmetic_overflow_offset () =
   let f_a = Field.v "a" uint8 in
   let f_b = Field.v "b" uint8 in
-  let codec =
-    Codec.v "WhereOverflow"
-      ~where:Expr.(int max_int + Field.ref f_b + Field.ref f_a >= int 0)
-      (fun a b -> (a, b))
-      Codec.[ f_a $ fst; f_b $ snd ]
-  in
-  let base = 5 in
-  let buf = Bytes.make (base + 2) '\000' in
-  Bytes.set_uint8 buf (base + 1) 1;
-  (match Codec.decode codec buf base with
-  | Error { at; kind = Value_out_of_range _; _ } ->
-      Alcotest.(check int) "decode offset" base at
-  | Error e ->
-      Alcotest.failf "decode: expected Value_out_of_range, got %a"
-        pp_parse_error e
-  | Ok _ -> Alcotest.fail "decode accepted overflowing where expression");
-  match Codec.validate_exn codec buf base with
-  | () -> Alcotest.fail "validate accepted overflowing where expression"
-  | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
-      Alcotest.(check int) "validate offset" base at
-
-let zero_divisor_span_codec name size =
-  let f_divisor = Field.v "Divisor" uint8 in
-  let f_data = Field.v "Data" (byte_array ~size:(size (Field.ref f_divisor))) in
-  Codec.v name
-    (fun divisor data -> (divisor, data))
-    Codec.[ f_divisor $ fst; f_data $ snd ]
-
-let test_dep_size_zero_divisor () =
-  let int = Wire.int in
-  let codecs =
-    [
-      ( "division",
-        zero_divisor_span_codec "DivZero" (fun divisor ->
-            Expr.(int 8 / divisor)) );
-      ( "modulo",
-        zero_divisor_span_codec "ModZero" (fun divisor ->
-            Expr.(int 8 mod divisor)) );
-    ]
-  in
-  let base = 5 in
-  let buf = Bytes.make (base + 2) '\000' in
-  List.iter
-    (fun (name, codec) ->
-      (match Codec.decode codec buf base with
-      | Error { at; kind = Zero_divisor; _ } ->
-          Alcotest.(check int) (name ^ " decode offset") base at
-      | Error e ->
-          Alcotest.failf "%s decode: expected Zero_divisor, got %a" name
-            pp_parse_error e
-      | Ok _ -> Alcotest.failf "%s decode: accepted a zero divisor" name
-      | exception Division_by_zero ->
-          Alcotest.failf "%s decode: leaked Division_by_zero" name);
-      match Codec.validate_exn codec buf base with
-      | exception Parse_error { at; kind = Zero_divisor; _ } ->
-          Alcotest.(check int) (name ^ " validate offset") base at
-      | () -> Alcotest.failf "%s validate: accepted a zero divisor" name
-      | exception Division_by_zero ->
-          Alcotest.failf "%s validate: leaked Division_by_zero" name)
-    codecs
+  Alcotest.(check bool)
+    "refused" true
+    (raises_invalid (fun () ->
+         Codec.v "WhereOverflow"
+           ~where:Expr.(int max_int + Field.ref f_b + Field.ref f_a >= int 0)
+           (fun a b -> (a, b))
+           Codec.[ f_a $ fst; f_b $ snd ]))
 
 let test_dep_ref_size_eval () =
   (* Test that the size expression is evaluated correctly for wire_size_at *)
@@ -655,12 +588,10 @@ let suite =
       Alcotest.test_case "dep: min_wire_size" `Quick test_dep_min_wire_size;
       Alcotest.test_case "dep: wire_size_at" `Quick test_dep_compute_wire_size;
       Alcotest.test_case "dep: codec ref" `Quick test_dep_codec_ref;
-      Alcotest.test_case "dep: size arithmetic overflow raises" `Quick
+      Alcotest.test_case "dep: size arithmetic 3D cannot verify refused" `Quick
         test_dep_size_arithmetic_overflow;
-      Alcotest.test_case "codec: where arithmetic overflow offset" `Quick
+      Alcotest.test_case "codec: where past the native int refused" `Quick
         test_where_arithmetic_overflow_offset;
-      Alcotest.test_case "dep: size zero divisor raises" `Quick
-        test_dep_size_zero_divisor;
       Alcotest.test_case "dep: codec ref size eval" `Quick
         test_dep_ref_size_eval;
       Alcotest.test_case "dep: struct_of_codec" `Quick test_struct_of_dep;

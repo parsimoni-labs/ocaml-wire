@@ -673,11 +673,11 @@ let lookup_bound_cond raw_name field_typ =
    then accepted bodies the codec rejects. *)
 let render_typ_at : type a.
     name:string ->
-    arith:arith ->
+    env:Arith_3d.env ->
     own:bool expr option ->
     a typ ->
     (Format.formatter -> unit) * field_suffix * bool expr option =
- fun ~name ~arith ~own field_typ ->
+ fun ~name ~env ~own field_typ ->
   (* Extract Where constraints from the type so they appear as field
      constraints in the 3D output, not inline in the type. *)
   let where_cond, typ = extract_where_constraint field_typ in
@@ -705,7 +705,7 @@ let render_typ_at : type a.
       enum_cond
   in
   let constraint_ =
-    Option.map (project_constraint ~name ~arith typ) constraint_
+    Option.map (Arith_3d.refinement env ~name typ) constraint_
   in
   let suffix, pp_base = field_suffix typ in
   let pp_base =
@@ -726,7 +726,7 @@ let rec fresh_anon_name () =
   incr anon_counter;
   if List.mem s !named_fields_3d then fresh_anon_name () else s
 
-let pp_field arith ppf (Field f) =
+let pp_field env ppf (Field f) =
   let raw_name, name =
     match f.field_name with
     | Some name -> (name, escape_3d name)
@@ -735,7 +735,7 @@ let pp_field arith ppf (Field f) =
         (s, s)
   in
   let pp_base, suffix, constraint_ =
-    render_typ_at ~name:raw_name ~arith ~own:f.constraint_ f.field_typ
+    render_typ_at ~name:raw_name ~env ~own:f.constraint_ f.field_typ
   in
   Option.iter (pp_field_doc ppf) f.field_doc;
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
@@ -946,8 +946,9 @@ let add_guard g (Field f as field) =
   | None -> Field { f with constraint_ = Some g }
   | Some c -> Field { f with constraint_ = Some (And (c, g)) }
 
-(* A byte span sized [a - b] rejects negative lengths in Codec; 3D must prove
-   the subtraction does not underflow. A span sized [f - k], with [f] an
+(* A byte span, [uint] or nested region sized [a - b] rejects negative lengths
+   in Codec; 3D must prove the subtraction does not underflow. One sized
+   [f - k], with [f] an
    unsigned field of at most 32 bits and [k] a nonnegative constant, puts
    [f >= k] on [f] itself, a scalar EverParse can refine. A span sized
    [a - sizeof(this)] puts [a >= sizeof(this)] on the field just before it.
@@ -960,8 +961,11 @@ let guard_subtraction_sizes fields =
       fields
   in
   let size_guard : type a. a typ -> (string * bool expr) option = function
-    | Byte_array { size } | Byte_slice { size } | Byte_array_where { size; _ }
-      -> (
+    | Byte_array { size }
+    | Byte_slice { size }
+    | Byte_array_where { size; _ }
+    | Uint_var { size; _ }
+    | Single_elem { size; _ } -> (
         match size with
         | Sub ((Ref (I, name) as a), (Int n as b)) when n >= 0 && unsigned name
           ->
@@ -992,6 +996,18 @@ let guard_subtraction_sizes fields =
   in
   go (List.map on_size_field fields)
 
+(* A struct's fields as 3D checks them, each with the environment its
+   expressions are typed in, and its [where] once the fields it names have
+   taken it: what [pp_struct] prints and what [Codec.v] refuses. *)
+let projected_fields ?(params = []) where fields =
+  let fields = reorder_bit_groups_for_3d fields in
+  let where, fields = lower_where_to_field_constraint where fields in
+  let fields = guard_subtraction_sizes fields in
+  let formals = List.map (fun (p : param) -> p.param_name) params in
+  let outer, envs = Arith_3d.envs ~formals ?where fields in
+  ( Option.map (Arith_3d.condition outer) where,
+    List.map2 (fun env f -> (env, Arith_3d.field env f)) envs fields )
+
 let pp_struct ppf (s : struct_) =
   check_3d_names s;
   anon_counter := 0;
@@ -1001,15 +1017,20 @@ let pp_struct ppf (s : struct_) =
       s.fields;
   let name = escape_3d s.name in
   let tag = struct_tag_name s in
-  let fields = reorder_bit_groups_for_3d s.fields in
-  let where, fields = lower_where_to_field_constraint s.where fields in
-  let fields = guard_subtraction_sizes fields in
-  let arith = arith fields in
+  let where, fields = projected_fields ~params:s.params s.where s.fields in
   Fmt.pf ppf "typedef struct %s%a" tag (pp_params ?as_enum:None) s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
-  List.iter (pp_field arith ppf) fields;
+  List.iter (fun (env, field) -> pp_field env ppf field) fields;
   Fmt.pf ppf "@]@,} %s" name
+
+let check_fields where fields =
+  let _, fields = projected_fields where fields in
+  List.iter
+    (fun (env, Field f) ->
+      let name = Option.value ~default:"_" f.field_name in
+      ignore (render_typ_at ~name ~env ~own:f.constraint_ f.field_typ))
+    fields
 
 (* The integer type an enum declaration names. A [where] on the enum's base is
    a constraint on the field, which the field carries; 3D has no refined base
@@ -1062,7 +1083,7 @@ let pp_casetype_cases : type k.
     (fun i (tag_opt, Pack_typ typ) ->
       let field_name = Fmt.str "v%d" i in
       let pp_base, suffix, constraint_ =
-        render_typ_at ~name:field_name ~arith:no_arith ~own:None typ
+        render_typ_at ~name:field_name ~env:Arith_3d.empty ~own:None typ
       in
       let pp_body ppf () =
         Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix;

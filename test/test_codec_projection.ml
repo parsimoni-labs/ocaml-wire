@@ -807,10 +807,9 @@ let test_wide_size_rejected () =
          bytes Expr.(if_then_else (n >= int 5) (int 1) (int 0))));
   check "uint32 byte size accepted" false (sized uint32be bytes)
 
-(* EverParse computes a constraint at the field's own width, so a subtraction
-   or multiplication over a field under/overflows there and 3d.exe refuses to
-   verify it. Each refusal comes when the codec is built; constant arithmetic
-   folds and projects. *)
+(* 3D refuses a subtraction that can go below zero and a product past 64 bits,
+   when the codec is built; a product that fits a wider type than its operands'
+   is widened, and constant arithmetic folds. *)
 let test_field_sub_mul_rejected () =
   let one typ f () =
     Codec.v "SubMul" Fun.id
@@ -819,7 +818,7 @@ let test_field_sub_mul_rejected () =
   let check what want f = Alcotest.(check bool) what want (raises_invalid f) in
   check "uint8 v - 1 refused" true
     (one uint8 Expr.(fun v -> v - int 1 >= int 5));
-  check "uint8 v * 2 refused" true
+  check "uint8 v * 2 accepted" false
     (one uint8 Expr.(fun v -> v * int 2 <= int 5));
   check "uint64 v - 1 refused" true
     (one uint64be Expr.(fun v -> v - int 1 <= int 5));
@@ -828,9 +827,14 @@ let test_field_sub_mul_rejected () =
   check "constant product accepted" false
     (one uint8 Expr.(fun v -> v < int 10 * int 5));
   let a = Field.v "a" uint8 in
-  check "field product in where refused" true (fun () ->
+  check "field product in where accepted" false (fun () ->
       Codec.v "SubMulWhere"
         ~where:Expr.(Field.ref a * int 4 >= int 20)
+        Fun.id
+        Codec.[ a $ Fun.id ]);
+  check "field subtraction in where refused" true (fun () ->
+      Codec.v "SubWhere"
+        ~where:Expr.(Field.ref a - int 4 >= int 20)
         Fun.id
         Codec.[ a $ Fun.id ])
 

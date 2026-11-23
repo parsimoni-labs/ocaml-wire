@@ -1515,23 +1515,16 @@ let test_validate_rejects_all_zeros_failure () =
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on non-zero all_zeros: %s" m
 
+(* 3D reads a signed size as its unsigned bit pattern ([-1] is 255), so a
+   span sized by an [int8] is refused when the codec is built. *)
 let test_validate_rejects_negative_byte_slice () =
   let len = Field.v "Len" int8 in
   let data = Field.v "Data" (byte_slice ~size:(Field.ref len)) in
-  let c =
+  match
     Codec.v "SignedSlice" (fun l d -> (l, d)) Codec.[ len $ fst; data $ snd ]
-  in
-  let bad = Bytes.of_string "\xff" in
-  (match Codec.decode c bad 0 with
-  | Error _ -> ()
-  | Ok _ -> Alcotest.fail "decode accepted a negative byte_slice size"
-  | exception Invalid_argument m ->
-      Alcotest.failf "decode crashed on a negative byte_slice size: %s" m);
-  match Codec.validate_exn c bad 0 with
-  | () -> Alcotest.fail "validate accepted a negative byte_slice size"
-  | exception Wire.Parse_error _ -> ()
-  | exception Invalid_argument m ->
-      Alcotest.failf "validate crashed on a negative byte_slice size: %s" m
+  with
+  | _ -> Alcotest.fail "a span sized by an int8 was accepted"
+  | exception Invalid_argument _ -> ()
 
 let check_decode_and_validate_reject label c bad =
   (match Codec.decode c bad 0 with

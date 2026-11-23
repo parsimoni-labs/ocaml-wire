@@ -82,8 +82,6 @@
   s_skipped.mli
   s_huge.ml
   s_huge.mli
-  s_bigspan.ml
-  s_bigspan.mli
   s_nested.ml
   s_nested.mli)
  (action
@@ -157,8 +155,6 @@
   s_skipped.mli
   s_huge.ml
   s_huge.mli
-  s_bigspan.ml
-  s_bigspan.mli
   s_nested.ml
   s_nested.mli)
  (action
@@ -228,8 +224,6 @@
   s_skipped.mli
   s_huge.ml
   s_huge.mli
-  s_bigspan.ml
-  s_bigspan.mli
   s_nested.ml
   s_nested.mli)
  (action
@@ -293,7 +287,6 @@
   s_overflow
   s_skipped
   s_huge
-  s_bigspan
   s_nested
   boxed_loads)
  (libraries

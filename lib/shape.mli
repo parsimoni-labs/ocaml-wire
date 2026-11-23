@@ -4,8 +4,8 @@
     be given a verified validator is refused when the codec is built, not
     silently accepted and then quietly weakened at decode. Each check here
     covers one such layout: a greedy field that is not last, a [where] buried
-    inside a container element, a byte-size product that can exceed EverParse's
-    u32 limit, and a repeated field name.
+    inside a container element, arithmetic 3d.exe cannot verify or that the C
+    computes differently from OCaml, and a repeated field name.
 
     A check reports by raising [Invalid_argument] with a message naming the
     codec and the offending field, so the failure lands on the line that wrote
@@ -17,5 +17,5 @@ val reject_invalid_codec_shape :
   ?where:bool Types.expr -> string -> Types.field list -> unit
 (** [reject_invalid_codec_shape ?where name fields] runs every check against the
     fields of the codec called [name] and its [where] clause, among them the
-    constraints 3D refuses ({!Types.check_constraints}). Raises
-    [Invalid_argument] on the first one that fails. *)
+    constraints 3D refuses ({!Types.check_fields}). Raises [Invalid_argument] on
+    the first one that fails. *)

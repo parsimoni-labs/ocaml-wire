@@ -71,24 +71,18 @@
   field of the codec itself, or check the value inside the sub-codec
   (#526, @samoht)
 
-- `Wire.Codec.v` refuses a constraint or `where` clause that 3D cannot check
-  as written: an addition over a `uint64`, `int64` or `float64` field, which
-  3d.exe cannot prove free of overflow, and an ordering on an `int64` or float
-  field. They used to fail only in `Everparse.project` or in 3d.exe
-  (#526, @samoht)
-
-- `Wire.Codec.v` refuses a size or array length that reads a `uint64`,
-  `int64` or `float64` field, even cast or masked. 3D types a size as a
-  32-bit integer and 3d.exe rejected the generated schema. A comparison of
-  such a field, which only picks between the branches of an `if_then_else`,
-  is still accepted (#526, @samoht)
-
-- `Wire.Codec.v` refuses a constraint or `where` clause that subtracts or
-  multiplies a field, such as `Field.ref len - int 4` or `Field.ref ihl * int
-  4`. 3D computes it at the field's own width and 3d.exe cannot prove it free
-  of under/overflow; it used to fail only in `Everparse.project`. Constant
-  arithmetic and additions over fields of at most 32 bits still project
-  (#526, @samoht)
+- `Wire.Codec.v` refuses a constraint, `where` clause, size or presence
+  condition whose arithmetic 3d.exe cannot verify, or which the generated C
+  would compute differently from OCaml: a subtraction that can go below zero
+  (guard it, as in `a >= int 1 && l >= a - int 1`), a division by a value
+  that can be zero, a result past 64 bits, a size that needs 64 bits, a shift
+  by the width of its type or more, a cast that can lose bits, `lnot` (but
+  `x land lnot m`), a negative literal, `field_pos`, an ordering on an
+  `int64` or float field, any use of a signed field but a comparison with a
+  literal, and a value past OCaml's native int that reads no 64-bit field.
+  They used to fail in `Everparse.project`, in 3d.exe, or to give the C and
+  OCaml different answers (docs/projection.md, Arithmetic) (#526, #527,
+  @samoht)
 
 ### Added
 
@@ -184,6 +178,12 @@
 
 ### Changed
 
+- Field arithmetic that 3D verifies once widened now projects: a sum,
+  product or left shift whose value does not fit its operands' type has them
+  cast to the narrowest type that holds it (`((UINT16) a) << 2`), and a
+  product within its type stays as written (`IHL * 4` over 4 bits)
+  (#527, @samoht)
+
 - `Wire.Codec.decode`, `encode` and `validate` are several times faster on
   fixed-size codecs. `decode` of an Ethernet, IPv4 and TCP or UDP packet takes
   less than half the instructions and does not slow down with nesting, and
@@ -233,6 +233,15 @@
   region takes the rest of the region, as 3D does. It took the rest of the
   buffer, so `decode` and `validate` refused it in a region shorter than the
   buffer (#522, @samoht)
+
+- A left shift over a field no longer wraps in the generated C:
+  `l >= a lsl 2` over a `uint8` accepted `a = 255, l = 1000` there, which
+  OCaml rejects (#527, @samoht)
+
+- A signed field in a presence condition is compared in two's-complement
+  form in the generated C, as in a constraint: `n >= 5` over an `int8` read
+  `n = -1` as 255 and made the field present where OCaml leaves it out
+  (#527, @samoht)
 
 - A constraint that compares a signed field from another field, or from a
   `where` clause, gives the generated C's answer. 3D reads a signed field as

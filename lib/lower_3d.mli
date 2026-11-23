@@ -84,62 +84,15 @@ val combine_constraints :
   bool expr option -> bool expr option -> bool expr option
 (** [combine_constraints a b] is the conjunction of the constraints present. *)
 
-val scalar_kind : 'a typ -> [ `Signed of int | `Float | `Other ]
-(** [scalar_kind t] is the scalar a refinement over a field of type [t] compares
-    against, seen through the transparent wrappers. *)
-
-val project_refinement :
-  name:string ->
-  kind:[ `Signed of int | `Float | `Other ] ->
-  bool expr ->
-  bool expr
-(** [project_refinement ~name ~kind cond] rewrites the comparisons of field
-    [name] in [cond] to the two's-complement form its unsigned projection reads
-    when [kind] is signed, and raises [Invalid_argument] for one with no
-    faithful projection: a float or signed 64-bit ordering, or a signed field
-    compared with anything other than an integer literal. *)
-
 val widenable_unsigned : 'a typ -> bool
 (** [widenable_unsigned t] is [true] when [t] is an unsigned scalar at most 32
-    bits wide, so an [Add] over it can be widened without overflow. *)
-
-val width64 : 'a typ -> bool
-(** [width64 t] is [true] when [t] is a 64-bit scalar, seen through the
-    transparent wrappers. *)
+    bits wide, seen through the transparent wrappers. *)
 
 val lower_where_to_field_constraint :
   bool expr option -> field list -> bool expr option * field list
 (** [lower_where_to_field_constraint where fields] moves a struct-level [where]
     that references fields onto the last field it references, since 3D's [where]
     sees only parameters. *)
-
-type arith
-(** What the arithmetic of a struct's constraints projects over: the fields an
-    [Add] widens to 64 bits, and the 64-bit fields, over which an [Add] has no
-    projection. *)
-
-val no_arith : arith
-(** [no_arith] is the arithmetic of a body that names no field. *)
-
-val arith : field list -> arith
-(** [arith fields] is the arithmetic of a struct of [fields]. *)
-
-val project_constraint :
-  name:string -> arith:arith -> 'a typ -> bool expr -> bool expr
-(** [project_constraint ~name ~arith t cond] is the refinement 3D checks for
-    [cond] on the field [name] of type [t]: {!project_refinement}, then each
-    [Add] operand naming an unsigned field of at most 32 bits widened to 64
-    bits. Raises [Invalid_argument] for a shape with no faithful projection,
-    among them a field subtraction or multiplication and an addition over a
-    64-bit field. *)
-
-val check_constraints : bool expr option -> field list -> unit
-(** [check_constraints where fields] raises [Invalid_argument] where
-    {!project_constraint} does when the struct is projected, before it widens
-    the arithmetic: for a comparison {!project_refinement} refuses, of the
-    constrained field or of any signed field of [fields], a field subtraction or
-    multiplication, or an addition over a 64-bit field, in a constraint of
-    [fields] or a [where] that names them. *)
 
 val collect_refs : 'a expr -> string list
 (** Field-reference names occurring in an expression, including nested terms. *)

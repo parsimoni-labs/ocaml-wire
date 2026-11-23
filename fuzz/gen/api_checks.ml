@@ -64,48 +64,19 @@ let check_all_zeros_semantic label () =
   check_decode_validate_agree label "all_zeros" g
     (Bytes.of_string "\000\001\000")
 
-let signed_slice_semantic_codec () =
+(* 3D reads a signed size as its unsigned bit pattern, so a span sized by an
+   [int8] has no projection that agrees with OCaml, which reads [-1] where the
+   C reads 255: the codec is refused when it is built. *)
+let check_negative_byte_slice_semantic label () =
   let len = Wire.Field.v "Len" Wire.int8 in
   let data = Wire.Field.v "Data" (Wire.byte_slice ~size:(Wire.Field.ref len)) in
-  let cf_data = Wire.Codec.(data $ snd) in
-  let codec =
+  match
     Wire.Codec.v "FuzzSignedSlice"
       (fun l d -> (l, d))
-      Wire.Codec.[ len $ fst; cf_data ]
-  in
-  let g =
-    {
-      codec;
-      typ = Wire.codec codec;
-      positive =
-        Alcobar.const
-          ((Wire.SInt8.v 0, slice_of_string ""), Bytes.of_string "\000");
-      random = bytes_any;
-      adversarial = bytes_any;
-      equal =
-        (fun (l1, s1) (l2, s2) ->
-          Wire.SInt8.equal l1 l2
-          && String.equal (string_of_slice s1) (string_of_slice s2));
-      env = None;
-      fields = [];
-      adversarial_value = None;
-    }
-  in
-  (g, codec, cf_data)
-
-let check_negative_byte_slice_semantic label () =
-  let g, codec, cf_data = signed_slice_semantic_codec () in
-  let bad = Bytes.of_string "\255" in
-  check_decode_validate_agree label "negative byte_slice" g bad;
-  match validate_one g bad with
-  | `Reject | `Crash -> ()
-  | `Ok -> (
-      match (Wire.Staged.unstage (Wire.Codec.get codec cf_data)) bad 0 with
-      | s ->
-          if Bytesrw.Bytes.Slice.length s < 0 then
-            Alcobar.failf "%s validate-then-get produced negative slice" label
-      | exception Invalid_argument m ->
-          Alcobar.failf "%s validate-then-get crashed: %s" label m)
+      Wire.Codec.[ len $ fst; data $ snd ]
+  with
+  | _ -> Alcobar.failf "%s: a span sized by an int8 was accepted" label
+  | exception Invalid_argument _ -> ()
 
 let semantic_invariant_cases label =
   [
@@ -113,7 +84,7 @@ let semantic_invariant_cases label =
       (label ^ " decode/validate all_zeros")
       (check_all_zeros_semantic label);
     const_case
-      (label ^ " decode/validate negative byte_slice")
+      (label ^ " signed byte_slice size refused")
       (check_negative_byte_slice_semantic label);
   ]
 

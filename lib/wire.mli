@@ -244,9 +244,8 @@ val field_pos : int expr
 (** Zero-based index of the current field in the enclosing sequential
     description.
 
-    Like {!sizeof_this}, this is context-dependent and is mainly used inside
-    dependent field constraints and projections. It has no meaning in a size
-    expression, where decoding it raises [Invalid_argument]. *)
+    EverParse 3D has no form for it, so {!Codec.v} refuses it in a constraint,
+    size or presence condition. *)
 
 module Expr : sig
   (** Arithmetic, bitwise, and comparison operators on expressions.

@@ -517,7 +517,7 @@ val finite_float64 : float t
 
 val expr_ops : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [expr_ops] is a codec whose [~where] uses every integer [Wire.Expr] operator
-    (arithmetic, bitwise, comparison, logical, [to_uint*] casts). *)
+    3D projects (arithmetic, bitwise, comparison, logical, [to_uint*] casts). *)
 
 val rest_bytes : (Wire.UInt8.t * string) t
 (** [rest_bytes] is a codec whose final field is [Wire.rest_bytes] sized from a
@@ -525,7 +525,7 @@ val rest_bytes : (Wire.UInt8.t * string) t
 
 val sizeof : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [sizeof] is a two-uint8 codec whose second field's [~self_constraint]
-    references [Wire.sizeof_this] / [Wire.field_pos] / [Wire.sizeof]. *)
+    references [Wire.sizeof_this] and [Wire.sizeof]. *)
 
 val codec_where : (Wire.UInt8.t * Wire.UInt8.t) t
 (** [codec_where] generates for a two-{!val-uint8} record whose

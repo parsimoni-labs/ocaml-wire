@@ -779,12 +779,12 @@ let test_layout_pass () =
       "same answer" (outcome slow env buf) (outcome fast None buf)
   done
 
-(* A span sized by a field times a literal: the product can pass [max_int],
-   and [decode] then refuses the record, so [validate] must not accept it on a
-   wrapped size. With 31-bit ints, [0xffff * 32769] wraps to 32767. *)
+(* A span sized by a field times a literal past the buffer: [decode] refuses
+   the record, and [validate] must agree. Where the product can pass the
+   native int (31 and 32-bit ints), the codec is refused when it is built. *)
 let test_layout_size_overflow () =
   let n = Field.v "n" uint16be in
-  let c =
+  match
     Codec.v "Scaled"
       (fun n body -> (n, body))
       Codec.
@@ -793,22 +793,24 @@ let test_layout_size_overflow () =
           ( Field.v "body" (byte_array ~size:Expr.(Field.ref n * int 32769))
           $ fun (_, body) -> body );
         ]
-  in
-  let buf = Bytes.make (2 + 32767) '\x00' in
-  Bytes.set_uint16_be buf 0 0xffff;
-  let decoded = Result.is_ok (Codec.decode c buf 0) in
-  let validated =
-    match Codec.validate_exn c buf 0 with
-    | () -> true
-    | exception Wire.Parse_error _ -> false
-  in
-  Alcotest.(check bool) "decode refuses" false decoded;
-  Alcotest.(check bool) "validate agrees with decode" decoded validated;
-  Alcotest.(check bool)
-    "no proof for a record decode refuses" false
-    (let module V = (val Codec.View.codec c) in
-     let (Buf.Any b) = Buf.v buf in
-     Codec.View.(ok (check V.codec b (Buf.length b) 0)))
+  with
+  | exception Invalid_argument _ when Sys.int_size < 63 -> ()
+  | c ->
+      let buf = Bytes.make (2 + 32767) '\x00' in
+      Bytes.set_uint16_be buf 0 0xffff;
+      let decoded = Result.is_ok (Codec.decode c buf 0) in
+      let validated =
+        match Codec.validate_exn c buf 0 with
+        | () -> true
+        | exception Wire.Parse_error _ -> false
+      in
+      Alcotest.(check bool) "decode refuses" false decoded;
+      Alcotest.(check bool) "validate agrees with decode" decoded validated;
+      Alcotest.(check bool)
+        "no proof for a record decode refuses" false
+        (let module V = (val Codec.View.codec c) in
+         let (Buf.Any b) = Buf.v buf in
+         Codec.View.(ok (check V.codec b (Buf.length b) 0)))
 
 (* A negative offset is refused by name on every encode path, the general one
    included: a codec with a [where] clause does not take the plain one. *)

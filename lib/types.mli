@@ -1110,6 +1110,12 @@ val check_where_encode : bool expr -> bool -> unit
 val pp_action : Format.formatter -> action -> unit
 (** Pretty-print an action block. *)
 
+val check_fields : bool expr option -> field list -> unit
+(** [check_fields where fields] raises [Invalid_argument] where projecting a
+    struct of [fields] and [where] would: for a constraint, size, presence
+    condition or [where] whose arithmetic 3d.exe cannot verify, or which the C
+    would compute differently from OCaml (docs/projection.md, Arithmetic). *)
+
 val pp_module : Format.formatter -> module_ -> unit
 (** Pretty-print a module as 3D source. *)
 
@@ -1121,18 +1127,6 @@ val to_3d : ?enum_as_type:bool -> module_ -> string
 val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
 (** [to_3d_file path m] writes module [m] to a [.3d] file at [path]. See
     {!to_3d} for [enum_as_type]. *)
-
-val width64 : 'a typ -> bool
-(** [width64 t] is [true] when [t] is a 64-bit scalar, seen through the
-    transparent wrappers. *)
-
-val check_constraints : bool expr option -> field list -> unit
-(** [check_constraints where fields] raises [Invalid_argument], as {!to_3d} does
-    when it renders the struct, for a comparison with no faithful 3D projection
-    (a float or signed 64-bit ordering, or a signed field compared with anything
-    but an integer literal), a field subtraction or multiplication, or an
-    addition over a 64-bit field, in a constraint of [fields] or a [where] that
-    names them. *)
 
 val escape_3d : string -> string
 (** [escape_3d name] is [name] as a 3D identifier: a word 3D or F* reserves,

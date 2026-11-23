@@ -427,8 +427,8 @@ let test_refined () =
 (* A codec the generator cannot specialise is refused when the code is
    generated, naming the field and why, rather than given a module with fewer
    functions. *)
-(* Arithmetic that overflows the native int rejects the record, with the
-   codec's error, where wrapping would accept it. *)
+(* Arithmetic near the top of the native int reads and writes as the codec
+   does. *)
 let test_overflow () =
   let fix buf off =
     Bytes.set_int32_be buf off (Int32.of_int (Random.State.int rand 8));
@@ -1101,8 +1101,8 @@ let scan_ops name fields decode =
     scan_index = None;
   }
 
-(* The scanner rejects a record whose condition, size or check overflows, as
-   the codec does, and only that one. *)
+(* The scanner accepts what the codec accepts when a condition, size or check
+   computes near the top of its type. *)
 let test_scan_overflow () =
   let sized =
     scan_ops "S_sized" [ "n"; "body_present"; "tail" ] (fun b o n ->
@@ -1153,8 +1153,7 @@ let skipped_reference =
     }
 
 (* A condition that facts decide is still evaluated where the codec
-   evaluates it: when [x = 4] holds, [n * n > 0 && x = 3] is false, but the
-   codec computes [n * n] first and rejects the record where it overflows. *)
+   evaluates it: when [x = 4] holds, [high n * high n > 0 && x = 3] is false. *)
 let test_scan_skipped () =
   let skipped =
     scan_ops "S_skipped" [ "n"; "x"; "a_present"; "a"; "b_present"; "b" ]
@@ -1234,40 +1233,6 @@ let test_scan_deep () =
       | _ -> Alcotest.failf "deep %d %d: scanner generated" depth big
       | exception Invalid_argument _ -> ())
     [ (32, Sys.max_string_length - 1); (3, Sys.max_string_length / 2) ]
-
-let bigspan_reference =
-  Diff_ocaml.Reference
-    {
-      label = "bigspan";
-      codec = Schemas.bigspan;
-      known = None;
-      project =
-        (fun _ (a, b, _, _, t) ->
-          [
-            ("a", UInt8.to_int a); ("b", UInt8.to_int b); ("t", UInt8.to_int t);
-          ]);
-      inputs = (fun b -> [ b ]);
-    }
-
-(* When the ends of two spans sum past the native int, the scanner is still
-   generated and rejects every frame, as the codec does. *)
-let test_scan_bigspan () =
-  let bigspan =
-    scan_ops "S_bigspan" [ "a"; "b"; "t" ] (fun b o n ->
-        let v = S_bigspan.decode b o n in
-        if v.ok then Some [ ("a", v.a); ("b", v.b); ("t", v.t) ] else None)
-  in
-  List.iter
-    (fun s ->
-      Diff_ocaml.check_scan bigspan_reference [ bigspan ] (Bytes.of_string s))
-    [
-      "";
-      "\000";
-      "\000\000";
-      "\000\000\000";
-      "\255\255\255\255";
-      String.make 64 '\001';
-    ]
 
 (* Optional fields are written once each: the code after one is joined, or
    copied into its branches only while it is short, holds no optional field
@@ -1866,8 +1831,6 @@ let suite =
         test_scan_skipped;
       Alcotest.test_case "offsets past the largest buffer" `Quick test_scan_deep;
       Alcotest.test_case "prefix of a huge fixed slice" `Quick test_huge_prefix;
-      Alcotest.test_case "span ends past the largest int" `Quick
-        test_scan_bigspan;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
       Alcotest.test_case "nested optional fields allocate nothing" `Quick
         test_nested_no_alloc;

@@ -495,35 +495,34 @@ let finite_float64 =
     adversarial_value = None;
   }
 
-(* Codec whose constraint exercises every integer Expr operator a constraint
-   takes (arithmetic, bitwise, comparison, logical, casts); a field subtraction
-   or multiplication has no 3D projection, so [Codec.v] refuses it. Positives
-   satisfy the chained predicate. The selected arithmetic operation uses input
-   values at the native-integer boundaries, so adversarials reach the checked
-   overflow of an addition and every zero-divisor path. *)
+(* Codec whose constraint exercises every integer Expr operator 3D projects
+   (arithmetic, bitwise, comparison, logical, casts), each where 3D verifies it:
+   a divisor known to be non-zero, sums and products inside their types.
+   Positives satisfy the chained predicate; the selected operation varies with
+   [a], so adversarials reach each branch at its edges. *)
 let build_expr_ops_pred a b =
   let module E = Wire.Expr in
   let selector = E.(a land Wire.int 7) in
+  let divided =
+    E.if_then_else E.(selector = Wire.int 3) E.(a / b) E.(a mod b)
+  in
   let arith =
     E.if_then_else
       E.(selector = Wire.int 0)
-      E.(Wire.int max_int + (b / (a + Wire.int 1)))
-      (E.if_then_else E.(selector = Wire.int 3) E.(a / b) E.(a mod b))
+      E.(Wire.int 1000 + (b / (a + Wire.int 1)))
+      E.(if_then_else (b > Wire.int 0) divided (a * Wire.int 4))
   in
   let bw = E.(a land Wire.int 0xFF lor (a lxor a)) in
   let shifted = E.((a lsl Wire.int 0) lsr Wire.int 0) in
   let casts = E.(to_uint8 a + to_uint16 b + to_uint32 a + to_uint64 b) in
-  let lnotted = E.(lnot (lnot a)) in
   E.(
     arith >= Wire.int 0
     && bw >= Wire.int 0
     && shifted >= Wire.int 0
     && casts >= Wire.int 0
-    && lnotted >= Wire.int 0
     && a = a
-    && a <> Wire.int (-1)
+    && a <> Wire.int 256
     && a >= Wire.int 0
-    && a > Wire.int (-1)
     && b <= Wire.int 0xFF
     && not (bool false)
     || true_)
@@ -555,11 +554,13 @@ let expr_ops =
          (fun octets -> Alcobar.const (bytes_of_octets octets))
          [
            [ 0; 1 ];
-           (* addition overflow *)
+           (* the sum *)
            [ 3; 0 ];
-           (* division by zero *)
-           [ 4; 0 ];
-           (* modulo by zero *)
+           (* the product, with a zero divisor ruled out *)
+           [ 3; 1 ];
+           (* the division *)
+           [ 4; 255 ];
+           (* the remainder *)
          ])
   in
   {
@@ -701,17 +702,15 @@ let if_then_else =
   }
 
 (* Two-field codec whose second field's [~self_constraint] references
-   [Wire.sizeof_this], [Wire.field_pos], and [Wire.sizeof]. [sizeof_this] is
-   the description's fixed prefix, so it is 2 here (both fields) wherever it is
-   read, not the offset of the field reading it. *)
+   [Wire.sizeof_this] and [Wire.sizeof]. [sizeof_this] is the description's
+   fixed prefix, so it is 2 here (both fields) wherever it is read, not the
+   offset of the field reading it. *)
 let sizeof =
   let f_a = Wire.Field.v "a" Wire.uint8 in
   let f_b =
     Wire.Field.v "b" Wire.uint8 ~self_constraint:(fun _ ->
         Wire.Expr.(
-          Wire.sizeof_this = Wire.int 2
-          && Wire.field_pos = Wire.int 1
-          && Wire.sizeof Wire.uint8 = Wire.int 1))
+          Wire.sizeof_this = Wire.int 2 && Wire.sizeof Wire.uint8 = Wire.int 1))
   in
   let codec =
     Wire.Codec.v "_sizeof"

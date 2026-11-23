@@ -282,10 +282,10 @@ type overflow = UInt32.t * int * int * UInt32.t * UInt32.t
 
 let overflow_make a hi lo b c = (a, hi, lo, b, c)
 
-(* Arithmetic that leaves the native int: the sums for any [A] or [Lo] above
-   5. *)
+(* Arithmetic at the top of the native int: the sums come within [2^32] of
+   [max_int], and [Codec.v] refuses one that can pass it. *)
 let overflow =
-  let near_max = max_int - 5 in
+  let near_max = max_int - 0xFFFF_FFFF in
   let overflows self = Expr.(self + int near_max <> int 0) in
   let b = Field.v "B" uint32be in
   let c = Field.v "C" uint32be in
@@ -303,6 +303,9 @@ let overflow =
 
 type sized = UInt32.t * Bytesrw.Bytes.Slice.t option * UInt8.t
 
+(* The high half of [n], whose square needs the 32 bits of [n]'s own type. *)
+let high n = Expr.(Field.ref n lsr int 16)
+
 let sized =
   let n = Field.v "n" uint32be in
   Codec.v "Sized"
@@ -311,8 +314,8 @@ let sized =
       [
         (n $ fun (n, _, _) -> n);
         ( Field.optional "body"
-            ~present:Expr.(Field.ref n * Field.ref n <> int 1)
-            (byte_slice ~size:Expr.((Field.ref n * Field.ref n) - int 1))
+            ~present:Expr.(high n * high n <> int 1)
+            (byte_slice ~size:Expr.(high n * high n))
         $ fun (_, b, _) -> b );
         (Field.v "tail" uint8 $ fun (_, _, t) -> t);
       ]
@@ -330,8 +333,7 @@ let skipped =
         ( Field.optional "a" ~present:Expr.(Field.ref x = int 4) uint8
         $ fun (_, _, a, _) -> a );
         ( Field.optional "b"
-            ~present:
-              Expr.(Field.ref n * Field.ref n > int 0 && Field.ref x = int 3)
+            ~present:Expr.(high n * high n > int 0 && Field.ref x = int 3)
             uint8
         $ fun (_, _, _, b) -> b );
       ]
@@ -379,24 +381,6 @@ let deep depth big =
   Codec.v "Top"
     (fun body tail -> { body; tail })
     Codec.[ (body $ fun r -> r.body); (tail $ fun r -> r.tail) ]
-
-type bigspan =
-  UInt8.t * UInt8.t * Bytesrw.Bytes.Slice.t * Bytesrw.Bytes.Slice.t * UInt8.t
-
-let bigspan =
-  let a = Field.v "A" uint8 and b = Field.v "B" uint8 in
-  let big = 1 lsl 61 in
-  let large f = Expr.(Field.ref f + int big) in
-  Codec.v "Bigspan"
-    (fun a b x y t -> (a, b, x, y, t))
-    Codec.
-      [
-        (a $ fun (a, _, _, _, _) -> a);
-        (b $ fun (_, b, _, _, _) -> b);
-        (Field.v "X" (byte_slice ~size:(large a)) $ fun (_, _, x, _, _) -> x);
-        (Field.v "Y" (byte_slice ~size:(large b)) $ fun (_, _, _, y, _) -> y);
-        (Field.v "T" uint8 $ fun (_, _, _, _, t) -> t);
-      ]
 
 let rec gated n =
   let tag = Field.v "tag" uint8 in

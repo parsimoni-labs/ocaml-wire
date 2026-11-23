@@ -528,13 +528,13 @@ let byte_array_struct =
    [UINT8[:byte-size (total_ - sizeof(this))]] -- [total] is an F*
    keyword and gets escaped automatically. *)
 let all_bytes_struct =
-  let total = Wire.Param.input "total" Wire.int32be in
+  let total = Wire.Param.input "total" Wire.uint32be in
   param_struct "TrailingData"
     [ Wire.Param.decl total ]
     [ field "Header" uint32be; field "Rest" (Wire.rest_bytes total) ]
 
 let all_zeros_struct =
-  let total = Wire.Param.input "total" Wire.int32be in
+  let total = Wire.Param.input "total" Wire.uint32be in
   param_struct "PaddedMsg"
     [ Wire.Param.decl total ]
     [ field "Value" uint16be; field "Padding" (Wire.rest_bytes total) ]

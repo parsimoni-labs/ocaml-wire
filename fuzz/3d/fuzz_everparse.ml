@@ -7,56 +7,23 @@
     is set, the {e whole} registry is additionally run through EverParse, once
     per projection mode: every codec that builds must project to a schema
     EverParse verifies as the standalone spec {e and} as the FFI schema, except
-    the few in {!no_3d_projection} that wire rejects at projection and the known
-    standalone-only gaps in {!no_3d_standalone} (both asserted to reject). That
-    extraction pass is the only check that catches errors surfacing during F*
-    verification rather than pretty-printing (a kind error on a possibly-empty
-    list, an invalid action or expression). It is opt-in because it takes
-    several minutes (too heavy for a plain [dune test]); the everparse-3d CI job
-    sets [WIRE_3D_BATCH=1]. It is skipped where [3d.exe] is absent (the plain CI
-    build, AFL) or the variable is unset. *)
+    the known standalone-only gaps in {!no_3d_standalone} (asserted to reject).
+    That extraction pass is the only check that catches errors surfacing during
+    F* verification rather than pretty-printing (a kind error on a
+    possibly-empty list, an invalid action or expression). It is opt-in because
+    it takes several minutes (too heavy for a plain [dune test]); the
+    everparse-3d CI job sets [WIRE_3D_BATCH=1]. It is skipped where [3d.exe] is
+    absent (the plain CI build, AFL) or the variable is unset. *)
 
 open Alcobar
 
 let err_c_compile fmt = Fmt.kstr (fun s -> Error s) fmt
 
-(* Shapes wire rejects at projection: they use a construct with no 3D form, so
-   [to_3d] raises a clear [Invalid_argument]. [expr_ops] uses a negative integer
-   literal (3D has no negative literals); [sizeof] uses [field_pos] (no 3D
-   keyword). Every other operator they exercise (shifts, bitwise, casts, mod,
-   div, comparisons, logic, [sizeof(this)], [sizeof(<type>)]) does project and is
-   covered by the rest of the registry. These are the "reject with a clear
-   error" half of closing the gaps: asserted to reject (below), not swept through
-   [3d.exe]. *)
-let no_3d_projection = [ "expr_ops"; "sizeof" ]
-
-let to_3d_of g =
-  Wire.Everparse.Raw.to_3d
-    (Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g)).module_
-
-(* For a shape with no 3D projection: [to_3d] must raise [Invalid_argument] with
-   a clear message, not produce 3D EverParse would reject. *)
-let rejection_case name g =
-  [
-    Alcobar.test_case
-      ("rejects projection " ^ name)
-      [ const () ]
-      (fun () ->
-        match to_3d_of g with
-        | _ ->
-            Alcobar.failf
-              "%s: expected projection to be rejected, but it succeeded" name
-        | exception Invalid_argument _ -> ());
-  ]
-
-(* Projection + pretty-print coverage: cheap, no subprocess, always runs. A
-   shape with no 3D projection is asserted to reject; every other shape must
-   project and pretty-print. *)
+(* Projection + pretty-print coverage: cheap, no subprocess, always runs. Every
+   shape that builds must project and pretty-print. *)
 let pp_cases () =
   List.concat_map
-    (fun (name, Fuzz_gen.Pack g) ->
-      if List.mem name no_3d_projection then rejection_case name g
-      else Fuzz_gen.everparse_cases name g)
+    (fun (name, Fuzz_gen.Pack g) -> Fuzz_gen.everparse_cases name g)
     Fuzz_gen.registry
 
 let nested_pp_cases () =
@@ -67,8 +34,7 @@ let nested_pp_cases () =
 let normal_mode () = not (Fuzz_gen.afl_mode ())
 
 (* Adversarially test the generated 3d files: every shape in the registry that
-   wire claims projects (all but the {!no_3d_projection} ones, asserted to reject
-   in [pp_cases]) must verify in both projection modes, or it is a
+   wire builds must verify in both projection modes, or it is a
    build-but-fail-3d hole. Doing that lazily inside the test cases trips
    alcobar's per-test timeout, so the whole set is verified once at module load,
    one [.3d] module per schema, run concurrently (EverParse's own corpus-test
@@ -112,8 +78,7 @@ let sweep_schemas ~mode ~tag keep =
   if not (batch_enabled ()) then []
   else
     Fuzz_gen.registry
-    |> List.filter (fun (name, _) ->
-        (not (List.mem name no_3d_projection)) && keep name)
+    |> List.filter (fun (name, _) -> keep name)
     |> List.mapi (fun i (label, Fuzz_gen.Pack g) ->
         let s = Wire.Everparse.project ~mode (Fuzz_gen.codec g) in
         { s with Wire.Everparse.name = batch_module_name i tag label })
@@ -564,17 +529,11 @@ let corpus_property_case (label, Fuzz_gen.Pack g) =
 
 let corpus_property_cases () =
   if not (normal_mode ()) then []
-  else
-    Fuzz_gen.registry
-    |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
-    |> List.map corpus_property_case
+  else List.map corpus_property_case Fuzz_gen.registry
 
 let corpus_cases () =
   if not (normal_mode ()) then []
-  else
-    Fuzz_gen.registry
-    |> List.filter (fun (name, _) -> not (List.mem name no_3d_projection))
-    |> List.map corpus_oracle_case
+  else List.map corpus_oracle_case Fuzz_gen.registry
 
 let suite =
   if Fuzz_gen.afl_mode () then

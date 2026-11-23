@@ -197,8 +197,8 @@ let test_3d_signed_float_setters () =
 let test_3d_arith_constraint_widens () =
   (* A constraint adding two narrow unsigned fields overflows the field width in
      3D, which EverParse refuses to verify, while the OCaml decoder computes the
-     sum in its wide native int. The projection widens each [Add] operand to
-     UINT64 so the 3D sum cannot overflow and matches the decoder. *)
+     sum exactly. The projection casts each operand to the narrowest type that
+     holds the sum, so the 3D sum cannot overflow and matches the decoder. *)
   let f_a = Field.v "a" uint8 in
   let f_b =
     Field.v "b" uint8 ~self_constraint:(fun b ->
@@ -207,8 +207,8 @@ let test_3d_arith_constraint_widens () =
   let c = Codec.v "Arith" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ] in
   let output = to_3d (Everparse.project ~mode:`Ffi c).module_ in
   Alcotest.(check bool)
-    "both Add operands widened to UINT64" true
-    (contains ~sub:"((UINT64) a) + ((UINT64) b)" output);
+    "both Add operands widened to UINT16" true
+    (contains ~sub:"((UINT16) a) + ((UINT16) b)" output);
   Alcotest.(check bool)
     "no un-widened narrow sum" false
     (contains ~sub:"(a + b)" output)
@@ -1138,24 +1138,24 @@ let test_3d_on_success_conditional_return () =
     "the field setter runs before the if" true
     (contains ~sub:"ActIfSetU8" out3d)
 
-let projects_or_raises codec =
-  match to_3d (Everparse.project ~mode:`Ffi codec).module_ with
+(* Whether building the codec [mk] makes, or projecting it, raises. *)
+let projects_or_raises mk =
+  match to_3d (Everparse.project ~mode:`Ffi (mk ())).module_ with
   | (_ : string) -> false
   | exception Invalid_argument _ -> true
 
 let test_3d_negative_literal_rejected () =
-  (* 3D has no negative integer literals, so a projected expression containing
-     one is rejected at projection with a clear error, not emitted as C
-     EverParse cannot parse. *)
+  (* 3D has no negative integer literals, so a codec with one is refused when
+     it is built, not emitted as C EverParse cannot parse. *)
   let f = Field.v "a" uint8 in
-  let codec =
+  let codec () =
     Codec.v "NegLit"
       ~where:Expr.(Field.ref f <> int (-1))
       (fun a -> a)
       Codec.[ (f $ fun a -> a) ]
   in
   Alcotest.(check bool)
-    "negative literal rejected by projection" true (projects_or_raises codec)
+    "negative literal refused" true (projects_or_raises codec)
 
 let test_3d_constant_arith_projects () =
   (* A [Sub] / [Mul] of constants folds, so the constraint projects. *)
@@ -1171,7 +1171,7 @@ let test_3d_constant_arith_projects () =
   in
   Alcotest.(check bool)
     "constant arithmetic still projects" false
-    (projects_or_raises constc)
+    (projects_or_raises (fun () -> constc))
 
 let test_3d_byte_size_mul_bound_rejected () =
   let construct ~bound ~coeff =
@@ -1192,14 +1192,14 @@ let test_3d_byte_size_mul_bound_rejected () =
     match construct ~bound:536_870_912 ~coeff:8 with
     | _ -> false
     | exception Invalid_argument msg ->
-        contains ~sub:"byte-size" msg && contains ~sub:"2^32" msg
+        contains ~sub:"32-bit" msg && contains ~sub:"data" msg
   in
   Alcotest.(check bool) "2^32 maximum rejected clearly" true rejected;
   Alcotest.(check bool)
     "maximum below 2^32 remains projectable" false
-    (projects_or_raises (construct ~bound:536_870_911 ~coeff:8));
+    (projects_or_raises (fun () -> construct ~bound:536_870_911 ~coeff:8));
   let f_count = Field.v "count" uint32 in
-  let unbounded =
+  let unbounded () =
     Codec.v "UnboundedProduct"
       (fun count data -> (count, data))
       Codec.
@@ -1211,15 +1211,14 @@ let test_3d_byte_size_mul_bound_rejected () =
         ]
   in
   Alcotest.(check bool)
-    "unbounded products remain EverParse's decision" false
+    "an unbounded product refused" true
     (projects_or_raises unbounded)
 
 let test_schema_authoritative () =
-  (* [Everparse.project] is the projectability gate: a non-projectable constraint
-     raises when the codec is projected, not only later when it is rendered, so
-     a consumer of [schema] gets an honest answer. *)
+  (* A non-projectable constraint is refused when the codec is built, so
+     every codec [Everparse.project] receives projects. *)
   let f = Field.v "a" uint8 in
-  let bad =
+  let bad () =
     Codec.v "SchemaNeg"
       (fun a b -> (a, b))
       Codec.
@@ -1233,7 +1232,7 @@ let test_schema_authoritative () =
   Alcotest.(check bool)
     "schema rejects a non-projectable codec" true
     (try
-       ignore (Everparse.project ~mode:`Ffi bad : Everparse.t);
+       ignore (Everparse.project ~mode:`Ffi (bad ()) : Everparse.t);
        false
      with Invalid_argument _ -> true);
   (* A projectable codec still produces a schema. *)
@@ -1353,17 +1352,16 @@ let test_3d_int64_mask_projects () =
     (contains ~sub:"(Seek & 9223372036854775807uL)" out)
 
 let test_3d_field_pos_rejected () =
-  (* EverParse has no [field_pos] keyword, so a projected expression using it is
-     rejected at projection, not emitted as an undefined identifier. *)
+  (* EverParse has no [field_pos] keyword, so a codec using it is refused when
+     it is built, not emitted as an undefined identifier. *)
   let f = Field.v "a" uint8 in
-  let codec =
+  let codec () =
     Codec.v "FieldPos"
       ~where:Expr.(field_pos = int 0)
       (fun a -> a)
       Codec.[ (f $ fun a -> a) ]
   in
-  Alcotest.(check bool)
-    "field_pos rejected by projection" true (projects_or_raises codec)
+  Alcotest.(check bool) "field_pos refused" true (projects_or_raises codec)
 
 (* -- Codec definitions for 3D extraction tests --
    The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
@@ -1881,7 +1879,7 @@ let suite =
         test_3d_constant_arith_projects;
       Alcotest.test_case "3d: certain byte-size multiplication overflow" `Quick
         test_3d_byte_size_mul_bound_rejected;
-      Alcotest.test_case "3d: schema is the projectability gate" `Quick
+      Alcotest.test_case "3d: only a codec that projects builds" `Quick
         test_schema_authoritative;
       Alcotest.test_case "3d: array enum element decl" `Quick
         test_3d_array_enum_element_decl;
@@ -1939,7 +1937,7 @@ let suite =
         test_3d_on_act_drops_bool_return;
       Alcotest.test_case "3d: on_success conditional return to if/else" `Quick
         test_3d_on_success_conditional_return;
-      Alcotest.test_case "3d: negative literal rejected by projection" `Quick
+      Alcotest.test_case "3d: negative literal refused when built" `Quick
         test_3d_negative_literal_rejected;
       Alcotest.test_case "3d: signed constraint two's-complement" `Quick
         test_signed_constraint_twos_complement;
@@ -1951,6 +1949,6 @@ let suite =
         test_3d_int64_literal_uses_unsigned_decimal;
       Alcotest.test_case "3d: int64 mask projects to refinement" `Quick
         test_3d_int64_mask_projects;
-      Alcotest.test_case "3d: field_pos rejected by projection" `Quick
+      Alcotest.test_case "3d: field_pos refused when built" `Quick
         test_3d_field_pos_rejected;
     ] )
