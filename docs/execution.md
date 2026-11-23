@@ -26,8 +26,13 @@ a prefix of them.
    lies inside the input, which only fails for a field the checks do not
    read. A scalar inside the frame is read into its slot only when a
    constraint, an action or the `where` clause uses it, and a comparison of a
-   field with a literal or another field is tested directly. Any other field
-   runs its general validator, so the choice is made field by field.
+   field with a literal or another field is tested directly. On a target
+   whose `int` holds 63 bits, the tests of fields that one 8-byte word of the
+   frame holds are one test of that word: exact values anywhere in it, and a
+   range below them, whose subtraction cannot borrow from them unless it
+   fails, so the IPv4 version and header length are one range test, and the
+   TCP gate of IPv4 one masked comparison. Any other field runs its general
+   validator, so the choice is made field by field.
 3. **Read.** Build the value. A field at a fixed offset inside `min_size` is
    read with no bounds check; any other field is read with one. A size that
    reads an output parameter gets the value the check pass left, which is the

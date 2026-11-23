@@ -284,15 +284,22 @@ type order = Lt | Ge | Eq | Ne
 let[@inline] ordered op (x : int) y =
   match op with Lt -> x < y | Ge -> x >= y | Eq -> x = y | Ne -> x <> y
 
+(* Two fields read as words compare in a closure of the comparison, which
+   tests no [op] when it runs. *)
+let compare_words op q1 s1 m1 k1 a1 q2 s2 m2 k2 a2 =
+  let[@inline] x c = (word_value c q1 s1 m1 lsl k1) + a1
+  and[@inline] y c = (word_value c q2 s2 m2 lsl k2) + a2 in
+  match op with
+  | Lt -> fun c -> x c < y c
+  | Ge -> fun c -> x c >= y c
+  | Eq -> fun c -> x c = y c
+  | Ne -> fun c -> x c <> y c
+
 let compare op a b =
   match (a, b) with
   | ( Lin { w = Some { q = q1; s = s1; m = m1 }; k = k1; a = a1; _ },
       Lin { w = Some { q = q2; s = s2; m = m2 }; k = k2; a = a2; _ } ) ->
-      Cond
-        (fun c ->
-          ordered op
-            ((word_value c q1 s1 m1 lsl k1) + a1)
-            ((word_value c q2 s2 m2 lsl k2) + a2))
+      Cond (compare_words op q1 s1 m1 k1 a1 q2 s2 m2 k2 a2)
   | _ ->
       let fa = fn a and fb = fn b in
       Cond (fun c -> ordered op (fa c) (fb c))
@@ -798,6 +805,18 @@ let settle fail c base =
   fail c.wend c.wbuf base;
   unwalked ()
 
+(* The conditions of [checks], compiled for a frame of [size] bytes, as one
+   test. *)
+let conditions ~size checks =
+  match
+    List.filter_map
+      (function Holds f -> Some (f ~size) | Within _ -> None)
+      checks
+  with
+  | [] -> None
+  | [ f ] -> Some f
+  | fs -> Some (fun c -> List.for_all (fun f -> f c) fs)
+
 (* The walk tests the fixed-offset fields in the form the check pass picks:
    one word test, the staged word tests, or the scan of the flat tests. The
    frame check comes first, so the unchecked reads stay in the record. *)
@@ -807,16 +826,7 @@ let record_walk ~min_size ~start ~fail ~where checks body =
       (List.filter_map
          (function Within (s, set) -> Some (s, set) | Holds _ -> None)
          checks)
-  and holds =
-    match
-      List.filter_map
-        (function Holds f -> Some (f ~size:min_size) | Within _ -> None)
-        checks
-    with
-    | [] -> None
-    | [ f ] -> Some f
-    | fs -> Some (fun c -> List.for_all (fun f -> f c) fs)
-  in
+  and holds = conditions ~size:min_size checks in
   let has_where = Option.is_some where in
   let where =
     match where with Some f -> f ~size:min_size | None -> fun _ -> true
@@ -842,24 +852,40 @@ let record_walk ~min_size ~start ~fail ~where checks body =
         if not (Codec_intervals.within c.wbuf base q l r m lo hi) then
           settle fail c base;
         rest c base
+  | None when within = [||] ->
+      fun c ->
+        let base = frame c in
+        rest c base
   | None -> (
-      match staged ~gate:(-1) ~size:min_size within with
-      | Some test ->
-          fun c ->
-            let base = frame c in
-            c.wbase <- base;
-            if not (test c) then settle fail c base;
-            rest c base
-      | None ->
-          let flat, tables = Codec_intervals.flatten_intervals within in
-          let n = Array.length flat in
+      match Codec_intervals.word_tests ~size:min_size within with
+      | Some [ (_, q, s, m, lo, n) ] ->
           fun c ->
             let base = frame c in
             if
-              n > 0
-              && Codec_intervals.scan_intervals flat tables c.wbuf base n 0 >= 0
+              not
+                (Codec_intervals.holds
+                   (Codec_words.load c.wbuf base q)
+                   s m lo n)
             then settle fail c base;
-            rest c base)
+            rest c base
+      | _ -> (
+          match staged ~gate:(-1) ~size:min_size within with
+          | Some test ->
+              fun c ->
+                let base = frame c in
+                c.wbase <- base;
+                if not (test c) then settle fail c base;
+                rest c base
+          | None ->
+              let flat, tables = Codec_intervals.flatten_intervals within in
+              let n = Array.length flat in
+              fun c ->
+                let base = frame c in
+                if
+                  Codec_intervals.scan_intervals flat tables c.wbuf base n 0
+                  >= 0
+                then settle fail c base;
+                rest c base))
 
 (* The walks of a list in order, one closure per four. *)
 let rec seq = function

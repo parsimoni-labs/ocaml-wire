@@ -568,6 +568,91 @@ let test_shared_byte_constraints () =
   Alcotest.(check string) "second table" "hi" (two_outcome '\x45' '\x41');
   Alcotest.(check string) "first table" "ihl" (two_outcome '\x44' '\x31')
 
+(* Tests that read one 8-byte word are merged into one test of it: exact
+   values anywhere in the word, and a range only below them. On every input,
+   the merged tests answer as the scan of the tests they stand for, and the
+   check of the codec, fixed or walked, as the general path. Kept apart: a
+   range above an exact value, a signed field and a test past 62 bits. *)
+let test_word_merged_tests () =
+  let f name typ ok = Field.v name typ ~self_constraint:ok in
+  let fields =
+    Codec.
+      [
+        (f "version" (bits ~width:4 U8) (fun x -> Expr.(x = int 4)) $ fun _ -> 4);
+        (f "ihl" (bits ~width:4 U8) (fun x -> Expr.(x >= int 5)) $ fun _ -> 5);
+        (Field.v "free" uint8 $ fun _ -> UInt8.v 0);
+        (f "fl" (bits ~width:3 U16be) (fun x -> Expr.(x = int 2)) $ fun _ -> 0);
+        ( f "frag" (bits ~width:13 U16be) (fun x -> Expr.(x = int 0)) $ fun _ ->
+          0 );
+        (f "proto" uint8 (fun x -> Expr.(x = int 6)) $ fun _ -> UInt8.v 6);
+        ( f "low" uint8 (fun x -> Expr.(x >= int 10 && x <= int 20)) $ fun _ ->
+          UInt8.v 10 );
+        (f "signed" int8 (fun x -> Expr.(x >= int (-3))) $ fun _ -> SInt8.v 0);
+        (f "hi" (bits ~width:4 U8) (fun x -> Expr.(x >= int 2)) $ fun _ -> 2);
+        (f "lo" (bits ~width:4 U8) (fun x -> Expr.(x = int 3)) $ fun _ -> 3);
+        ( f "word" uint32be (fun x -> Expr.(x = int 0x3eadbeef)) $ fun _ ->
+          UInt32.of_int 0x3eadbeef );
+      ]
+  in
+  let c = Codec.v "MergedWords" (fun _ _ _ _ _ _ _ _ _ _ _ -> ()) fields in
+  let n = Field.v "n" uint8 in
+  let walked =
+    Codec.v "MergedWalk"
+      (fun _ () _ -> ())
+      Codec.
+        [
+          (n $ fun _ -> UInt8.v 0);
+          (Field.v "body" (codec c) $ fun _ -> ());
+          ( Field.v "tail" (byte_slice ~size:(Field.ref n)) $ fun _ ->
+            Bytesrw.Bytes.Slice.eod );
+        ]
+  in
+  let general = Private.Testing.general c in
+  let general_walked = Private.Testing.general walked in
+  let module V = (val Codec.View.codec c) in
+  let module W = (val Codec.View.codec walked) in
+  let good = "\x45\x00\x40\x00\x06\x0a\x00\x23\x3e\xad\xbe\xef" in
+  let rnd = Random.State.make [| 7 |] in
+  let input () =
+    Bytes.init 12 (fun i ->
+        match Random.State.int rnd 4 with
+        | 0 -> Char.chr (Random.State.int rnd 256)
+        | 1 -> Char.chr (Char.code good.[i] lxor (1 lsl Random.State.int rnd 8))
+        | _ -> good.[i])
+  in
+  let accepts c buf =
+    match Codec.validate c buf 0 with Ok () -> true | Error _ -> false
+  in
+  Alcotest.(check bool) "good" true (accepts general (Bytes.of_string good));
+  for i = 1 to 20_000 do
+    let buf = input () in
+    (match Private.Testing.staged_intervals c buf 0 with
+    | Some (staged, scan) ->
+        if staged <> scan then Alcotest.failf "input %d: staged %b" i staged
+    | None ->
+        (* Only a target whose ints hold 63 bits stages word tests. *)
+        if Sys.int_size >= 63 then Alcotest.fail "the tests are not staged");
+    let (Buf.Any b) = Buf.v buf in
+    let viewed = Codec.View.(ok (check V.codec b (Buf.length b) 0)) in
+    if viewed <> accepts general buf then
+      Alcotest.failf "input %d: view %b" i viewed;
+    let tail = Random.State.int rnd 3 in
+    let buf =
+      Bytes.cat (Bytes.make 1 (Char.chr (Random.State.int rnd 3))) buf
+    in
+    let buf = Bytes.cat buf (Bytes.make tail 'x') in
+    let (Buf.Any b) = Buf.v buf in
+    let viewed = Codec.View.(ok (check W.codec b (Buf.length b) 0)) in
+    if viewed <> accepts general_walked buf then
+      Alcotest.failf "input %d: walked view %b" i viewed
+  done;
+  (* A constraint on a 32-bit field keeps the record off the walk where ints
+     have fewer than 63 bits. *)
+  if Sys.int_size >= 63 then
+    Alcotest.(check bool)
+      "walks" true
+      (List.mem "decode.walk" (Private.Testing.paths walked))
+
 (* The checks on a field under [map] and [enum], and a disjunction, still give
    the errors they gave, whatever path the check pass takes. *)
 let test_mapped_and_disjunctive_checks () =
@@ -1160,6 +1245,8 @@ let suite =
       Alcotest.test_case "view: read agrees with get" `Quick test_view_read;
       Alcotest.test_case "view: short frames read as get" `Quick
         test_view_short_frames;
+      Alcotest.test_case "check: tests merged in one word" `Quick
+        test_word_merged_tests;
       Alcotest.test_case "check: constraints sharing a byte" `Quick
         test_shared_byte_constraints;
       Alcotest.test_case "check: mapped and disjunctive constraints" `Quick

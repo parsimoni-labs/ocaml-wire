@@ -222,17 +222,95 @@ let stage_tests tests =
   | _ -> None
 [@@ocamlformat "disable"]
 
+(* Tests of one word merged into one: the bits [b] to [e] (exclusive) of the
+   record they span, counted from its first bit, the mask and the value they
+   test relative to the lowest of those bits, and the room of the test of the
+   lowest bits, the only one that may not be exact. [open_] is false for a
+   test kept on its own: one that fails always or whose values wrap. *)
+type group = {
+  b : int;
+  e : int;
+  gm : int;
+  glo : int;
+  gn : int;
+  open_ : bool;
+  test : int * int * int * int * int;
+}
+
+let group (_, q, s, m, lo, n) =
+  let e = (q * 8) + 64 - s in
+  {
+    b = e - Codec_words.bit_width m;
+    e;
+    gm = m;
+    glo = lo;
+    gn = n;
+    open_ = n >= 0 && lo >= 0 && lo + n <= m;
+    test = (q, s, m, lo, n);
+  }
+
+(* [g] and [t] as one test, when one word in the frame of [size] bytes holds
+   both, their bits do not overlap and a test that is not exact stays below
+   every other bit: an exact test is a mask compared once, and a range below
+   exact bits subtracts with no borrow from them unless it fails. *)
+let merge ~size g t =
+  let b = min g.b t.b and e = max g.e t.e in
+  let q = min (b / 8) (size - 8) in
+  let dg = e - g.e and dt = e - t.e in
+  let lowest = t.b >= g.e in
+  if
+    g.open_ && t.open_
+    && e - b <= 62
+    && q * 8 <= b
+    && e <= (q * 8) + 64
+    && (g.gm lsl dg) land (t.gm lsl dt) = 0
+    && if t.gn > 0 then g.gn = 0 && lowest else g.gn = 0 || t.e <= g.e
+  then
+    let gm = (g.gm lsl dg) lor (t.gm lsl dt)
+    and glo = (g.glo lsl dg) lor (t.glo lsl dt)
+    and gn = max g.gn t.gn in
+    Some
+      {
+        b;
+        e;
+        gm;
+        glo;
+        gn;
+        open_ = true;
+        test = (q, (q * 8) + 64 - e, gm, glo, gn);
+      }
+  else None
+
+(* The tests as words, merged where one word holds several: [version = 4 &&
+   ihl >= 5] is one test of the first byte, and the tests of a fragment
+   flag, the fragment offset and the protocol of IPv4 one test of a word. The
+   tests make a conjunction, so their order does not change its answer. *)
 let word_tests ~size tests =
   if Sys.int_size < 63 || size < 8 || Array.length tests = 0 then None
   else
-    let rec words prev = function
+    let rec words = function
       | [] -> Some []
       | t :: ts -> (
-          match word_test ~size ~prev t with
+          match word_test ~size ~prev:(-1) t with
           | None -> None
-          | Some ((_, q, _, _, _, _) as w) ->
-              Option.map (fun ws -> w :: ws) (words q ts))
+          | Some w -> Option.map (fun ws -> group w :: ws) (words ts))
     in
-    words (-1) (Array.to_list tests)
+    let rec add t = function
+      | [] -> [ t ]
+      | g :: gs -> (
+          match merge ~size g t with Some g -> g :: gs | None -> g :: add t gs)
+    in
+    Option.map
+      (fun ws ->
+        let groups = List.fold_left (fun gs t -> add t gs) [] ws in
+        let _, tests =
+          List.fold_left
+            (fun (prev, acc) g ->
+              let q, s, m, lo, n = g.test in
+              (q, (q = prev, q, s, m, lo, n) :: acc))
+            (-1, []) groups
+        in
+        List.rev tests)
+      (words (Array.to_list tests))
 
 let staged ~size tests = Option.bind (word_tests ~size tests) stage_tests
