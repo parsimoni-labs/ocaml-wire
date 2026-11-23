@@ -14,6 +14,10 @@
       for untrusted input: a field is read only from a record that passed, in
       the buffer it passed in.
 
+    - {!word_reader} and {!load_word} read the fields of a short fixed header
+      from one word, with a bounds check and no other check. They are faster
+      than {!View} on records shorter than 8 bytes; see {!type-word_reader}.
+
     - {!get} and {!set} read and write one field in place, for bytes the program
       wrote itself. {!get} fires the field's [~action] (if any). Neither checks
       record-level [~where] clauses or other fields' constraints; {!set} refuses
@@ -596,7 +600,14 @@ type 'r word = private int
 (** The bytes of a record of a ['r] codec, big-endian, in an [int]. *)
 
 type 'r word_reader
-(** A reader of the records of a ['r] codec as words. *)
+(** A reader of the records of a ['r] codec as words.
+
+    The record is read with a bounds check and no other check; on untrusted
+    input use {!View}. The word readers stay for unchecked reads of short fixed
+    headers: on [bench/routing] (6-byte space packet headers) they spend 101
+    instructions per packet where {!View} spends 152, and on [bench/gateway]
+    (6-byte frame and packet headers) 1237 per frame where {!View} spends 2251,
+    as a view reads a field of a frame shorter than 8 bytes out of line. *)
 
 val word_reader : 'r t -> 'r word_reader
 (** [word_reader c] reads the records of [c] with {!read_word}. Raises
