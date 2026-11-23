@@ -78,6 +78,36 @@ let test_per_byte () =
          ])
     [ Wire_3d.pack per_byte_codec ]
 
+(* An optional region sized by [a * 4] over a [uint8]: its declaration reads
+   [a] as a [UINT32] and states the [a <= 255] the record proves. *)
+let opt_region_codec =
+  let inner = Codec.v "Word" Fun.id Codec.[ Field.v "x" uint32be $ Fun.id ] in
+  let a = Field.v "a" uint8 in
+  Codec.v "OptRegionMul"
+    (fun a r -> (a, r))
+    Codec.
+      [
+        a $ fst;
+        Field.optional "r"
+          ~present:Expr.(Field.ref a > int 0)
+          (nested ~size:Expr.(Field.ref a * int 4) (codec inner))
+        $ snd;
+      ]
+
+let test_optional_region () =
+  needs_3d_exe ();
+  let line = Agree.corpus_line "OptRegionMul" opt_region_codec in
+  Agree.differential_ok ~name:"optregionspec" ~package:"opt-region-doc"
+    ~corpus:
+      (`Lines
+         [
+           line "00" true;
+           line "0112345678" true;
+           line "01123456" false;
+           line "021234567812345678" false;
+         ])
+    [ Wire_3d.pack opt_region_codec ]
+
 let suite =
   ( "wire_3d_arith",
     [
@@ -86,4 +116,6 @@ let suite =
       Alcotest.test_case
         "per-byte conditions past the native int (needs 3d.exe)" `Quick
         test_per_byte;
+      Alcotest.test_case "optional region sized by a product (needs 3d.exe)"
+        `Quick test_optional_region;
     ] )

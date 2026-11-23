@@ -283,8 +283,23 @@ let test_arith_regions_and_actions () =
           $ snd;
         ]
   in
-  check_refused "a product sizing an optional region" true
+  check_refused "a product sizing an optional region" false
     (optional Expr.(fun a -> a * int 4));
+  projects_to "an optional region declares the bound of a uint8"
+    (optional Expr.(fun a -> a * int 4) ())
+    "where ((a <= 255))";
+  check_refused "a uint32 product sizing an optional region" true (fun () ->
+      let a = Field.v "a" uint32be in
+      Codec.v "OptRegion32"
+        (fun a r -> (a, r))
+        Codec.
+          [
+            a $ fst;
+            Field.optional "r"
+              ~present:Expr.(Field.ref a > int 0)
+              (nested ~size:Expr.(Field.ref a * int 4) (codec inner))
+            $ snd;
+          ]);
   check_refused "a field sizing an optional region" false (optional Fun.id);
   projects_to "a product sizing a region"
     (region Expr.(fun a -> a * int 4) ())
