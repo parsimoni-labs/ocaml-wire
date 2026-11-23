@@ -294,7 +294,8 @@ let span (type a) (kind : a span) size : a Types.walk =
     let cur = c.wpos in
     let sz = bound c in
     match kind with
-    | Slice_span -> Slice.make_or_eod c.wbuf ~first:cur ~length:sz
+    | Slice_span ->
+        if sz = 0 then Slice.eod else Slice.make c.wbuf ~first:cur ~length:sz
     | String_span -> Bytes.sub_string c.wbuf cur sz
   in
   { wvalue; wskip = (fun c -> ignore (bound c : int)) }
@@ -413,8 +414,9 @@ let scalar : type a. a scalar -> cursor -> a = function
 let read : type a. a walk_read -> cursor -> a = function
   | Scalar s -> scalar s
   | String (off, n) -> fun c -> Bytes.sub_string c.wbuf (c.wbase + off) n
+  | Slice (_, 0) -> fun _ -> Slice.eod
   | Slice (off, n) ->
-      fun c -> Slice.make_or_eod c.wbuf ~first:(c.wbase + off) ~length:n
+      fun c -> Slice.make c.wbuf ~first:(c.wbase + off) ~length:n
   | Walk w -> w.wvalue
 
 type (_, _) readers =
