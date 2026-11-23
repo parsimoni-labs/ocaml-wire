@@ -133,6 +133,10 @@ let rec pp_expr : type a. a expr Fmt.t =
   | And (a, b) -> Fmt.pf ppf "(%a && %a)" pp_expr a pp_expr b
   | Or (a, b) -> Fmt.pf ppf "(%a || %a)" pp_expr a pp_expr b
   | Not a -> Fmt.pf ppf "(!%a)" pp_expr a
+  | Cast (t, (Sizeof _ as e)) ->
+      Fmt.pf ppf "((%a) (%a))" pp_cast_type t pp_expr e
+  | Cast (t, (Sizeof_this as e)) ->
+      Fmt.pf ppf "((%a) (%a))" pp_cast_type t pp_expr e
   | Cast (t, e) -> Fmt.pf ppf "((%a) %a)" pp_cast_type t pp_expr e
   | If_then_else (c, t, e) ->
       Fmt.pf ppf "((%a) ? %a : %a)" pp_expr c pp_expr t pp_expr e
@@ -279,9 +283,25 @@ let rec pp_stmts env ppf = function
       if rest <> [] then Fmt.sp ppf ();
       pp_stmts env ppf rest
 
+(* 3D ends an action at an [if], each branch running to the end of the action,
+   and at a [return]. The statements after an [if] are copied into both of its
+   branches, and a branch ends at its first [return]. An [:on-success] action
+   returns a Bool, so one that runs to its end returns [true], as in OCaml. *)
+let rec terminal_ifs = function
+  | [] -> []
+  | (Return _ as s) :: _ -> [ s ]
+  | If (c, t, e) :: (_ :: _ as rest) ->
+      let branch b = terminal_ifs (b @ rest) in
+      [ If (c, branch t, Some (branch (Option.value ~default:[] e))) ]
+  | [ If (c, t, e) ] -> [ If (c, terminal_ifs t, Option.map terminal_ifs e) ]
+  | s :: rest -> s :: terminal_ifs rest
+
 let pp_action ppf = function
-  | Success stmts -> Fmt.pf ppf "@[<h>{:on-success %a }@]" (pp_stmts []) stmts
-  | Act stmts -> Fmt.pf ppf "@[<h>{:act %a }@]" (pp_stmts []) stmts
+  | Success stmts ->
+      Fmt.pf ppf "@[<h>{:on-success %a }@]" (pp_stmts [])
+        (terminal_ifs (stmts @ [ Return (Bool true) ]))
+  | Act stmts ->
+      Fmt.pf ppf "@[<h>{:act %a }@]" (pp_stmts []) (terminal_ifs stmts)
 
 (* Extract field suffix for arrays - the modifier goes after the field name *)
 type field_suffix =

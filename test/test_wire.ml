@@ -820,7 +820,7 @@ type sizeof_action_record = { a : UInt8.t; b : UInt16.t; c : UInt8.t }
 
 let test_sizeof_this_with_action () =
   (* sizeof_this visible to actions, as the description's fixed prefix (4) *)
-  let out = Param.output "out" uint8 in
+  let out = Param.output "out" uint32be in
   let c =
     Codec.v "SizeofThisAction"
       (fun a b c -> { a; b; c })
@@ -840,7 +840,7 @@ let test_sizeof_this_with_action () =
   | Ok _ ->
       Alcotest.(check int)
         "sizeof_this via action" 4
-        (UInt8.to_int (Param.get env out))
+        (UInt32.to_int (Param.get env out))
   | Error e -> Alcotest.failf "sizeof_this action: %a" pp_parse_error e
 
 (* -- Encoding tests -- *)

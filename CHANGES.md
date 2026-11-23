@@ -84,6 +84,10 @@
   optional region whose size does not verify over `UINT32` copies of its
   fields (`a * int 4` over a `uint8`), and action arithmetic 3d.exe cannot
   verify.
+  An action is refused when it stores into an output a value the output's
+  type may not hold (`x + int 1` over a `uint8`, or `sizeof_this`, into a
+  `uint8`), or reads `field_pos`, and any expression is refused that reads an
+  output parameter, which 3D holds as a pointer.
   They used to fail in `Everparse.project`, in 3d.exe, or to give the C and
   OCaml different answers (docs/projection.md, Arithmetic) (#526, #527,
   #529, @samoht)
@@ -256,6 +260,18 @@
   region takes the rest of the region, as 3D does. It took the rest of the
   buffer, so `decode` and `validate` refused it in a region shorter than the
   buffer (#522, @samoht)
+
+- An action that stores a value wider than its output projects with a
+  narrowing cast when the refinements and `if` conditions before it bound the
+  value within the output (`*out = ((UINT8) x)` after `x <= int 200`), and
+  an action whose `if` has no `else` or is followed by other statements
+  projects with those statements in both branches, and an `on_success`
+  action that runs to its end returns true in the `Standalone` projection
+  too. 3d.exe rejected all three (@samoht)
+
+- `Wire_3d.generate_agree` builds for a codec with output parameters: the
+  harness passes each output a cell of its own, where the C did not compile
+  (@samoht)
 
 - Action arithmetic projects widened as a constraint's does
   (`*out = (((UINT16) a) * 4)`), and the body of an optional region projects

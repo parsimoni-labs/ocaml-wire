@@ -478,7 +478,7 @@ type pos_record = { pa : UInt8.t; pb : UInt8.t; pc : UInt8.t }
 type wide_pos_record = { wa : UInt8.t; wb : UInt16.t; wc : UInt8.t }
 
 let test_codec_sizeof_this () =
-  let out = Param.output "out" uint8 in
+  let out = Param.output "out" uint32be in
   let codec =
     let open Codec in
     v "SizeofThisCodec"
@@ -496,31 +496,27 @@ let test_codec_sizeof_this () =
   let buf = Bytes.of_string "\x01\x00\x02\x03" in
   let _v = decode_ok (Codec.decode ~env codec buf 0) in
   (* sizeof_this at field c = 1 (uint8) + 2 (uint16be) = 3 *)
-  Alcotest.(check int) "sizeof_this at c" 4 (UInt8.to_int (Param.get env out))
+  Alcotest.(check int) "sizeof_this at c" 4 (UInt32.to_int (Param.get env out))
 
 let test_codec_field_pos () =
-  let out = Param.output "out" uint8 in
-  let codec =
-    let open Codec in
-    v "FieldPosCodec"
-      (fun a b c -> { pa = a; pb = b; pc = c })
-      [
-        (Field.v "a" uint8 $ fun r -> r.pa);
-        (Field.v "b" uint8 $ fun r -> r.pb);
-        ( Field.v "c"
-            ~action:(Action.on_success [ Action.assign out field_pos ])
-            uint8
-        $ fun r -> r.pc );
-      ]
-  in
-  let env = Codec.env codec in
-  let buf = Bytes.of_string "\x01\x02\x03" in
-  let _v = decode_ok (Codec.decode ~env codec buf 0) in
-  (* field_pos at c = 2 (third field, zero-indexed) *)
-  Alcotest.(check int) "field_pos at c" 2 (UInt8.to_int (Param.get env out))
+  (* 3D reads the field position only into a [var], which the projection does
+     not write: an action assigning it is refused. *)
+  let out = Param.output "out" uint32be in
+  Alcotest.(check bool)
+    "field_pos refused" true
+    (raises_invalid (fun () ->
+         let open Codec in
+         v "FieldPosCodec"
+           (fun a b c -> { pa = a; pb = b; pc = c })
+           [
+             (Field.v "a" uint8 $ fun r -> r.pa);
+             (Field.v "b" uint8 $ fun r -> r.pb);
+             ( Field.v "c"
+                 ~action:(Action.on_success [ Action.assign out field_pos ])
+                 uint8
+             $ fun r -> r.pc );
+           ]))
 
-(* A size that names a mapped field reads the field's wire value, not the
-   mapped one: what the check pass and the 3D projection read. *)
 let test_size_names_mapped_field () =
   let sized typ =
     let f_len = Field.v "len" typ in
@@ -601,7 +597,8 @@ let suite =
       Alcotest.test_case "dep: trailer struct_of_codec" `Quick
         test_struct_of_dep_trailer;
       Alcotest.test_case "codec: sizeof_this" `Quick test_codec_sizeof_this;
-      Alcotest.test_case "codec: field_pos" `Quick test_codec_field_pos;
+      Alcotest.test_case "codec: field_pos in an action refused" `Quick
+        test_codec_field_pos;
       Alcotest.test_case "constraint: int64 signed-magnitude domain" `Quick
         test_int64_field_constraint_accepts_signed_magnitude_domain;
       Alcotest.test_case "constraint: int64 rejects negative zero" `Quick

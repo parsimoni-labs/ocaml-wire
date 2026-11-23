@@ -105,10 +105,19 @@ casetype is checked there too, as 3D computes it: at the type of its operands,
 each field a `UINT32` it knows nothing more of than the `where` its
 declaration states for a size `a - b`. `nested ~size:(a * 4)` over a `uint8`
 projects as `((UINT16) a) * 4` in the record, but under an `optional` it is
-refused, since `a * 4` over a `UINT32` does not verify. An action assigns its
-value as 3D computes it, widened like a constraint's (`*out = (((UINT16) a) *
-4)`); 3D refuses an assignment of a value wider than its output
-("Expected type UINT8"), which `Wire.Codec.v` does not check yet.
+refused, since `a * 4` over a `UINT32` does not verify.
+
+An action assigns its value as 3D computes it, widened like a constraint's
+(`*out = (((UINT16) a) * 4)`). 3D stores only a value whose type is at most
+its output's ("Expected type UINT8"), and an action knows the refinements of
+the fields before its own and the condition of each `if` it sits under, not
+its own field's refinement: a wider value those bound within the output is
+narrowed (`*out = ((UINT8) x)` after `x <= 200`), and any other is refused:
+`x + 1` over a `UINT8` into a `UINT8`, and `sizeof (this)`, which
+`Wire.Codec.v` bounds only by its `UINT32` type, into a narrower one. No
+expression reads an output, which 3D holds as a pointer, nor `field_pos`,
+which 3D reads only into a `var`. A 3D `if` ends its action, so the
+statements after it are written into both of its branches.
 
 ## The FFI plug
 

@@ -93,25 +93,16 @@ type env = {
   formals : bool;
   trusted : bool;
   written : bool;
-  in_action : bool;
 }
 
 let empty =
-  {
-    leaves = [];
-    ge = [];
-    formals = false;
-    trusted = false;
-    written = false;
-    in_action = false;
-  }
+  { leaves = []; ge = []; formals = false; trusted = false; written = false }
 
 (* A [trusted] environment computes how wide an expression the struct's own
    environment has checked: it knows no refinement or condition, so it bounds
    what it cannot prove by the type, and refuses nothing. A [written] one checks
    an expression 3D computes as written, at its operands' type: it casts
-   nothing. One [in_action] checks an action's expression, where the field
-   position exists. *)
+   nothing. *)
 
 let rec pp : type a. a expr Fmt.t =
  fun ppf e ->
@@ -411,15 +402,22 @@ let rec int_ env (e : int expr) : int expr * range =
       if n < 0 then fail e "is a negative literal, which 3D cannot write"
       else (e, exact (Int64.of_int n))
   | Ref (I, n) -> (e, read env e n)
+  | Param_ref p when p.mutable_ && not env.trusted ->
+      fail e
+        "reads the output %S, which 3D holds as a pointer and does not read in \
+         an expression"
+        p.name
   | Param_ref p -> (e, param p)
   | Sizeof t -> (
       match Lower_3d.inner_wire_size t with
       | Some s -> (e, { (exact (Int64.of_int s)) with ty = T32 })
       | None -> (e, full T32))
   | Sizeof_this -> (e, position)
-  | Field_pos when env.trusted || env.in_action -> (e, position)
+  | Field_pos when env.trusted -> (e, position)
   | Field_pos ->
-      fail e "has no 3D projection: the field position exists only in an action"
+      fail e
+        "has no 3D projection: 3D reads the field position only into a [var] \
+         of an action"
   | Add (a, b) -> grow env e (fun a b -> Add (a, b)) add_u a b
   | Mul (a, b) -> grow env e (fun a b -> Mul (a, b)) mul_u a b
   | Sub (a, b) -> subtract env e a b
@@ -788,25 +786,45 @@ let value env (x : int expr) =
       | exception Invalid_argument _ -> (x, full T64))
   | _ -> int_ env x
 
-(* The value an action assigns to an output, which the codec stores in a
-   native int. *)
-let assigned env (x : int expr) =
-  match x with
-  | Int _ | Ref (I, _) -> x
-  | _ ->
-      checked env x @@ fun x ->
-      let x', r = int_ env x in
-      if not (ule r.hi native) then
+(* The 3D type of an output, when 3D stores an integer there. *)
+let output_ty : type a k. (a, k) param_handle -> ty option =
+ fun p ->
+  match leaf p.typ with
+  | Unsigned r | Float r -> Some r.ty
+  | Signed w -> Some (smallest (ones w))
+  | Opaque | Formal -> None
+
+(* The value an action assigns to the output [p], which the codec stores in a
+   native int. 3D stores only a value of at most the output's type: a wider one
+   is narrowed with a cast when its range fits the output, and refused
+   otherwise. A literal or a field is [copied] as the codec read it, also one
+   3D does not read as an integer. *)
+let assigned env p (x : int expr) =
+  checked env x @@ fun x ->
+  let copied = match x with Int _ | Ref (I, _) -> true | _ -> false in
+  match int_ env x with
+  | exception Invalid_argument _ when copied -> x
+  | x', r -> (
+      if (not copied) && not (ule r.hi native) then
         fail x
           "assigns a value past OCaml's native int, which the codec cannot \
            store";
-      x'
+      match output_ty p with
+      | Some ty when bits r.ty > bits ty ->
+          if fits ty r.hi then Cast (cast_of_ty ty, x')
+          else
+            fail x
+              "can exceed %s, the type of the output %S, and 3D stores only a \
+               value that fits its output: bound it before the action, or \
+               assign it to a wider output"
+              (type_name ty) p.name
+      | _ -> x')
 
 (* An action's expressions as 3D checks them. A [var] is the range of its
    expression to the statements after it. *)
 let rec stmts env = function
   | [] -> []
-  | Assign (p, x) :: rest -> Assign (p, assigned env x) :: stmts env rest
+  | Assign (p, x) :: rest -> Assign (p, assigned env p x) :: stmts env rest
   | Field_assign (ptr, name, x) :: rest ->
       Field_assign (ptr, name, checked env x (fun x -> fst (value env x)))
       :: stmts env rest
@@ -823,9 +841,9 @@ let rec stmts env = function
       :: stmts { env with leaves = (n, Unsigned r) :: env.leaves } rest
   | ((Extern_call _ | Abort) as s) :: rest -> s :: stmts env rest
 
-let action env a =
-  let env = { env with in_action = true } in
-  match a with Success l -> Success (stmts env l) | Act l -> Act (stmts env l)
+let action env = function
+  | Success l -> Success (stmts env l)
+  | Act l -> Act (stmts env l)
 
 let field env (Field f) =
   match (typ env f.field_typ, Option.map (action env) f.action) with

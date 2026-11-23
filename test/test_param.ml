@@ -289,7 +289,7 @@ type mixed_record = { a : UInt8.t; b : UInt8.t }
 
 let test_mixed_params () =
   let max_val = Param.input "max_val" uint8 in
-  let out_sum = Param.output "out_sum" uint8 in
+  let out_sum = Param.output "out_sum" uint16be in
   let f_a = Field.v "a" uint8 in
   let f_b = Field.v "b" uint8 in
   let cf_a =
@@ -301,12 +301,12 @@ let test_mixed_params () =
     Field.v "b"
       ~action:
         (Action.on_success
-           [ Action.assign out_sum Expr.(Param.expr out_sum + Field.ref f_b) ])
+           [ Action.assign out_sum Expr.(Field.ref f_a + Field.ref f_b) ])
       uint8
   in
   let c =
     Codec.v "Mixed"
-      ~where:Expr.(Param.expr out_sum <= Param.expr max_val)
+      ~where:Expr.(Field.ref f_a + Field.ref f_b <= Param.expr max_val)
       (fun a b -> { a; b })
       Codec.[ (cf_a $ fun r -> r.a); (cf_b $ fun r -> r.b) ]
   in
@@ -314,7 +314,7 @@ let test_mixed_params () =
   let buf = Bytes.of_string "\x0A\x14" in
   let env = Codec.env c |> Param.bind max_val (UInt8.v 50) in
   ignore (decode_ok (Codec.decode ~env c buf 0));
-  Alcotest.(check int) "out_sum" 30 (UInt8.to_int (Param.get env out_sum));
+  Alcotest.(check int) "out_sum" 30 (UInt16.to_int (Param.get env out_sum));
   (* a=10, b=20 => out_sum=30, max_val=20 => 30 > 20: FAIL *)
   let env = Codec.env c |> Param.bind max_val (UInt8.v 20) in
   expect_constraint_fail (Codec.decode ~env c buf 0)
