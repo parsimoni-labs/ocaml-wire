@@ -1018,6 +1018,15 @@ module Raw = struct
           Some (Types.c_type_of t))
       s.params
 
+  let param_c_types (s : Types.struct_) =
+    List.map
+      (fun (p : Types.param) ->
+        if p.mutable_ then None
+        else
+          let (Types.Pack_typ t) = p.param_typ in
+          Some (Types.c_type_of t))
+      s.params
+
   let struct_typ = Types.struct_typ
   let param = Types.param
   let mutable_param = Types.mutable_param

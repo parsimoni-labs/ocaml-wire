@@ -1505,20 +1505,29 @@ let emit_agree_run ppf triples =
   pr "  (void) params;";
   List.iter
     (fun (cname, check, ptypes) ->
-      let n = List.length ptypes in
-      if n = 0 then
+      if ptypes = [] then
         pr "  if (strcmp(name, \"%s\") == 0) return %s(base, len) ? 1 : 0;"
           cname check
       else begin
-        let args =
-          ptypes
-          |> List.mapi (fun i t -> Fmt.str "(%s) p[%d]" t i)
-          |> String.concat ", "
+        (* An input takes the corpus's next value; an output points at a
+           64-bit cell of its own, which holds any output type. *)
+        let n = List.length (List.filter_map Fun.id ptypes) in
+        let args, _, _ =
+          List.fold_left
+            (fun (args, i, o) -> function
+              | Some t -> (Fmt.str "(%s) p[%d]" t i :: args, i + 1, o)
+              | None -> (Fmt.str "(void *) &o[%d]" o :: args, i, o + 1))
+            ([], 0, 0) ptypes
         in
+        let outputs = List.length ptypes - n in
         pr "  if (strcmp(name, \"%s\") == 0) {" cname;
-        pr "    unsigned long p[%d];" n;
-        pr "    parse_params(params, p, %d);" n;
-        pr "    return %s(%s, base, len) ? 1 : 0;" check args;
+        if n > 0 then begin
+          pr "    unsigned long p[%d];" n;
+          pr "    parse_params(params, p, %d);" n
+        end;
+        if outputs > 0 then pr "    uint64_t o[%d] = { 0 };" outputs;
+        pr "    return %s(%s, base, len) ? 1 : 0;" check
+          (String.concat ", " (List.rev args));
         pr "  }"
       end)
     triples;
@@ -1631,9 +1640,7 @@ let generate_agree ?name ~outdir ~package codecs =
       (fun (Pack c) ->
         let s = project ~mode:`Standalone c in
         let ptypes =
-          match s.source with
-          | Some st -> Raw.input_param_c_types st
-          | None -> []
+          match s.source with Some st -> Raw.param_c_types st | None -> []
         in
         (* EverParse builds the wrapper symbol as
            [pascal_case (module ^ "_check_" ^ codec)], so compute it the same way
@@ -1644,7 +1651,11 @@ let generate_agree ?name ~outdir ~package codecs =
           ptypes ))
       codecs
   in
-  let has_params = List.exists (fun (_, _, ptypes) -> ptypes <> []) triples in
+  let has_params =
+    List.exists
+      (fun (_, _, ptypes) -> List.exists Option.is_some ptypes)
+      triples
+  in
   let oc = open_out (Filename.concat outdir "agree.c") in
   let ppf = Format.formatter_of_out_channel oc in
   emit_agree_preamble ppf base ~has_params;
