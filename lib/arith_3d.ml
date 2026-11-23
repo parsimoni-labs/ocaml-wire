@@ -93,10 +93,24 @@ type env = {
   formals : bool;
   trusted : bool;
   written : bool;
+  this : range;
+  params : bool;
 }
 
+(* A position in a buffer, as [sizeof (this)] and [field_pos] are. *)
+let position =
+  { (full T32) with hi = umin (top T32) (Int64.of_int Sys.max_string_length) }
+
 let empty =
-  { leaves = []; ge = []; formals = false; trusted = false; written = false }
+  {
+    leaves = [];
+    ge = [];
+    formals = false;
+    trusted = false;
+    written = false;
+    this = position;
+    params = true;
+  }
 
 (* A [trusted] environment computes how wide an expression the struct's own
    environment has checked: it knows no refinement or condition, so it bounds
@@ -391,10 +405,6 @@ let past_64 env e =
   if env.trusted then full ~wide:true T64
   else fail e "can exceed 64 bits, which no 3D type holds"
 
-(* A position in a buffer, as [sizeof (this)] and [field_pos] are. *)
-let position =
-  { (full T32) with hi = umin (top T32) (Int64.of_int Sys.max_string_length) }
-
 let rec int_ env (e : int expr) : int expr * range =
   match e with
   | Int n when n < 0 && env.trusted -> raise Unknown
@@ -407,12 +417,17 @@ let rec int_ env (e : int expr) : int expr * range =
         "reads the output %S, which 3D holds as a pointer and does not read in \
          an expression"
         p.name
+  | Param_ref p when not env.params ->
+      fail e
+        "reads the parameter %S, which the element struct 3D declares for a \
+         per-byte condition does not take"
+        p.name
   | Param_ref p -> (e, param p)
   | Sizeof t -> (
       match Lower_3d.inner_wire_size t with
       | Some s -> (e, { (exact (Int64.of_int s)) with ty = T32 })
       | None -> (e, full T32))
-  | Sizeof_this -> (e, position)
+  | Sizeof_this -> (e, env.this)
   | Field_pos when env.trusted -> (e, position)
   | Field_pos ->
       fail e
@@ -701,7 +716,14 @@ let packed env (Pack_expr e) = Pack_expr (checked env e (operand env))
 (* A per-byte condition, over the byte [elt_var] alone, as its synthesised
    struct checks it. *)
 let per_byte elt_var cond =
-  let env = { empty with leaves = [ (elt_var, leaf Uint8) ] } in
+  let env =
+    {
+      empty with
+      leaves = [ (elt_var, leaf Uint8) ];
+      this = { (exact 1L) with ty = T32 };
+      params = false;
+    }
+  in
   ignore (bool_ env cond : bool expr)
 
 let rec typ : type a. env -> a typ -> a typ =
@@ -885,6 +907,20 @@ let refinement env ~name t cond =
 
 let condition env cond = checked env cond (bool_ env)
 
+(* What F* knows of the struct's [sizeof (this)]: the bytes of the fields before
+   the first whose size is not constant. A bitfield counts its whole word, so
+   this is a bound: consecutive bitfields share one word. *)
+let this_size fields =
+  let rec prefix acc = function
+    | [] -> acc
+    | Field f :: rest -> (
+        match Lower_3d.field_wire_size f.field_typ with
+        | Some n -> prefix (acc + n) rest
+        | None -> acc)
+  in
+  let hi = Int64.of_int (prefix 0 fields) in
+  if fits T32 hi then { (full T32) with hi } else position
+
 let envs ?(formals = []) ?where fields =
   let leaves =
     List.filter_map
@@ -893,7 +929,9 @@ let envs ?(formals = []) ?where fields =
       fields
     @ List.map (fun n -> (n, Formal)) formals
   in
-  let outer = { empty with leaves; formals = formals <> [] } in
+  let outer =
+    { empty with leaves; formals = formals <> []; this = this_size fields }
+  in
   let first =
     match where with Some w -> assume outer w true | None -> outer
   in

@@ -6,9 +6,6 @@
 
 open Dsl
 
-val field_wire_size : 'a typ -> int option
-(** Fixed wire size of a field type, if determinable. *)
-
 val array : len:int expr -> 'a typ -> 'a list typ
 (** Fixed-count array of elements. *)
 

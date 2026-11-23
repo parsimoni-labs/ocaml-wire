@@ -101,6 +101,9 @@ val primitive_width : 'a typ -> int option
 (** [primitive_width t] is the width in bytes of [t] when it is a primitive
     scalar, whose sized region lowers to a guarded scalar plus padding. *)
 
+val field_wire_size : 'a typ -> int option
+(** Fixed wire size of a field type, if determinable. *)
+
 val inner_wire_size : 'a typ -> int option
 (** [inner_wire_size t] is the fixed byte width of a scalar, bitfield base, unit
     or fixed sub-codec, seen through [map], [enum] and [where]. *)

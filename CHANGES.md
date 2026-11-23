@@ -85,9 +85,9 @@
   fields under the bounds the record proves of them (`a * int 4` over a
   `uint32`), and action arithmetic 3d.exe cannot verify.
   An action is refused when it stores into an output a value the output's
-  type may not hold (`x + int 1` over a `uint8`, or `sizeof_this`, into a
-  `uint8`), or reads `field_pos`, and any expression is refused that reads an
-  output parameter, which 3D holds as a pointer.
+  type may not hold (`x + int 1` over a `uint8`, or `sizeof_this` past 255,
+  into a `uint8`), or reads `field_pos`, and any expression is refused that
+  reads an output parameter, which 3D holds as a pointer.
   They used to fail in `Everparse.project`, in 3d.exe, or to give the C and
   OCaml different answers (docs/projection.md, Arithmetic) (#526, #527,
   #529, @samoht)
@@ -261,6 +261,17 @@
   region takes the rest of the region, as 3D does. It took the rest of the
   buffer, so `decode` and `validate` refused it in a region shorter than the
   buffer (#522, @samoht)
+
+- `Wire.byte_array_where` refuses a per-byte condition that reads a
+  parameter or another field, or whose arithmetic 3d.exe cannot verify, when
+  the type is built. `Wire.Codec.decode` raised `Invalid_argument` on such a
+  condition and 3d.exe rejected its projection. `sizeof_this` in a per-byte
+  condition is 1, the size of the element struct it projects to, where OCaml
+  read 0 and accepted a byte the generated C rejects (@samoht)
+
+- `sizeof_this` stored into a `uint8` or `uint16` output projects with the
+  cast 3d.exe verifies (`*out = ((UINT8) (sizeof (this)))`) when the
+  record's fixed prefix fits it, where `Wire.Codec.v` refused it (@samoht)
 
 - An output parameter holds every bit of a 64-bit value, and of a 32-bit one
   on js_of_ocaml and wasm_of_ocaml. `Wire.Codec.decode` rejected a record

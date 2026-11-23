@@ -593,6 +593,34 @@ let primitive_width : type a. a typ -> int option = function
   | Uint64 _ | Int64 _ | Float64 _ -> Some 8
   | _ -> None
 
+let rec field_wire_size : type a. a typ -> int option = function
+  | Uint_var { size = Int n; _ } -> Some n
+  | Uint_var _ -> None
+  | Bits { base; _ } -> (
+      match base with U8 -> Some 1 | U16 _ -> Some 2 | U32 _ -> Some 4)
+  | Unit -> Some 0
+  | Byte_array { size = Int n }
+  | Byte_array_where { size = Int n; _ }
+  | Byte_slice { size = Int n }
+  (* A bounded zero-terminated string spans its whole region whatever the
+     terminator's position, as [elem_size_of] already reports it. *)
+  | Zeroterm_at_most { size = Int n } ->
+      Some n
+  | Where { inner; _ } -> field_wire_size inner
+  | Enum { base; _ } -> field_wire_size base
+  | Map { inner; _ } -> field_wire_size inner
+  | Codec { codec_fixed_size; _ } -> codec_fixed_size
+  | Optional { present = Bool true; inner } -> field_wire_size inner
+  | Optional { present = Bool false; _ } -> Some 0
+  | Optional _ -> None
+  | Optional_or { present = Bool true; inner; _ } -> field_wire_size inner
+  | Optional_or { present = Bool false; _ } -> Some 0
+  | Optional_or _ -> None
+  | Repeat _ -> None
+  | Array { len = Int n; elem; _ } -> (
+      match field_wire_size elem with Some k -> Some (n * k) | None -> None)
+  | t -> primitive_width t
+
 let rec inner_wire_size : type a. a typ -> int option = function
   | Bits { base = U8; _ } -> Some 1
   | Bits { base = U16 _; _ } -> Some 2

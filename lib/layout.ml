@@ -154,37 +154,9 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
   | Type_ref _ -> 0
   | Qualified_ref _ -> 0
 
-let rec field_wire_size : type a. a typ -> int option = function
-  | Uint_var { size = Int n; _ } -> Some n
-  | Uint_var _ -> None
-  | Bits { base; _ } -> (
-      match base with U8 -> Some 1 | U16 _ -> Some 2 | U32 _ -> Some 4)
-  | Unit -> Some 0
-  | Byte_array { size = Int n }
-  | Byte_array_where { size = Int n; _ }
-  | Byte_slice { size = Int n }
-  (* A bounded zero-terminated string spans its whole region whatever the
-     terminator's position, as [elem_size_of] already reports it. *)
-  | Zeroterm_at_most { size = Int n } ->
-      Some n
-  | Where { inner; _ } -> field_wire_size inner
-  | Enum { base; _ } -> field_wire_size base
-  | Map { inner; _ } -> field_wire_size inner
-  | Codec { codec_fixed_size; _ } -> codec_fixed_size
-  | Optional { present = Bool true; inner } -> field_wire_size inner
-  | Optional { present = Bool false; _ } -> Some 0
-  | Optional _ -> None
-  | Optional_or { present = Bool true; inner; _ } -> field_wire_size inner
-  | Optional_or { present = Bool false; _ } -> Some 0
-  | Optional_or _ -> None
-  | Repeat _ -> None
-  | Array { len = Int n; elem; _ } -> (
-      match field_wire_size elem with Some k -> Some (n * k) | None -> None)
-  | t -> Lower_3d.primitive_width t
-
 (* An array of a literal count of fixed-width elements is a byte count too. *)
 let array_len ~combinator len elem =
-  match (literal_size ~combinator len, field_wire_size elem) with
+  match (literal_size ~combinator len, Lower_3d.field_wire_size elem) with
   | Int n, Some k when k > 0 && n > Sys.max_string_length / k ->
       Fmt.invalid_arg
         "Wire.%s: %d elements of %d bytes are more than a buffer can hold"

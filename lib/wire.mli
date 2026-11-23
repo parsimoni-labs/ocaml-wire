@@ -918,7 +918,10 @@ val byte_array_where :
     {!byte_array}: the string must be exactly [size] bytes. The motivating shape
     is SSH name-list payloads (RFC 4251 sec 5), where every byte must be
     printable US-ASCII. Raises [Invalid_argument] on a literal [size] that is
-    negative or more than a buffer can hold. *)
+    negative or more than a buffer can hold, and on a [per_byte] that reads a
+    parameter or another field, or whose arithmetic 3d.exe cannot verify: it
+    projects to a one-byte element struct of its own, whose {!val-sizeof_this}
+    is [1]. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Fixed-size byte sequence exposed as a zero-copy slice by bytes-based

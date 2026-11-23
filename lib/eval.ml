@@ -122,7 +122,8 @@ let byte_test ~elt_var cond =
         (fun (Pack_typ t) ->
           let n = Option.value ~default:0 (field_wire_size t) in
           fun _ () () () -> n);
-      sizeof_this = (fun _ () () () -> 0);
+      (* The one-byte element struct the condition projects to. *)
+      sizeof_this = (fun _ () () () -> 1);
       field_pos = (fun _ () () () -> 0);
     }
   in

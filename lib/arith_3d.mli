@@ -44,6 +44,12 @@ val field : env -> field -> field
 (** [field env f] is [f] with its sizes and presence conditions as 3D checks
     them. Its refinement is left to {!refinement}. *)
 
+val per_byte : string -> bool expr -> unit
+(** [per_byte elt_var cond] raises [Invalid_argument] unless 3d.exe verifies
+    [cond] in the element struct a [byte_array_where] declares: [cond] reads the
+    byte [elt_var] alone, as a [UINT8], and no parameter, and its
+    [sizeof (this)] is that struct's single byte. *)
+
 val wide : (string -> packed_typ option) -> int expr -> bool
 (** [wide typ_of e] is [true] when OCaml computes [e] on 64 bits, as unsigned
     integers, rather than in its native int: [e] reads a field the native int

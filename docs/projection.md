@@ -96,7 +96,9 @@ C computes it at the `UINT64` it has (`a + 4611686018427387898` over a
 generates and the Rust `Wire_rust` generates compare such an expression on 64
 bits, and keep every other one in the native int, so a narrow expression
 costs what it did. A `byte_array_where` per-byte condition is computed the
-same way, over its byte.
+same way, over its byte. It projects to a one-byte element struct of its own,
+so it reads no parameter and no other field (`byte_array_where` refuses one
+that does), and its `sizeof (this)` is 1.
 
 The expressions of a declaration the projection synthesises (an optional
 region, a sized wrapper) read the enclosing struct's fields through `UINT32`
@@ -117,8 +119,10 @@ its output's ("Expected type UINT8"), and an action knows the refinements of
 the fields before its own and the condition of each `if` it sits under, not
 its own field's refinement: a wider value those bound within the output is
 narrowed (`*out = ((UINT8) x)` after `x <= 200`), and any other is refused:
-`x + 1` over a `UINT8` into a `UINT8`, and `sizeof (this)`, which
-`Wire.Codec.v` bounds only by its `UINT32` type, into a narrower one. No
+`x + 1` over a `UINT8` into a `UINT8`. `sizeof (this)` is a `UINT32` whose
+constant F* knows: it is narrowed the same way when the bytes of the fields
+before the first of variable size fit the output (a bitfield counts its whole
+word, so this bounds it from above), and refused past them. No
 expression reads an output, which 3D holds as a pointer, nor `field_pos`,
 which 3D reads only into a `var`. A 3D `if` ends its action, so the
 statements after it are written into both of its branches. An output whose

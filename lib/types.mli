@@ -1155,6 +1155,12 @@ val check_fields : bool expr option -> field list -> unit
     condition or [where] whose arithmetic 3d.exe cannot verify, or which the C
     would compute differently from OCaml (docs/projection.md, Arithmetic). *)
 
+val check_per_byte : string -> bool expr -> unit
+(** [check_per_byte elt_var cond] raises [Invalid_argument] unless 3d.exe
+    verifies the per-byte condition [cond] over the byte [elt_var] in the
+    element struct it projects to: it reads no parameter and no other field, and
+    its {!val-sizeof_this} is that struct's single byte. *)
+
 val wide_expr : (string -> packed_typ option) -> int expr -> bool
 (** [wide_expr typ_of e] is [true] when [e] is evaluated on 64 bits, as unsigned
     integers, rather than in the native int: it reads a field the native int

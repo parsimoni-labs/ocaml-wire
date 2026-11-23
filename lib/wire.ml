@@ -172,6 +172,18 @@ type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
     }
       -> ('elt, 'seq) seq_map
 
+(* A per-byte condition is checked when the type is built: it projects to an
+   element struct of its own, which sees no parameter and no other field. *)
+let byte_array_where ~size ~per_byte =
+  let t = Types.byte_array_where ~size ~per_byte in
+  (match t with
+  | Byte_array_where { elt_var; cond; _ } -> (
+      try Types.check_per_byte elt_var cond
+      with Invalid_argument m ->
+        Fmt.invalid_arg "Wire.byte_array_where: per-byte condition: %s" m)
+  | _ -> ());
+  t
+
 let seq_list = Types.seq_list
 let array_seq = Types.array_seq
 
