@@ -1701,6 +1701,108 @@ let test_projection_filenames () =
     "stale provenance is not promotable" false
     (contains_exact "Rpmsg_endpoint_info.provenance.gen")
 
+(* Expressions whose C answer differed from OCaml's before the projection
+   typed them as 3D does: [a lsl 2] over a [UINT8] wrapped at 256 in the C, a
+   signed field in a presence condition read as its bit pattern, a size shifted
+   past 8 bits. Each input's verdict is the OCaml codec's own, so the C must
+   give the same one. *)
+let arith_codecs =
+  let open Wire in
+  let shl =
+    let a = Field.v "a" uint8 in
+    Codec.v "ArithShl"
+      (fun a l -> (a, l))
+      Codec.
+        [
+          a $ fst;
+          Field.v "l" uint16be ~self_constraint:(fun l ->
+              Expr.(l >= Field.ref a lsl int 2))
+          $ snd;
+        ]
+  in
+  let ihl = Field.v "IHL" (bits ~width:4 U8) in
+  let mul =
+    Codec.v "ArithMul"
+      (fun v i l -> (v, i, l))
+      Codec.
+        [
+          (Field.v "Version" (bits ~width:4 U8) $ fun (v, _, _) -> v);
+          (ihl $ fun (_, i, _) -> i);
+          ( Field.v "Length" uint16be ~self_constraint:(fun l ->
+                Expr.(l >= Field.ref ihl * int 4))
+          $ fun (_, _, l) -> l );
+        ]
+  in
+  let n = Field.v "n" int8 in
+  let signed =
+    Codec.v "ArithSigned"
+      (fun n d -> (n, d))
+      Codec.
+        [
+          n $ fst;
+          Field.optional "d" ~present:Expr.(Field.ref n >= int 5) uint8 $ snd;
+        ]
+  in
+  let m = Field.v "m" uint8 in
+  let size =
+    Codec.v "ArithSize"
+      (fun m d -> (m, d))
+      Codec.
+        [
+          m $ fst;
+          Field.v "d" (byte_array ~size:Expr.(Field.ref m lsl int 2)) $ snd;
+        ]
+  in
+  let w = Field.v "v" uint8 in
+  let sub =
+    Codec.v "ArithSub"
+      (fun v l -> (v, l))
+      Codec.
+        [
+          w $ fst;
+          Field.v "l" uint8 ~self_constraint:(fun l ->
+              Expr.(Field.ref w >= int 1 && l >= Field.ref w - int 1))
+          $ snd;
+        ]
+  in
+  let line (name, c) hex =
+    let buf =
+      Bytes.init
+        (String.length hex / 2)
+        (fun i -> Char.chr (int_of_string ("0x" ^ String.sub hex (2 * i) 2)))
+    in
+    let ok =
+      match Codec.validate c buf 0 with
+      | Ok () -> Codec.wire_size_at c buf 0 = Bytes.length buf
+      | Error _ -> false
+      | exception Invalid_argument _ -> false
+    in
+    Fmt.str "%s - %s %d" name hex (if ok then 1 else 0)
+  in
+  let lines c = List.map (line c) in
+  ( [
+      Wire_3d.pack shl;
+      Wire_3d.pack mul;
+      Wire_3d.pack signed;
+      Wire_3d.pack size;
+      Wire_3d.pack sub;
+    ],
+    lines ("ArithShl", shl)
+      [ "ff03e8"; "ff03fc"; "0a0028"; "0a0027"; "4003ff"; "40ffff" ]
+    @ lines ("ArithMul", mul) [ "450014"; "4f003b"; "4f003c"; "f0ffff" ]
+    @ lines ("ArithSigned", signed)
+        [ "ff"; "ffaa"; "05aa"; "05"; "7f01"; "80"; "fb"; "fbaa" ]
+    @ lines ("ArithSize", size)
+        [ "00"; "0101020304"; "01010203"; "40" ^ String.make 512 'a' ]
+    @ lines ("ArithSub", sub) [ "0000"; "0100"; "0504"; "0503"; "ff00"; "fffe" ]
+  )
+
+let test_arith_differential () =
+  needs_3d_exe ();
+  let codecs, lines = arith_codecs in
+  differential_ok ~name:"arithspec" ~package:"arith-doc" ~corpus:(`Lines lines)
+    codecs
+
 let suite =
   ( "wire_3d",
     [
@@ -1732,6 +1834,8 @@ let suite =
         test_doc_differential_no_params;
       Alcotest.test_case "doc differential nested regions (needs 3d.exe)" `Quick
         test_doc_differential_nested_regions;
+      Alcotest.test_case "doc differential arithmetic (needs 3d.exe)" `Quick
+        test_arith_differential;
       Alcotest.test_case "doc differential region/cardinality (needs 3d.exe)"
         `Quick test_doc_differential_region_cardinality;
       Alcotest.test_case "doc differential Msb_first sub-codec (needs 3d.exe)"
