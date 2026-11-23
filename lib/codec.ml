@@ -324,35 +324,75 @@ let rec nested_names : type a. a typ -> string list = function
   | Where { inner; _ } -> nested_names inner
   | _ -> []
 
+(* A scope, newest first: each name with the field of this codec that brings
+   it, [None] for the codec's own field and [Some f] for a field of the
+   sub-codec in [f]. A codec's own field shadows a sub-codec's field of the
+   same name, and the first sub-codec to bring a name keeps it, as in
+   [Codec_elem.extend_scope]. *)
+let extend_names name typ scope =
+  let taken n = String.equal n name || List.mem_assoc n scope in
+  let nested =
+    List.filter_map
+      (fun n -> if taken n then None else Some (n, Some name))
+      (nested_names typ)
+  in
+  nested @ ((name, None) :: List.remove_assoc name scope)
+
+(* 3D does not see a sub-codec's fields from the struct that embeds it, so an
+   expression of the codec naming one has no projection. *)
+let check_own codec scope ~user name =
+  match List.assoc_opt name scope with
+  | Some (Some sub) ->
+      Fmt.invalid_arg
+        "Codec.v %S: %s refers to %S, a field of the sub-codec in field %S; 3D \
+         does not see a sub-codec's fields from the struct that embeds it"
+        codec user name sub
+  | Some None | None -> ()
+
 (* A constraint or an action may only name the fields before it, and the
-   [where] clause may name them all. Checking that here, with the scope and the
-   error the compile uses, makes a bad name fail where the codec is built.
-   Returns the scope of the [where] clause. *)
-let check_field_refs : type f r. (f, r) fields -> string list =
- fun flds ->
-  let rec go : type g. string list -> (g, r) fields -> string list =
+   [where] clause may name them all; none may name a field of an embedded
+   sub-codec. Checking that here, with the scope and the error the compile
+   uses, makes a bad name fail where the codec is built. Returns the scope of
+   the [where] clause. *)
+let check_field_refs : type f r.
+    string -> (f, r) fields -> (string * string option) list =
+ fun codec flds ->
+  let rec go : type g.
+      (string * string option) list ->
+      (g, r) fields ->
+      (string * string option) list =
    fun scope -> function
      | [] -> scope
      | fld :: rest ->
+         let user = Fmt.str "field %S" fld.name in
          let stmts : Types.action_stmt list =
            match fld.action with
            | None -> []
            | Some (Types.Success stmts | Types.Act stmts) -> stmts
          in
+         iter_typ_field_refs (check_own codec scope ~user) fld.typ;
          let conds = Option.to_list fld.constraint_ @ typ_where_conds fld.typ in
          if not (List.is_empty conds && List.is_empty stmts) then (
-           let visible = List.fold_left action_vars (fld.name :: scope) stmts in
+           let vars = List.fold_left action_vars [] stmts in
+           let scope = extend_names fld.name Unit scope in
            let check name =
-             if not (List.mem name visible) then unbound_check_ref name
+             if not (List.mem name vars) then
+               if List.mem_assoc name scope then
+                 check_own codec scope ~user name
+               else unbound_check_ref name
            in
            List.iter (iter_refs ~param:ignore ~field:check) conds;
            List.iter (iter_stmt_field_refs check) stmts);
-         go (nested_names fld.typ @ (fld.name :: scope)) rest
+         go (extend_names fld.name fld.typ scope) rest
   in
   go [] flds
 
-let check_where_refs scope where =
-  let check name = if not (List.mem name scope) then unbound_where_ref name in
+let check_where_refs codec scope where =
+  let check name =
+    if List.mem_assoc name scope then
+      check_own codec scope ~user:"the where clause" name
+    else unbound_where_ref name
+  in
   Option.iter (iter_refs ~param:ignore ~field:check) where
 
 let v : type f r.
@@ -364,11 +404,11 @@ let v : type f r.
   in
   (* Check the description now, so a malformed codec fails where it is built.
      The compile waits for the first operation that needs it. *)
-  let scope = check_field_refs flds in
+  let scope = check_field_refs name flds in
   let struct_fields = struct_fields flds in
   Shape.reject_invalid_codec_shape name struct_fields;
   let param_handles = collect_param_handles name struct_fields where in
-  check_where_refs scope where;
+  check_where_refs name scope where;
   let compile name =
     let rec add : type g. (g, r) record -> (g, r) fields -> r compiled =
      fun r flds ->

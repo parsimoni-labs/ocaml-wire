@@ -64,6 +64,13 @@
   `open Wire.Codec`. Rename the local one or qualify it (#435, #496, #525,
   @samoht)
 
+- `Wire.Codec.v` refuses a codec whose constraint, action, size, presence
+  condition or `where` clause names a field of an embedded sub-codec. 3D does
+  not see a sub-codec's fields from the struct that embeds it, so such a codec
+  had no EverParse validator, and its constraints read the field as 0. Name a
+  field of the codec itself, or check the value inside the sub-codec
+  (#526, @samoht)
+
 ### Added
 
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an
