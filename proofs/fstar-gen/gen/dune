@@ -1,0 +1,6 @@
+; Writes, for each codec of the spike, its standalone .3d and the scanner
+; Wire_ocaml emits, for make -C proofs/fstar-gen. Building it needs no F*.
+
+(executable
+ (name gen)
+ (libraries wire wire.ocaml wire.3d headers net))
