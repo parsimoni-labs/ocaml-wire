@@ -134,21 +134,24 @@ let test_literal_size_is_a_byte_count () =
   check "byte_array too big" (fun () -> byte_array ~size:(int big))
 
 (* The fixed part of a record has to fit in a buffer, or the frame check
-   [decode] makes before its unchecked reads would wrap round. *)
+   [decode] makes before its unchecked reads would wrap round. A size of 2^32
+   bytes or more has no 3D type, so the codec is refused when built there; a
+   smaller one past the largest buffer is refused on first use. *)
 let test_record_too_big_for_a_buffer () =
-  let c =
-    Codec.v "Huge"
-      (fun _ _ -> ())
-      Codec.
-        [
-          ( Field.v "a" (byte_array ~size:(int Sys.max_string_length)) $ fun _ ->
-            "" );
-          (Field.v "b" uint32 $ fun _ -> UInt32.of_int 0);
-        ]
-  in
   Alcotest.(check bool)
-    "first use" true
-    (raises_invalid (fun () -> Codec.decode c (Bytes.create 8) 0))
+    "refused" true
+    (raises_invalid (fun () ->
+         let c =
+           Codec.v "Huge"
+             (fun _ _ -> ())
+             Codec.
+               [
+                 ( Field.v "a" (byte_array ~size:(int Sys.max_string_length))
+                 $ fun _ -> "" );
+                 (Field.v "b" uint32 $ fun _ -> UInt32.of_int 0);
+               ]
+         in
+         Codec.decode c (Bytes.create 8) 0))
 
 (* An array's size is a byte count too: one that would overflow is refused. *)
 let test_array_size_overflow () =

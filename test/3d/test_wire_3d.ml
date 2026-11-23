@@ -1765,6 +1765,23 @@ let arith_codecs =
           $ snd;
         ]
   in
+  (* Values past OCaml's native int, which 3D computes as a [UINT64]: a sum
+     near [2^62], one near [2^63], a product reaching [2^64 - 1] and the square
+     of a [uint32]. *)
+  let k = max_int - 5 in
+  let wide name cond =
+    Codec.v name Fun.id
+      Codec.[ Field.v "a" uint32be ~self_constraint:cond $ Fun.id ]
+  in
+  let near62 = wide "ArithNear62" Expr.(fun a -> a + int k >= int max_int) in
+  let near63 =
+    wide "ArithNear63" Expr.(fun a -> (a + int k + int k) lsr int 62 = int 2)
+  in
+  let near64 =
+    wide "ArithNear64"
+      Expr.(fun a -> (a * int 0x1_0000_0001) lsr int 32 = int 0xffff_ffff)
+  in
+  let square = wide "ArithSquare" Expr.(fun a -> (a * a) lsr int 63 = int 1) in
   let line (name, c) hex =
     let buf =
       Bytes.init
@@ -1786,6 +1803,10 @@ let arith_codecs =
       Wire_3d.pack signed;
       Wire_3d.pack size;
       Wire_3d.pack sub;
+      Wire_3d.pack near62;
+      Wire_3d.pack near63;
+      Wire_3d.pack near64;
+      Wire_3d.pack square;
     ],
     lines ("ArithShl", shl)
       [ "ff03e8"; "ff03fc"; "0a0028"; "0a0027"; "4003ff"; "40ffff" ]
@@ -1795,7 +1816,14 @@ let arith_codecs =
     @ lines ("ArithSize", size)
         [ "00"; "0101020304"; "01010203"; "40" ^ String.make 512 'a' ]
     @ lines ("ArithSub", sub) [ "0000"; "0100"; "0504"; "0503"; "ff00"; "fffe" ]
-  )
+    @ lines ("ArithNear62", near62)
+        [ "00000000"; "00000004"; "00000005"; "ffffffff" ]
+    @ lines ("ArithNear63", near63)
+        [ "00000000"; "0000000b"; "0000000c"; "ffffffff" ]
+    @ lines ("ArithNear64", near64)
+        [ "00000000"; "7fffffff"; "fffffffe"; "ffffffff" ]
+    @ lines ("ArithSquare", square)
+        [ "00000000"; "b504f333"; "b504f334"; "ffffffff" ] )
 
 let test_arith_differential () =
   needs_3d_exe ();

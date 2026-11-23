@@ -1153,7 +1153,7 @@ let skipped_reference =
     }
 
 (* A condition that facts decide is still evaluated where the codec
-   evaluates it: when [x = 4] holds, [high n * high n > 0 && x = 3] is false. *)
+   evaluates it: when [x = 4] holds, [n * n > max_int && x = 3] is false. *)
 let test_scan_skipped () =
   let skipped =
     scan_ops "S_skipped" [ "n"; "x"; "a_present"; "a"; "b_present"; "b" ]
@@ -1204,8 +1204,8 @@ let test_huge_prefix () =
       Codec.
         [
           Field.v "Flag" uint8 $ fst;
-          ( Field.v "Body" (byte_array ~size:(int (Sys.max_string_length - 8)))
-          $ fun _ -> "" );
+          ( Field.v "Body" (byte_array ~size:(int (0xFFFF_FFFF - 8))) $ fun _ ->
+            "" );
           Field.v "Tail" uint8 $ snd;
         ]
   in
@@ -1825,10 +1825,10 @@ let test_interfaces () =
 let suite =
   ( "wire_ocaml",
     [
-      Alcotest.test_case "scanned arithmetic that overflows" `Quick
+      Alcotest.test_case "scanned arithmetic past the native int" `Quick
         test_scan_overflow;
-      Alcotest.test_case "overflow in a condition the facts decide" `Quick
-        test_scan_skipped;
+      Alcotest.test_case "wide arithmetic in a condition the facts decide"
+        `Quick test_scan_skipped;
       Alcotest.test_case "offsets past the largest buffer" `Quick test_scan_deep;
       Alcotest.test_case "prefix of a huge fixed slice" `Quick test_huge_prefix;
       Alcotest.test_case "code size of optional fields" `Quick test_size;

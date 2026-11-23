@@ -172,8 +172,8 @@ let gated t present =
       ]
 
 (* Arithmetic is plain where the ranges the plan knows, narrowed by the
-   checks passed, keep it in the 63-bit int, as they do for every codec
-   [Codec.v] accepts. A size is compared with the tail as [u64], where a
+   checks passed, keep it in the 63-bit int, and a comparison is on [u64]
+   where they do not, as the codec computes it on 64 bits. A size is compared with the tail as [u64], where a
    negative one is larger than any length: it has no test of its own. *)
 let test_scanner_arithmetic () =
   let src c = Wire_rust.scanner ~codec:"c" c in
@@ -196,10 +196,14 @@ let test_scanner_arithmetic () =
         ]
   in
   has "u32 below 1000, cubed" (src refined) "((f1_x * f1_x) * f1_x)";
+  has "u32 squared"
+    (src (gated uint32be (fun x -> Expr.(x * x >= int 0))))
+    "(((f1_x as u64) * (f1_x as u64)) >= 0u64)";
   let overflow = src Schemas.overflow in
-  let near_max = Fmt.str "%di64" (max_int - 0xFFFF_FFFF) in
-  has "overflow" overflow (Fmt.str "(f1_a + %s)" near_max);
-  has "overflow" overflow (Fmt.str "(f3_lo + %s)" near_max);
+  let near_max = Fmt.str "%du64" (max_int - 5) in
+  let max = Fmt.str "%du64" max_int in
+  has "overflow" overflow (Fmt.str "(((f1_a as u64) + %s) != %s)" near_max max);
+  has "overflow" overflow (Fmt.str "(((f3_lo as u64) + %s) != %s)" near_max max);
   let sized = src Schemas.sized in
   has "sized" sized "if (((f1_n >> 16) * (f1_n >> 16)) != 1i64) {";
   has "sized" sized "if (n4 as u64) > (r2.len() as u64) { return None; }";

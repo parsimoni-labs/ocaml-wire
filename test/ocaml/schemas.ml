@@ -282,11 +282,12 @@ type overflow = UInt32.t * int * int * UInt32.t * UInt32.t
 
 let overflow_make a hi lo b c = (a, hi, lo, b, c)
 
-(* Arithmetic at the top of the native int: the sums come within [2^32] of
-   [max_int], and [Codec.v] refuses one that can pass it. *)
+(* Arithmetic past the top of the native int, which is computed on 64 bits:
+   the sums pass [max_int] for any [A] or [Lo] above 5, and only 5 reaches it
+   exactly. *)
 let overflow =
-  let near_max = max_int - 0xFFFF_FFFF in
-  let overflows self = Expr.(self + int near_max <> int 0) in
+  let near_max = max_int - 5 in
+  let overflows self = Expr.(self + int near_max <> int max_int) in
   let b = Field.v "B" uint32be in
   let c = Field.v "C" uint32be in
   Codec.v "Overflow" overflow_make
@@ -333,7 +334,9 @@ let skipped =
         ( Field.optional "a" ~present:Expr.(Field.ref x = int 4) uint8
         $ fun (_, _, a, _) -> a );
         ( Field.optional "b"
-            ~present:Expr.(high n * high n > int 0 && Field.ref x = int 3)
+            ~present:
+              Expr.(
+                Field.ref n * Field.ref n > int max_int && Field.ref x = int 3)
             uint8
         $ fun (_, _, _, b) -> b );
       ]
@@ -341,7 +344,7 @@ let skipped =
 type huge = UInt8.t * Bytesrw.Bytes.Slice.t * UInt8.t
 
 let huge =
-  let size = Sys.max_string_length - 8 in
+  let size = 0xFFFF_FFFF - 8 in
   Codec.v "Huge"
     (fun flag body tail -> (flag, body, tail))
     Codec.

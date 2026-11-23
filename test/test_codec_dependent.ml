@@ -338,18 +338,21 @@ let test_dep_size_arithmetic_overflow () =
       ("modulo zero", span_codec "ModZero" (fun n -> Expr.(int 8 mod n)));
     ]
 
-(* A [where] that adds a literal near [max_int] to two fields can pass OCaml's
-   native int where the C computes it in 64 bits: refused when built. *)
+(* A [where] that adds a literal near [max_int] to two fields passes OCaml's
+   native int: it is computed on 64 bits, as the C computes it. *)
 let test_where_arithmetic_overflow_offset () =
   let f_a = Field.v "a" uint8 in
   let f_b = Field.v "b" uint8 in
-  Alcotest.(check bool)
-    "refused" true
-    (raises_invalid (fun () ->
-         Codec.v "WhereOverflow"
-           ~where:Expr.(int max_int + Field.ref f_b + Field.ref f_a >= int 0)
-           (fun a b -> (a, b))
-           Codec.[ f_a $ fst; f_b $ snd ]))
+  let c =
+    Codec.v "WhereOverflow"
+      ~where:Expr.(int max_int + Field.ref f_b + Field.ref f_a > int max_int)
+      (fun a b -> (a, b))
+      Codec.[ f_a $ fst; f_b $ snd ]
+  in
+  let ok s = Result.is_ok (Codec.decode c (Bytes.of_string s) 0) in
+  Alcotest.(check bool) "a + b = 0" false (ok "\000\000");
+  Alcotest.(check bool) "a + b = 1" true (ok "\000\001");
+  Alcotest.(check bool) "a + b = 510" true (ok "\255\255")
 
 let test_dep_ref_size_eval () =
   (* Test that the size expression is evaluated correctly for wire_size_at *)
@@ -590,7 +593,7 @@ let suite =
       Alcotest.test_case "dep: codec ref" `Quick test_dep_codec_ref;
       Alcotest.test_case "dep: size arithmetic 3D cannot verify refused" `Quick
         test_dep_size_arithmetic_overflow;
-      Alcotest.test_case "codec: where past the native int refused" `Quick
+      Alcotest.test_case "codec: where past the native int on 64 bits" `Quick
         test_where_arithmetic_overflow_offset;
       Alcotest.test_case "dep: codec ref size eval" `Quick
         test_dep_ref_size_eval;

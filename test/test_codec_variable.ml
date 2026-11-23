@@ -710,15 +710,17 @@ let deep_top big depth =
     (fun body tail -> (body, tail))
     Codec.[ (body $ fun (b, _) -> b); (tail $ fun (_, t) -> t) ]
 
-(* A codec that no buffer can hold is refused when it is built. *)
+(* A codec that no buffer can hold is refused when it is built: past the
+   largest buffer or, for a size of 2^32 bytes or more, because 3D has no type
+   for it. *)
 let test_nested_codecs_past_largest_buffer () =
   List.iter
     (fun depth ->
       match deep_top (Sys.max_string_length - 1) depth with
       | _ -> Alcotest.failf "%d levels: built a codec no buffer can hold" depth
       | exception Invalid_argument msg ->
-          if not (Re.execp (Re.compile (Re.str "past the largest buffer")) msg)
-          then
+          let said s = Re.execp (Re.compile (Re.str s)) msg in
+          if not (said "past the largest buffer" || said "UINT64") then
             Alcotest.failf "%d levels: refused for another reason: %s" depth msg)
     [ 1; 32 ]
 
