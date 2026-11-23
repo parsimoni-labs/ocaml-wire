@@ -882,20 +882,39 @@ let region_bounds env inner =
 (* [f] with the region of its optional under a [Where] stating those bounds,
    which the region's declaration takes as its [where] and its name records,
    when the region verifies only under them. *)
+(* [region] under [cond], where {!Lower_3d.region_bound} finds it: around the
+   region, inside the [map] it may sit in. *)
+let under : type a. bool expr -> a typ -> a typ option =
+ fun cond -> function
+  | Single_elem _ as inner -> Some (Where { cond; inner })
+  | Map ({ inner = Single_elem _ as inner; _ } as m) ->
+      Some (Map { m with inner = Where { cond; inner } })
+  | _ -> None
+
+(* [inner] under the bounds [env] proves of the fields it reads, when it
+   verifies only under them. *)
+let bounded_region env inner =
+  match region_bounds env inner with
+  | [] -> None
+  | b :: bs -> (
+      let cond = List.fold_left (fun a c -> And (a, c)) b bs in
+      match under cond inner with
+      | None -> None
+      | Some inner -> (
+          match region_check inner with
+          | () -> Some inner
+          | exception Invalid_argument _ -> None))
+
 let bounded env (Field f as field) =
   match f.field_typ with
-  | Optional { present; inner = Single_elem _ as inner } -> (
+  | Optional { present; inner } -> (
       match region_check inner with
       | () -> field
       | exception Invalid_argument _ -> (
-          match region_bounds env inner with
-          | [] -> field
-          | b :: bs -> (
-              let cond = List.fold_left (fun a c -> And (a, c)) b bs in
-              let inner = Where { cond; inner } in
-              match region_check inner with
-              | () -> Field { f with field_typ = Optional { present; inner } }
-              | exception Invalid_argument _ -> field)))
+          match bounded_region env inner with
+          | Some inner ->
+              Field { f with field_typ = Optional { present; inner } }
+          | None -> field))
   | _ -> field
 
 let refinement env ~name t cond =

@@ -581,6 +581,8 @@ let optional_region_name inner = "OptRegion_" ^ wrap_tag inner
 
 let region_bound : type a. a typ -> bool expr option * a typ = function
   | Where { cond; inner = Single_elem _ as region } -> (Some cond, region)
+  | Map ({ inner = Where { cond; inner = Single_elem _ as region }; _ } as m) ->
+      (Some cond, Map { m with inner = region })
   | t -> (None, t)
 
 (* Primitive scalars have a fixed extent. Lower their sized regions to a

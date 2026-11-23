@@ -111,7 +111,7 @@ proves of the fields it reads, where the body verifies only under them.
 record; under an `optional`, `a * 4` over a `UINT32` verifies only with the
 `where (a <= 255)` its declaration then states, and the declaration is named
 by that bound as well as its shape, so each use site applies the one it
-proves.
+proves. A region under a `map` takes the bound the same way.
 
 An action assigns its value as 3D computes it, widened like a constraint's
 (`*out = (((UINT16) a) * 4)`). 3D stores only a value whose type is at most

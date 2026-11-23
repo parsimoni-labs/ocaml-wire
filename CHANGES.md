@@ -287,9 +287,10 @@
   too. 3d.exe rejected all three (@samoht)
 
 - An optional region sized by a product of its record's fields
-  (`optional (nested ~size:(a * int 4) ...)` over a `uint8`) projects: its
-  declaration states the bound the record proves (`where (a <= 255)`), under
-  which 3d.exe verifies it, and `Wire.Codec.v` accepts it (@samoht)
+  (`optional (nested ~size:(a * int 4) ...)` over a `uint8`, also under a
+  `map`) projects: its declaration states the bound the record proves
+  (`where (a <= 255)`), under which 3d.exe verifies it, and `Wire.Codec.v`
+  accepts it (@samoht)
 
 - `Wire_3d.generate_agree` builds for a codec with output parameters: the
   harness passes each output a cell of its own type, where the C did not
