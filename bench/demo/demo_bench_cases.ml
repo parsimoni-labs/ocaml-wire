@@ -143,20 +143,19 @@ let read_ip_payload =
 
 (* Where the TCP header of [buf] starts, read through checked views of the
    Ethernet and IPv4 headers. *)
-module Eth_view = (val Codec.view Net.ethernet_codec)
-module Ip_view = (val Codec.view Net.ipv4_codec)
+module Eth_view = (val Codec.View.codec Net.ethernet_codec)
+module Ip_view = (val Codec.View.codec Net.ipv4_codec)
 
-let eth_payload = Codec.reader Eth_view.view Net.bf_eth_payload
-let ip_payload = Codec.reader Ip_view.view Net.bf_ip_payload
+let eth_payload = Codec.View.field Eth_view.codec Net.bf_eth_payload
+let ip_payload = Codec.View.field Ip_view.codec Net.bf_ip_payload
 
 let nested_tcp_off buf =
-  match Buf.v buf with
-  | Buf.Any b ->
-      let len = Buf.length b in
-      let eth = Codec.valid (Codec.check Eth_view.view b len 0) in
-      let ip = Slice.first (Codec.read eth_payload b eth) in
-      let ip = Codec.valid (Codec.check Ip_view.view b len ip) in
-      Slice.first (Codec.read ip_payload b ip)
+  let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
+  let eth = Codec.View.(get (check Eth_view.codec b len 0)) in
+  let ip = Slice.first (Codec.View.read eth_payload b eth) in
+  let ip = Codec.View.(get (check Ip_view.codec b len ip)) in
+  Slice.first (Codec.View.read ip_payload b ip)
 
 let ip_off = Slice.first (read_eth_payload tcp_frame 0)
 let tcp_off = Slice.first (read_ip_payload tcp_frame ip_off)

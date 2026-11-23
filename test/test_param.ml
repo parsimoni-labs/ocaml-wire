@@ -685,7 +685,7 @@ let test_slice_navigation_requires_parameters () =
     Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ Fun.id)
   in
   let codec = Codec.v "ParamSlice" Fun.id [ field ] in
-  match Codec.view codec with
+  match Codec.View.codec codec with
   | _ -> Alcotest.fail "a view without its input parameter"
   | exception Invalid_argument _ -> ()
 
@@ -702,23 +702,22 @@ let test_slice_navigation_with_parameters () =
   in
   let buf = Bytes.of_string "_abcDEF" in
   let env = Codec.env codec |> Param.bind size (UInt8.v 3) in
-  let module V = (val Codec.view ~env codec) in
+  let module V = (val Codec.View.codec ~env codec) in
   let slice = (Staged.unstage (Codec.get ~env codec body)) buf 1 in
-  (match Buf.v buf with
-  | Buf.Any b ->
-      let p = Codec.valid (Codec.check V.view b (Buf.length b) 1) in
-      let read = Codec.read (Codec.reader V.view body) b p in
-      Alcotest.(check int)
-        "absolute offset"
-        (Bytesrw.Bytes.Slice.first slice)
-        (Bytesrw.Bytes.Slice.first read);
-      Alcotest.(check int)
-        "length"
-        (Bytesrw.Bytes.Slice.length slice)
-        (Bytesrw.Bytes.Slice.length read));
+  let (Buf.Any b) = Buf.v buf in
+  let r = Codec.View.(get (check V.codec b (Buf.length b) 1)) in
+  let read = Codec.View.(read (field V.codec body) b r) in
+  Alcotest.(check int)
+    "absolute offset"
+    (Bytesrw.Bytes.Slice.first slice)
+    (Bytesrw.Bytes.Slice.first read);
+  Alcotest.(check int)
+    "length"
+    (Bytesrw.Bytes.Slice.length slice)
+    (Bytesrw.Bytes.Slice.length read);
   List.iter
     (fun env ->
-      match Codec.view ~env codec with
+      match Codec.View.codec ~env codec with
       | _ -> Alcotest.fail "accepted an invalid slice environment"
       | exception Invalid_argument _ -> ())
     [ Codec.env codec; Codec.env (Codec.v "Other" () []) ]

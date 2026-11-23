@@ -1070,8 +1070,8 @@ let check_frame_isolation label kind ?env a g bs interloper =
 
    [Codec] compiles a codec on first use and picks fast paths from its shape:
    a plain decode and validate over a fixed frame, interval tests and byte
-   tables, a layout pass over byte spans, a staged encode, [Codec.check] and
-   [Codec.read]. Each must answer exactly what the general path answers: the
+   tables, a layout pass over byte spans, a staged encode, [View.check] and
+   [View.read]. Each must answer exactly what the general path answers: the
    same value, the same error at the same offset for the same field, the same
    bytes, the same [Invalid_argument]. {!Wire.Private.Testing.general} is the
    same codec with every fast path off, the oracle for a performance rewrite.
@@ -1130,26 +1130,22 @@ let decode_answer ?env c bs =
 let validate_answer ?env c bs =
   answer (fun () -> Wire.Codec.validate_exn ?env c bs 0)
 
-(* Whether [Codec.check] of a view of [c] accepts the record at 0 of [bs]. *)
+module View = Wire.Codec.View
+
+(* Whether [View.check] of [c] accepts the record at 0 of [bs]. *)
 let check_answer_of (type r) ?env (c : r Wire.Codec.t) bs =
   answer (fun () ->
-      let module V =
-        (val Wire.Codec.view ?env c : Wire.Codec.VIEW with type r = r)
-      in
-      match Wire.Buf.v bs with
-      | Wire.Buf.Any b ->
-          Wire.Codec.ok (Wire.Codec.check V.view b (Wire.Buf.length b) 0))
+      let module V = (val View.codec ?env c) in
+      let (Wire.Buf.Any b) = Wire.Buf.v bs in
+      View.ok (View.check V.codec b (Wire.Buf.length b) 0))
 
-(* [Codec.read] of [f] from a view of [c], on a record [Codec.check] accepts. *)
+(* [View.read] of [f] in the view of [c], on a record [View.check] accepts. *)
 let view_read (type r) ?env (c : r Wire.Codec.t) f bs =
   answer (fun () ->
-      let module V =
-        (val Wire.Codec.view ?env c : Wire.Codec.VIEW with type r = r)
-      in
-      match Wire.Buf.v bs with
-      | Wire.Buf.Any b ->
-          let k = Wire.Codec.check V.view b (Wire.Buf.length b) 0 in
-          Wire.Codec.read (Wire.Codec.reader V.view f) b (Wire.Codec.valid k))
+      let module V = (val View.codec ?env c) in
+      let (Wire.Buf.Any b) = Wire.Buf.v bs in
+      let k = View.check V.codec b (Wire.Buf.length b) 0 in
+      View.read (View.field V.codec f) b (View.get k))
 
 let unit_equal () () = true
 
@@ -1178,10 +1174,10 @@ let field_get ?env c f bs =
    general codec, and [get] of each field on both. *)
 let check_accessors label ?env ~fast ~general checks bs =
   let fast_valid = check_answer_of ?env fast bs in
-  check_answer label "Codec.check" ~equal:Bool.equal
+  check_answer label "View.check" ~equal:Bool.equal
     ("the fast path", fast_valid)
     ("the general path", check_answer_of ?env general bs);
-  (* A misuse names the call that refused it: [Codec.view] or
+  (* A misuse names the call that refused it: [View.codec] or
      [Codec.validate_exn]. The two must refuse the same misuse. *)
   let misuse = function
     | Invalid m -> (
@@ -1195,8 +1191,8 @@ let check_accessors label ?env ~fast ~general checks bs =
     | Parse _ -> Value false
     | Invalid _ as a -> misuse a
   in
-  check_answer label "Codec.check against validate_exn" ~equal:Bool.equal
-    ("Codec.check", misuse fast_valid)
+  check_answer label "View.check against validate_exn" ~equal:Bool.equal
+    ("View.check", misuse fast_valid)
     ("Codec.validate_exn", accepted (validate_answer ?env general bs));
   List.iter
     (fun (Field_check f) ->
@@ -1209,9 +1205,9 @@ let check_accessors label ?env ~fast ~general checks bs =
       match fast_valid with
       | Value true ->
           check_answer label
-            ("Codec.read of field " ^ f.name)
+            ("View.read of field " ^ f.name)
             ~equal:f.equal
-            ("Codec.read", view_read ?env fast f.field bs)
+            ("View.read", view_read ?env fast f.field bs)
             ("Codec.get on the general path", reference)
       | Value false | Parse _ | Invalid _ -> ())
     checks
@@ -1276,7 +1272,7 @@ let check_cold_warm label kind ?env a g bs =
   cold_vs_warm "Codec.decode" ~equal:g.equal (fun c -> decode_answer ?env c bs);
   cold_vs_warm "Codec.validate_exn" ~equal:unit_equal (fun c ->
       validate_answer ?env c bs);
-  check_answer label "Codec.check" ~equal:Bool.equal
+  check_answer label "View.check" ~equal:Bool.equal
     (fst names, check_answer_of ?env (Testing.fresh a.acodec) bs)
     (snd names, check_answer_of ?env a.acodec bs);
   match a.achecks with

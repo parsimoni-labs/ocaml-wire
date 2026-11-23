@@ -39,11 +39,11 @@
     The generated module has [Get.<field> buf off] for each field, which reads
     it as {!Wire.Codec.get} does with one bounds-checked load at a constant
     offset, and [Get.<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
-    validates the record at offset 0, as {!Wire.Codec.check} does, and
+    validates the record at offset 0, as {!Wire.Codec.View.val-check} does, and
     [read_<field>] on what it returns is one load with no check of its own. As
-    for {!Wire.Codec.check}, the promise is memory safety only: a buffer's
-    length never changes, so a read never leaves the buffer, but if its bytes
-    change after [Valid.v], a read may return a value that breaks a constraint.
+    for {!Wire.Codec.View}, the promise is memory safety only: a buffer's length
+    never changes, so a read never leaves the buffer, but if its bytes change
+    after [Valid.v], a read may return a value that breaks a constraint.
     [(v :> bytes)] is the buffer itself, not a copy. For a bitfield,
     [Get.<field>_word] loads the word that holds it and [<field>_of_word] takes
     the field out, so fields packed in one word share one load.

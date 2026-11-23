@@ -300,86 +300,86 @@ module H = Headers
 
 (* {2 Wire.Codec: a checked view, then a read per field}
 
-   Each header's codec is a view of its own ([Codec.view]), as each generated
-   module has its own [View]. The buffer is named once and its length read
-   once; [Codec.check v b len off] checks a header at [off] and [Codec.valid]
-   turns the answer into a proof that only [b]'s reads of that view accept;
-   each [Codec.read] of a reader is then one load with no bounds check, and
-   the proof is an [int], so nothing is allocated. *)
+   Each header's codec is named by a type of its own ([V.codec]), as each
+   generated module has its own [View]. The buffer is named once and its
+   length read once; [V.check v b len off] checks a header at [off] and
+   [V.get] turns the result into a view that only [b]'s reads of that codec's
+   fields accept; each [V.read] of a field is then one load with no bounds
+   check, and a view is immediate, so nothing is allocated. *)
 
-module Eth = (val Codec.view H.eth)
-module Ip = (val Codec.view H.ipv4)
-module Tcp = (val Codec.view H.tcp)
-module Udp = (val Codec.view H.udp)
+module V = Codec.View
+module Eth = (val V.codec H.eth)
+module Ip = (val V.codec H.ipv4)
+module Tcp = (val V.codec H.tcp)
+module Udp = (val V.codec H.udp)
 
-let eth_type = Codec.reader Eth.view H.eth_type
-let ip_ihl = Codec.reader Ip.view H.ipv4_ihl
-let ip_flags = Codec.reader Ip.view H.ipv4_flags
-let ip_frag = Codec.reader Ip.view H.ipv4_fragment_offset
-let ip_len = Codec.reader Ip.view H.ipv4_total_length
-let ip_ttl = Codec.reader Ip.view H.ipv4_ttl
-let ip_proto = Codec.reader Ip.view H.ipv4_protocol
-let ip_src = Codec.reader Ip.view H.ipv4_src
-let ip_dst = Codec.reader Ip.view H.ipv4_dst
-let tcp_sp = Codec.reader Tcp.view H.tcp_src_port
-let tcp_dp = Codec.reader Tcp.view H.tcp_dst_port
-let tcp_seq = Codec.reader Tcp.view H.tcp_seq
-let tcp_ack = Codec.reader Tcp.view H.tcp_ack
-let tcp_off = Codec.reader Tcp.view H.tcp_data_offset
-let tcp_flags = Codec.reader Tcp.view H.tcp_flags
-let tcp_win = Codec.reader Tcp.view H.tcp_window
-let udp_sp = Codec.reader Udp.view H.udp_src_port
-let udp_dp = Codec.reader Udp.view H.udp_dst_port
-let udp_len = Codec.reader Udp.view H.udp_length
+let eth_type = V.field Eth.codec H.eth_type
+let ip_ihl = V.field Ip.codec H.ipv4_ihl
+let ip_flags = V.field Ip.codec H.ipv4_flags
+let ip_frag = V.field Ip.codec H.ipv4_fragment_offset
+let ip_len = V.field Ip.codec H.ipv4_total_length
+let ip_ttl = V.field Ip.codec H.ipv4_ttl
+let ip_proto = V.field Ip.codec H.ipv4_protocol
+let ip_src = V.field Ip.codec H.ipv4_src
+let ip_dst = V.field Ip.codec H.ipv4_dst
+let tcp_sp = V.field Tcp.codec H.tcp_src_port
+let tcp_dp = V.field Tcp.codec H.tcp_dst_port
+let tcp_seq = V.field Tcp.codec H.tcp_seq
+let tcp_ack = V.field Tcp.codec H.tcp_ack
+let tcp_off = V.field Tcp.codec H.tcp_data_offset
+let tcp_flags = V.field Tcp.codec H.tcp_flags
+let tcp_win = V.field Tcp.codec H.tcp_window
+let udp_sp = V.field Udp.codec H.udp_src_port
+let udp_dp = V.field Udp.codec H.udp_dst_port
+let udp_len = V.field Udp.codec H.udp_length
 
 let codec_tcp base acc b len o ~payload =
-  let k = Codec.check Tcp.view b len o in
-  if not (Codec.ok k) then base
+  let k = V.check Tcp.codec b len o in
+  if not (V.ok k) then base
   else
-    let t = Codec.valid k in
-    let off = Codec.read tcp_off b t in
+    let t = V.get k in
+    let off = V.read tcp_off b t in
     if off * 4 > payload then base
     else
       tcp_fields acc
-        ~sp:(UInt16.to_int (Codec.read tcp_sp b t))
-        ~dp:(UInt16.to_int (Codec.read tcp_dp b t))
-        ~seq:(UInt32.to_int (Codec.read tcp_seq b t))
-        ~ack:(UInt32.to_int (Codec.read tcp_ack b t))
-        ~win:(UInt16.to_int (Codec.read tcp_win b t))
-        ~flags:(Codec.read tcp_flags b t) ~off
+        ~sp:(UInt16.to_int (V.read tcp_sp b t))
+        ~dp:(UInt16.to_int (V.read tcp_dp b t))
+        ~seq:(UInt32.to_int (V.read tcp_seq b t))
+        ~ack:(UInt32.to_int (V.read tcp_ack b t))
+        ~win:(UInt16.to_int (V.read tcp_win b t))
+        ~flags:(V.read tcp_flags b t) ~off
 
 let codec_udp base acc b len o ~payload =
-  let k = Codec.check Udp.view b len o in
-  if not (Codec.ok k) then base
+  let k = V.check Udp.codec b len o in
+  if not (V.ok k) then base
   else
-    let u = Codec.valid k in
-    let ulen = UInt16.to_int (Codec.read udp_len b u) in
+    let u = V.get k in
+    let ulen = UInt16.to_int (V.read udp_len b u) in
     if ulen > payload then base
     else
       udp_fields acc
-        ~sp:(UInt16.to_int (Codec.read udp_sp b u))
-        ~dp:(UInt16.to_int (Codec.read udp_dp b u))
+        ~sp:(UInt16.to_int (V.read udp_sp b u))
+        ~dp:(UInt16.to_int (V.read udp_dp b u))
         ~len:ulen
 
 let codec_ipv4 base acc b len o ~avail =
-  let k = Codec.check Ip.view b len o in
-  if not (Codec.ok k) then base
+  let k = V.check Ip.codec b len o in
+  if not (V.ok k) then base
   else
-    let ip = Codec.valid k in
-    let hlen = Codec.read ip_ihl b ip * 4
-    and tlen = UInt16.to_int (Codec.read ip_len b ip) in
+    let ip = V.get k in
+    let hlen = V.read ip_ihl b ip * 4
+    and tlen = UInt16.to_int (V.read ip_len b ip) in
     if tlen < hlen || tlen > avail then base
     else
-      let proto = UInt8.to_int (Codec.read ip_proto b ip) in
+      let proto = UInt8.to_int (V.read ip_proto b ip) in
       let acc =
         ip_fields acc
-          ~src:(UInt32.to_int (Codec.read ip_src b ip))
-          ~dst:(UInt32.to_int (Codec.read ip_dst b ip))
-          ~ttl:(UInt8.to_int (Codec.read ip_ttl b ip))
+          ~src:(UInt32.to_int (V.read ip_src b ip))
+          ~dst:(UInt32.to_int (V.read ip_dst b ip))
+          ~ttl:(UInt8.to_int (V.read ip_ttl b ip))
           ~proto ~len:tlen
       in
-      if Codec.read ip_flags b ip land 1 <> 0 || Codec.read ip_frag b ip <> 0
-      then acc
+      if V.read ip_flags b ip land 1 <> 0 || V.read ip_frag b ip <> 0 then acc
       else
         let payload = tlen - hlen in
         match proto with
@@ -388,10 +388,10 @@ let codec_ipv4 base acc b len o ~avail =
         | _ -> acc
 
 let codec_packet ~avail acc b len o =
-  let k = Codec.check Eth.view b len o in
-  if not (Codec.ok k) then acc
+  let k = V.check Eth.codec b len o in
+  if not (V.ok k) then acc
   else
-    let ty = UInt16.to_int (Codec.read eth_type b (Codec.valid k)) in
+    let ty = UInt16.to_int (V.read eth_type b (V.get k)) in
     if ty = ipv4 then codec_ipv4 acc (acc + ty) b len (o + 14) ~avail
     else acc + ty
 
@@ -499,24 +499,22 @@ let codec ~stride frame_codec buf =
 (* Each loop names the function it calls on every frame. *)
 
 let codec_linked ~stride buf =
-  match Wire_runtime.Buf.v buf with
-  | Wire_runtime.Buf.Any b ->
-      let len = Wire_runtime.Buf.length b in
-      let acc = ref 0 in
-      for i = 0 to (Bytes.length buf / stride) - 1 do
-        acc := codec_packet ~avail:(stride - 14) !acc b len (i * stride)
-      done;
-      !acc
+  let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := codec_packet ~avail:(stride - 14) !acc b len (i * stride)
+  done;
+  !acc
 
 let view_linked ~stride buf =
-  match Wire_runtime.Buf.v buf with
-  | Wire_runtime.Buf.Any b ->
-      let len = Wire_runtime.Buf.length b in
-      let acc = ref 0 in
-      for i = 0 to (Bytes.length buf / stride) - 1 do
-        acc := view_packet ~avail:(stride - 14) !acc b len (i * stride)
-      done;
-      !acc
+  let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := view_packet ~avail:(stride - 14) !acc b len (i * stride)
+  done;
+  !acc
 
 let generated ~stride buf =
   let acc = ref 0 in

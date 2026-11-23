@@ -148,8 +148,8 @@ let check_string label expected actual =
   if not (String.equal expected actual) then
     Alcobar.failf "%s: expected %S, got %S" label expected actual
 
-let check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo
-    payload_s =
+let check_api_getters (codec : api_access Wire.Codec.t) bf_a bf_hi bf_lo
+    bf_payload buf base a hi lo payload_s =
   let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
   let get_hi = Wire.Codec.get codec bf_hi |> Wire.Staged.unstage in
   let get_lo = Wire.Codec.get codec bf_lo |> Wire.Staged.unstage in
@@ -159,17 +159,14 @@ let check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo
   check_int "Codec.get bitfield lo" lo (get_lo buf base);
   check_string "Codec.get slice" payload_s
     (string_of_slice (get_payload buf base));
-  let module V =
-    (val Wire.Codec.view codec : Wire.Codec.VIEW with type r = api_access)
-  in
-  match Wire.Buf.v buf with
-  | Wire.Buf.Any b ->
-      let k = Wire.Codec.check V.view b (Wire.Buf.length b) base in
-      if not (Wire.Codec.ok k) then Alcobar.failf "Codec.check refused";
-      let p = Wire.Codec.valid k in
-      check_string "Codec.read slice" payload_s
-        (string_of_slice
-           (Wire.Codec.read (Wire.Codec.reader V.view bf_payload) b p))
+  let module V = (val Wire.Codec.View.codec codec) in
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let k = Wire.Codec.View.check V.codec b (Wire.Buf.length b) base in
+  if not (Wire.Codec.View.ok k) then Alcobar.failf "Codec.View.check refused";
+  let r = Wire.Codec.View.get k in
+  check_string "Codec.View.read slice" payload_s
+    (string_of_slice
+       (Wire.Codec.View.read (Wire.Codec.View.field V.codec bf_payload) b r))
 
 let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
   let bit_hi = Wire.Codec.bitfield codec bf_hi in
