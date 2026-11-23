@@ -58,6 +58,16 @@ type cursor = {
     each field is checked and read once, in order, and a sub-codec hands back
     its value and its end together. Internal use. *)
 
+type 'r walk = {
+  wvalue : cursor -> 'r;
+      (** The record at the cursor's {!field-wpos}, within its {!field-wend}:
+          its value, with the cursor moved to its end. *)
+  wskip : cursor -> unit;
+      (** The same walk making only its checks: it builds no value and moves the
+          cursor to the same end. *)
+}
+(** A record's walk in its two modes, both from one plan. Internal use. *)
+
 exception Unwalked
 (** Raised by a walk that does not accept the record, which then goes to the
     general decode for its answer and its error. Internal use. *)
@@ -340,6 +350,7 @@ and _ typ =
       (** Parameterised type application. *)
   | Codec : {
       codec_name : string;
+      codec_id : int;  (** The id of the codec, which a rename keeps. *)
       codec_decode : eval_ctx -> Input_end.t -> bytes -> int -> 'r;
       codec_validate : eval_ctx -> Input_end.t -> bytes -> int -> unit;
           (** Everything [codec_decode] checks, none of what it builds. Run at
@@ -357,10 +368,7 @@ and _ typ =
               accepts the record with it. A use site with a negative answer runs
               those two, and after [-1] does not try the fast checks of the
               records under it again. *)
-      codec_walk : (cursor -> 'r) option;
-          (** The walk of the record at the cursor's {!field-wpos}, within its
-              {!field-wend}: its value, with the cursor moved to its end. [None]
-              when the codec has none. *)
+      codec_walk : 'r walk option;  (** The codec's walk, if it has one. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_min_size : int;

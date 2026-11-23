@@ -418,6 +418,44 @@ module View : sig
       {b Warning.} If bytes of [b] are written after the check, the value may be
       one the codec's checks refuse, and a field read as {!Codec.get} reads it
       raises as {!Codec.get} does. No read leaves [b]. *)
+
+  (** {1:subs Sub-records} *)
+
+  type ('cs, 'c) sub
+  (** The type for the fields of the codec named ['c] that hold a record of the
+      codec named ['cs]. *)
+
+  val sub :
+    ('c, 'r) codec -> ('cs, 's) codec -> ('s, 'r) record_field -> ('cs, 'c) sub
+  (** [sub v w f] is the field [f] of [v] as a record of [w]: a field
+      {!Wire.codec} of the codec of [w], a {!Wire.nested} or
+      {!Wire.nested_at_most} of it, or a {!Field.optional_or} of those. Make it
+      once per field, not once per record.
+
+      Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
+      codec of [v], if it does not hold the codec of [w], or if the codec of [w]
+      has input parameters. *)
+
+  val sub_option :
+    ('c, 'r) codec ->
+    ('cs, 's) codec ->
+    ('s option, 'r) record_field ->
+    ('cs, 'c) sub
+  (** [sub_option v w f] is {!sub} for a {!Field.optional} field [f]. *)
+
+  val enter :
+    ('cs, 'c) sub ->
+    'b Wire_runtime.Buf.t ->
+    'b Wire_runtime.Buf.length ->
+    ('b, 'c) t ->
+    ('b, 'cs) check
+  (** [enter s b len r] is the result of checking the record [s] holds in the
+      view [r]. The check that gave [r] already made every check of that record,
+      so [enter] makes none of them again: it accepts the record iff it is
+      present and its frame lies in [b]. [len] must be [Buf.length b].
+
+      [enter] never raises on [b]: a record whose bytes were written after the
+      check is refused when they move the sub-record out of [b]. *)
 end
 
 val set :
@@ -502,9 +540,10 @@ val embed_check_end : 'r t -> Input_end.t -> bytes -> int -> int
     gives is the one the codec's extent measures, and
     {!embed_validate_sized_ctx} accepts the record with it. Internal use. *)
 
-val embed_walk : 'r t -> (Types.cursor -> 'r) option
+val embed_walk : 'r t -> 'r Types.walk option
 (** [embed_walk c] is the walk of [c], the decode that checks and reads each
-    field once, or [None] when [c] has none. Internal use. *)
+    field once and the check that makes the same checks, or [None] when [c] has
+    none. Internal use. *)
 
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
@@ -517,6 +556,9 @@ val wire_size_info_ctx :
 
 val name : 'r t -> string
 (** [name c] returns the codec's name. *)
+
+val id : 'r t -> int
+(** [id c] is the identity of [c], which {!rename} keeps. Internal use. *)
 
 val rename : string -> 'r t -> 'r t
 (** [rename n c] is [c] with its name set to [n]. The name is metadata: it only

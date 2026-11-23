@@ -14,6 +14,8 @@
   codec_elem
   codec_compile
   codec_intervals
+  codec_sets
+  codec_view
   codec_layout
   codec_walk
   codec_seal

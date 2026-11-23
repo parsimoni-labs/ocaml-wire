@@ -55,6 +55,10 @@ type cursor = {
   wnamed : bool;
 }
 
+(* A record's walk in its two modes over one plan: its value, or only its
+   checks. *)
+type 'r walk = { wvalue : cursor -> 'r; wskip : cursor -> unit }
+
 exception Unwalked
 
 let rec eval_param ctx name =
@@ -305,6 +309,7 @@ and _ typ =
   | Apply : { typ : 'a typ; args : packed_expr list } -> 'a typ
   | Codec : {
       codec_name : string;
+      codec_id : int; (* The id of the codec, which [Codec.rename] keeps. *)
       codec_decode : eval_ctx -> Input_end.t -> bytes -> int -> 'r;
       codec_validate : eval_ctx -> Input_end.t -> bytes -> int -> unit;
           (* Everything [codec_decode] checks, none of what it builds. The
@@ -323,7 +328,7 @@ and _ typ =
              measures, and [codec_validate_sized] accepts the record with it.
              A use site with a negative answer runs those two, and after [-1]
              does not try the fast checks of the records under it again. *)
-      codec_walk : (cursor -> 'r) option;
+      codec_walk : 'r walk option;
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
           (* Returns the offset after the bytes the encoder wrote. *)
       codec_fixed_size : int option;

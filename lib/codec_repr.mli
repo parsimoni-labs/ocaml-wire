@@ -328,7 +328,8 @@ type _ walk_read =
       (** A byte array of the given offset and length. *)
   | Slice : int * int -> Bytesrw.Bytes.Slice.t walk_read
       (** A byte slice of the given offset and length. *)
-  | Walk : (Types.cursor -> 'a) -> 'a walk_read
+  | Walk : 'a Types.walk -> 'a walk_read
+      (** A field the cursor moves over, read or only checked. *)
 
 (** The walk's readers in field order, as {!readers}. *)
 type (_, _) walk_readers =
@@ -343,11 +344,20 @@ type walk_check =
   | Within of packed_scalar * (int * int) array
   | Holds of (Types.cursor -> bool)
 
+type walk_place = {
+  pname : string;
+  pskip : (Types.cursor -> unit) option;
+      (** The checks of a field the cursor walks. *)
+  pgate : (Types.cursor -> bool) option;  (** The gate of an optional field. *)
+}
+(** A field of a walk. *)
+
 type ('full, 'f) walk = {
   wreaders : ('full, 'f) walk_readers;
   wchecks_rev : walk_check list;
   wstart : int option;
   wgates : (bool Types.expr * int) list;
+  wplaces_rev : walk_place list;
 }
 (** The walk of a record under construction: its readers, its checks, last
     first, and where the first field the cursor moves over starts in the record,
@@ -445,7 +455,11 @@ type 'r compiled = {
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
   read : runtime -> Input_end.t -> bytes -> int -> 'r;
   plain_decode : (bytes -> int -> 'r) option;
-  walk : (Types.cursor -> 'r) option;
+  walk : 'r Types.walk option;
+  places : (string * (Types.cursor -> int)) list;
+      (** Where the walk finds each field it walks or gates: the offset of the
+          field in the record at the cursor's [wbase], or [-1] when it is
+          absent. *)
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;

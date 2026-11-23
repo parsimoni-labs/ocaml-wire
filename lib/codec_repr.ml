@@ -956,7 +956,7 @@ type _ walk_read =
   | Scalar : 'a scalar -> 'a walk_read
   | String : int * int -> string walk_read
   | Slice : int * int -> Bytesrw.Bytes.Slice.t walk_read
-  | Walk : (Types.cursor -> 'a) -> 'a walk_read
+  | Walk : 'a Types.walk -> 'a walk_read
 
 (* The walk's readers in field order, as [readers]. *)
 type (_, _) walk_readers =
@@ -971,6 +971,14 @@ type walk_check =
   | Within of packed_scalar * (int * int) array
   | Holds of (Types.cursor -> bool)
 
+(* A field of the walk: its name, the checks the walk makes of it when it is
+   one the cursor walks, and its gate. *)
+type walk_place = {
+  pname : string;
+  pskip : (Types.cursor -> unit) option;
+  pgate : (Types.cursor -> bool) option;
+}
+
 type ('full, 'f) walk = {
   wreaders : ('full, 'f) walk_readers;
   wchecks_rev : walk_check list;
@@ -978,6 +986,7 @@ type ('full, 'f) walk = {
       (* Where the first field the cursor moves over starts in the record. *)
   wgates : (bool expr * int) list;
       (* The gates so far, each with its bit of the cursor's [wgates]. *)
+  wplaces_rev : walk_place list; (* Each field, last first. *)
 }
 
 type ('f, 'r) record =
@@ -1109,7 +1118,8 @@ type 'r compiled = {
   plain_decode : (bytes -> int -> 'r) option;
       (* [decode] for a codec with no parameters and nothing to check after the
          reads: [Codec.decode] has only the bounds to check. *)
-  walk : (Types.cursor -> 'r) option;
+  walk : 'r Types.walk option;
+  places : (string * (Types.cursor -> int)) list;
       (* The decode that checks and reads each field once, for a codec without
          parameters whose fields all have a walk. *)
   encode : 'r -> runtime -> bytes -> int -> int;
@@ -1194,7 +1204,14 @@ let record_start ?where ?doc name make =
       puts_rev = Some [];
       layout_rev = Some [];
       walk =
-        Some { wreaders = WNil; wchecks_rev = []; wstart = None; wgates = [] };
+        Some
+          {
+            wreaders = WNil;
+            wchecks_rev = [];
+            wstart = None;
+            wgates = [];
+            wplaces_rev = [];
+          };
       prefix = [];
       size_of_value_rev = [];
       min_wire_size = 0;

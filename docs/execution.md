@@ -48,6 +48,17 @@ one 8-byte load, a shift and a mask; in a frame of 4 to 7 bytes it is read
 from a 4-byte word by one call. Any other field is one call, and a field that
 `get` reads with a check is read with that check.
 
+A codec of variable size, or one whose checks are more than word tests, is
+checked by its walk in check mode: the same plan as the walk that decodes
+it, the same frame, tests, spans, gates and regions in field order, with no
+value built and no field read but those a check, a size or a gate reads.
+`View.enter` then reaches a sub-record of a view without checking it again:
+the walk of the record around it finds where it starts, or that its gate
+leaves it absent, and `enter` tests only that the sub-record's frame lies in
+the buffer, so its fields read in place as those of any view. A record whose
+bytes changed after its check can move a sub-record, never out of the
+buffer.
+
 ## Invariants
 
 These are what the unchecked reads rely on. Each one is enforced where the
@@ -56,7 +67,9 @@ codec is built, so no input can break it.
 - **Unchecked reads stay in the frame.** A read without a bounds check is
   created only for a field whose offset and width are constants of the
   schema, with `0 <= offset` and `offset + width <= min_size` at the point
-  the field is added (`Codec.field_read`, `Codec.View.field`).
+  the field is added (`Codec.field_read`, `Codec.View.field`), and a view
+  is made only of a record whose frame lies in the buffer (`Codec.View.check`,
+  `Codec.View.enter`).
 - **The frame only grows.** `min_size` never decreases as fields are added,
   and never exceeds `Sys.max_string_length`, so the frame check cannot
   overflow (`Codec.add_min_size`). A codec whose fields, sub-codecs

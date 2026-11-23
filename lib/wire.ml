@@ -128,6 +128,7 @@ let codec (c : 'r Codec.t) : 'r typ =
       Codec
         {
           codec_name = Codec.name c;
+          codec_id = Codec.id c;
           codec_decode;
           codec_validate;
           codec_validate_sized;
@@ -146,6 +147,7 @@ let codec (c : 'r Codec.t) : 'r typ =
       Codec
         {
           codec_name = Codec.name c;
+          codec_id = Codec.id c;
           codec_decode;
           codec_validate;
           codec_validate_sized;

@@ -97,6 +97,14 @@
   headers of a packet this way takes about 545 instructions and allocates
   nothing (#435, #496, #525, @samoht)
 
+- `Wire.Codec.View.enter`: reach a sub-record of a checked view, such as the
+  IPv4 packet of an Ethernet frame, without checking it again. Make the
+  sub-codec field once with `View.sub` or `View.sub_option`; `enter` refuses
+  an absent sub-record. `View.check` of a codec of variable size makes its
+  checks without decoding: an Ethernet, IPv4 and TCP or UDP stack is checked
+  and its headers read in about 2460 instructions per packet, against 3000
+  for `decode` (@samoht)
+
 - `Wire.Codec.decoder` and `Wire.Codec.encoder`: decode and encode prepared
   once, for a loop over many records (#496, @samoht)
 

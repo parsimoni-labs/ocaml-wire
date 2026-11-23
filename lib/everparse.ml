@@ -347,6 +347,7 @@ let boxed : type a. walk -> path:string -> a Types.typ -> a Types.typ =
   Types.Codec
     {
       codec_name = s.name;
+      codec_id = Codec.id c;
       codec_decode = Codec.embed_decode_ctx c;
       codec_validate = Codec.embed_validate_ctx c;
       codec_validate_sized = Codec.embed_validate_sized_ctx c;

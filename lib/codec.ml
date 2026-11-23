@@ -1276,13 +1276,14 @@ module View = struct
 
   (* A named codec holds what [accepts] decides on each call: [frame] is the
      fixed frame of a codec checked by its plain pass alone, or [-1] for one
-     [validate] checks. Its name ['c] is a phantom. *)
+     its walk or [validate] checks. Its name ['c] is a phantom. *)
   type 'r named = {
     codec : 'r record_codec;
     env : Param.env option;
     c : 'r compiled;
     frame : int;
     pass : pass;
+    walk : 'r Types.walk option;
   }
 
   type ('c, 'r) codec = 'r named
@@ -1297,12 +1298,16 @@ module View = struct
   let named ?env (codec : _ record_codec) =
     require_env ~op:"View.codec" codec env;
     let compiled = compiled codec in
+    let walk =
+      match env with None when codec.n_params = 0 -> compiled.walk | _ -> None
+    in
     let frame =
-      match env with
-      | None when codec.n_params = 0 -> compiled.fixed_frame
+      match (env, compiled.plain_pass, walk) with
+      | _, Steps _, Some _ -> -1
+      | None, _, _ when codec.n_params = 0 -> compiled.fixed_frame
       | _ -> -1
     in
-    { codec; env; c = compiled; frame; pass = compiled.plain_pass }
+    { codec; env; c = compiled; frame; pass = compiled.plain_pass; walk }
 
   let codec (type r) ?env (c : r record_codec) : (module CODEC with type r = r)
       =
@@ -1316,8 +1321,16 @@ module View = struct
 
   type ('b, 'c) check = int
 
+  (* A codec with a walk makes its checks with the walk, building nothing; any
+     other is checked by [validate]. *)
   let[@inline never] check_slow v buf off =
-    if accepts_slow v.env v.codec buf off then off else -1
+    let ok =
+      match v.walk with
+      | Some w ->
+          off >= 0 && Codec_walk.accepts w buf off (Input_end.of_bytes buf)
+      | None -> accepts_slow v.env v.codec buf off
+    in
+    if ok then off else -1
 
   let[@inline never] pass_slow pass buf off =
     passes pass (Input_end.of_bytes buf) buf off
@@ -1346,124 +1359,7 @@ module View = struct
 
   let[@inline] get k = if k < 0 then refused () else k
 
-  (* A field is data: an unsigned field of a word of the frame reads as
-     [Word], the 8-byte word at [q] shifted right by [s] and masked by [m],
-     inline. Every other field is one direct call, so a read site holds one
-     test and one load: in a frame of 4 to 7 bytes an unsigned field reads as
-     [Word32], the same from the 4-byte word at [q], and a byte slice of
-     constant size in the frame ([Bytes]) is built only by the reads of that
-     field. A second inline case costs every [Word] read an instruction. *)
-  type ('a, 'c) field =
-    | Word : {
-        q : int;
-        s : int;
-        m : int;
-        eq : ('a, int) Type.eq;
-      }
-        -> ('a, 'c) field
-    | Word32 : {
-        q : int;
-        s : int;
-        m : int;
-        eq : ('a, int) Type.eq;
-      }
-        -> ('a, 'c) field
-    | Bytes : { off : int; length : int } -> (Slice.t, 'c) field
-    | Scalar : 'a scalar -> ('a, 'c) field
-    | Get : (bytes -> int -> 'a) -> ('a, 'c) field
-
-  let scalar_read : type a. a scalar -> bytes -> int -> a =
-   fun s buf off ->
-    match s with
-    | Byte o -> UInt8.unsafe_get buf (off + o)
-    | U16le o -> UInt16.unsafe_le buf (off + o)
-    | U16be o -> UInt16.unsafe_be buf (off + o)
-    | U32le o -> UInt32.unsafe_le buf (off + o)
-    | U32be o -> UInt32.unsafe_be buf (off + o)
-    | Sbyte o -> SInt8.unsafe_get buf (off + o)
-    | I16le o -> SInt16.unsafe_le buf (off + o)
-    | I16be o -> SInt16.unsafe_be buf (off + o)
-    | I32le o -> SInt32.unsafe_le buf (off + o)
-    | I32be o -> SInt32.unsafe_be buf (off + o)
-    | Bits8 { off = o; shift; mask } ->
-        (Unchecked.u8 buf (off + o) lsr shift) land mask
-    | Bits16le { off = o; shift; mask } ->
-        (Unchecked.u16le buf (off + o) lsr shift) land mask
-    | Bits16be { off = o; shift; mask } ->
-        (Unchecked.u16be buf (off + o) lsr shift) land mask
-
-  let[@inline] word_read buf p q s m =
-    Int64.to_int (Int64.shift_right_logical (Codec_words.load buf p q) s) land m
-
-  (* [Int32.to_int] extends the sign, which the mask of a field of at most 32
-     bits clears. *)
-  let[@inline] word32_read buf p q s m =
-    (Int32.to_int (Unchecked.i32be buf (p + q)) lsr s) land m
-
-  let[@inline] bytes_read buf p off length =
-    if Int.equal length 0 then Slice.eod
-    else Slice.make buf ~first:(p + off) ~length
-
-  let[@inline never] read_other : type a c. (a, c) field -> bytes -> int -> a =
-   fun f buf off ->
-    match f with
-    | Word { q; s; m; eq = Type.Equal } -> word_read buf off q s m
-    | Word32 { q; s; m; eq = Type.Equal } -> word32_read buf off q s m
-    | Bytes { off = o; length } -> bytes_read buf off o length
-    | Scalar s -> scalar_read s buf off
-    | Get get -> get buf off
-
-  let[@inline] read (type a) (f : (a, _) field) b r : a =
-    let buf = (b : _ Buf.t :> bytes) in
-    match f with
-    | Word { q; s; m; eq = Type.Equal } -> word_read buf r q s m
-    | f -> read_other f buf r
-
-  (* The [w] bits above bit [s] of the [n] bytes at [o] of a record, an
-     unsigned field of an [int]. *)
-  type 'a bits = { o : int; n : int; s : int; w : int; eq : ('a, int) Type.eq }
-
-  let bits_of_scalar : type a. a scalar -> a bits option = function
-    | Byte o -> Some { o; n = 1; s = 0; w = 8; eq = UInt8.int_eq }
-    | U16be o -> Some { o; n = 2; s = 0; w = 16; eq = UInt16.int_eq }
-    | U32be o ->
-        Option.map (fun eq -> { o; n = 4; s = 0; w = 32; eq }) UInt32.int_eq
-    | Bits8 { off; shift; mask } ->
-        Some
-          {
-            o = off;
-            n = 1;
-            s = shift;
-            w = Codec_words.bit_width mask;
-            eq = Type.Equal;
-          }
-    | Bits16be { off; shift; mask } ->
-        Some
-          {
-            o = off;
-            n = 2;
-            s = shift;
-            w = Codec_words.bit_width mask;
-            eq = Type.Equal;
-          }
-    | Sbyte _ | I16be _ | I32be _ | U16le _ | U32le _ | I16le _ | I32le _
-    | Bits16le _ ->
-        None
-
-  (* The word a field reads from in a frame of [size] bytes, on a target whose
-     [int] holds 63 bits: the 8-byte word {!Codec_words.word} picks in a frame
-     of at least 8 bytes, else the 4-byte word at the field's bytes or, near the
-     end of the frame, its last 4 bytes. *)
-  let word_field ~size { o; n; s; w; eq } =
-    if Sys.int_size < 63 || size < 4 then None
-    else if size >= 8 then
-      let { Codec_words.q; l; r; m; _ } =
-        Codec_words.word ~size o ~bytes:n ~s ~w ~signed:false
-      in
-      Some (Word { q; s = r - l; m; eq })
-    else
-      let q = min o (size - 4) in
-      Some (Word32 { q; s = (8 * (q + 4 - o - n)) + s; m = (1 lsl w) - 1; eq })
+  include Codec_view
 
   let frame_of (c : _ compiled) =
     match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
@@ -1493,9 +1389,112 @@ module View = struct
       when plain && off >= 0 && length >= 0 && off <= size - length ->
         Bytes { off; length }
     | None, _, _ -> get ()
+
+  (* A sub-codec field is data too: where its record starts in the record
+     around it, and the frame its views read in. A field at a constant offset
+     with no gate is [At] it; the walk of the record around it finds any other
+     ([Walked], [-1] when it is absent); without a walk, [Locate] and the
+     field's gate ([present]) evaluate it from the record's bytes. *)
+  type place =
+    | At of int
+    | Walked of (Types.cursor -> int)
+    | Locate of (runtime -> Input_end.t -> bytes -> int -> int)
+
+  type ('cs, 'c) sub = {
+    place : place;
+    present : (runtime -> Input_end.t -> bytes -> int -> bool) option;
+    rt : runtime;
+    sub_frame : int;
+  }
+
+  (* The id of the codec a sub-codec field holds, and its presence gate. *)
+  let rec sub_codec : type a. a typ -> (int * bool expr option) option =
+    function
+    | Codec { codec_id; _ } -> Some (codec_id, None)
+    | Single_elem { elem; _ } -> sub_codec elem
+    | Optional_or { present; inner; _ } ->
+        Option.map (fun (id, _) -> (id, Some present)) (sub_codec inner)
+    | _ -> None
+
+  let make_sub ~op v (cv : _ codec) (f : _ record_field) typ =
+    if cv.codec.n_params > 0 then
+      Fmt.invalid_arg "%s: codec %S has input parameters" op cv.codec.name;
+    let access = field_access ~op v.codec f in
+    let id, present =
+      match typ with
+      | Some (id, present) -> (id, present)
+      | None ->
+          Fmt.invalid_arg "%s: field %S does not hold a sub-codec" op f.name
+    in
+    if id <> cv.codec.id then
+      Fmt.invalid_arg "%s: field %S does not hold codec %S" op f.name
+        cv.codec.name;
+    let place, present =
+      match (access, present, List.assoc_opt f.name v.c.places) with
+      | (Fixed off | Variable { off; _ }), None, _ -> (At off, None)
+      | _, _, Some at when Option.is_some v.walk -> (Walked at, None)
+      | (Fixed off | Variable { off; _ }), present, _ -> (At off, present)
+      | (Dynamic fn | Variable_dynamic { off_fn = fn; _ }), present, _ ->
+          (Locate fn, present)
+      | Bitfield _, _, _ ->
+          Fmt.invalid_arg "%s: field %S does not hold a sub-codec" op f.name
+    in
+    {
+      place;
+      present = Option.map (compile_bool_expr v.c.field_readers) present;
+      rt = runtime ?env:v.env ();
+      sub_frame = frame_of cv.c;
+    }
+
+  let sub v cv (f : _ record_field) =
+    make_sub ~op:"Codec.View.sub" v cv f (sub_codec f.typ)
+
+  let sub_option v cv (f : (_ option, _) record_field) =
+    let typ =
+      match f.typ with
+      | Optional { present; inner } ->
+          Option.map (fun (id, _) -> (id, Some present)) (sub_codec inner)
+      | _ -> None
+    in
+    make_sub ~op:"Codec.View.sub_option" v cv f typ
+
+  (* The check of the enclosing record ran the sub-record's checks where it is
+     present, so entering it tests only that its frame lies in the buffer: a
+     view reads its fields there with no check of their own. A record whose
+     bytes changed since may move the sub-record or raise in the reads that
+     place it; it is then refused. *)
+  let[@inline never] enter_slow s buf len r =
+    let input_end = Input_end.of_bytes buf in
+    match
+      match (s.present, s.place) with
+      | Some present, _ when not (present s.rt input_end buf r) -> -1
+      | _, At off -> r + off
+      | _, Locate fn -> r + fn s.rt input_end buf r
+      | _, Walked at ->
+          at
+            {
+              wbuf = buf;
+              wbase = r;
+              wpos = r;
+              wend = input_end;
+              wgates = 0;
+              wnamed = false;
+            }
+    with
+    | o -> if o >= 0 && o <= len - s.sub_frame then o else -1
+    | exception (Types.Parse_error _ | Types.Unwalked) -> -1
+
+  let[@inline] enter s b len r =
+    let buf = (b : _ Buf.t :> bytes) and len = (len : _ Buf.length :> int) in
+    match (s.place, s.present) with
+    | At off, None ->
+        let o = r + off in
+        if o <= len - s.sub_frame then o else -1
+    | _ -> enter_slow s buf len r
 end
 
 let name (t : _ t) = t.name
+let id (t : _ t) = t.id
 
 let rename new_name (t : _ t) =
   { t with name = new_name; compiled = Atomic.make None }
@@ -1883,6 +1882,7 @@ module Testing = struct
         c with
         plain_decode = None;
         walk = None;
+        places = [];
         plain_encode = None;
         fixed_frame = -1;
         plain_validate = (fun buf off -> c.validate buf off);

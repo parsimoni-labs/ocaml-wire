@@ -4,6 +4,7 @@ open Codec_repr
 open Codec_elem
 open Codec_compile
 open Codec_intervals
+open Codec_sets
 
 (* -- Apply a compiled plan to the record state -- *)
 
@@ -189,72 +190,6 @@ let field_validators ~field_idx ~validator_off ~populate ~check ~act =
     | None -> ()
   in
   (check_only, full)
-
-(* The interval a conjunction of comparisons between the field [name] and
-   literals allows, or [None] for any other constraint. *)
-(* Sets of ints as sorted, disjoint intervals. *)
-let set_inter a b =
-  let rec go a b =
-    match (a, b) with
-    | [], _ | _, [] -> []
-    | (l1, h1) :: r1, (l2, h2) :: r2 ->
-        let rest = if h1 < h2 then go r1 b else go a r2 in
-        let lo = max l1 l2 and hi = min h1 h2 in
-        if lo <= hi then (lo, hi) :: rest else rest
-  in
-  go a b
-
-let set_union a b =
-  let rec merge = function
-    | (l1, h1) :: (l2, h2) :: rest when h1 = max_int || l2 <= h1 + 1 ->
-        merge ((l1, max h1 h2) :: rest)
-    | x :: rest -> x :: merge rest
-    | [] -> []
-  in
-  merge (List.sort compare (a @ b))
-
-let all_ints = [ (min_int, max_int) ]
-
-(* The values [cmp] keeps when comparing with [n]. *)
-let cmp_set cmp n =
-  match cmp with
-  | Eq -> [ (n, n) ]
-  | Ge -> [ (n, max_int) ]
-  | Le -> [ (min_int, n) ]
-  | Gt -> if n = max_int then [] else [ (n + 1, max_int) ]
-  | Lt -> if n = min_int then [] else [ (min_int, n - 1) ]
-  | Ne ->
-      set_union
-        (if n = min_int then [] else [ (min_int, n - 1) ])
-        (if n = max_int then [] else [ (n + 1, max_int) ])
-
-(* The values of the field [name] that [e] accepts, when [e] only compares the
-   field with literals, through [&&] and [||]. *)
-let rec self_set name (e : bool expr) =
-  let bound : type a. cmp -> a expr -> a expr -> (int * int) list option =
-   fun op x y ->
-    match (x, y) with
-    | Ref (I, a), Int n when a = name -> Some (cmp_set op n)
-    | Int n, Ref (I, a) when a = name -> Some (cmp_set (flip op) n)
-    | _ -> None
-  in
-  let both f a b =
-    match (self_set name a, self_set name b) with
-    | Some a, Some b -> Some (f a b)
-    | _ -> None
-  in
-  match e with
-  | Bool true -> Some all_ints
-  | Bool false -> Some []
-  | And (a, b) -> both set_inter a b
-  | Or (a, b) -> both set_union a b
-  | Eq (x, y) -> bound Eq x y
-  | Ne (x, y) -> bound Ne x y
-  | Lt (x, y) -> bound Lt x y
-  | Le (x, y) -> bound Le x y
-  | Gt (x, y) -> bound Gt x y
-  | Ge (x, y) -> bound Ge x y
-  | _ -> None
 
 type base_view = Base : 'b typ * (int * int) list list -> base_view
 
@@ -515,7 +450,7 @@ let field_put : type a r.
 (* A field the cursor moves over: a byte span, a sub-codec in a region, or one
    measuring itself, each with a walk of its own. *)
 let moving : type a.
-    name:string option -> (string * packed_scalar) list -> a typ -> cursor -> a
+    name:string option -> (string * packed_scalar) list -> a typ -> a Types.walk
     =
  fun ~name prefix typ ->
   match typ with
@@ -570,7 +505,7 @@ let field_walk : type a f r.
     min_wire_size:int ->
     gates:Codec_walk.gates ->
     named:bool ->
-    a walk_read * walk_check list * Codec_walk.gates =
+    a walk_read * walk_check list * Codec_walk.gates * (cursor -> bool) option =
  fun (Record r) fld cf read ~min_wire_size ~gates ~named ->
   if Option.is_some fld.action then raise Exit;
   let name = if named then Some fld.name else None in
@@ -579,16 +514,31 @@ let field_walk : type a f r.
       let prefix = field_prefix r.prefix ~min_wire_size cf fld in
       let checks () = fixed_checks prefix ~min_wire_size cf fld in
       match (read, cf.field_access, fld.typ) with
-      | Data s, _, _ -> (Scalar s, checks (), gates)
-      | Span (off, n), _, _ -> (String (off, n), checks (), gates)
+      | Data s, _, _ -> (Scalar s, checks (), gates, None)
+      | Span (off, n), _, _ -> (String (off, n), checks (), gates, None)
       | Fn _, Fixed off, Byte_slice { size = Int n }
         when off >= 0 && n >= 0 && off + n <= min_wire_size ->
-          (Slice (off, n), checks (), gates)
+          (Slice (off, n), checks (), gates, None)
       | ( Fn _,
           Fixed off,
           Codec { codec_walk = Some w; codec_fixed_size = Some _; _ } )
         when field_conds fld = [] ->
-          (Walk (Codec_walk.fixed_sub ~name off w), [], gates)
+          (Walk (Codec_walk.fixed_sub ~name off w), [], gates, None)
+      | ( Fn _,
+          Fixed off,
+          Single_elem
+            {
+              size = Int size;
+              elem = Codec { codec_walk = Some w; _ };
+              at_most;
+            } )
+        when field_conds fld = []
+             && off >= 0 && size >= 0
+             && off + size <= min_wire_size ->
+          ( Walk (Codec_walk.fixed_sub ~at_most ~size ~name off w),
+            [],
+            gates,
+            None )
       | _ -> raise Exit)
   | _, Dynamic _ when field_conds fld = [] -> (
       match fld.typ with
@@ -596,8 +546,9 @@ let field_walk : type a f r.
           let present, gates = Codec_walk.gate ~gates r.prefix present in
           ( Walk (Codec_walk.gated present (moving ~name r.prefix inner)),
             [],
-            gates )
-      | typ -> (Walk (moving ~name r.prefix typ), [], gates))
+            gates,
+            Some present )
+      | typ -> (Walk (moving ~name r.prefix typ), [], gates, None))
   | _ -> raise Exit
 
 (* The variables [fld]'s action assigns, and the context its constraint and
@@ -660,9 +611,16 @@ let apply_compiled : type a f r.
           field_walk record fld cf read ~min_wire_size ~gates:w.wgates
             ~named:(names_errors ~validates ~check ~act)
         with
-        | wr, checks, wgates ->
+        | wr, checks, wgates, pgate ->
+            let pskip =
+              match wr with
+              | Walk w -> Some w.wskip
+              | Scalar _ | String _ | Slice _ -> None
+            in
             Some
               {
+                wplaces_rev =
+                  { pname = fld.name; pskip; pgate } :: w.wplaces_rev;
                 wreaders = WSnoc (w.wreaders, wr);
                 wchecks_rev = List.rev_append checks w.wchecks_rev;
                 wstart =
@@ -1438,7 +1396,7 @@ let build_decoders : type r.
     (runtime -> Input_end.t -> bytes -> int -> r)
     * (runtime -> Input_end.t -> bytes -> int -> r)
     * (bytes -> int -> r) option
-    * (cursor -> r) option =
+    * (r Types.walk * (string * (cursor -> int)) list) option =
  fun ~layout ~n_params (Record r) wire_size_info min_size ~check ->
   let fwd = to_fwd r.readers and checked = to_fwd r.checked_readers in
   let read runtime input_end buf off =
@@ -1453,8 +1411,8 @@ let build_decoders : type r.
     read,
     (if n_params = 0 then
        Some
-         (build_plain_decode ~layout ~walk r.make fwd wire_size_info min_size
-            check)
+         (build_plain_decode ~layout ~walk:(Option.map fst walk) r.make fwd
+            wire_size_info min_size check)
      else None),
     walk )
 
@@ -1960,7 +1918,8 @@ let seal : type r.
     decode;
     read;
     plain_decode;
-    walk;
+    walk = Option.map fst walk;
+    places = Option.fold ~none:[] ~some:snd walk;
     encode =
       record_encoder r.name writers wire_size_info size_of_value encode_check;
     wire_size = wire_size_info;
