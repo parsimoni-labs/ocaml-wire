@@ -1,0 +1,34 @@
+; The executables the rules of proofs/fstar-gen run: gen.exe writes each
+; proved codec's .3d and the F* modules Wire_ocaml.fstar writes for it;
+; vectors.exe prints WireGen.Vectors.fst, the OCaml primitives the F*
+; rendering calls on boundary and random operands; tables.exe prints
+; WireGen.Tables.fst, the rules of WireGen.OCaml at the literals the emitter
+; prints. None needs F*. prove.exe finds 3d.exe, runs F* and prunes the F*
+; cache for prove.sh; prune.t checks the pruning.
+
+(executable
+ (name gen)
+ (modules gen)
+ (libraries wire wire.ocaml headers space))
+
+(executable
+ (name vectors)
+ (modules vectors)
+ (libraries wire.runtime fmt))
+
+(executable
+ (name tables)
+ (modules tables)
+ (libraries fmt))
+
+(executable
+ (name prove)
+ (modules prove)
+ (foreign_stubs
+  (language c)
+  (names rusage_stubs))
+ (libraries wire.3d fmt unix))
+
+(cram
+ (applies_to prune)
+ (deps prove.exe))

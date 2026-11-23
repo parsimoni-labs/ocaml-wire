@@ -2,7 +2,7 @@
        fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
        bench-clcw bench-rust bench-flow bench-flow-swap bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
-       cppcheck clean
+       cppcheck prove clean
 
 build:
 	dune build
@@ -79,6 +79,13 @@ fuzz-nightly:
 	  dune build @@fuzz/runtest --profile paranoid
 	WIRE_AFL_SECONDS=3600 $(MAKE) fuzz-afl
 	WIRE_AFL_SECONDS=7200 $(MAKE) fuzz-afl-diff
+
+# The scanners of the codecs proofs/fstar-gen/dune lists, proved by F* equal
+# to the parser 3d.exe writes for each, and the mutant that must not verify
+# (needs EverParse, whose F* and Z3 it runs, at most two at once).
+# WIRE_FSTAR_CACHE holds the checked modules (proofs/fstar-gen/README.md).
+prove:
+	BUILD_EVERPARSE=1 dune build -j 2 @proofs/fstar-gen/prove
 
 3d:
 	dune exec examples/validate_3d.exe

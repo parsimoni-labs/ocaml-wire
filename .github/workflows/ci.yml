@@ -478,3 +478,41 @@ jobs:
             @test/bench/runtest @test/ocaml/runtest @fuzz/diff/ocaml/runtest
         env:
           BUILD_EVERPARSE: 1
+
+  # make prove: F* proves the scanners of the codecs proofs/fstar-gen/dune
+  # lists equal to the parser 3d.exe writes for each, and refuses the mutant
+  # there, with the F* and Z3 EverParse ships. The checked modules are cached
+  # on the EverParse release, the F* library and the generator; F* checks
+  # again any module whose source or dependencies changed, and make prove
+  # removes every entry the run did not use, so the cache saved is only
+  # what this tree needs. WIRE_FSTAR_CACHE names the directory the cache
+  # step saves, instead of the default in _build.
+  prove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+
+      - run: opam install . --deps-only
+
+      - name: Install EverParse
+        run: |
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/wire-fstar
+          key: fstar-${{ hashFiles('.github/ci-dependencies.env', 'proofs/fstar-gen/**', 'proofs/fstar/Plan.Word.fst', 'scripts/fstar-gen/**', 'bench/rust/headers.ml', 'lib/**', 'examples/**') }}
+          restore-keys: |
+            fstar-
+
+      - name: Prove the scanners against 3d.exe
+        run: WIRE_FSTAR_CACHE=$HOME/.cache/wire-fstar opam exec -- make prove

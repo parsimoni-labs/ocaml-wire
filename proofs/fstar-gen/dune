@@ -1,0 +1,170 @@
+;; make prove: the scanners of the codecs below, proved by F* equal to the
+;; parser 3d.exe writes for each codec's 3D projection (README.md). Writing
+;; the modules needs no F*; checking them needs EverParse, so the @prove
+;; alias runs only with BUILD_EVERPARSE=1, as the other EverParse lanes do.
+
+(rule
+ (targets
+  Tiny.3d
+  Tiny.Scan.fst
+  Tiny.Flat.fsti
+  Tiny.Flat.fst
+  Tiny.Proof.fsti
+  Tiny.Proof.fst
+  Ethernet.3d
+  Ethernet.Scan.fst
+  Ethernet.Flat.fsti
+  Ethernet.Flat.fst
+  Ethernet.Proof.fsti
+  Ethernet.Proof.fst
+  IPv4.3d
+  IPv4.Scan.fst
+  IPv4.Flat.fsti
+  IPv4.Flat.fst
+  IPv4.Proof.fsti
+  IPv4.Proof.fst
+  Clcw.3d
+  Clcw.Scan.fst
+  Clcw.Flat.fsti
+  Clcw.Flat.fst
+  Clcw.Proof.fsti
+  Clcw.Proof.fst
+  IPv4Mutant.3d
+  IPv4Mutant.Scan.fst
+  IPv4Mutant.Flat.fsti
+  IPv4Mutant.Flat.fst
+  IPv4Mutant.Proof.fsti
+  IPv4Mutant.Proof.fst)
+ (action
+  (run %{exe:../../scripts/fstar-gen/gen.exe} .)))
+
+;; The primitives of WireGen.OCaml on the operands the OCaml runtime was
+;; run on, which F* must agree with.
+
+(rule
+ (targets WireGen.Vectors.fst)
+ (action
+  (with-stdout-to
+   WireGen.Vectors.fst
+   (run %{exe:../../scripts/fstar-gen/vectors.exe}))))
+
+;; The rules that use the F* cache run in the build directory, where
+;; prove.sh finds the default cache, never in a sandbox.
+
+(rule
+ (targets used.lib)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  prove.sh
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files lib/*.fst)
+  (glob_files lib/*.fsti)
+  ../fstar/Plan.Word.fst
+  WireGen.Vectors.fst
+  (env_var EVERPARSE)
+  (env_var WIRE_FSTAR_CACHE))
+ (action
+  (run
+   sh
+   prove.sh
+   lib
+   ../fstar/Plan.Word.fst
+   lib/WireGen.Lib.fst
+   lib/WireGen.OCaml.fst
+   lib/WireGen.Tables.fst
+   lib/WireGen.Tac.fst
+   WireGen.Vectors.fst)))
+
+(rule
+ (targets used.Tiny)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files Tiny.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh codec Tiny)))
+
+(rule
+ (targets used.Ethernet)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files Ethernet.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh codec Ethernet)))
+
+(rule
+ (targets used.IPv4)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files IPv4.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh codec IPv4)))
+
+(rule
+ (targets used.Clcw)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files Clcw.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh codec Clcw)))
+
+;; ihl read with three bits instead of four: the proof must fail.
+
+(rule
+ (targets used.IPv4Mutant)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files IPv4Mutant.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh refused IPv4Mutant "s/(P.land bw1 0xf)/(P.land bw1 0x7)/")))
+
+;; Once every run has listed the cache entries it used, the rest of
+;; WIRE_FSTAR_CACHE goes: other F* versions, the 3d.exe output of a .3d that
+;; changed, modules no codec has any more.
+
+(rule
+ (alias prove)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  prove.sh
+  ../../scripts/fstar-gen/prove.exe
+  (env_var WIRE_FSTAR_CACHE))
+ (action
+  (run
+   sh
+   prove.sh
+   prune
+   %{dep:used.lib}
+   %{dep:used.Tiny}
+   %{dep:used.Ethernet}
+   %{dep:used.IPv4}
+   %{dep:used.Clcw}
+   %{dep:used.IPv4Mutant})))
