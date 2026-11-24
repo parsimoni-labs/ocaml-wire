@@ -155,7 +155,7 @@ CAMLprim value ep_stack_run(value v_corpus, value v_buf, value v_stride,
    flow run it: the validator of Packet_stack.capture once per frame, bounded
    by its captured length, the 5-tuple and IP length read from the default
    CapturedStack_Fields plug, zeroed per frame, and counted in a flow table of
-   the layout and hash of bench/rust/flow_table.ml and cargo/src/flow.rs. The
+   the layout and hash of bench/rust/flow_table.std.ml and cargo/src/flow.rs. The
    table's checksum is read after the timed passes, as theirs is. */
 
 #define FLOW_ROW "EverParse C, default plug"

@@ -35,7 +35,7 @@ pub trait Sink {
     fn add6(&mut self, s: [u32; 4], d: [u32; 4], proto: u8, ports: u32, bytes: u64);
 }
 
-/// A slot of the table: 64 bytes, laid out as `bench/rust/flow_table.ml` and
+/// A slot of the table: 64 bytes, laid out as `bench/rust/flow_table.std.ml` and
 /// `bench/rust/everparse/stack_c.c` lay theirs out. `meta` is
 /// `(version << 8) | protocol`, `ports` `(src << 16) | dst` or 0; an IPv4
 /// address is in the first word, the others 0. A slot is live when its epoch is

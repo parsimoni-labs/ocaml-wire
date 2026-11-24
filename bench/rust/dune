@@ -79,6 +79,9 @@
 (rule
  (copy flow_rows.mli flow_rows_keys.mli))
 
+;; The flow table is flow_table.ox.ml on OxCaml, whose slots hold unboxed
+;; words, and flow_table.std.ml elsewhere.
+
 (executable
  (name bench)
  (modules
@@ -97,4 +100,16 @@
   g_ipv6
   g_tcp
   g_udp)
- (libraries bench_lib headers net wire wire.runtime unix fmt))
+ (libraries
+  bench_lib
+  headers
+  net
+  wire
+  wire.runtime
+  unix
+  fmt
+  (select
+   flow_table.ml
+   from
+   (stdlib_upstream_compatible -> flow_table.ox.ml)
+   (-> flow_table.std.ml))))

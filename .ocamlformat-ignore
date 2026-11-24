@@ -1,4 +1,4 @@
-# OxCaml syntax (modes), which ocamlformat does not parse.
+# OxCaml syntax (modes, unboxed literals), which ocamlformat does not parse.
 lib/runtime/loads.ox.ml
 lib/runtime/loads.ox.mli
 lib/runtime/buf.ox.ml
@@ -11,3 +11,4 @@ lib/runtime/vec.neon.mli
 lib/runtime/vec.sse.ml
 lib/runtime/vec.sse.mli
 test/ocaml-ox/test_modes.ox.ml
+bench/rust/flow_table.ox.ml

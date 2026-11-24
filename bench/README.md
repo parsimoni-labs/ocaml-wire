@@ -533,8 +533,9 @@ length (the IPv4 total length, or 40 plus the IPv6 payload length) in an
 open-addressing table with linear probing. The hash mixes the key's 32-bit
 words, `h = (h xor w) * 0x9E3779B97F4A7C15`, and takes the slot from bits 32
 and up; OCaml's 63-bit `int` keeps the low 63 bits of the same product, so
-the OCaml, Rust and C tables (`flow_table.ml`, `cargo/src/flow.rs`,
-`everparse/stack_c.c`) fill the same slots. A slot belongs to the pass whose epoch it carries, so no
+the OCaml, OxCaml, Rust and C tables (`flow_table.std.ml`,
+`flow_table.ox.ml`, `cargo/src/flow.rs`, `everparse/stack_c.c`) fill the
+same slots. A slot belongs to the pass whose epoch it carries, so no
 pass clears the table. Each row prints the number of flows and a checksum of
 every live slot (its place, key, packets and bytes), read after the timed
 passes and not timed; the report fails unless every row agrees. The default packets hold 342,506 flows.
