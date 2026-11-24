@@ -13,6 +13,7 @@ open Types
 type ctx = (string * int) list
 
 let empty : ctx = []
+let bind name value ctx = (name, value) :: ctx
 
 let rec lookup name = function
   | [] ->

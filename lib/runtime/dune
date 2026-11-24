@@ -11,7 +11,7 @@
  (enabled_if
   (= %{ocaml-config:ox} true))
  (private_modules loads prims carrier)
- (modules_without_implementation record)
+ (modules_without_implementation record scan)
  ; On OxCaml every value of these modules is [portable]: they hold no state
  ; and only compute, read the buffer they are given or raise, so any domain
  ; may call them. Only OxCaml syntax can say so, so on OxCaml their shared
@@ -84,7 +84,7 @@
  (enabled_if
   (<> %{ocaml-config:ox} true))
  (private_modules loads prims carrier)
- (modules_without_implementation record)
+ (modules_without_implementation record scan)
  (foreign_stubs
   (language c)
   (names vec_stubs))

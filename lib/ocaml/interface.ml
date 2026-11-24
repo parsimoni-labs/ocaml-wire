@@ -885,6 +885,8 @@ let pp_step_scans ppf target b m =
   let t = m ^ ".t" in
   (* The step functions hand out their integers as [int64]. *)
   let outputs = ", each integer output an [int64]" in
+  Fmt.pf ppf
+    "type step = %s@\n(** The type for the accumulator of [%s]. *)@\n@\n" t m;
   pp_val ~portable:false target ppf "fold_step"
     (arrows [ b; "int"; "int"; "init:" ^ t; t ])
     (Fmt.str

@@ -983,6 +983,7 @@ let pp_body ?step s =
             m = scan_mode ~decide:s.m.decide s.plan ~num:Boxed s.selected;
           }
       in
+      Fmt.pf s.ppf "type step = %s.t@\n@\n" m;
       pp_fold_step s m;
       pp_frames ~step:m s ~unboxed:false)
     step;

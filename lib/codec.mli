@@ -774,3 +774,37 @@ end) : sig
   (** [field f] is the handle of [f]: its getter is {!get} of [f] staged once,
       its view reads [f] as {!View.read} does. *)
 end
+
+(** The outputs of a record as a scanner hands them out, by name: each named
+    scalar field, its name the path of field labels joined with ['_'], and for
+    each optional field [<path>_present]. An absent field is [0] or [false]. *)
+module Outputs : sig
+  type t
+  (** The type for the outputs of one record. *)
+
+  val int : t -> string -> int64
+  (** [int o name] is the integer output [name] of [o]. Raises
+      [Invalid_argument] if [o] has no integer output [name]. *)
+
+  val bool : t -> string -> bool
+  (** [bool o name] is the presence [name] of [o]. Raises [Invalid_argument] if
+      [o] has no presence [name]. *)
+end
+
+(** [Scan (C) (K)] is the scanner of [C.codec] that folds the consumer [K], as a
+    {!Wire_runtime.Scan.S}, so code written against that signature runs on the
+    interpreted codec or on the scanner [Wire_ocaml] generates from it with [K]
+    as its step module, by changing one line. A record is checked as {!validate}
+    checks the bytes of its frame alone, then walked once more to read its
+    outputs. Raises [Invalid_argument] at application on a field a scanner does
+    not walk. *)
+module Scan (_ : sig
+  type r
+
+  val codec : r t
+end) (K : sig
+  type t
+
+  val invalid : t -> t
+  val valid : t -> Outputs.t -> t
+end) : Wire_runtime.Scan.S with type step = K.t

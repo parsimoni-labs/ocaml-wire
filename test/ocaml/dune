@@ -95,6 +95,21 @@
  (action
   (write-file %{target} "let v = false\n")))
 
+(library
+ (name scan_step)
+ (modules scan_step)
+ (libraries fmt))
+
+(executable
+ (name gen_scan)
+ (modules gen_scan)
+ (libraries net scan_step wire.ocaml))
+
+(rule
+ (targets s_capture_step.ml s_capture_step.mli)
+ (action
+  (run ./gen_scan.exe)))
+
 (test
  (name test)
  (modules
@@ -102,6 +117,8 @@
   test_wire_ocaml
   test_view_module
   test_same
+  test_scan
+  s_capture_step
   g_ipv4
   g_ipv4_wire
   g_ipv4_record
@@ -145,6 +162,7 @@
   diff_ocaml
   diff_driver
   ocaml_index
+  scan_step
   bytesrw
   fmt
   alcotest))

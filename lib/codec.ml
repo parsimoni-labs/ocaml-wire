@@ -1742,3 +1742,51 @@ struct
     let read = Staged.unstage (get C.codec f) and r = Checked.field v f in
     { Field.get = read; view = (fun b p -> Checked.read r b p) }
 end
+
+module Outputs = Scan_outputs
+
+module Scan (C : sig
+  type r
+
+  val codec : r t
+end) (K : sig
+  type t
+
+  val invalid : t -> t
+  val valid : t -> Outputs.t -> t
+end) =
+struct
+  type step = K.t
+
+  let s = to_struct C.codec
+  let () = ignore (Scan_outputs.names s : (string * bool) list)
+
+  let fold_step buf off len ~init =
+    if off < 0 || len < 0 || len > Bytes.length buf - off then K.invalid init
+    else
+      let frame = Bytes.sub buf off len in
+      match validate C.codec frame 0 with
+      | Ok () -> K.valid init (Scan_outputs.read s frame 0)
+      | Error _ -> K.invalid init
+
+  let fold_frames_step buf off len ~stride ~init =
+    if
+      stride <= 0 || off < 0 || len < 0
+      || off > Bytes.length buf
+      || len > Bytes.length buf - off
+    then invalid_arg "fold_frames_step: invalid frame bounds or stride";
+    let rec go acc i =
+      if i = len / stride then acc
+      else go (fold_step buf (off + (i * stride)) stride ~init:acc) (i + 1)
+    in
+    go init 0
+
+  let fold_index_step buf ~offs ~lens ~init =
+    if Array.length offs <> Array.length lens then
+      invalid_arg "fold_index_step: offs and lens differ in length";
+    let rec go acc i =
+      if i = Array.length offs then acc
+      else go (fold_step buf offs.(i) lens.(i) ~init:acc) (i + 1)
+    in
+    go init 0
+end

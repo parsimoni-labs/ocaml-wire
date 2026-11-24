@@ -3,6 +3,7 @@
 module Staged = Staged
 
 module type S = Wire_runtime.Record.S
+module type Scan = Wire_runtime.Scan.S
 
 module UInt32 = UInt32
 module UInt63 = UInt63
