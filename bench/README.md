@@ -829,6 +829,46 @@ the constraints, 9.0%), 9.9% in the compiled constraint expressions, 7.4% in
 costs little: 51.1 minor words (409 bytes) per packet on OCaml 5.4.1, none
 promoted, and no GC function of the runtime reaches 5 samples.
 
+### One loop, interpreted or generated (`make bench-flow-swap`)
+
+Code written against `Wire.S` runs on the interpreted codec,
+`Wire.Codec.Make`, or on the `Global` module `Wire_ocaml` generates from the
+same codec. `bench/rust/flow_swap.ml` is one flow counter written so: its
+header modules are those of `swap.ml`, and its one line
+`module H = Swap.Generated` picks them; the dune rules build the interpreted
+rows from the same file with that line replaced by
+`module H = Swap.Interpreted`, and the parse-only rows by making `Flow_sum`
+the sink. The generated side is one line per header,
+`module Ipv4 = G_ipv4.Global`; the interpreted side applies `Codec.Make` and
+names the handles the loop reads (`ihl`, `src_addr`, ...) with `field`, since
+`Wire.S` declares the type of a handle but no handle.
+
+Per frame the loop checks Ethernet, IPv4 (its options skipped by IHL) and
+TCP or UDP with the checks of the classifier above, and hands the IPv4
+5-tuple (no ports for a fragment) and total length to the table; IPv6, VLAN
+tags and every other frame are counted, not parsed, as is an IPv4 packet
+failing a check. `smoltcp 0.14, IPv4 flows` makes the same checks in Rust.
+The rows run on corpora of their own, `mawi swap` and `mawi swap parse`, and
+`make bench-flow` runs them with the others; `make bench-flow-swap` times
+and counts them alone, into `_build/bench-flow/swap/`. On the default
+packets every row counts 314,998 flows, checksum `1215103043457353650`, and
+IPv6 178,454, VLAN 0, other 1,286, IPv4 rejected 1 (parse only: 820,259
+keys, `4332859610784037926`).
+
+Measured at commit `4497904b` on the machine above, best CPU ns/packet of
+21 passes and `bench/count.sh` per packet: the OxCaml and Rust rows at a
+load average of 481 before and 415 after, the OCaml 5.4.1 rows at 331 and
+403, when the row `wire.ocaml View.check/view, linked headers, parse only`
+counted 220.9 instructions (222.0 above):
+
+| Row | ns | ns, parse | Instructions | Instructions, parse | Cycles | Cycles, parse |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| swap=interpreted, OCaml 5.4.1 | 186.6 | 59.8 | 880.7 | 809.2 | 535.1 | 159.0 |
+| swap=generated, OCaml 5.4.1 | 105.0 | 20.9 | 258.4 | 190.2 | 286.9 | 58.6 |
+| swap=interpreted, OxCaml | 185.7 | 54.3 | 921.4 | 852.5 | 521.2 | 148.3 |
+| swap=generated, OxCaml | 96.2 | 19.7 | 254.2 | 186.0 | 268.3 | 49.3 |
+| smoltcp 0.14, IPv4 flows | 34.5 | 9.0 | 121.0 | 56.0 | 93.1 | 24.2 |
+
 ## Compiler flags
 
 The `bench` profile of `dune-workspace` adds the flags of
