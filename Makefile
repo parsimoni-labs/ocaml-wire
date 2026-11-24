@@ -152,9 +152,11 @@ bench-rust:
 # BENCH_FLOW_PACKETS packets held in memory, through a flow classifier on one
 # core: Wire.Codec and wire.ocaml on OCaml and on each switch of
 # BENCH_SWITCHES, wire.rust against etherparse, smoltcp and pnet_packet, and
-# with BUILD_EVERPARSE=1 the EverParse C validator of the same codec. The
-# trace is downloaded into _build/bench-flow once and checked against its
-# SHA-256; the packets are cut from it into _build/bench-flow/mawi.pcap.
+# with BUILD_EVERPARSE=1 the EverParse C validator of the same codec; then
+# each parse without the table (corpus mawi parse) and the table without a
+# parse (corpus mawi table). The trace is downloaded into _build/bench-flow
+# once and checked against its SHA-256; the packets are cut from it into
+# _build/bench-flow/mawi.pcap.
 BENCH_FLOW_URL = http://mawi.wide.ad.jp/mawi/samplepoint-F/2025/202511151400.pcap.gz
 BENCH_FLOW_SHA256 = a99b91648ec296c1611558878f11828d2cb02d434e77f05153fa0020a6ce266c
 BENCH_FLOW_PACKETS ?= 1000000
@@ -182,6 +184,8 @@ bench-flow: $(BENCH_FLOW_TRACE)
 	cargo build --quiet --release --manifest-path bench/rust/cargo/Cargo.toml
 	rm -f $(BENCH_FLOW)/*.txt
 	sh bench/rows.sh bench/rust/cargo/target/release/wire-bench-rust flow \
+	  $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) >> $(BENCH_FLOW)/rust.txt
+	sh bench/rows.sh bench/rust/cargo/target/release/wire-bench-flow-parse \
 	  $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) >> $(BENCH_FLOW)/rust.txt
 	sh bench/rows.sh _build/default/bench/rust/bench.exe flow \
 	  $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) >> $(BENCH_FLOW)/ocaml.txt

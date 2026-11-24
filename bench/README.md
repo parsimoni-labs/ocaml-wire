@@ -484,7 +484,7 @@ row agrees. The default packets hold 342,506 flows.
 |---|---|---|
 | `Wire.Codec capture decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of the pcap record around the frame, its `incl_len` bounding `Packet_stack.capture`, then the nested values |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of `headers.ml`, IPv6 included | `View.check`/`View.ok` per header, `view_<field>` per field; the harness links the layers and checks each header ends inside the capture |
-| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_step` per frame, handing the classifier's fields to `Flow_step` by name |
+| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_step` per frame, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
 | `wire.rust scanner, selected outputs` | generated Rust scanner of `Packet_stack.capture` | `scan` per frame |
 | `wire.rust, linked headers` | generated Rust of `headers.ml` | `Valid::at` per header, then a read per field; the harness links the layers |
 | EverParse C (`BUILD_EVERPARSE=1`) | the verified validator of `Packet_stack.capture` | `CapturedStackValidateWireCapturedStack` per frame, then the members of the default `CapturedStack_Fields` plug, zeroed per frame |
@@ -520,6 +520,28 @@ make bench-flow BUILD_EVERPARSE=1     # adds the EverParse C row
 `BENCH_FLOW_PACKETS` sets how many packets are cut from the trace and
 `BENCH_FLOW_RUNS` the timed passes; `FLAMBDA_SWITCH` and `OXCAML_SWITCH` are
 read as for `make bench-rust`.
+
+### The parse and the table apart
+
+Two more corpora split each row into its parse and its table. On `mawi
+parse`, every row but EverParse C parses as on `mawi` and hands each key (the
+arguments of `add4` or `add6`) to a fold of a few instructions instead of the
+table (`flow_sum.ml`, `Sum` in `cargo/src/flow.rs`); the row `keys from an
+array, parse only` folds the keys of the pass from an array, with no parse.
+On `mawi table`, the row `flow table, keys from an array` hands the same keys
+from that array to the table of the classifier. The keys are recorded once
+before timing, 12 ints per key (`flow_keys.ml`, `Keys`), by the record modules
+in OCaml and by the generated scanner in Rust; every row of a corpus gives
+the same result, and the table row the result of `mawi`.
+
+The OCaml rows that hand their keys to a sink are written once, in
+`flow_rows.ml`, and copied by dune for the other sinks, so that every
+compiler calls the sink directly (a functor over the sink would call it
+through a closure on OCaml without flambda). The Rust parse rows run in a
+binary of their own, `wire-bench-flow-parse`: a binary that builds a row for
+two sinks gives a crate function, `Ipv6Packet::get_source` for one, two
+callers, and LLVM then leaves it out of line, which costs `pnet_packet` 28
+instructions per packet in its row of `mawi`.
 
 ### Results
 

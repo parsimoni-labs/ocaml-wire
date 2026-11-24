@@ -5,6 +5,14 @@ edition = "2021"
 publish = false
 description = "Ethernet/IPv4/IPv6/TCP/UDP header parsing: Wire_rust against etherparse, smoltcp and pnet_packet"
 
+[[bin]]
+name = "wire-bench-rust"
+path = "src/main.rs"
+
+[[bin]]
+name = "wire-bench-flow-parse"
+path = "src/flow_parse.rs"
+
 [dependencies]
 etherparse = { version = "0.21", default-features = false }
 # getrusage, for the process CPU time of each pass.

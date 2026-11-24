@@ -7,7 +7,8 @@
    selected_read.ml, the same with the scanner handing out only the fields the
    checksum reads, as [G_selected]; flow_read.ml, the scanner of
    [Packet_stack.capture] handing out the flow classifier's fields to the
-   consumer [Flow_step], as [G_flow]; and the record modules of the fixed
+   consumer [Flow_step], as [G_flow], and the same scanner handing them to
+   [Flow_parse], which folds them into [Flow_sum], as [G_flow_parse]; and the record modules of the fixed
    header codecs of [Headers], g_eth.ml, g_ipv4.ml, g_ipv6.ml, g_tcp.ml and
    g_udp.ml, with their interfaces. A scanner shares its consumers' module so that the compiler
    sees the fold and the consumer it inlines in one unit in every profile, and
@@ -214,28 +215,28 @@ let flow_fields =
     "ipv6_udp_dst_port";
   ]
 
-(* The consumer the scanner calls by name in [fold_step]: it adds the packet
-   to the flow table of [Flow_table], as the other rows do. *)
-let flow_step =
-  "module Flow_step = struct\n\
-   type t = int\n\n\
-   let[@inline always] invalid base = base\n\n\
-   let[@inline always] ports tcp tsp tdp udp usp udp_ =\n\
-   if tcp then (Int64.to_int tsp lsl 16) lor Int64.to_int tdp\n\
-   else if udp then (Int64.to_int usp lsl 16) lor Int64.to_int udp_\n\
-   else 0\n\n\
-   let[@inline always] valid base "
+(* The consumer [name] the scanner calls by name in [fold_step]: it hands the
+   packet's key to [sink], [Flow_table] as the other rows do or [Flow_sum]
+   for the rows that time the parse alone. *)
+let flow_step ~name ~sink =
+  "module " ^ name
+  ^ " = struct\n\
+     type t = int\n\n\
+     let[@inline always] invalid base = base\n\n\
+     let[@inline always] ports tcp tsp tdp udp usp udp_ =\n\
+     if tcp then (Int64.to_int tsp lsl 16) lor Int64.to_int tdp\n\
+     else if udp then (Int64.to_int usp lsl 16) lor Int64.to_int udp_\n\
+     else 0\n\n\
+     let[@inline always] valid base "
   ^ String.concat " " (List.map (fun n -> "~" ^ n) flow_fields)
-  ^ " =\n\
-     let i = Int64.to_int in\n\
-     if ipv4_present then\n\
-     Flow_table.add4 ~src:(i ipv4_src) ~dst:(i ipv4_dst)\n\
+  ^ " =\nlet i = Int64.to_int in\nif ipv4_present then\n" ^ sink
+  ^ ".add4 ~src:(i ipv4_src) ~dst:(i ipv4_dst)\n\
      ~proto:(i ipv4_protocol)\n\
      ~ports:(ports ipv4_tcp_present ipv4_tcp_src_port ipv4_tcp_dst_port\n\
      ipv4_udp_present ipv4_udp_src_port ipv4_udp_dst_port)\n\
      ~bytes:(i ipv4_total_length)\n\
-     else if ipv6_present then\n\
-     Flow_table.add6 ~s0:(i ipv6_src0) ~s1:(i ipv6_src1) ~s2:(i ipv6_src2)\n\
+     else if ipv6_present then\n" ^ sink
+  ^ ".add6 ~s0:(i ipv6_src0) ~s1:(i ipv6_src1) ~s2:(i ipv6_src2)\n\
      ~s3:(i ipv6_src3) ~d0:(i ipv6_dst0) ~d1:(i ipv6_dst1) ~d2:(i ipv6_dst2)\n\
      ~d3:(i ipv6_dst3) ~proto:(i ipv6_next_header)\n\
      ~ports:(ports ipv6_tcp_present ipv6_tcp_src_port ipv6_tcp_dst_port\n\
@@ -278,16 +279,21 @@ let () =
       read "selected_read.ml" ~core:"G_selected" ~fields:selected
         ~selected:checksum_fields ();
       (let codec = "Packet_stack.capture" and c = Packet_stack.capture in
-       let fields = flow_fields and step = "Flow_step" in
-       write "flow_read.ml"
-         (flow_step ^ "module G_flow : sig\n"
+       let fields = flow_fields in
+       let scanner ~core ~step ~sink ~entry =
+         flow_step ~name:step ~sink ^ "module " ^ core ^ " : sig\n"
          ^ Wire_ocaml.scanner_mli ~target ~fields ~step ~codec c
          ^ "\nend = struct\n"
          ^ Wire_ocaml.scanner ~target ~fields ~step ~codec c
-         ^ "\n\
-            end\n\n\
-            let[@inline always] classify buf off len =\n\
-            ignore (G_flow.fold_step buf off len ~init:0 : int)\n"));
+         ^ "\nend\n\nlet[@inline always] " ^ entry
+         ^ " buf off len =\n  ignore (" ^ core
+         ^ ".fold_step buf off len ~init:0 : int)\n\n"
+       in
+       write "flow_read.ml"
+         (scanner ~core:"G_flow" ~step:"Flow_step" ~sink:"Flow_table"
+            ~entry:"classify"
+         ^ scanner ~core:"G_flow_parse" ~step:"Flow_parse" ~sink:"Flow_sum"
+             ~entry:"parse"));
       headers
         {
           g =

@@ -27,6 +27,14 @@ fn mix(h: u64, w: u32) -> u64 {
     (h ^ w as u64).wrapping_mul(K)
 }
 
+/// What a row hands each packet's key to: `Table` for the classifier, `Sum`
+/// to time the parse alone, `Keys` to record the keys, as the sinks of
+/// `bench/rust/bench.ml` do.
+pub trait Sink {
+    fn add4(&mut self, src: u32, dst: u32, proto: u8, ports: u32, bytes: u64);
+    fn add6(&mut self, s: [u32; 4], d: [u32; 4], proto: u8, ports: u32, bytes: u64);
+}
+
 /// A slot of the table: 64 bytes, laid out as `bench/rust/flow_table.ml` and
 /// `bench/rust/everparse/stack_c.c` lay theirs out. `meta` is
 /// `(version << 8) | protocol`, `ports` `(src << 16) | dst` or 0; an IPv4
@@ -80,22 +88,6 @@ impl Table {
         }
     }
 
-    fn add4(&mut self, src: u32, dst: u32, proto: u8, ports: u32, bytes: u64) {
-        let meta = 0x400 | proto as u32;
-        let h = mix(mix(mix(mix(0, src), dst), ports), meta);
-        self.add(h, meta, ports, [src, 0, 0, 0], [dst, 0, 0, 0], bytes);
-    }
-
-    fn add6(&mut self, s: [u32; 4], d: [u32; 4], proto: u8, ports: u32, bytes: u64) {
-        let meta = 0x600 | proto as u32;
-        let mut h = 0;
-        for w in s.iter().chain(d.iter()) {
-            h = mix(h, *w);
-        }
-        let h = mix(mix(h, ports), meta);
-        self.add(h, meta, ports, s, d, bytes);
-    }
-
     fn summary(&self) -> Summary {
         let mut flows = 0;
         let mut sum = 0u64;
@@ -112,6 +104,91 @@ impl Table {
             sum = sum.wrapping_add(v.wrapping_mul(i as u64 + 1));
         }
         Summary { flows, sum: sum & MASK62 }
+    }
+}
+
+impl Sink for Table {
+    fn add4(&mut self, src: u32, dst: u32, proto: u8, ports: u32, bytes: u64) {
+        let meta = 0x400 | proto as u32;
+        let h = mix(mix(mix(mix(0, src), dst), ports), meta);
+        self.add(h, meta, ports, [src, 0, 0, 0], [dst, 0, 0, 0], bytes);
+    }
+
+    fn add6(&mut self, s: [u32; 4], d: [u32; 4], proto: u8, ports: u32, bytes: u64) {
+        let meta = 0x600 | proto as u32;
+        let mut h = 0;
+        for w in s.iter().chain(d.iter()) {
+            h = mix(h, *w);
+        }
+        let h = mix(mix(h, ports), meta);
+        self.add(h, meta, ports, s, d, bytes);
+    }
+}
+
+/// The sink of the rows that time the parse without the table, as
+/// `bench/rust/flow_sum.ml`: a key folds into
+/// `(w ^ ports) + (proto << 32) + (bytes << 40) + (version << 57)`, `w` the
+/// xor of its address words.
+#[derive(Default)]
+pub struct Sum {
+    keys: usize,
+    sum: u64,
+}
+
+impl Sum {
+    fn fold(&mut self, version: u64, proto: u8, ports: u32, bytes: u64, w: u32) {
+        self.keys += 1;
+        let v = ((w ^ ports) as u64) + ((proto as u64) << 32) + (bytes << 40) + (version << 57);
+        self.sum = self.sum.wrapping_add(v);
+    }
+
+    fn summary(&self) -> String {
+        format!("{} keys, {}", self.keys, self.sum & MASK62)
+    }
+}
+
+impl Sink for Sum {
+    fn add4(&mut self, src: u32, dst: u32, proto: u8, ports: u32, bytes: u64) {
+        self.fold(4, proto, ports, bytes, src ^ dst);
+    }
+
+    fn add6(&mut self, s: [u32; 4], d: [u32; 4], proto: u8, ports: u32, bytes: u64) {
+        let w = s[0] ^ s[1] ^ s[2] ^ s[3] ^ d[0] ^ d[1] ^ d[2] ^ d[3];
+        self.fold(6, proto, ports, bytes, w);
+    }
+}
+
+/// The keys of a pass, recorded once, untimed, for the rows that time the
+/// table alone: 12 words per key, as `Flow_keys` of `bench/rust/bench.ml`
+/// lays them out (the IP version, the protocol, the ports, the IP length,
+/// then the source and destination words).
+const STRIDE: usize = 12;
+
+#[derive(Default)]
+struct Keys(Vec<u64>);
+
+impl Sink for Keys {
+    fn add4(&mut self, src: u32, dst: u32, proto: u8, ports: u32, bytes: u64) {
+        self.0.extend([4, proto as u64, ports as u64, bytes, src as u64, 0, 0, 0, dst as u64, 0, 0, 0]);
+    }
+
+    fn add6(&mut self, s: [u32; 4], d: [u32; 4], proto: u8, ports: u32, bytes: u64) {
+        let w = |a: [u32; 4]| a.map(u64::from);
+        self.0.extend([6, proto as u64, ports as u64, bytes]);
+        self.0.extend(w(s));
+        self.0.extend(w(d));
+    }
+}
+
+// The keys `keys` of `Keys`, handed to `t` without a parse.
+fn replay<S: Sink>(t: &mut S, keys: &[u64]) {
+    for k in keys.chunks_exact(STRIDE) {
+        let w = |i: usize| k[i] as u32;
+        if k[0] == 4 {
+            t.add4(w(4), w(8), k[1] as u8, w(2), k[3]);
+        } else {
+            t.add6([w(4), w(5), w(6), w(7)], [w(8), w(9), w(10), w(11)], k[1] as u8, w(2), k[3]);
+        }
     }
 }
 
@@ -157,7 +234,7 @@ type Frames<'a> = &'a [(usize, usize)];
 
 // The scanner of `Packet_stack.capture`, handing out only the classifier's
 // fields.
-fn wire_rust_scanner(t: &mut Table, buf: &[u8], frames: Frames) {
+fn wire_rust_scanner<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
     for &(o, n) in frames {
         let Some(f) = flow_scan::scan(&buf[o..o + n]) else { continue };
         if f.ipv4_present {
@@ -203,7 +280,7 @@ fn linked_ports(p: &[u8], o: usize, proto: u8) -> Option<u32> {
     }
 }
 
-fn wire_rust_linked(t: &mut Table, buf: &[u8], frames: Frames) {
+fn wire_rust_linked<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
     for &(o, n) in frames {
         let p = &buf[o..o + n];
         let Ok(e) = eth::Valid::new(p) else { continue };
@@ -242,7 +319,7 @@ fn wire_rust_linked(t: &mut Table, buf: &[u8], frames: Frames) {
 // whose IP, TCP or UDP header fails stops it with an error; the adapter
 // drops it there, and makes the two checks lax slicing leaves out, an IPv4
 // total length covering the header and a UDP length of at least 8.
-fn etherparse(t: &mut Table, buf: &[u8], frames: Frames) {
+fn etherparse<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
     use etherparse::err::Layer;
     use etherparse::{LaxNetSlice, LaxSlicedPacket, TransportSlice};
     for &(o, n) in frames {
@@ -282,7 +359,7 @@ fn etherparse(t: &mut Table, buf: &[u8], frames: Frames) {
 // header-only capture fails. The IPv4, IPv6 and UDP layers are read through
 // `new_unchecked` after the adapter's capture-bounded checks; TCP through
 // `new_checked`, whose checks are exactly these.
-fn smoltcp(t: &mut Table, buf: &[u8], frames: Frames) {
+fn smoltcp<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
     use smoltcp::wire::{EthernetFrame, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
     let transport = |l4: &[u8], proto: u8| -> Option<u32> {
         match proto {
@@ -344,7 +421,7 @@ fn smoltcp(t: &mut Table, buf: &[u8], frames: Frames) {
 
 // pnet_packet: `new` checks a layer's minimum header length only, so the
 // adapter makes the other checks, as in the header benchmark.
-fn pnet(t: &mut Table, buf: &[u8], frames: Frames) {
+fn pnet<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
     use pnet_packet::ethernet::EthernetPacket;
     use pnet_packet::ipv4::Ipv4Packet;
     use pnet_packet::ipv6::Ipv6Packet;
@@ -405,29 +482,92 @@ fn pnet(t: &mut Table, buf: &[u8], frames: Frames) {
     }
 }
 
-type Row = fn(&mut Table, &[u8], Frames);
+type Row<S> = fn(&mut S, &[u8], Frames);
 
-pub fn main(args: &[String]) {
+// The rows of the classifier over the sink `S`: `Table` in this binary,
+// `Sum` in `wire-bench-flow-parse`, which times the parse alone. A binary
+// builds the rows for one sink only, so that no crate function a row calls
+// has more callers than in a binary of the classifier alone, and the
+// compiler inlines it as it would there.
+fn rows<S: Sink>() -> [(&'static str, Row<S>); 5] {
+    [
+        ("wire.rust scanner, selected outputs", wire_rust_scanner::<S>),
+        ("wire.rust, linked headers", wire_rust_linked::<S>),
+        ("etherparse 0.21, lax", etherparse::<S>),
+        ("smoltcp 0.14", smoltcp::<S>),
+        ("pnet_packet 0.35", pnet::<S>),
+    ]
+}
+
+// A capture held in memory, from `FILE RUNS [ROW | --list]`.
+struct Capture {
+    name: String,
+    buf: Vec<u8>,
+    frames: Vec<(usize, usize)>,
+    runs: usize,
+    filter: timing::Filter,
+}
+
+fn capture(args: &[String]) -> Capture {
     let path = std::path::Path::new(&args[0]);
     let buf = std::fs::read(path).expect("capture");
-    let runs: usize = args[1].parse().expect("runs");
+    let runs = args[1].parse().expect("runs");
     let filter = timing::Filter::new(args.get(2).map(String::as_str));
     let frames = index(&buf);
-    let mut table = Table::new(2 * frames.len());
-    let c = path.file_stem().and_then(|s| s.to_str()).expect("capture name");
-    let rows: [(&str, Row); 5] = [
-        ("wire.rust scanner, selected outputs", wire_rust_scanner),
-        ("wire.rust, linked headers", wire_rust_linked),
-        ("etherparse 0.21, lax", etherparse),
-        ("smoltcp 0.14", smoltcp),
-        ("pnet_packet 0.35", pnet),
-    ];
-    for (name, f) in rows {
+    let name = path.file_stem().and_then(|s| s.to_str()).expect("capture name").to_string();
+    Capture { name, buf, frames, runs, filter }
+}
+
+// The keys of the capture, for the rows that take them from an array.
+fn keys(c: &Capture) -> Vec<u64> {
+    let mut k = Keys::default();
+    wire_rust_scanner(&mut k, &c.buf, &c.frames);
+    k.0
+}
+
+/// `wire-bench-rust flow FILE RUNS [ROW | --list]`: the classifier, and the
+/// table alone on corpus `<capture> table`.
+pub fn main(args: &[String]) {
+    let c = capture(args);
+    let n = c.frames.len();
+    let mut table = Table::new(2 * n);
+    for (name, f) in rows::<Table>() {
         let pass = |t: &mut Table| {
             t.reset();
-            f(t, black_box(&buf), &frames);
+            f(t, black_box(&c.buf), &c.frames);
         };
-        timing::measure_state(c, name, &filter, frames.len(), runs, &mut table, pass, Table::summary);
+        timing::measure_state(&c.name, name, &c.filter, n, c.runs, &mut table, pass, Table::summary);
     }
-    filter.finish();
+    let keys = keys(&c);
+    let pass = |t: &mut Table| {
+        t.reset();
+        replay(t, black_box(&keys));
+    };
+    let corpus = format!("{} table", c.name);
+    timing::measure_state(&corpus, "flow table, keys from an array", &c.filter, n, c.runs, &mut table, pass, Table::summary);
+    c.filter.finish();
+}
+
+/// `wire-bench-flow-parse FILE RUNS [ROW | --list]`: the parse alone, each
+/// row handing its keys to `Sum`, on corpus `<capture> parse`.
+pub fn parse(args: &[String]) {
+    let c = capture(args);
+    let n = c.frames.len();
+    let corpus = format!("{} parse", c.name);
+    let mut sum = Sum::default();
+    for (name, f) in rows::<Sum>() {
+        let pass = |s: &mut Sum| {
+            *s = Sum::default();
+            f(s, black_box(&c.buf), &c.frames);
+        };
+        let name = format!("{name}, parse only");
+        timing::measure_state(&corpus, &name, &c.filter, n, c.runs, &mut sum, pass, Sum::summary);
+    }
+    let keys = keys(&c);
+    let pass = |s: &mut Sum| {
+        *s = Sum::default();
+        replay(s, black_box(&keys));
+    };
+    timing::measure_state(&corpus, "keys from an array, parse only", &c.filter, n, c.runs, &mut sum, pass, Sum::summary);
+    c.filter.finish();
 }

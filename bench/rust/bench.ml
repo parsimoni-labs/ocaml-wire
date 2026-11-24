@@ -759,160 +759,37 @@ let mix file =
 
 (* {2 The rows} *)
 
-(* [Wire.Codec]: the pcap record around each frame bounds it, and
-   [Codec.decode] builds the nested value of [Packet_stack.capture]. *)
-let pcap_record =
-  let incl_len = Field.v "incl_len" uint32 in
-  Codec.v "PcapRecord"
-    (fun _ _ _ _ p -> p)
-    Codec.
-      [
-        (Field.v "ts_sec" uint32 $ fun _ -> UInt32.zero);
-        (Field.v "ts_frac" uint32 $ fun _ -> UInt32.zero);
-        (incl_len $ fun _ -> UInt32.zero);
-        (Field.v "orig_len" uint32 $ fun _ -> UInt32.zero);
-        Field.v "packet"
-          (nested_at_most ~size:(Field.ref incl_len)
-             (Wire.codec Packet_stack.capture))
-        $ Fun.id;
-      ]
-
-let classify_value (p : Packet_stack.capture) =
-  let port = UInt16.to_int in
-  match (p.ipv4, p.ipv6) with
-  | Some ip, _ ->
-      let ports =
-        match (ip.tcp, ip.udp) with
-        | Some t, _ -> (port t.src_port lsl 16) lor port t.dst_port
-        | _, Some u -> (port u.src_port lsl 16) lor port u.dst_port
-        | _ -> 0
-      in
-      Flow_table.add4 ~src:(UInt32.to_int ip.src) ~dst:(UInt32.to_int ip.dst)
-        ~proto:(UInt8.to_int ip.protocol) ~ports
-        ~bytes:(UInt16.to_int ip.total_length)
-  | _, Some ip ->
-      let ports =
-        match (ip.tcp, ip.udp) with
-        | Some t, _ -> (port t.src_port lsl 16) lor port t.dst_port
-        | _, Some u -> (port u.src_port lsl 16) lor port u.dst_port
-        | _ -> 0
-      in
-      let w = UInt32.to_int in
-      Flow_table.add6 ~s0:(w ip.src0) ~s1:(w ip.src1) ~s2:(w ip.src2)
-        ~s3:(w ip.src3) ~d0:(w ip.dst0) ~d1:(w ip.dst1) ~d2:(w ip.dst2)
-        ~d3:(w ip.dst3)
-        ~proto:(UInt8.to_int ip.next_header)
-        ~ports
-        ~bytes:(40 + UInt16.to_int ip.payload_length)
-  | None, None -> ()
-
-let flow_codec buf (offs : int array) _ =
-  for i = 0 to Array.length offs - 1 do
-    match Codec.decode pcap_record buf (offs.(i) - 16) with
-    | Error _ -> ()
-    | Ok p -> classify_value p
-  done
-
 (* wire.ocaml: the scanner of [Packet_stack.capture], handing out only the
-   classifier's fields to [Flow_step], which it calls by name. *)
+   classifier's fields to [Flow_step], which it calls by name, or to
+   [Flow_parse] for [flow_scanner_parse]. *)
 let flow_scanner buf (offs : int array) (lens : int array) =
   for i = 0 to Array.length offs - 1 do
     Flow_read.classify buf offs.(i) lens.(i)
   done
 
-(* wire.ocaml, linked headers: the record modules of the fixed headers, and
-   the harness making the checks that link them, the bounds against the
-   capture ending at [cap] included. *)
-let view_ports b len ~cap o proto =
-  if proto = 6 then
-    let c = G_tcp.View.check b len o in
-    if not (G_tcp.View.ok c) then -1
-    else
-      let t = G_tcp.View.get c in
-      let off = G_tcp.data_offset_of_word (G_tcp.view_data_offset_word b t) in
-      if o + (off * 4) > cap then -1
-      else
-        (UInt16.to_int (G_tcp.view_src_port b t) lsl 16)
-        lor UInt16.to_int (G_tcp.view_dst_port b t)
-  else if proto = 17 then
-    if o + 8 > cap then -1
-    else
-      let c = G_udp.View.check b len o in
-      if not (G_udp.View.ok c) then -1
-      else
-        let u = G_udp.View.get c in
-        (UInt16.to_int (G_udp.view_src_port b u) lsl 16)
-        lor UInt16.to_int (G_udp.view_dst_port b u)
-  else 0
+let flow_scanner_parse buf (offs : int array) (lens : int array) =
+  for i = 0 to Array.length offs - 1 do
+    Flow_read.parse buf offs.(i) lens.(i)
+  done
 
-let view_ipv4 b len ~cap o =
-  if o + 20 <= cap then
-    let c = G_ipv4.View.check b len o in
-    if G_ipv4.View.ok c then
-      let ip = G_ipv4.View.get c in
-      let hlen = (G_ipv4.view_ihl b ip :> int) * 4
-      and total = UInt16.to_int (G_ipv4.view_total_length b ip) in
-      if total >= hlen && o + hlen <= cap then
-        let proto = UInt8.to_int (G_ipv4.view_protocol b ip) in
-        let w = G_ipv4.view_flags_word b ip in
-        let ports =
-          if
-            G_ipv4.flags_of_word w land 1 <> 0
-            || G_ipv4.fragment_offset_of_word w <> 0
-          then 0
-          else view_ports b len ~cap (o + hlen) proto
-        in
-        if ports >= 0 then
-          Flow_table.add4
-            ~src:(G_ipv4.view_src_addr_int b ip)
-            ~dst:(G_ipv4.view_dst_addr_int b ip)
-            ~proto ~ports ~bytes:total
-
-let view_ipv6 b len ~cap o =
-  if o + 40 <= cap then
-    let c = G_ipv6.View.check b len o in
-    if G_ipv6.View.ok c then
-      let ip = G_ipv6.View.get c in
-      let proto = UInt8.to_int (G_ipv6.view_next_header b ip) in
-      let ports = view_ports b len ~cap (o + 40) proto in
-      if ports >= 0 then
-        Flow_table.add6
-          ~s0:(G_ipv6.view_src0_int b ip)
-          ~s1:(G_ipv6.view_src1_int b ip)
-          ~s2:(G_ipv6.view_src2_int b ip)
-          ~s3:(G_ipv6.view_src3_int b ip)
-          ~d0:(G_ipv6.view_dst0_int b ip)
-          ~d1:(G_ipv6.view_dst1_int b ip)
-          ~d2:(G_ipv6.view_dst2_int b ip)
-          ~d3:(G_ipv6.view_dst3_int b ip)
-          ~proto ~ports
-          ~bytes:(40 + UInt16.to_int (G_ipv6.view_payload_length b ip))
-
-let view_frame b len o caplen =
-  let cap = o + caplen in
-  if caplen >= 14 then
-    let c = G_eth.View.check b len o in
-    if G_eth.View.ok c then
-      let ty = UInt16.to_int (G_eth.view_ether_type b (G_eth.View.get c)) in
-      if ty = 0x0800 then view_ipv4 b len ~cap (o + 14)
-      else if ty = 0x86dd then view_ipv6 b len ~cap (o + 14)
-
-let flow_view buf (offs : int array) (lens : int array) =
-  match Wire_runtime.Buf.v buf with
-  | Wire_runtime.Buf.Any b ->
-      let len = Wire_runtime.Buf.length b in
-      for i = 0 to Array.length offs - 1 do
-        view_frame b len offs.(i) lens.(i)
-      done
-
+(* The rows of the classifier, each on its own the parse and the table: the
+   parse rows hand their keys to [Flow_sum], and the table row takes the keys
+   from an array, as does the row folding them without a parse. *)
 let flow_rows =
   [
-    ("Wire.Codec capture decode", flow_codec);
-    ("wire.ocaml View.check/view, linked headers" ^ target, flow_view);
-    ("wire.ocaml scanner, selected outputs, fold_step" ^ target, flow_scanner);
+    ( "Wire.Codec capture decode",
+      Flow_rows.flow_codec,
+      Flow_rows_parse.flow_codec );
+    ( "wire.ocaml View.check/view, linked headers" ^ target,
+      Flow_rows.flow_view,
+      Flow_rows_parse.flow_view );
+    ( "wire.ocaml scanner, selected outputs, fold_step" ^ target,
+      flow_scanner,
+      flow_scanner_parse );
   ]
 
 let pp_flows ppf (flows, sum) = Fmt.pf ppf "%d flows, %d" flows sum
+let pp_keys ppf (keys, sum) = Fmt.pf ppf "%d keys, %d" keys sum
 
 let flow file runs filter =
   let buf = Bench_lib.read_file file in
@@ -920,13 +797,31 @@ let flow file runs filter =
   let n = Array.length offs in
   Flow_table.init ~capacity:(2 * n);
   let corpus = Filename.remove_extension (Filename.basename file) in
+  let measure ~corpus ~name ~pp ~result reset f =
+    Bench_lib.measure_state ~corpus ~filter ~name ~items:n ~runs ~pp ~result
+      (fun () ->
+        reset ();
+        f ())
+  in
+  let table = measure ~pp:pp_flows ~result:Flow_table.summary Flow_table.reset
+  and parse = measure ~pp:pp_keys ~result:Flow_sum.summary Flow_sum.reset in
   List.iter
-    (fun (name, f) ->
-      Bench_lib.measure_state ~corpus ~filter ~name ~items:n ~runs ~pp:pp_flows
-        ~result:Flow_table.summary (fun () ->
-          Flow_table.reset ();
-          f (Sys.opaque_identity buf) offs lens))
-    flow_rows
+    (fun (name, t, p) ->
+      table ~corpus ~name (fun () -> t (Sys.opaque_identity buf) offs lens);
+      parse ~corpus:(corpus ^ " parse") ~name:(name ^ ", parse only") (fun () ->
+          p (Sys.opaque_identity buf) offs lens))
+    flow_rows;
+  let keys =
+    lazy
+      (Flow_rows_keys.flow_view buf offs lens;
+       Flow_keys.take ())
+  in
+  table ~corpus:(corpus ^ " table")
+    ~name:("flow table, keys from an array" ^ target) (fun () ->
+      Flow_rows.replay (Sys.opaque_identity (Lazy.force keys)));
+  parse ~corpus:(corpus ^ " parse")
+    ~name:("keys from an array, parse only" ^ target) (fun () ->
+      Flow_rows_parse.replay (Sys.opaque_identity (Lazy.force keys)))
 
 let () =
   match Array.to_list Sys.argv with

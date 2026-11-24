@@ -55,6 +55,30 @@
  (action
   (run ./gen.exe --oxcaml)))
 
+;; flow_rows.ml over the sinks Flow_sum and Flow_keys, as copies in which
+;; Flow_table stands for the sink: OCaml without flambda calls the sink of a
+;; functor through a closure, a copy calls it directly.
+
+(rule
+ (with-stdout-to
+  flow_rows_parse.ml
+  (progn
+   (echo "module Flow_table = Flow_sum\n# 1 \"bench/rust/flow_rows.ml\"\n")
+   (cat %{dep:flow_rows.ml}))))
+
+(rule
+ (copy flow_rows.mli flow_rows_parse.mli))
+
+(rule
+ (with-stdout-to
+  flow_rows_keys.ml
+  (progn
+   (echo "module Flow_table = Flow_keys\n# 1 \"bench/rust/flow_rows.ml\"\n")
+   (cat %{dep:flow_rows.ml}))))
+
+(rule
+ (copy flow_rows.mli flow_rows_keys.mli))
+
 (executable
  (name bench)
  (modules
@@ -62,6 +86,11 @@
   stack_read
   selected_read
   flow_table
+  flow_sum
+  flow_keys
+  flow_rows
+  flow_rows_parse
+  flow_rows_keys
   flow_read
   g_eth
   g_ipv4

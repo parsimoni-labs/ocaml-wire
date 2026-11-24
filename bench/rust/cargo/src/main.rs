@@ -23,7 +23,8 @@
 //! that name, and fails when there is none; `--list` prints the row names.
 //!
 //! `wire-bench-rust flow FILE RUNS [ROW | --list]` runs the flow classifier of
-//! `flow.rs` on a capture instead.
+//! `flow.rs` on a capture instead; `wire-bench-flow-parse` runs its parsers
+//! without the table.
 
 use std::hint::black_box;
 
@@ -46,6 +47,8 @@ mod stack_selected;
 #[path = "gen/flow.rs"]
 mod flow_scan;
 
+// This binary runs `flow::main` only.
+#[allow(dead_code)]
 mod flow;
 
 const IPV4: u16 = 0x0800;
