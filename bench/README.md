@@ -826,6 +826,35 @@ load average between 160 and 285, the parse falls from a median of 92.0 to
 the header benchmark's OxCaml rows, which walk fixed-stride slots with
 `fold_frames`, are unchanged.
 
+The code `Wire_ocaml` writes for OxCaml then spends fewer instructions on
+each header. An indexed frame's bounds are tested on its untagged offset and
+length, as the sign of one `logor`, where the tagged test took two branches
+and their tag fixups. The IPv4 version and header length are one unsigned
+comparison of their byte, which one shift takes from the word already
+loaded, where a 16-bit load, a shift and two comparisons tested them. A
+field inside a loaded word is taken out with two shifts, where OxCaml built
+the mask of a shift and a mask in a register for each use. The TCP data
+offset is read with the 16-bit load that ends on its byte, where a 32-bit
+load, a swap and a mask took four instructions. The first frame of the
+unrolled loop then walks an IPv4 TCP packet in 82 instructions, 6 fewer.
+Counted three times at a load average between 300 and 450, the parse falls
+from a median of 84.7 to 81.4 instructions per packet, against 69.2 for the
+Rust scanner, 66.9 for `pnet_packet` and 64.2 for `smoltcp`, counted alike.
+The header benchmark's OxCaml scanner rows fall by 1.2 to 4.2 instructions
+per packet on every corpus (`selected outputs, batch` from 65.6 to 63.7 on
+`fixed64-random`, where `pnet_packet` takes 113.8).
+
+Most of what the OxCaml parse spends beyond `pnet_packet` is in the consumer
+and the compiler rather than the scanner. `Flow_parse` turns each `int64`
+the scanner hands it into an `int` and computes the key tagged: about half
+of the 24 instructions of an IPv4 TCP key tag its values, build the tag's
+constant 1 and the key's constant part again for each key, or keep in a
+register a mask applied before tagging. A consumer that computes the key on
+the `int64` values, as `Sum` does on `u64`, parses in 73.1. The loop over
+the index adds the address computation of each tagged index (2 per frame)
+and the untagging of the offset and the length (2), and the IPv6 key folds 8
+words one by one where LLVM folds them as vectors.
+
 `Wire.Codec` spends 8236.7 instructions and 1776.7 cycles per packet on the
 parse on OxCaml. macOS `sample`, 10 s of the parse row (7514 samples), puts
 21.1% of its time in closure application (`caml_apply4` 16.9%), 28.0% in
