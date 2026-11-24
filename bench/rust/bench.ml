@@ -884,6 +884,21 @@ let flow_rows =
 let pp_flows ppf (flows, sum) = Fmt.pf ppf "%d flows, %d" flows sum
 let pp_keys ppf (keys, sum) = Fmt.pf ppf "%d keys, %d" keys sum
 
+(* The swap rows, on corpora of their own: one flow counter, flow_swap.ml,
+   over the header modules [Wire.Codec.Make] gives and over the [Global]
+   modules wire.ocaml generates, with the table and without it. Only IPv4
+   makes a flow; the other packets are counted by kind, and every row prints
+   both. *)
+let swap_rows =
+  [
+    ( "swap=interpreted, Wire.Codec.Make",
+      Flow_swap_interpreted.run,
+      Flow_swap_interpreted_parse.run );
+    ("swap=generated, Global" ^ target, Flow_swap.run, Flow_swap_parse.run);
+  ]
+
+let pp_mix pp ppf (r, mix) = Fmt.pf ppf "%a; %a" pp r Flow_mix.pp mix
+
 let flow file runs filter =
   let buf = Bench_lib.read_file file in
   let offs, lens = index buf in
@@ -904,6 +919,24 @@ let flow file runs filter =
       parse ~corpus:(corpus ^ " parse") ~name:(name ^ ", parse only") (fun () ->
           p (Sys.opaque_identity buf) offs lens))
     flow_rows;
+  let with_mix ~pp ~result reset =
+    measure ~pp:(pp_mix pp)
+      ~result:(fun () -> (result (), Flow_mix.state))
+      (fun () ->
+        reset ();
+        Flow_mix.reset ())
+  in
+  let swap = with_mix ~pp:pp_flows ~result:Flow_table.summary Flow_table.reset
+  and swap_parse =
+    with_mix ~pp:pp_keys ~result:Flow_sum.summary Flow_sum.reset
+  in
+  List.iter
+    (fun (name, t, p) ->
+      swap ~corpus:(corpus ^ " swap") ~name (fun () ->
+          t (Sys.opaque_identity buf) offs lens);
+      swap_parse ~corpus:(corpus ^ " swap parse") ~name:(name ^ ", parse only")
+        (fun () -> p (Sys.opaque_identity buf) offs lens))
+    swap_rows;
   let keys =
     lazy
       (Flow_rows_keys.flow_view buf offs lens;

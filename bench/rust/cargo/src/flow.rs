@@ -419,6 +419,87 @@ fn smoltcp<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
     }
 }
 
+/// The packets of the swap rows that make no IPv4 flow, counted by kind, as
+/// `bench/rust/flow_mix.ml` counts them.
+#[derive(Default)]
+pub struct Mix {
+    ipv6: usize,
+    vlan: usize,
+    other: usize,
+    rejected: usize,
+}
+
+impl fmt::Display for Mix {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "IPv6 {}, VLAN {}, other {}, IPv4 rejected {}", self.ipv6, self.vlan, self.other, self.rejected)
+    }
+}
+
+// smoltcp with the checks of the swap rows of `bench/rust/flow_swap.ml`:
+// only IPv4 makes a flow, and the other packets are counted by kind. The
+// layers are read as in `smoltcp`; its transport is repeated here so that
+// the row of the classifier keeps its code.
+fn smoltcp_ipv4_flows<S: Sink>(t: &mut S, mix: &mut Mix, buf: &[u8], frames: Frames) {
+    use smoltcp::wire::{EthernetFrame, Ipv4Packet, TcpPacket, UdpPacket};
+    let transport = |l4: &[u8], proto: u8| -> Option<u32> {
+        match proto {
+            6 => {
+                let tp = TcpPacket::new_checked(l4).ok()?;
+                Some(ports(tp.src_port(), tp.dst_port()))
+            }
+            17 => {
+                if l4.len() < 8 {
+                    return None;
+                }
+                let u = UdpPacket::new_unchecked(l4);
+                if u.len() < 8 {
+                    return None;
+                }
+                Some(ports(u.src_port(), u.dst_port()))
+            }
+            _ => Some(0),
+        }
+    };
+    for &(o, n) in frames {
+        let Ok(e) = EthernetFrame::new_checked(&buf[o..o + n]) else {
+            mix.other += 1;
+            continue;
+        };
+        let body = e.payload();
+        match u16::from(e.ethertype()) {
+            IPV4 => {
+                if body.len() < 20 {
+                    mix.rejected += 1;
+                    continue;
+                }
+                let ip = Ipv4Packet::new_unchecked(body);
+                let hlen = ip.header_len() as usize;
+                if ip.version() != 4 || hlen < 20 || hlen > body.len() || (ip.total_len() as usize) < hlen {
+                    mix.rejected += 1;
+                    continue;
+                }
+                let proto = u8::from(ip.next_header());
+                let pt = if ip.more_frags() || ip.frag_offset() != 0 {
+                    0
+                } else {
+                    let Some(pt) = transport(&body[hlen..], proto) else {
+                        mix.rejected += 1;
+                        continue;
+                    };
+                    pt
+                };
+                t.add4(u32::from(ip.src_addr()), u32::from(ip.dst_addr()), proto, pt, ip.total_len() as u64);
+            }
+            IPV6 => mix.ipv6 += 1,
+            0x8100 | 0x88a8 | 0x9100 => mix.vlan += 1,
+            _ => mix.other += 1,
+        }
+    }
+}
+
+// The name of the smoltcp row of the swap corpora.
+const SMOLTCP_IPV4_FLOWS: &str = "smoltcp 0.14, IPv4 flows";
+
 // pnet_packet: `new` checks a layer's minimum header length only, so the
 // adapter makes the other checks, as in the header benchmark.
 fn pnet<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
@@ -538,6 +619,15 @@ pub fn main(args: &[String]) {
         };
         timing::measure_state(&c.name, name, &c.filter, n, c.runs, &mut table, pass, Table::summary);
     }
+    let mut mix = Mix::default();
+    let pass = |(t, m): &mut (&mut Table, &mut Mix)| {
+        t.reset();
+        **m = Mix::default();
+        smoltcp_ipv4_flows(*t, *m, black_box(&c.buf), &c.frames);
+    };
+    let corpus = format!("{} swap", c.name);
+    let summary = |(t, m): &(&mut Table, &mut Mix)| format!("{}; {}", t.summary(), m);
+    timing::measure_state(&corpus, SMOLTCP_IPV4_FLOWS, &c.filter, n, c.runs, &mut (&mut table, &mut mix), pass, summary);
     let keys = keys(&c);
     let pass = |t: &mut Table| {
         t.reset();
@@ -563,6 +653,15 @@ pub fn parse(args: &[String]) {
         let name = format!("{name}, parse only");
         timing::measure_state(&corpus, &name, &c.filter, n, c.runs, &mut sum, pass, Sum::summary);
     }
+    let pass = |(s, m): &mut (Sum, Mix)| {
+        *s = Sum::default();
+        *m = Mix::default();
+        smoltcp_ipv4_flows(s, m, black_box(&c.buf), &c.frames);
+    };
+    let swap = format!("{} swap parse", c.name);
+    let name = format!("{SMOLTCP_IPV4_FLOWS}, parse only");
+    let summary = |(s, m): &(Sum, Mix)| format!("{}; {}", s.summary(), m);
+    timing::measure_state(&swap, &name, &c.filter, n, c.runs, &mut (Sum::default(), Mix::default()), pass, summary);
     let keys = keys(&c);
     let pass = |s: &mut Sum| {
         *s = Sum::default();
