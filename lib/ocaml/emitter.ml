@@ -635,6 +635,9 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
       | Some v -> v
       | None -> load m ~o ~k ~bytes ~endian)
   | Tagged, _ -> load m ~o ~k ~bytes ~endian
+  | Unboxed, _ when bytes = 1 && List.mem k words ->
+      (* The top byte of a word loaded anyway: one shift. *)
+      Fmt.str "(U.shift_right_logical w%d 56)" k
   | Unboxed, _ when bytes = 1 ->
       (* A byte from the 16-bit load that ends on it, or else the one that
          starts on it, inside the prefix: no swap, and not at the address of
