@@ -401,6 +401,8 @@ type scan_ops = {
   scan_batch :
     (bytes -> int -> int -> int -> (string * int) list option list option)
     option;
+  scan_index :
+    (bytes -> int array -> int array -> (string * int) list option list) option;
 }
 
 type reference =
@@ -586,6 +588,45 @@ let scan_batches ?strides (Reference r as ref_) oracle backends buf off len =
         backends)
     strides
 
+(* The fold over the index [frames] of [buf], whose bad bounds reject only
+   their own frame. *)
+let scan_index (Reference r as ref_) backends buf frames =
+  let offs = Array.of_list (List.map fst frames)
+  and lens = Array.of_list (List.map snd frames) in
+  let values =
+    List.map
+      (fun (off, len) -> Option.bind (scan_frame buf off len) (expected ref_))
+      frames
+  in
+  List.iter
+    (fun backend ->
+      Option.iter
+        (fun index ->
+          let want = List.map (snapshot ref_ backend.scan_fields) values in
+          let got =
+            List.map (restrict ref_ backend.scan_fields) (index buf offs lens)
+          in
+          if want <> got then
+            Alcobar.failf "%s: %s fold over an index diverged" r.label
+              backend.scan_name)
+        backend.scan_index)
+    backends
+
+(* The frames of an index over a buffer of [n] bytes: the whole buffer, the
+   bad bounds [check_scan] tries, then the buffer cut in two. *)
+let index_frames n =
+  [
+    (0, n);
+    (-1, n);
+    (0, -1);
+    (max_int, 1);
+    (1, max_int);
+    (0, n + 1);
+    (0, n / 2);
+    (n / 2, n - (n / 2));
+    (min 1 n, n - min 1 n);
+  ]
+
 (* The codec's answer on a frame through its general path, and through
    [validate], which must agree with [decode]. *)
 let codec_agrees (Reference r) ~general bounded value =
@@ -641,7 +682,8 @@ let check_scan ?oracle ?strides ?(expand = true) (Reference r as ref_) backends
         at b max_int 1;
         at b 1 max_int;
         at b 0 (n + 1);
-        if n > 0 then at b 1 (n - 1))
+        if n > 0 then at b 1 (n - 1);
+        scan_index ref_ backends b (index_frames n))
       (if expand then r.inputs raw else [ raw ])
 
 let scan_corpus ?oracle (Diff_codecs.Scan c as case) backends =

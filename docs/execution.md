@@ -81,7 +81,7 @@ spans whose size an expression gives, optional fields (gates), sized windows
 variables unique in the plan. One walk over the plan writes every function
 that checks a record: `is_valid`, the decoders and the function that finds
 the codec's error for a fixed record, and `fold`, `fold_frames` and `decode`
-(and with `~step`, `fold_step` and `fold_frames_step`) for a codec of any
+(and with `~step`, `fold_step`, `fold_frames_step` and `fold_index_step`) for a codec of any
 shape in scope. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
@@ -131,7 +131,10 @@ The invariants above hold for the generated code as follows.
   `decode` checks `off` and `len` against the buffer. Where the walk starts
   with the bound check of a prefix, that check rejects a negative `len`, and
   `len > Bytes.length buf - off` then rejects an `off` past the buffer, so the
-  entry tests `off < 0` and that bound only.
+  entry tests `off < 0` and that bound only. `fold_index_step` makes the
+  same test for each frame of its index, against the buffer's length read
+  once before its loop, and checks once that its two arrays have the same
+  length, so that the loop reads both without a bound check.
 - **Arithmetic agrees with the codec.** An addition, subtraction or product
   whose operands' ranges keep it inside the native int is written as plain
   arithmetic; any other is checked, and an overflow rejects the record, or
@@ -174,7 +177,7 @@ The invariants above hold for the generated code as follows.
   range test of the word: the IPv4 version and header length are one byte in
   `[0x45, 0x4f]`.
 
-On OCaml, `fold_step` and `fold_frames_step` hold each field value as an
+On OCaml, the step functions hold each field value as an
 `int64` and each position as an `int`. The other functions hold both as
 `int`, and on OxCaml every function holds both as `int64_u`.
 

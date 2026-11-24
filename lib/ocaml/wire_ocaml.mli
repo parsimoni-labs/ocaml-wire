@@ -203,7 +203,10 @@ val scanner :
     [invalid : t -> t], adds [fold_step buf off len ~init] and
     [fold_frames_step buf off len ~stride ~init], which are [fold] and
     [fold_frames] with [init] as the accumulator, calling that module's
-    functions by name. OCaml without flambda never inlines a function passed as
+    functions by name, and [fold_index_step buf ~offs ~lens ~init], which folds
+    [fold_step] over the frames of [lens.(i)] bytes at [offs.(i)], reading the
+    length of [buf] once; it raises [Invalid_argument] if [offs] and [lens]
+    differ in length. OCaml without flambda never inlines a function passed as
     an argument, so only these call the consumer with no closure call. They pass
     each integer to [valid] as an [int64], on both targets. Nothing is boxed and
     no frame allocates where the compiler inlines [valid]. On OCaml the

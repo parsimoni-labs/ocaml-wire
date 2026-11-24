@@ -880,6 +880,35 @@ let pp_scan_preamble ppf s =
   Fmt.pf ppf
     " A scan never raises on bad input: it calls [invalid] instead. *)@\n@\n"
 
+(* The scans of a scanner with the step module [m]. *)
+let pp_step_scans ppf target b m =
+  let t = m ^ ".t" in
+  (* The step functions hand out their integers as [int64]. *)
+  let outputs = ", each integer output an [int64]" in
+  pp_val ~portable:false target ppf "fold_step"
+    (arrows [ b; "int"; "int"; "init:" ^ t; t ])
+    (Fmt.str
+       "[fold_step buf off len ~init] is [fold buf off len] with \
+        [~invalid:(fun () -> %s.invalid init)] and [~valid:(%s.valid init)]%s, \
+        with no closure built."
+       m m outputs);
+  pp_val ~portable:false target ppf "fold_index_step"
+    (arrows [ b; "offs:int array"; "lens:int array"; "init:" ^ t; t ])
+    (Fmt.str
+       "[fold_index_step buf ~offs ~lens ~init] folds [fold_step] over the \
+        frames of [lens.(i)] bytes at [offs.(i)], in order, from [init]: a \
+        frame whose bounds are bad gives [%s.invalid]. The length of [buf] is \
+        read once. Raises [Invalid_argument] if [offs] and [lens] differ in \
+        length."
+       m);
+  pp_val ~portable:false target ppf "fold_frames_step"
+    (arrows [ b; "int"; "int"; "stride:int"; "init:" ^ t; t ])
+    (Fmt.str
+       "[fold_frames_step buf off len ~stride ~init] is [fold_frames buf off \
+        len ~stride ~init ~invalid:%s.invalid ~valid:%s.valid]%s, with no \
+        closure built."
+       m m outputs)
+
 let pp_scans ppf s =
   let target = s.target in
   let b = buf (bytes_buf target) in
@@ -911,26 +940,7 @@ let pp_scans ppf s =
      frames of [stride] bytes at [off], each checked on its own, from [init]. \
      Raises [Invalid_argument] if [stride] is not positive or the bounds are \
      bad.";
-  match s.step with
-  | None -> ()
-  | Some m ->
-      let t = m ^ ".t" in
-      (* The step functions hand out their integers as [int64]. *)
-      let outputs = ", each integer output an [int64]" in
-      pp_val ~portable:false target ppf "fold_step"
-        (arrows [ b; "int"; "int"; "init:" ^ t; t ])
-        (Fmt.str
-           "[fold_step buf off len ~init] is [fold buf off len] with \
-            [~invalid:(fun () -> %s.invalid init)] and [~valid:(%s.valid \
-            init)]%s, with no closure built."
-           m m outputs);
-      pp_val ~portable:false target ppf "fold_frames_step"
-        (arrows [ b; "int"; "int"; "stride:int"; "init:" ^ t; t ])
-        (Fmt.str
-           "[fold_frames_step buf off len ~stride ~init] is [fold_frames buf \
-            off len ~stride ~init ~invalid:%s.invalid ~valid:%s.valid]%s, with \
-            no closure built."
-           m m outputs)
+  Option.iter (pp_step_scans ppf target b) s.step
 
 let pp_unboxed_scans ppf s =
   let target = s.target in

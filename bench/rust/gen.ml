@@ -215,13 +215,30 @@ let flow_fields =
     "ipv6_udp_dst_port";
   ]
 
-(* The consumer [name] the scanner calls by name in [fold_step]: it hands the
-   packet's key to [sink], [Flow_table] as the other rows do or [Flow_sum]
-   for the rows that time the parse alone. *)
-let flow_step ~name ~sink =
-  "module " ^ name
-  ^ " = struct\n\
-     type t = int\n\n\
+(* The arguments of [add4] and [add6] the outputs of [flow_fields] give, with
+   [i] converting an output to an [int]. *)
+let key4 =
+  "~src:(i ipv4_src) ~dst:(i ipv4_dst)\n\
+   ~proto:(i ipv4_protocol)\n\
+   ~ports:(ports ipv4_tcp_present ipv4_tcp_src_port ipv4_tcp_dst_port\n\
+   ipv4_udp_present ipv4_udp_src_port ipv4_udp_dst_port)\n\
+   ~bytes:(i ipv4_total_length)"
+
+let key6 =
+  "~s0:(i ipv6_src0) ~s1:(i ipv6_src1) ~s2:(i ipv6_src2)\n\
+   ~s3:(i ipv6_src3) ~d0:(i ipv6_dst0) ~d1:(i ipv6_dst1) ~d2:(i ipv6_dst2)\n\
+   ~d3:(i ipv6_dst3) ~proto:(i ipv6_next_header)\n\
+   ~ports:(ports ipv6_tcp_present ipv6_tcp_src_port ipv6_tcp_dst_port\n\
+   ipv6_udp_present ipv6_udp_src_port ipv6_udp_dst_port)\n\
+   ~bytes:(40 + i ipv6_payload_length)"
+
+(* The consumer [name] the scanner calls by name in [fold_index_step], whose
+   accumulator has type [typ] and is [base] in [valid]: [v4 args] and [v6 args]
+   are its next value for an IPv4 and an IPv6 packet whose key [args] gives,
+   [other] for a packet with no key. *)
+let flow_step ~name ~typ ~v4 ~v6 ~other =
+  "module " ^ name ^ " = struct\ntype t = " ^ typ
+  ^ "\n\n\
      let[@inline always] invalid base = base\n\n\
      let[@inline always] ports tcp tsp tdp udp usp udp_ =\n\
      if tcp then (Int64.to_int tsp lsl 16) lor Int64.to_int tdp\n\
@@ -229,21 +246,38 @@ let flow_step ~name ~sink =
      else 0\n\n\
      let[@inline always] valid base "
   ^ String.concat " " (List.map (fun n -> "~" ^ n) flow_fields)
-  ^ " =\nlet i = Int64.to_int in\nif ipv4_present then\n" ^ sink
-  ^ ".add4 ~src:(i ipv4_src) ~dst:(i ipv4_dst)\n\
-     ~proto:(i ipv4_protocol)\n\
-     ~ports:(ports ipv4_tcp_present ipv4_tcp_src_port ipv4_tcp_dst_port\n\
-     ipv4_udp_present ipv4_udp_src_port ipv4_udp_dst_port)\n\
-     ~bytes:(i ipv4_total_length)\n\
-     else if ipv6_present then\n" ^ sink
-  ^ ".add6 ~s0:(i ipv6_src0) ~s1:(i ipv6_src1) ~s2:(i ipv6_src2)\n\
-     ~s3:(i ipv6_src3) ~d0:(i ipv6_dst0) ~d1:(i ipv6_dst1) ~d2:(i ipv6_dst2)\n\
-     ~d3:(i ipv6_dst3) ~proto:(i ipv6_next_header)\n\
-     ~ports:(ports ipv6_tcp_present ipv6_tcp_src_port ipv6_tcp_dst_port\n\
-     ipv6_udp_present ipv6_udp_src_port ipv6_udp_dst_port)\n\
-     ~bytes:(40 + i ipv6_payload_length);\n\
-     base\n\
-     end\n\n"
+  ^ " =\nlet i = Int64.to_int in\nif ipv4_present then " ^ v4 key4
+  ^ "\nelse if ipv6_present then " ^ v6 key6 ^ "\nelse " ^ other ^ "\nend\n\n"
+
+(* The consumer [name] that hands each key to [sink]. *)
+let sink_step ~name sink =
+  flow_step ~name ~typ:"int"
+    ~v4:(fun k -> "(" ^ sink ^ ".add4 " ^ k ^ ";\nbase)")
+    ~v6:(fun k -> "(" ^ sink ^ ".add6 " ^ k ^ ";\nbase)")
+    ~other:"base"
+
+let table_step = sink_step ~name:"Flow_step" "Flow_table"
+
+(* The consumer of the rows that time the parse alone and its entry, which
+   calls the fold [fold]. On OxCaml it folds each key as [Flow_sum] does in
+   its accumulator, an unboxed pair of the number of keys and their sum, which
+   stays in registers. On OCaml that pair would be allocated for each key,
+   which costs more than [Flow_sum]'s global state, so it hands each key to
+   [Flow_sum]. *)
+let parse_step target =
+  if target = `OxCaml then
+    let next f k =
+      "let #(keys, sum) = base in\n#(keys + 1, sum + Flow_sum." ^ f ^ " " ^ k
+      ^ ")"
+    in
+    ( flow_step ~name:"Flow_parse" ~typ:"#(int * int)" ~v4:(next "key4")
+        ~v6:(next "key6") ~other:"base",
+      fun fold ->
+        "let #(keys, sum) = " ^ fold
+        ^ " ~init:#(0, 0) in\nFlow_sum.add_pass ~keys ~sum" )
+  else
+    ( sink_step ~name:"Flow_parse" "Flow_sum",
+      fun fold -> "ignore (" ^ fold ^ " ~init:0 : int)" )
 
 (* The fixed header codecs, each written by [g name codec]. *)
 type g = { g : 'r. string -> 'r Wire.Codec.t -> unit }
@@ -280,20 +314,22 @@ let () =
         ~selected:checksum_fields ();
       (let codec = "Packet_stack.capture" and c = Packet_stack.capture in
        let fields = flow_fields in
-       let scanner ~core ~step ~sink ~entry =
-         flow_step ~name:step ~sink ^ "module " ^ core ^ " : sig\n"
+       let scanner ~core ~step ~consumer ~entry body =
+         consumer ^ "module " ^ core ^ " : sig\n"
          ^ Wire_ocaml.scanner_mli ~target ~fields ~step ~codec c
          ^ "\nend = struct\n"
          ^ Wire_ocaml.scanner ~target ~fields ~step ~codec c
-         ^ "\nend\n\nlet[@inline always] " ^ entry
-         ^ " buf off len =\n  ignore (" ^ core
-         ^ ".fold_step buf off len ~init:0 : int)\n\n"
+         ^ "\nend\n\nlet " ^ entry ^ " buf offs lens =\n"
+         ^ body (core ^ ".fold_index_step buf ~offs ~lens")
+         ^ "\n\n"
        in
+       let consumer, parse = parse_step target in
        write "flow_read.ml"
-         (scanner ~core:"G_flow" ~step:"Flow_step" ~sink:"Flow_table"
-            ~entry:"classify"
-         ^ scanner ~core:"G_flow_parse" ~step:"Flow_parse" ~sink:"Flow_sum"
-             ~entry:"parse"));
+         (scanner ~core:"G_flow" ~step:"Flow_step" ~consumer:table_step
+            ~entry:"classify" (fun fold ->
+              "ignore (" ^ fold ^ " ~init:0 : int)")
+         ^ scanner ~core:"G_flow_parse" ~step:"Flow_parse" ~consumer
+             ~entry:"parse" parse));
       headers
         {
           g =

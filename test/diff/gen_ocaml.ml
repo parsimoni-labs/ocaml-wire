@@ -221,7 +221,8 @@ let pp_backend ppf ~m ~unboxed fields =
   in
   Fmt.pf ppf
     "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> let \
-     v = %s.%s b o n in if v.%sok then Some %a else None); scan_batch = %a };@\n"
+     v = %s.%s b o n in if v.%sok then Some %a else None); scan_batch = %a; \
+     scan_index = None };@\n"
     (m ^ if unboxed then " unboxed" else "")
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
     fields m
@@ -250,18 +251,19 @@ let pp_step ppf fields =
         fields)
     ()
 
-(* [fold_step] and [fold_frames_step], as the [decode] and [fold_frames] of
-   one more backend. *)
+(* [fold_step], [fold_frames_step] and [fold_index_step], as the [decode],
+   [fold_frames] and fold over an index of one more backend. *)
 let pp_step_backend ppf ~m fields =
   Fmt.pf ppf
     "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> \
      match %s.fold_step b o n ~init:[] with [ v ] -> v | _ -> failwith \
      \"fold_step\"); scan_batch = Some (fun b o n stride -> try Some (List.rev \
      (%s.fold_frames_step b o n ~stride ~init:[])) with Invalid_argument _ -> \
-     None) };@\n"
+     None); scan_index = Some (fun b offs lens -> List.rev (%s.fold_index_step \
+     b ~offs ~lens ~init:[])) };@\n"
     (m ^ " step")
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields m m
+    fields m m m
 
 (* The backends over [c]: each module [(name, target, selected)], generated
    inside the function under its interface, after the [Step] it calls. *)

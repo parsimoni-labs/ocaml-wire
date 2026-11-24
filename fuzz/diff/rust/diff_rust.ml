@@ -215,6 +215,7 @@ let scan_ops s =
         | 0 -> None
         | code -> Alcobar.failf "rust scanner %d: outcome %d" s.scan_id code);
     scan_batch = None;
+    scan_index = None;
   }
 
 let check label (Fuzz_gen.Pack g) case =

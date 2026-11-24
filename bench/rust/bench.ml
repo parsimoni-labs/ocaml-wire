@@ -759,18 +759,11 @@ let mix file =
 
 (* {2 The rows} *)
 
-(* wire.ocaml: the scanner of [Packet_stack.capture], handing out only the
-   classifier's fields to [Flow_step], which it calls by name, or to
-   [Flow_parse] for [flow_scanner_parse]. *)
-let flow_scanner buf (offs : int array) (lens : int array) =
-  for i = 0 to Array.length offs - 1 do
-    Flow_read.classify buf offs.(i) lens.(i)
-  done
-
-let flow_scanner_parse buf (offs : int array) (lens : int array) =
-  for i = 0 to Array.length offs - 1 do
-    Flow_read.parse buf offs.(i) lens.(i)
-  done
+(* wire.ocaml: the scanner of [Packet_stack.capture] over the frames of the
+   index, handing out only the classifier's fields to [Flow_step], which it
+   calls by name, or to [Flow_parse] for [flow_scanner_parse]. *)
+let flow_scanner = Flow_read.classify
+let flow_scanner_parse = Flow_read.parse
 
 (* The rows of the classifier, each on its own the parse and the table: the
    parse rows hand their keys to [Flow_sum], and the table row takes the keys
