@@ -723,6 +723,33 @@ What the OCaml tables spend beyond the Rust one, read in the disassembly:
 5. tagging: the slot index and the counters stay tagged, a word more per
    arithmetic step.
 
+On OxCaml the table is `flow_table.ox.ml`: each word of a slot an `int64#`
+stored flat in its record, an address two words in the order of Rust's
+`[u32; 4]`, the probe a `while` loop over a `let mutable` index in each of
+`add4` and `add6`, indexing plain and checked. The constant is then built
+once per mix with no tag correction, nothing in a slot is tagged and an IPv4
+slot writes 9 words. Counted at a load average of 251 before and 271 after,
+the table alone falls from 108.6 to 81.9 instructions per packet (149.1 less
+67.2), and on `mawi` the scanner row from 219.2 to 193.1 and the `View` row
+from 309.1 to 283.1. An array of unboxed records `#{ ... }`, the layout of
+Rust's `Vec<Slot>`, read and written through the stdlib's checked array
+primitives declared at any layout, costs 192 instead: reading an element loads its 9 words
+before any is compared, each with its own address, and each bound check
+divides the array's size by 9.
+
+What the OxCaml table spends beyond Rust's 44 is then the compiler's and
+the memory model's: `add4` is still called, not inlined, and reloads the
+table on every key; the constant is built four times per key
+([oxcaml#8183](https://github.com/oxcaml/oxcaml/issues/8183)); the bound
+check decodes the array's header on every probe
+([oxcaml#8175](https://github.com/oxcaml/oxcaml/issues/8175)); the index is
+tagged and each load computes its address apart
+([oxcaml#8171](https://github.com/oxcaml/oxcaml/issues/8171),
+[oxcaml#8178](https://github.com/oxcaml/oxcaml/issues/8178)); the loop's
+exit tests its flag again and polls; and every store of a mutable field
+follows a `dmb ishld`, 2 per counted packet and 9 per claimed slot, which no
+compiler pass removes under OCaml 5's memory model.
+
 The OxCaml scanner parsed in 117.7 instructions where the Rust scanner takes
 68.8: about 25 in the loop over the frames, which reloaded the lengths of
 the buffer (8) and of the array of lengths (3) on every frame and checked
