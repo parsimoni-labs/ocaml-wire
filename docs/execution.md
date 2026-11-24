@@ -17,7 +17,13 @@ a prefix of them.
    region that holds a nested record. A fixed-size field counts for its size
    and a sub-codec for its own `min_size`; an optional field and a span sized
    by the input count for nothing. After the frame, every byte at a fixed
-   offset below `min_size` is in the input.
+   offset below `min_size` is in the input. A record that does not fit
+   reports what the validator 3D generates reports, which checks each field
+   as it reaches it: the first field in order that fails its checks within
+   the input, else the end of input. Only then are its checks run again,
+   each field read once it fits, and its `where` clause with the last field
+   it reads, or before every field when it reads none, so a record that fits
+   pays for none of it.
 2. **Check.** Evaluate each field in field order: its bounds (a span, a
    region and a sub-codec, each against `input_end`, a sub-codec against its
    own frame first), its constraints, closed enum membership and `map`

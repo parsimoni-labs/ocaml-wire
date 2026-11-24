@@ -23,9 +23,9 @@ val bytes_from : Input_end.t -> int -> int
 (** [bytes_from input_end off] is the number of input bytes from [off] on, the
     [got] of an end-of-input error; [0] outside the input. *)
 
-val min_bounds_error : int -> bytes -> int -> 'a
-(** [min_bounds_error min_size buf off] raises the [Parse_error] of a record of
-    [min_size] bytes that does not fit [buf] at [off]. *)
+val frame_error : int -> Input_end.t -> int -> 'a
+(** [frame_error min_size input_end off] raises the [Parse_error] of a record of
+    [min_size] bytes that does not fit before [input_end] at [off]. *)
 
 val check_min_bounds : int -> Input_end.t -> int -> unit
 (** [check_min_bounds min_size input_end off] raises the [Parse_error] of a

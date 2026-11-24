@@ -427,6 +427,10 @@ type ('f, 'r) record =
       validators_rev : (int * step) list;
       checkers_rev :
         (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
+      faults_rev :
+        (string list
+        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
+        list;
       field_actions_rev : (string * compiled_action) list;
       n_fields : int;
       n_array_slots : int;
@@ -511,6 +515,7 @@ type 'r compiled = {
   plain_encode : ('r -> bytes -> int -> unit) option;
   fixed_frame : int;
   plain_pass : pass;
+  faults : runtime -> Input_end.t -> bytes -> int -> unit;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
   validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
   check_end : Input_end.t -> bytes -> int -> int;

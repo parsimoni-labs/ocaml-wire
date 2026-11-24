@@ -5,6 +5,7 @@ open Codec_repr
 open Codec_elem
 open Codec_compile
 open Codec_seal
+open Codec_fault
 
 (* The codec is built in phases, one module each, in dependency order:
    [Codec_leaf] (one field type at a fixed offset), [Codec_repr] (scratch,
@@ -404,7 +405,7 @@ let decode_params consume e t (c : _ compiled) buf off =
         | Fixed n -> n
         | Variable { min_size; _ } -> min_size
       in
-      check_min_bounds min_size input_end off;
+      check_frame ~faults:c.faults min_size runtime input_end buf off;
       let arr = c.decode_scratch () in
       c.clear_scratch arr;
       (match e with
@@ -545,10 +546,10 @@ let to_struct t =
 let validate_first (t : _ t) buf off = (compiled t).plain_validate buf off
 
 (* [valid] inlines this, so the error stays a call. *)
-let validate_fixed min_size pass buf off =
+let validate_fixed ~faults min_size pass buf off =
   let input_end = Input_end.of_bytes buf in
   if off < 0 || off > Input_end.to_int input_end - min_size then
-    (min_bounds_error [@inlined never]) min_size buf off
+    short ~faults min_size buf off
   else
     match pass with
     | No_checks -> ()
@@ -564,7 +565,7 @@ let validate_exn ?env:e (t : _ t) buf off =
       match Atomic.get t.compiled with
       | Some c ->
           if c.fixed_frame >= 0 then
-            validate_fixed c.fixed_frame c.plain_pass buf off
+            validate_fixed ~faults:c.faults c.fixed_frame c.plain_pass buf off
           else c.plain_validate buf off
       | None -> validate_first t buf off)
   | _ ->

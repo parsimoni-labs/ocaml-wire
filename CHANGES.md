@@ -255,6 +255,13 @@
 
 ### Fixed
 
+- `decode`, `validate` and the code `Wire_ocaml` generates report a field
+  that fails its check before the end of input, as the validator 3D
+  generates does. A record that did not fit its input reported `unexpected
+  EOF` even when a field that fits failed its constraint, its enum or a
+  `where` clause over the fields before it, or a field of a sub-codec did
+  (@samoht)
+
 - `decode` and `validate` check a nested record against the region that
   holds it, so an error inside one counts the bytes of that region. A packet
   in a frame of a large buffer reported `unexpected EOF: expected 20 bytes,

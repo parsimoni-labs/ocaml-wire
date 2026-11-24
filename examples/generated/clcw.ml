@@ -279,9 +279,11 @@ let pp ppf (r : t) =
   Format.pp_print_string ppf " }";
   Format.pp_close_box ppf ()
 
+let[@inline never] short buf off =
+  Wire_runtime.Errors.frame ~size ~len:(Bytes.length buf) off
+
 let[@inline never] fail buf off =
-  if off < 0 || off > Bytes.length buf - size then
-    Wire_runtime.Errors.frame ~size ~len:(Bytes.length buf) off;
+  if off < 0 || off > Bytes.length buf - size then short buf off;
   no_error ()
 
 let[@inline never] too_short buf off =
@@ -1034,11 +1036,14 @@ module Global = struct
 end
 
 module Bigstring = struct
+  let[@inline never] short buf off =
+    Wire_runtime.Errors.frame ~size
+      ~len:(Wire_runtime.Unchecked.Bigstring.length buf)
+      off
+
   let[@inline never] fail buf off =
     if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
-      Wire_runtime.Errors.frame ~size
-        ~len:(Wire_runtime.Unchecked.Bigstring.length buf)
-        off;
+      short buf off;
     no_error ()
 
   let[@inline never] too_short buf off =

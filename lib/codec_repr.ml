@@ -1133,6 +1133,13 @@ type ('f, 'r) record =
         (int (* byte offset *)
         * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
         list;
+      faults_rev :
+        (string list
+        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
+        list;
+          (* Each field's checks, its reads bounded by the input, with the
+             names it brings in scope: what a record that does not fit runs,
+             in field order, for a check that fails before its end. *)
       field_actions_rev : (string * compiled_action) list;
       n_fields : int; (* count of named fields (for field indexing) *)
       n_array_slots : int;
@@ -1238,6 +1245,11 @@ type 'r compiled = {
       (* The frame of a fixed-size codec, or -1: with [plain_pass], what
          [validate] of a codec without parameters runs with no closure call. *)
   plain_pass : pass; (* [validate] for a codec without parameters. *)
+  faults : runtime -> Input_end.t -> bytes -> int -> unit;
+      (* The record's checks in field order, each field checked once it is
+         read within the input: raises the first that fails, or end of input
+         at the first field that does not fit. Run only on a record that does
+         not fit. *)
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
       (* [validate] for a codec embedded in another: the same bounds check and
          the same field pass, with parameters resolved by name against the
@@ -1322,6 +1334,7 @@ let record_start ?where ?doc name make =
       used_slots = Hashtbl.create 8;
       validators_rev = [];
       checkers_rev = [];
+      faults_rev = [];
       field_actions_rev = [];
       n_fields = 0;
       n_array_slots = 0;

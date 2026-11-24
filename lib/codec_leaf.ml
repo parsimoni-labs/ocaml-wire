@@ -30,9 +30,6 @@ let frame_error min_size input_end off =
   if off < 0 then Errors.negative_offset off;
   raise_eof ~at:off ~expected:min_size ~got:(bytes_from input_end off)
 
-let min_bounds_error min_size buf off =
-  frame_error min_size (Input_end.of_bytes buf) off
-
 (* The structural bounds check decode runs before reading any field: the buffer
    must hold at least [min_size] bytes, and the codec's resolved wire size must
    fit. Shared with [validate] so a constraint-free codec is still bounds-checked

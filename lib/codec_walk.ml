@@ -889,9 +889,10 @@ let[@inline never] settle fail c base =
   fail c.wend c.wbuf base;
   unwalked ()
 
-(* The record at [base] does not fit before [stop]. *)
-let[@inline never] unframed min_size stop base =
-  Codec_leaf.check_min_bounds min_size stop base;
+(* The record at [base] does not fit before [stop]: [unfit] raises its
+   error. *)
+let[@inline never] unframed unfit c base =
+  unfit c.wend c.wbuf base;
   unwalked ()
 
 (* The fields [body] walks, then the [where] clause of a frame of [size] bytes,
@@ -924,7 +925,7 @@ let conditions ~size checks =
 (* The walk tests the fixed-offset fields in the form the check pass picks:
    one word test, the staged word tests, or the scan of the flat tests. The
    frame check comes first, so the unchecked reads stay in the record. *)
-let record_walk ~errors ~min_size ~start ~fail ~where checks body =
+let record_walk ~errors ~min_size ~start ~fail ~unfit ~where checks body =
   let within =
     Array.of_list
       (List.filter_map
@@ -938,7 +939,7 @@ let record_walk ~errors ~min_size ~start ~fail ~where checks body =
   let[@inline] frame c =
     let base = c.wpos and stop = c.wend in
     if base < 0 || base > Input_end.to_int stop - min_size then
-      if errors then unframed min_size stop base else unwalked ();
+      if errors then unframed unfit c base else unwalked ();
     base
   in
   let[@inline] rest c base =
@@ -1110,7 +1111,7 @@ let places ~start places =
 
 (* The walk of a sealed record without parameters, while every field has one
    and its [where] clause reads only fixed-offset fields. *)
-let record ~n_params ~min_size ~prefix ~where ~fail make = function
+let record ~n_params ~min_size ~prefix ~where ~fail ~unfit make = function
   | Some w when n_params = 0 -> (
       match Option.map (cond_at prefix) where with
       | exception Exit -> None
@@ -1119,7 +1120,7 @@ let record ~n_params ~min_size ~prefix ~where ~fail make = function
           let checks = List.rev w.wchecks_rev in
           let fields = List.rev w.wplaces_rev in
           let walk ~errors body =
-            record_walk ~errors ~min_size ~start ~fail ~where checks body
+            record_walk ~errors ~min_size ~start ~fail ~unfit ~where checks body
           in
           match
             ( stage make (readers ~names:false w.wreaders),

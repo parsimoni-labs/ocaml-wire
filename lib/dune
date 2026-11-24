@@ -18,6 +18,7 @@
   codec_view
   codec_layout
   codec_walk
+  codec_fault
   codec_seal
   codec_struct
   codec_words)
