@@ -540,11 +540,8 @@ let[@inline always] frames_record ~buf ~base ~stop ~current ~invalid ~valid
       ~ipv4_udp_checksum:0 ~ipv4_opaque_present:false
 
 let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
-  if
-    stride <= 0 || off < 0 || len < 0
-    || off > Bytes.length buf
-    || len > Bytes.length buf - off
-  then invalid_arg "fold_frames: invalid frame bounds or stride";
+  if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then
+    invalid_arg "fold_frames: invalid frame bounds or stride";
   let acc = ref init in
   let cursor = ref off in
   let last = off + len - stride in

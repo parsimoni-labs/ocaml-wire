@@ -286,13 +286,15 @@
     ahead_past_window_ox.mutant:scanner-ox/34:Stack.WireEthernetStack:64))))
 
 ; Checks that no input needs: each check of a generated function is taken
-; out in turn, and the code without it must read in bounds (or the check is
-; needed for safety) and answer as the code with it, which the equivalence
-; lane proves equal to the specification (or the check is needed for
-; semantics). The first check of fold, off < 0, and the IPv4 header check
-; are needed for safety. fold_frames, which raises Invalid_argument for bad
-; arguments, tests off > Bytes.length buf, which len < 0 and
-; len > Bytes.length buf - off imply.
+; out in turn. The code without it must read in bounds and raise nothing, or
+; the check is needed for safety, and must answer as the code with it on
+; every input, or the check is needed for semantics; otherwise it is
+; redundant. fold and frames_record answer accept or reject, which the
+; equivalence lane proves equal to the specification; fold_frames with any
+; arguments answers whether it raises Invalid_argument, for its argument
+; checks (its other checks are those of fold and frames_record). Every check
+; of the three on the OCaml scanner is classified, and the run fails if one
+; is redundant or undecided, or if it finds none.
 
 (rule
  (alias runtest)
@@ -302,37 +304,70 @@
    %{bin-available:z3}))
  (deps %{project_root}/examples/generated/stack.ml Stack.3d)
  (action
+  (run
+   ./main.exe
+   --classify-checks
+   --expect
+   safety,semantics
+   .
+   %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128)))
+
+; The same on the step scanner, and on OxCaml for fold and frames_record
+; and their step forms, which take minutes more: BUILD_EVERPARSE=1 dune build
+; @verify/classify. The argument checks of the OxCaml frame loops are not
+; classified: walking their unrolled loop without stride <= 0 takes over an
+; hour; they are the checks of the OCaml frame loop, written by the same
+; code.
+
+(rule
+ (alias classify)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   %{bin-available:z3}))
+ (deps stack_ox.gen stack_step.gen stack_step_ox.gen Stack.3d)
+ (action
   (progn
    (run
     ./main.exe
     --classify-checks
-    --only
-    fold
-    --check
-    "off < 0"
     --expect
-    safety
+    safety,semantics
     .
-    %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128)
+    stack_step.gen:step/34:Stack.WireEthernetStack:128)
    (run
     ./main.exe
     --classify-checks
     --only
     fold
-    --check
-    "(stop : int) < 34"
     --expect
-    safety
+    safety,semantics
     .
-    %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128)
+    stack_ox.gen:scanner-ox/34:Stack.WireEthernetStack:128)
    (run
     ./main.exe
     --classify-checks
     --only
-    "fold_frames, any arguments"
-    --check
-    "off > (Bytes.length buf)"
+    frames_record
     --expect
-    redundant
+    safety,semantics
     .
-    %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128))))
+    stack_ox.gen:scanner-ox/34:Stack.WireEthernetStack:128)
+   (run
+    ./main.exe
+    --classify-checks
+    --only
+    fold_step
+    --expect
+    safety,semantics
+    .
+    stack_step_ox.gen:step-ox/34:Stack.WireEthernetStack:128)
+   (run
+    ./main.exe
+    --classify-checks
+    --only
+    frames_step_record
+    --expect
+    safety,semantics
+    .
+    stack_step_ox.gen:step-ox/34:Stack.WireEthernetStack:128))))

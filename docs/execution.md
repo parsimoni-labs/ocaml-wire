@@ -221,10 +221,12 @@ The invariants above hold for the generated code as follows.
   offsets and sizes with saturating arithmetic, capped at
   `Sys.max_string_length + 1`. No buffer is that long, so a prefix that ends
   there fails its bound check, and no sum wraps. The entry of `fold` and
-  `decode` checks `off` and `len` against the buffer. Where the walk starts
-  with the bound check of a prefix, that check rejects a negative `len`, and
-  `len > Bytes.length buf - off` then rejects an `off` past the buffer, so the
-  entry tests `off < 0` and that bound only. `fold_index_step` makes the
+  `decode` checks `off` and `len` against the buffer. With `len` not
+  negative, `len > Bytes.length buf - off` rejects an `off` past the buffer,
+  so no entry tests `off > Bytes.length buf`. Where the walk starts with the
+  bound check of a prefix, that check rejects a negative `len`, so the entry
+  tests `off < 0` and that bound only; the frame loops test `len < 0` too,
+  and raise `Invalid_argument` instead of rejecting. `fold_index_step` makes the
   same test for each frame of its index, against the buffer's length read
   once before its loop, and checks once that its two arrays have the same
   length, so that the loop reads both without a bound check. It loads a
@@ -338,3 +340,21 @@ absent field as zero. The sampled shapes are compared with those validators
 too, on acceptance, the bytes consumed and their top-level integer members.
 On OxCaml the scanners hold integers as `int64_u`; the
 paranoid profile checks each of their loads too, on the full 64-bit index.
+
+With `BUILD_EVERPARSE=1` and z3, `verify/` executes the packet-stack
+scanner symbolically and has Z3 prove every unchecked read in bounds and,
+in `@verify/equivalence`, every answer equal to the EverParse
+specification's. It also shows that the scanner makes no check it could do
+without: each check is taken out in turn, and the code without it must read
+out of bounds or raise on some input (the check is needed for safety), or
+answer differently from the code with it (needed for semantics). `fold` and
+`frames_record` answer accept or reject; `fold_frames`, given any
+arguments, answers whether it raises `Invalid_argument`, which is what its
+argument checks decide. Runtest classifies every check of these three on
+OCaml, 28 in all, and fails if one is redundant or undecided, or if it
+finds none. `@verify/classify` does the same for the step scanner, and on
+OxCaml for `fold`, `frames_record` and their step forms; the argument
+checks of the OxCaml frame loops, written by the same code as on OCaml, are
+not classified there. The classifier does not show that a loop ends, so
+`stride <= 0` is needed because a negative stride must raise, not because
+a zero one would loop.

@@ -182,12 +182,12 @@ let rec fixed_need = function
 let checks_len plan =
   match plan.nodes with Prefix (_, n) :: _ -> n > 0 | _ -> false
 
-(* The entry tests [len < 0] and [off > length] unless {!checks_len} holds:
-   then the walk's first check rejects a negative [len], and
-   [len > length - off] an [off] past the buffer. [length] is the length of
-   [buf], an [int64_u] with [unboxed_length]: the bounds are then tested on
-   the [int64_u] position and length, as the sign of one [logor], where an
-   [int] holds no 64-bit difference of them that could wrap. *)
+(* The entry tests [len < 0] unless {!checks_len} holds, when the walk's
+   first check rejects a negative [len]. With [len] not negative,
+   [len > length - off] rejects an [off] past the buffer. [length] is the
+   length of [buf], an [int64_u] with [unboxed_length]: the bounds are then
+   tested on the [int64_u] position and length, as the sign of one [logor],
+   where an [int] holds no 64-bit difference of them that could wrap. *)
 let pp_entry ?cuts ?(length = "Bytes.length buf") ?(unboxed_length = false)
     ~name ~scope s ~reject ~accept =
   let unboxed = s.m.num = Unboxed in
@@ -202,9 +202,7 @@ let pp_entry ?cuts ?(length = "Bytes.length buf") ?(unboxed_length = false)
   else begin
     Fmt.pf s.ppf "if %s then %s else@\n"
       (if checks_len s.plan then Fmt.str "off < 0 || len > %s - off" length
-       else
-         Fmt.str "off < 0 || len < 0 || off > %s || len > %s - off" length
-           length)
+       else Fmt.str "off < 0 || len < 0 || len > %s - off" length)
       reject;
     Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
       (if unboxed then "U.of_int off" else "off")
@@ -447,7 +445,9 @@ let frames_scope ?step s ~unboxed =
   | None -> ([ ("current", None); ("invalid", None); ("valid", None) ], "")
 
 (* The start of the frame loop [name]: its parameters, the check of its
-   bounds and stride, and its accumulator, cursor and last offset. *)
+   bounds and stride, and its accumulator, cursor and last offset. With
+   [len] not negative, [len > Bytes.length buf - off] rejects an [off] past
+   the buffer. *)
 let pp_frames_head s ~name ~unboxed ~callbacks =
   let ppf = s.ppf and native = s.m.num = Unboxed in
   Fmt.pf ppf "let[@inline always] %s%s %s off len ~stride %s %s =@\n" name
@@ -456,8 +456,7 @@ let pp_frames_head s ~name ~unboxed ~callbacks =
     (if unboxed then "~(init : a)" else "~init")
     callbacks;
   Fmt.pf ppf
-    "if stride <= 0 || off < 0 || len < 0 || off > Bytes.length buf || len > \
-     Bytes.length buf - off then@\n\
+    "if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then@\n\
      invalid_arg \"%s: invalid frame bounds or stride\";@\n"
     name;
   if native then

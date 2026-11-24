@@ -1703,12 +1703,13 @@ let test_decisions () =
   | _ -> Alcotest.fail "decisions of a refused codec"
   | exception Invalid_argument _ -> ()
 
-(* The entry of a scan tests [len < 0] and [off > Bytes.length buf] only when
-   the walk does not start with the bound check of a prefix: that check
-   rejects a negative [len], and [len > Bytes.length buf - off] then rejects
-   an [off] past the buffer. *)
+(* The entry of a scan tests [len < 0] only when the walk does not start with
+   the bound check of a prefix, which rejects a negative [len]. Neither it
+   nor a frame loop tests [off > Bytes.length buf]: with [len] not negative,
+   [len > Bytes.length buf - off] rejects an [off] past the buffer. *)
 let test_entry_bounds () =
-  let full = "if off < 0 || len < 0 || off > Bytes.length buf ||" in
+  let full = "if off < 0 || len < 0 || len > Bytes.length buf - off then" in
+  let past = "off > Bytes.length buf ||" in
   let short = "if off < 0 || len > Bytes.length buf - off then" in
   let stack = Wire_ocaml.scanner ~codec:"c" Packet_stack.codec in
   let ox = Wire_ocaml.scanner ~target:`OxCaml ~codec:"c" Packet_stack.codec in
@@ -1717,15 +1718,21 @@ let test_entry_bounds () =
       Alcotest.(check bool)
         (what ^ ": the short entry")
         true (contains src short);
-      Alcotest.(check bool) (what ^ ": no full entry") false (contains src full))
+      Alcotest.(check bool) (what ^ ": no full entry") false (contains src full);
+      Alcotest.(check bool)
+        (what ^ ": no test of off past the buffer")
+        false (contains src past))
     [ ("OCaml", stack); ("OxCaml", ox) ];
   let region =
     Codec.v "Region" Fun.id
       Codec.[ Field.v "a" (nested ~size:(int 4) uint32be) $ Fun.id ]
   in
   Alcotest.(check bool)
-    "a walk that starts with a region keeps both" true
-    (contains (Wire_ocaml.scanner ~codec:"c" region) full)
+    "a walk that starts with a region tests len < 0" true
+    (contains (Wire_ocaml.scanner ~codec:"c" region) full);
+  Alcotest.(check bool)
+    "a walk that starts with a region tests no off past the buffer" false
+    (contains (Wire_ocaml.scanner ~codec:"c" region) past)
 
 (* A region's window holds the bytes the range of its size proves: in a region
    of constant size, the record it holds checks no bound and its exact end is
