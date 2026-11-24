@@ -585,14 +585,17 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
   | Tagged, Some a when bytes = 1 || endian = T.Big ->
       let i64 = i64 m.src and shift = 8 * (a + 8 - k - bytes) in
       let v =
-        Fmt.str "%s.to_int (%s.shift_right_logical w%d %d)" i64 i64 a shift
+        if shift = 0 then Fmt.str "%s.to_int w%d" i64 a
+        else Fmt.str "%s.to_int (%s.shift_right_logical w%d %d)" i64 i64 a shift
       in
       if a = k || raw then Fmt.str "(%s)" v
       else if bytes = 4 then mask32 v
       else Fmt.str "(%s land 0x%x)" v ((1 lsl (8 * bytes)) - 1)
   | Unboxed, Some a when bytes > 1 && endian = T.Big ->
+      let shift = 8 * (a + 8 - k - bytes) in
       let shifted =
-        Fmt.str "(U.shift_right_logical w%d %d)" a (8 * (a + 8 - k - bytes))
+        if shift = 0 then Fmt.str "w%d" a
+        else Fmt.str "(U.shift_right_logical w%d %d)" a shift
       in
       if a = k then shifted
       else
