@@ -295,6 +295,19 @@ let relation num op a b =
   | Boxed -> Fmt.str "((%s : int64) %s %s)" a op b
   | Unboxed -> Fmt.str "(U.compare %s %s %s 0)" a b op
 
+(* The test that [v] lies outside [lo, hi]. An [int64_u] is tested as one
+   unsigned comparison of [v - lo] with [hi - lo], which wraps a [v] below
+   [lo] past [hi - lo]. *)
+let outside_range num v ~lo ~hi =
+  match num with
+  | Unboxed ->
+      let d = if lo = 0 then v else binop num "-" v (lit num lo) in
+      Fmt.str "(B.unsigned_compare %s %s > 0)" d (lit num (hi - lo))
+  | Tagged | Boxed ->
+      Fmt.str "%s || %s"
+        (relation num "<" v (lit num lo))
+        (relation num ">" v (lit num hi))
+
 (* An [int64] or [int64_u] holds the value of a 63-bit [int]
    sign-extended. *)
 let normalise63 num v =
@@ -1260,9 +1273,8 @@ let prefix w fields size p ~need ~after k =
               w.m.decide (word_range_decision w p f g lo hi);
               let w = field ~checked:false (field ~checked:false w f) g in
               let num = w.m.num in
-              pf w "if %s || %s then %s else@\n"
-                (relation num "<" word (lit num lo))
-                (relation num ">" word (lit num hi))
+              pf w "if %s then %s else@\n"
+                (outside_range num word ~lo ~hi)
                 (w.m.fail Bounds);
               let conditions =
                 List.map (fun c -> c.cond) (f.checks @ g.checks)

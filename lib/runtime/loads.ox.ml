@@ -15,6 +15,9 @@ let[@inline always] offset off =
     invalid_arg "index out of bounds";
   o
 
+external unsigned_compare : int64_u -> int64_u -> int @@ portable
+  = "%int64#_unsigned_compare"
+
 module Local = struct
   external get8 : bytes @ local -> int -> char @@ portable = "%bytes_unsafe_get"
   external set8 : bytes @ local -> int -> char -> unit @@ portable = "%bytes_unsafe_set"
