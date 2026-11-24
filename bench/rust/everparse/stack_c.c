@@ -1,11 +1,13 @@
-/* Packet-stack benchmark, EverParse C row.
+/* Packet-stack benchmark, EverParse C rows.
 
    The validator EverParse generates and verifies for Packet_stack.codec,
    called once per corpus slot with the slot as its input, as the OCaml rows
-   bound each frame by its slot. The fields come from the default
-   EthernetStack_Fields plug, zeroed before each validation, and are folded
-   into the checksum bench.ml and cargo/src/main.rs compute. No field is read
-   from the bytes here: every value is a named plug member the validator set.
+   bound each frame by its slot. In the default-plug row the fields come from
+   the default EthernetStack_Fields plug, zeroed before each validation, and
+   are folded into the checksum bench.ml and cargo/src/main.rs compute; the
+   inline-plug row (stack_inline.c) folds the same members of a custom plug.
+   No field is read from the bytes here: every value is a named plug member
+   the validator set.
 
    Each pass is timed in process CPU time (getrusage, user and system) and
    wall time, after one warm-up pass that gives the checksum, and printed as
@@ -28,6 +30,7 @@
 #include "CapturedStack_Fields.h"
 
 #include "bench_common.h"
+#include "stack_fold.h"
 
 #define STR_(x) #x
 #define STR(x) STR_(x)
@@ -44,12 +47,10 @@
 #else
 #define CC_NAME "cc"
 #endif
-#define ROW "EverParse C, default plug"
-#define ROW_NAME ROW " (" CC_NAME ")"
 
 /* Called with the stride the command line gives, as the OCaml and Rust rows
    take it. */
-static uint64_t stack_fold(uint8_t *buf, size_t len, uint32_t stride) {
+static uint64_t stack_default_fold(uint8_t *buf, size_t len, uint32_t stride) {
   uint64_t acc = 0;
   size_t n = len / stride;
   for (size_t i = 0; i < n; i++) {
@@ -75,6 +76,18 @@ static uint64_t stack_fold(uint8_t *buf, size_t len, uint32_t stride) {
   }
   return acc;
 }
+
+struct row {
+  const char *name;
+  uint64_t (*fold)(uint8_t *, size_t, uint32_t);
+};
+
+static const struct row rows[] = {
+    {"EverParse C, default plug", stack_default_fold},
+    {"EverParse C, inline plug", stack_inline_fold},
+};
+
+#define ROWS (sizeof rows / sizeof rows[0])
 
 static double cpu_time(void) {
   struct rusage ru;
@@ -103,15 +116,30 @@ static void quantiles(double *t, size_t n, double q[4]) {
   q[3] = t[(n - 1) * 90 / 100];
 }
 
-/* The name a filter selects the row by. */
-CAMLprim value ep_stack_row(value v_unit) {
+CAMLprim value ep_stack_rows(value v_unit) {
   CAMLparam1(v_unit);
-  CAMLreturn(caml_copy_string(ROW));
+  CAMLreturn(Val_long(ROWS));
 }
 
-CAMLprim value ep_stack_run(value v_corpus, value v_buf, value v_stride,
-                            value v_runs) {
-  CAMLparam4(v_corpus, v_buf, v_stride, v_runs);
+static const struct row *row_of(value v_row) {
+  long i = Long_val(v_row);
+  if (i < 0 || (size_t)i >= ROWS) {
+    fprintf(stderr, "everparse.exe: no row %ld\n", i);
+    exit(1);
+  }
+  return &rows[i];
+}
+
+/* The name a filter selects row [v_row] by. */
+CAMLprim value ep_stack_row(value v_row) {
+  CAMLparam1(v_row);
+  CAMLreturn(caml_copy_string(row_of(v_row)->name));
+}
+
+CAMLprim value ep_stack_run(value v_row, value v_corpus, value v_buf,
+                            value v_stride, value v_runs) {
+  CAMLparam5(v_row, v_corpus, v_buf, v_stride, v_runs);
+  const struct row *row = row_of(v_row);
   uint8_t *buf = (uint8_t *)Bytes_val(v_buf);
   size_t len = caml_string_length(v_buf);
   uint32_t stride = (uint32_t)Long_val(v_stride);
@@ -128,11 +156,11 @@ CAMLprim value ep_stack_run(value v_corpus, value v_buf, value v_stride,
     exit(1);
   }
   volatile uint64_t sink;
-  uint64_t sum = stack_fold(buf, len, stride);
+  uint64_t sum = row->fold(buf, len, stride);
   for (size_t r = 0; r < runs; r++) {
     double w0 = wall_time();
     double c0 = cpu_time();
-    sink = stack_fold(buf, len, stride);
+    sink = row->fold(buf, len, stride);
     double c1 = cpu_time();
     double w1 = wall_time();
     cpu[r] = (c1 - c0) * 1e9 / packets;
@@ -142,9 +170,9 @@ CAMLprim value ep_stack_run(value v_corpus, value v_buf, value v_stride,
   double c[4], w[4];
   quantiles(cpu, runs, c);
   quantiles(wall, runs, w);
-  printf("RESULT\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%llu\n",
-         String_val(v_corpus), ROW_NAME, c[0], c[1], c[2], c[3], w[0], w[1],
-         w[2], w[3], (unsigned long long)(sum & ((UINT64_C(1) << 62) - 1)));
+  printf("RESULT\t%s\t%s (%s)\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%llu\n",
+         String_val(v_corpus), row->name, CC_NAME, c[0], c[1], c[2], c[3],
+         w[0], w[1], w[2], w[3], (unsigned long long)(sum & ((UINT64_C(1) << 62) - 1)));
   fflush(stdout);
   free(cpu);
   free(wall);

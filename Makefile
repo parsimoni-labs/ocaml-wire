@@ -145,7 +145,7 @@ bench-rust:
 	  BUILD_EVERPARSE=1 dune build --profile=bench \
 	    bench/rust/everparse/everparse.exe && \
 	  $(call bench_rust_each,_build/default/bench/rust/everparse/everparse.exe,everparse); \
-	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
+	else echo "BUILD_EVERPARSE unset: skipping the EverParse C rows"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
 
 # A MAWI trace (samplepoint-F, 2025-11-15 14:00, 15 minutes), its first
@@ -202,7 +202,7 @@ bench-flow: $(BENCH_FLOW_TRACE)
 # The instructions and cycles each row of bench-rust spends per packet, as
 # bench-apps-count counts them below, on each corpus of BENCH_RUST_CORPORA
 # with BENCH_RUST_PACKETS packets, and with BUILD_EVERPARSE=1 the EverParse C
-# row too. Results in _build/bench-rust-count/counts.tsv: label, instructions
+# rows too. Results in _build/bench-rust-count/counts.tsv: label, instructions
 # and cycles per packet, and the row's checksum.
 BENCH_RUST_COUNT_DIR = _build/bench-rust-count
 # $(1) a harness and its arguments up to the corpus, $(2) a label prefix: each
@@ -233,7 +233,7 @@ bench-rust-count:
 	  BUILD_EVERPARSE=1 dune build --profile=bench \
 	    bench/rust/everparse/everparse.exe && \
 	  $(call bench_rust_count_rows,_build/default/bench/rust/everparse/everparse.exe,); \
-	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
+	else echo "BUILD_EVERPARSE unset: skipping the EverParse C rows"; fi
 	@cat $(BENCH_RUST_COUNT_DIR)/counts.tsv
 
 # The application benchmarks (bench/routing, bench/gateway, bench/clcw) across

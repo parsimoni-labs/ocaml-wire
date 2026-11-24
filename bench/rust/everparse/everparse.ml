@@ -1,12 +1,12 @@
-(* The EverParse C row of the packet-stack benchmark.
+(* The EverParse C rows of the packet-stack benchmark.
 
    everparse.exe FILE STRIDE RUNS [ROW | --list]
 
    times the verified C validator of Packet_stack.codec on the corpus FILE of
    STRIDE-byte slots, as bench.exe run and cargo/src/main.rs time theirs: the
-   C loop, its timing and its RESULT line are in stack_c.c. With ROW, it runs
-   only if ROW is the row's name, and fails otherwise; --list prints the row's
-   name.
+   C loops, their timing and their RESULT lines are in stack_c.c and
+   stack_inline.c. With ROW, it runs only the row of that name, and fails if
+   there is none; --list prints the rows' names.
 
    everparse.exe flow FILE RUNS [ROW | --list]
 
@@ -25,10 +25,11 @@ let flow file runs =
   in
   flow_run (Filename.remove_extension (Filename.basename file)) buf runs
 
-external row : unit -> string = "ep_stack_row"
-external run : string -> bytes -> int -> int -> unit = "ep_stack_run"
+external rows : unit -> int = "ep_stack_rows"
+external row : int -> string = "ep_stack_row"
+external run : int -> string -> bytes -> int -> int -> unit = "ep_stack_run"
 
-let time file stride runs =
+let time file stride runs rows =
   let stride = int_of_string stride and runs = int_of_string runs in
   let buf =
     Bytes.unsafe_of_string (In_channel.with_open_bin file In_channel.input_all)
@@ -38,21 +39,27 @@ let time file stride runs =
   if Bytes.length buf mod stride <> 0 then
     Fmt.failwith "everparse.exe: %s is not a whole number of %d-byte slots" file
       stride;
-  run (Filename.remove_extension (Filename.basename file)) buf stride runs
+  let corpus = Filename.remove_extension (Filename.basename file) in
+  List.iter (fun i -> run i corpus buf stride runs) rows
 
 let () =
+  let all = List.init (rows ()) Fun.id in
   match Array.to_list Sys.argv with
   | [ _; "flow"; file; runs ] -> flow file runs
   | [ _; "flow"; _; _; "--list" ] -> print_endline (flow_row ())
   | [ _; "flow"; file; runs; name ] when String.equal name (flow_row ()) ->
       flow file runs
-  | [ _; file; stride; runs ] -> time file stride runs
-  | [ _; _; _; _; "--list" ] -> print_endline (row ())
-  | [ _; file; stride; runs; name ] when String.equal name (row ()) ->
-      time file stride runs
-  | [ _; _; _; _; name ] ->
+  | [ _; "flow"; _; _; name ] ->
       Fmt.epr "no row is named %S@." name;
       exit 1
+  | [ _; file; stride; runs ] -> time file stride runs all
+  | [ _; _; _; _; "--list" ] -> List.iter (fun i -> print_endline (row i)) all
+  | [ _; file; stride; runs; name ] -> (
+      match List.filter (fun i -> String.equal name (row i)) all with
+      | [] ->
+          Fmt.epr "no row is named %S@." name;
+          exit 1
+      | rows -> time file stride runs rows)
   | _ ->
       prerr_endline
         "usage: everparse.exe (FILE STRIDE RUNS | flow FILE RUNS) [ROW | \
