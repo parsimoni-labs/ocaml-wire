@@ -1053,13 +1053,50 @@ let shared w ~k ~constant ~lo ~hi ~held fields loads =
   Shared_words
     { at = k; constant; lo; hi; window = w.limit; fields; held; loads }
 
+(* The words of [fields] whose two bitfields a prefix tests as one range of
+   the word, each with that range. *)
+let ranged_words w fields =
+  let rec pairs = function
+    | f :: (g :: rest' as rest) -> (
+        match Planner.word_range f g with
+        | Some r -> r :: pairs rest'
+        | None -> pairs rest)
+    | _ -> []
+  in
+  if w.m.ranged then pairs fields else []
+
+(* The big-endian 16-bit bitfield words of [fields] whose [live] fields all
+   lie in their first byte, which is the high byte of the word: read as the
+   16-bit little-endian load that ends on that byte, one load and no swap,
+   whose low byte, the byte before the word, no field reads. A word tested
+   as one range is read whole. *)
+let high_byte_words w fields live =
+  let ranged = List.map (fun (at, _, _) -> at) (ranged_words w fields) in
+  if w.m.num <> Unboxed then []
+  else
+    List.filter_map
+      (fun f ->
+        match f.store with
+        | Bits { base = T.U16 T.Big as base; _ } ->
+            let at = (f.offset, base) in
+            let high g =
+              match g.store with
+              | Bits { base = base'; shift; _ } ->
+                  base' <> base || g.offset <> f.offset || shift >= 8
+              | _ -> true
+            in
+            if List.for_all high live && not (List.mem at ranged) then Some at
+            else None
+        | _ -> None)
+      live
+
 (* The words a prefix at [o + k] of [size] bytes loads once: the 64-bit ones
    two or more live fields share, then each word of a live bitfield, which
    the bitfields' views read. With [Boxed], the words are [shared_words]
    between [lo] and [hi]. A prefix at a constant offset of the window
    ([constant]) reads the words loaded before it and keeps its own for the
    prefixes after it. *)
-let load_words w ~o ~k ~size ~constant ~lo ~hi ~later live =
+let load_words w ~o ~k ~size ~constant ~lo ~hi ~later ~fields live =
   let m = w.m in
   (* A 32-bit field bound as its [int32] is one load of its own. *)
   let worded =
@@ -1069,6 +1106,7 @@ let load_words w ~o ~k ~size ~constant ~lo ~hi ~later live =
       live
   in
   let held = if constant then w.held else [] in
+  let high = high_byte_words w fields live in
   let fresh =
     match m.num with
     | Boxed ->
@@ -1101,8 +1139,12 @@ let load_words w ~o ~k ~size ~constant ~lo ~hi ~later live =
     |> List.map (fun (at, base) ->
         let v = w.fresh "bw" in
         pf w "let %s = %s in@\n" v
-          (unsigned m ~size:(k + size) ~lo:w.disp ~o ~words ~k:(k + at)
-             ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ());
+          (if List.mem (at, base) high && k + at - 1 >= w.disp then
+             Fmt.str "(U.of_int %s)"
+               (load m ~o ~k:(k + at - 1) ~bytes:2 ~endian:T.Little)
+           else
+             unsigned m ~size:(k + size) ~lo:w.disp ~o ~words ~k:(k + at)
+               ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ());
         ((at, base), v))
   in
   (List.fold_left bind_bitword w bitwords, words, bitwords)
@@ -1264,7 +1306,7 @@ let prefix w fields size p ~need ~after k =
     else []
   in
   let w, words, bitwords =
-    load_words w ~o ~k:at ~size ~constant ~lo ~hi ~later live
+    load_words w ~o ~k:at ~size ~constant ~lo ~hi ~later ~fields live
   in
   let field ?checked w f = field ?checked w ~o ~k:at ~size ~words ~bitwords f in
   let rec go w = function
