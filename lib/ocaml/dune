@@ -5,6 +5,7 @@
   planner
   decision
   dispatch_tree
+  lines
   emitter
   record_module
   scan_module

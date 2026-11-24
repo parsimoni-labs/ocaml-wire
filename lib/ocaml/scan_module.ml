@@ -719,7 +719,7 @@ let selected (plan : plan) = function
       List.filter (fun (o : output) -> List.mem o.name wanted) plan.outputs
 
 let without_dead_bindings text =
-  String.concat "\n" (prune (String.split_on_char '\n' text))
+  String.concat "\n" (Lines.prune (String.split_on_char '\n' text))
 
 (* The scanner after its header: the walks, the outputs and their printer. *)
 let pp_body ?step s =

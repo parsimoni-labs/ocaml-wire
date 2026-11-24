@@ -157,10 +157,6 @@ val output_text : w -> output -> string
 (** [output_text w o] is the text of the value of [o] at the position of [w]:
     its literal where it is known absent or present. *)
 
-val prune : string list -> string list
-(** [prune lines] is [lines] without each binding [let x = e in] that no later
-    line of its function reads. *)
-
 val lit : num -> int -> string
 (** [lit num n] is the literal [n] in the integers of [num]. *)
 
