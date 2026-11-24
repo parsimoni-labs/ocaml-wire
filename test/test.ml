@@ -19,6 +19,7 @@ let () =
       Test_codec_dependent.suite;
       Test_codec_embed.suite;
       Test_codec_optional.suite;
+      Test_codec_fault.suite;
       Test_codec_repeat.suite;
       Test_codec_casetype.suite;
       Test_codec_union.suite;

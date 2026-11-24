@@ -958,6 +958,37 @@ let test_bigstring () =
     Alcotest.(check string) "write" on_bytes on_big
   done
 
+(* A record that does not fit reports the first field in order that fails a
+   check where it fits, before the end of input, as the validator 3d.exe
+   generates does: [Checked]'s where clause is checked with [Length], the last
+   field it reads. The generated module, on bytes and on a bigarray, answers
+   what the codec does. *)
+let test_short_faults () =
+  let error = function
+    | Ok _ -> "ok"
+    | Error (e : parse_error) -> Fmt.str "%a" pp_parse_error e
+  in
+  List.iter
+    (fun (s, expected) ->
+      let buf = Bytes.of_string s in
+      let check name got =
+        Alcotest.(check string) (Fmt.str "%s %S" name s) expected got
+      in
+      check "codec decode" (error (Codec.decode Schemas.checked buf 0));
+      check "codec validate" (error (Codec.validate Schemas.checked buf 0));
+      check "generated decode" (error (G_checked.decode buf 0));
+      check "generated validate" (error (G_checked.validate buf 0));
+      check "generated bigstring decode"
+        (error (G_checked.Bigstring.decode (bigstring buf) 0));
+      check "generated bigstring validate"
+        (error (G_checked.Bigstring.validate (bigstring buf) 0)))
+    [
+      ("\x55", "Version@0: field constraint violated (value 5)");
+      ("\x45\x00\x00\x00", "@0: where clause violated");
+      ("\x45\x00\x50\x00", "TTL@3: field constraint violated (value 0)");
+      ("\x45\x00\x50\x01", "@0: unexpected EOF: expected 5 bytes, got 4");
+    ]
+
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
    as raising, adds a stack-allocated decode for the generated record, takes
    each buffer it does not keep and the constructor of [decode_with] [local],
@@ -1825,6 +1856,8 @@ let test_interfaces () =
 let suite =
   ( "wire_ocaml",
     [
+      Alcotest.test_case "faults before the end of input" `Quick
+        test_short_faults;
       Alcotest.test_case "scanned arithmetic past the native int" `Quick
         test_scan_overflow;
       Alcotest.test_case "wide arithmetic in a condition the facts decide"
