@@ -611,9 +611,15 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
         else Fmt.str "(U.shift_right_logical w%d %d)" a shift
       in
       if a = k then shifted
-      else
+      else if shift = 0 then
         Fmt.str "(U.logand %s #%LdL)" shifted
           (Int64.pred (Int64.shift_left 1L (8 * bytes)))
+      else
+        (* A field inside the word: two shifts, where a shift and a mask may
+           cost the compiler a register to hold the mask. *)
+        Fmt.str "(U.shift_right_logical (U.shift_left w%d %d) %d)" a
+          (8 * (k - a))
+          (64 - (8 * bytes))
   | Boxed, Some a when bytes = 1 || endian = T.Big ->
       let shift = 8 * (a + 8 - k - bytes) in
       let shifted =
