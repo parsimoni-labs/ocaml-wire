@@ -378,10 +378,189 @@ same checksum. It times its passes in C as the Rust harness does. Every
 field reaches the plug through an out-of-line setter call, 30 for a TCP
 packet; the measurements do not separate that cost from the validator's.
 
-A real capture (length-prefixed frames) is not measured: it has frames of
-every length, which the batch consumers cannot take without a second,
-per-frame code path per row, and padding each frame to a fixed slot would
-change what the parsers accept.
+The batch consumers take fixed-stride slots only, so a real capture, with
+frames of every length, is measured per frame by the flow benchmark below.
+
+## A real trace through a flow classifier (`make bench-flow`)
+
+The corpora above are synthetic: their mix of options, fragments and kinds
+of packet is the one `bench.exe corpus` draws, and the branch predictors
+learn it as such. This benchmark runs the first packets of a real backbone
+trace, held in memory, through a flow classifier on one core, so every row
+meets the trace's own mix of IPv4 and IPv6, ports, flows and lengths.
+
+### The trace
+
+[MAWI](https://mawi.wide.ad.jp/mawi/) samplepoint-F, the public 15-minute
+daily trace of the WIDE backbone (CAIDA's traces need an agreement and are
+not used):
+
+| | |
+|---|---|
+| URL | `http://mawi.wide.ad.jp/mawi/samplepoint-F/2025/202511151400.pcap.gz` |
+| SHA-256 | `a99b91648ec296c1611558878f11828d2cb02d434e77f05153fa0020a6ce266c` |
+| Size | 4,636,631,468 bytes compressed; 180,654,520 packets over 900 s (MAWI's summary) |
+| Link type, snap length | Ethernet, 96 bytes |
+
+`make bench-flow` downloads it into `_build/bench-flow` once, checks the
+SHA-256 on every run, and cuts its first `BENCH_FLOW_PACKETS` packets
+(default 1,000,000) into `_build/bench-flow/mawi.pcap` (71.6 MB for the
+default). Each harness reads that file whole into one buffer and indexes the
+offset and captured length of each frame before timing; the flow table has
+the least power of two at least twice the packets in slots of 64 bytes, 128
+MiB for the default. Nothing of the trace is committed.
+
+`bench.exe flow-mix FILE` counts the mix byte by byte, independently of the
+parsers; on the default 1,000,000 packets:
+
+| | Packets | Share |
+|---|---:|---:|
+| IPv4 | 820,260 | 82.03% |
+| IPv6 | 178,454 | 17.85% |
+| neither (ARP and others) | 1,286 | 0.13% |
+| IPv4 fragments | 393 | 0.04% |
+| IPv4 with options, IPv4 AH, IPv6 extension headers, VLAN tags | 0 | 0% |
+| captured length under the wire length | 776,000 | 77.60% |
+| IPv4 total length past the capture | 617,735 | 61.77% |
+| IPv6 payload length past the capture | 156,836 | 15.68% |
+
+Captured lengths run from 34 to 96 bytes: MAWI keeps the headers and drops
+every payload, so a TCP packet stops after its TCP header (54 bytes, 66 with
+the usual 12 bytes of options) and a UDP packet after its UDP header (42
+bytes). With no extension header in these packets, the IPv6 rows read the
+fixed header and the TCP or UDP header its next header names; an extension
+header ends the walk with no transport header, as in `Packet_stack.ipv6`.
+
+### Truncated captures
+
+On this trace the IPv4 total length runs past the bytes captured in 62% of
+the packets, so the checks of the header benchmark, which bound the payload
+by the total length, would reject most of them. etherparse's API for
+truncated captures, `LaxSlicedPacket`, takes the payload to be what was
+captured when a length runs past it. Every row here does the same, with the
+checks of `Packet_stack.capture` (`examples/net`):
+
+1. Ethernet: 14 bytes captured; EtherType `0x0800` is IPv4 and `0x86dd`
+   IPv6, any other ends the packet without a flow;
+2. IPv4: version 4, a header length of at least 5 words, the header and its
+   options captured, a total length covering the header; IPv6: version 6 and
+   the 40-byte header captured;
+3. unless the packet is an IPv4 fragment, the TCP header (a data offset of at
+   least 5 words, the header and options captured) or the UDP header (8
+   bytes captured, a length of at least 8);
+4. a packet counts only when every header it has passes, as in the header
+   benchmark.
+
+The IP and UDP length fields are read and bound nothing. Lax slicing also
+cuts the payload at the IP length when that length ends before the capture;
+`Packet_stack.capture` cannot, because a Wire codec cannot name the bytes
+left in its input (3D has no such expression either: the validator would
+have to take the captured length as a parameter, which the scanner
+generators do not accept). The two rules differ only on a packet whose IP
+length ends before the capture and whose transport header runs past that
+length: `flow-mix` counts them, and there are none in the default packets,
+so the etherparse row runs its lax API unchanged and agrees with the others.
+Its adapter drops a packet whose TCP or UDP header stopped the slicing, and
+makes the two checks lax slicing leaves out (a total length covering the
+IPv4 header, a UDP length of at least 8; neither fails on these packets).
+
+### The classifier
+
+Per packet, every row parses the frame, builds the 5-tuple (both addresses,
+IPv4 or IPv6, the protocol or next header, and the ports when a TCP or UDP
+header was read, 0 otherwise), hashes it and counts the packet and its IP
+length (the IPv4 total length, or 40 plus the IPv6 payload length) in an
+open-addressing table with linear probing. The hash mixes the key's 32-bit
+words, `h = (h xor w) * 0x9E3779B97F4A7C15`, and takes the slot from bits 32
+and up; OCaml's 63-bit `int` keeps the low 63 bits of the same product, so
+the OCaml, Rust and C tables (`flow_table.ml`, `cargo/src/flow.rs`,
+`everparse/stack_c.c`) fill the same slots. A slot belongs to the pass whose
+epoch it carries, so no pass clears the table. Each row prints the number of
+flows and a checksum of every live slot (its place, key, packets and bytes),
+read after the timed passes and not timed; the report fails unless every
+row agrees. The default packets hold 342,506 flows.
+
+| Row | Implementation | Parse |
+|---|---|---|
+| `Wire.Codec capture decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of the pcap record around the frame, its `incl_len` bounding `Packet_stack.capture`, then the nested values |
+| `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of `headers.ml`, IPv6 included | `View.check`/`View.ok` per header, `view_<field>` per field; the harness links the layers and checks each header ends inside the capture |
+| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_step` per frame, handing the classifier's fields to `Flow_step` by name |
+| `wire.rust scanner, selected outputs` | generated Rust scanner of `Packet_stack.capture` | `scan` per frame |
+| `wire.rust, linked headers` | generated Rust of `headers.ml` | `Valid::at` per header, then a read per field; the harness links the layers |
+| EverParse C (`BUILD_EVERPARSE=1`) | the verified validator of `Packet_stack.capture` | `CapturedStackValidateWireCapturedStack` per frame, then the members of the default `CapturedStack_Fields` plug, zeroed per frame |
+| `etherparse 0.21, lax` | hand-written | `LaxSlicedPacket::from_ethernet` |
+| `smoltcp 0.14` | hand-written | `EthernetFrame::new_checked`, `TcpPacket::new_checked`; the IPv4, IPv6 and UDP layers through `new_unchecked` after the adapter's checks, because `new_checked` bounds them by their length fields and rejects a header-only capture |
+| `pnet_packet 0.35` | generated by its `#[packet]` derive | `new` per layer, then the field accessors; the adapter makes the checks beyond the minimum header lengths, as in the header benchmark |
+
+The IPv6 fixed header of `Packet_stack.ipv6` and `Headers.ipv6` is the layout
+of nox-ip's `Ip.V6.Header.codec`, with each address as four 32-bit words
+because the scanners hand out scalars of at most 32 bits.
+
+Each row runs in a process of its own, one warm-up pass then
+`BENCH_FLOW_RUNS` (default 21) timed passes, timed as the header benchmark
+times them (process CPU time and wall time around each pass). ns/packet is
+the CPU time of a pass over the packets; packets per second is its inverse.
+
+The methodology follows ixy, the user-space NIC driver written in C, Rust,
+Go, C#, Java, OCaml, Haskell, Swift, JavaScript and Python (P. Emmerich et
+al., "The Case for Writing Network Drivers in High-Level Programming
+Languages", ANCS 2019; [ixy-languages](https://github.com/ixy-languages)):
+one core, packets per second as the measure, and the same design in every
+language, so the rows differ in the parser and not in the work around it.
+ixy measured a NIC forwarding packets and swept the batch size, which
+amortises the per-call cost of the driver; here the packets are already in
+memory and every row walks them one frame at a time, which is the batch the
+whole buffer gives, so there is no batch size to sweep.
+
+```
+make bench-flow                       # needs cargo, curl and the network the first time
+make bench-flow BUILD_EVERPARSE=1     # adds the EverParse C row
+```
+
+`BENCH_FLOW_PACKETS` sets how many packets are cut from the trace and
+`BENCH_FLOW_RUNS` the timed passes; `FLAMBDA_SWITCH` and `OXCAML_SWITCH` are
+read as for `make bench-rust`.
+
+### Results
+
+Measured at commit `12adeef7` (the parent of the commit that adds this
+section, which changes only this README) with the default 1,000,000 packets
+and 21 timed passes, each row in a process of its own, on an Apple M5 Max
+(18 cores, 128 GiB, macOS 27.3) shared with other work: `top` showed a load
+average of 146 before the run and 94 after it, with no idle CPU. The CPU time
+leaves out the time a row waited descheduled, not the caches and predictors
+other processes share; compare rows of one run. OCaml 5.4.1 (`-inline 50`),
+OCaml 5.4.1 with flambda (`-O2`) and OxCaml 5.4.0+ox (`-O4`) with dune's
+`bench` profile; rustc 1.94.1 at `opt-level = 3` with LTO; EverParse 3d
+v2026.10.27 with Apple clang 21.0.0 at `-O2`. The command is `make
+bench-flow BUILD_EVERPARSE=1`, run as its recipe with dune rooted at this
+checkout. Packets per second is the inverse of the best CPU time.
+
+| Row | CPU ns/packet, best | median | Mpackets/s, best |
+| --- | ---: | ---: | ---: |
+| wire.rust, linked headers | 29.66 | 31.12 | 33.7 |
+| pnet_packet 0.35 | 29.77 | 30.49 | 33.6 |
+| wire.rust scanner, selected outputs | 31.01 | 32.27 | 32.2 |
+| smoltcp 0.14 | 34.88 | 36.05 | 28.7 |
+| wire.ocaml scanner, selected outputs, fold_step, OxCaml | 66.81 | 68.10 | 15.0 |
+| wire.ocaml View.check/view, linked headers, OxCaml | 71.89 | 73.55 | 13.9 |
+| wire.ocaml scanner, selected outputs, fold_step, OCaml flambda | 77.87 | 81.48 | 12.8 |
+| wire.ocaml View.check/view, linked headers, OCaml | 84.19 | 86.84 | 11.9 |
+| etherparse 0.21, lax | 91.80 | 94.40 | 10.9 |
+| wire.ocaml View.check/view, linked headers, OCaml flambda | 92.89 | 97.18 | 10.8 |
+| EverParse C, default plug | 95.62 | 99.07 | 10.5 |
+| wire.ocaml scanner, selected outputs, fold_step, OCaml | 98.61 | 101.16 | 10.1 |
+| Wire.Codec capture decode, OxCaml | 632.38 | 654.09 | 1.6 |
+| Wire.Codec capture decode, OCaml | 681.18 | 711.91 | 1.5 |
+| Wire.Codec capture decode, OCaml flambda | 712.21 | 739.20 | 1.4 |
+
+Every row counted 342,506 flows and gave checksum `3901415651386128532`.
+
+Every OCaml row reads and writes its table through checked `Bytes`
+accessors, as the harness rules ask, where the Rust rows index a vector of
+slots; this run does not separate the cost of the table from that of the
+parse, so the gap between the OCaml and the Rust rows is not the parsers'
+alone.
 
 ## Compiler flags
 

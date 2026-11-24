@@ -12,6 +12,7 @@ make bench-routing      # APID demux throughput
 make bench-gateway      # TM frame reassembly
 make bench-clcw         # CLCW polling loop
 make bench-rust         # Ethernet/IPv4/TCP/UDP: OCaml, OxCaml, Rust (needs cargo)
+make bench-flow         # a MAWI trace through a flow classifier (downloads it once)
 make bench-apps-rust    # routing, gateway, CLCW workloads: OCaml, OxCaml, Rust (needs cargo)
 make fuzz-rust          # sampled codecs vs the Rust Wire_rust generates (needs rustc)
 make prof               # CPU profile with Instruments (open prof.trace)
