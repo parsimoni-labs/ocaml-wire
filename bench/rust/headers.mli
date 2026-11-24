@@ -105,3 +105,19 @@ val udp_dst_port : (UInt16.t, udp) Codec.field
 
 val udp_length : (UInt16.t, udp) Codec.field
 (** [udp_length] is the length of {!val-udp}. *)
+
+type ipv6 = {
+  version : int;
+  traffic_class : int;
+  flow_label : int;
+  payload_length : UInt16.t;
+  next_header : UInt8.t;
+  hop_limit : UInt8.t;
+  src : UInt32.t * UInt32.t * UInt32.t * UInt32.t;
+  dst : UInt32.t * UInt32.t * UInt32.t * UInt32.t;
+}
+(** An address is four 32-bit words, the most significant first. *)
+
+val ipv6 : ipv6 Codec.t
+(** [ipv6] is the fixed IPv6 header (RFC 8200), the layout of nox-ip's
+    [Ip.V6.Header.codec]. *)

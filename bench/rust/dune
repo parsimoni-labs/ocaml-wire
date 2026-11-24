@@ -21,10 +21,13 @@
  (targets
   stack_read.ml
   selected_read.ml
+  flow_read.ml
   g_eth.ml
   g_eth.mli
   g_ipv4.ml
   g_ipv4.mli
+  g_ipv6.ml
+  g_ipv6.mli
   g_tcp.ml
   g_tcp.mli
   g_udp.ml
@@ -38,10 +41,13 @@
  (targets
   stack_read.ml
   selected_read.ml
+  flow_read.ml
   g_eth.ml
   g_eth.mli
   g_ipv4.ml
   g_ipv4.mli
+  g_ipv6.ml
+  g_ipv6.mli
   g_tcp.ml
   g_tcp.mli
   g_udp.ml
@@ -51,5 +57,15 @@
 
 (executable
  (name bench)
- (modules bench stack_read selected_read g_eth g_ipv4 g_tcp g_udp)
+ (modules
+  bench
+  stack_read
+  selected_read
+  flow_table
+  flow_read
+  g_eth
+  g_ipv4
+  g_ipv6
+  g_tcp
+  g_udp)
  (libraries bench_lib headers net wire wire.runtime unix fmt))

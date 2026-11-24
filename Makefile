@@ -1,6 +1,6 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
        fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
-       bench-clcw bench-rust bench-apps-rust bench-apps-count \
+       bench-clcw bench-rust bench-flow bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -147,6 +147,53 @@ bench-rust:
 	  $(call bench_rust_each,_build/default/bench/rust/everparse/everparse.exe,everparse); \
 	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
+
+# A MAWI trace (samplepoint-F, 2025-11-15 14:00, 15 minutes), its first
+# BENCH_FLOW_PACKETS packets held in memory, through a flow classifier on one
+# core: Wire.Codec and wire.ocaml on OCaml and on each switch of
+# BENCH_SWITCHES, wire.rust against etherparse, smoltcp and pnet_packet, and
+# with BUILD_EVERPARSE=1 the EverParse C validator of the same codec. The
+# trace is downloaded into _build/bench-flow once and checked against its
+# SHA-256; the packets are cut from it into _build/bench-flow/mawi.pcap.
+BENCH_FLOW_URL = http://mawi.wide.ad.jp/mawi/samplepoint-F/2025/202511151400.pcap.gz
+BENCH_FLOW_SHA256 = a99b91648ec296c1611558878f11828d2cb02d434e77f05153fa0020a6ce266c
+BENCH_FLOW_PACKETS ?= 1000000
+BENCH_FLOW_RUNS ?= 21
+BENCH_FLOW = _build/bench-flow
+BENCH_FLOW_TRACE = $(BENCH_FLOW)/202511151400.pcap.gz
+BENCH_FLOW_PCAP = $(BENCH_FLOW)/mawi.pcap
+
+$(BENCH_FLOW_TRACE):
+	@mkdir -p $(BENCH_FLOW)
+	curl -fL -o $@.part $(BENCH_FLOW_URL)
+	@echo "$(BENCH_FLOW_SHA256)  $@.part" | shasum -a 256 -c - \
+	  || { echo "$(BENCH_FLOW_URL): unexpected SHA-256" >&2; exit 1; }
+	mv $@.part $@
+
+bench-flow: $(BENCH_FLOW_TRACE)
+	@mkdir -p bench/rust/cargo/src/gen
+	dune build --profile=bench bench/rust/bench.exe bench/rust/gen.exe
+	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
+	@echo "$(BENCH_FLOW_SHA256)  $(BENCH_FLOW_TRACE)" | shasum -a 256 -c - >/dev/null \
+	  || { echo "$(BENCH_FLOW_TRACE): unexpected SHA-256" >&2; exit 1; }
+	gzip -dc < $(BENCH_FLOW_TRACE) | _build/default/bench/rust/bench.exe \
+	  flow-extract $(BENCH_FLOW_PACKETS) $(BENCH_FLOW_PCAP)
+	_build/default/bench/rust/bench.exe flow-mix $(BENCH_FLOW_PCAP)
+	cargo build --quiet --release --manifest-path bench/rust/cargo/Cargo.toml
+	rm -f $(BENCH_FLOW)/*.txt
+	sh bench/rows.sh bench/rust/cargo/target/release/wire-bench-rust flow \
+	  $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) >> $(BENCH_FLOW)/rust.txt
+	sh bench/rows.sh _build/default/bench/rust/bench.exe flow \
+	  $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) >> $(BENCH_FLOW)/ocaml.txt
+	@$(call on_switches,bench/rust/bench.exe,sh bench/rows.sh $$h flow \
+	  $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) >> $(BENCH_FLOW)/$$n.txt)
+	@if [ "$(BUILD_EVERPARSE)" = 1 ]; then \
+	  BUILD_EVERPARSE=1 dune build --profile=bench \
+	    bench/rust/everparse/everparse.exe && \
+	  sh bench/rows.sh _build/default/bench/rust/everparse/everparse.exe flow \
+	    $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) >> $(BENCH_FLOW)/everparse.txt; \
+	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
+	@_build/default/bench/rust/bench.exe report $(BENCH_FLOW)/*.txt
 
 # The instructions and cycles each row of bench-rust spends per packet, as
 # bench-apps-count counts them below, on each corpus of BENCH_RUST_CORPORA
