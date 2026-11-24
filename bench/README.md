@@ -483,7 +483,7 @@ passes and not timed; the report fails unless every row agrees. The default pack
 |---|---|---|
 | `Wire.Codec capture decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of the pcap record around the frame, its `incl_len` bounding `Packet_stack.capture`, then the nested values |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of `headers.ml`, IPv6 included | `View.check`/`View.ok` per header, `view_<field>` per field; the harness links the layers and checks each header ends inside the capture |
-| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_step` per frame, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
+| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_index_step` over the frames, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
 | `wire.rust scanner, selected outputs` | generated Rust scanner of `Packet_stack.capture` | `scan` per frame |
 | `wire.rust, linked headers` | generated Rust of `headers.ml` | `Valid::at` per header, then a read per field; the harness links the layers |
 | EverParse C (`BUILD_EVERPARSE=1`) | the verified validator of `Packet_stack.capture` | `CapturedStackValidateWireCapturedStack` per frame, then the members of the default `CapturedStack_Fields` plug, zeroed per frame |
@@ -662,12 +662,27 @@ What the OCaml tables spend beyond the Rust one, read in the disassembly:
 5. tagging: the slot index and the counters stay tagged, a word more per
    arithmetic step.
 
-The OxCaml scanner parses in 117.7 instructions where the Rust scanner takes
-68.8: about 25 in the loop over the frames, which reloads the lengths of the
-buffer (8) and of the array of lengths (3) on every frame and checks both
-array reads (8), where Rust bounds the frame in 7; about 12 in the fold,
-whose state is a global record written behind two barriers; the rest in
-tagging the fields the scanner hands out.
+The OxCaml scanner parsed in 117.7 instructions where the Rust scanner takes
+68.8: about 25 in the loop over the frames, which reloaded the lengths of
+the buffer (8) and of the array of lengths (3) on every frame and checked
+both array reads (8), where Rust bounds the frame in 7; about 12 in the
+fold, whose state was a global record written behind two barriers; the rest
+in tagging the fields the scanner hands out. The row now walks the frames
+with `fold_index_step`, which reads both lengths once per pass and the two
+arrays with no bound check, and `Flow_parse` keeps its keys and sum in an
+unboxed pair the loop carries in registers. Counted on the tree that adds
+this, at a load average of 93 before and 79 after, the parse falls from
+116.0 to 91.5 instructions per packet and the row on `mawi` from 233.9 to
+218.4. What the loop still spends beyond Rust's, about 14 of its 21: the
+poll at its back edge (3), the tagged index (2), an address computed for
+each of the two loads where Rust loads the pair at once (3), the test of a
+negative offset (2) and the untagging of the offset and the length (2). On
+OCaml an accumulator of two values would be allocated per key, so
+`Flow_parse` keeps `Flow_sum`'s global state there, and the loop saves less
+(151.9 to 143.2 instructions on OCaml flambda, 308.2 to 298.2 on OCaml;
+256.0 to 245.2 and 405.6 to 392.6 on `mawi`), because the stock and flambda
+register allocators keep the loop's buffer, arrays and lengths on the stack
+around the inlined walk.
 
 `Wire.Codec` spends 8236.7 instructions and 1776.7 cycles per packet on the
 parse on OxCaml. macOS `sample`, 10 s of the parse row (7514 samples), puts
