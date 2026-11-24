@@ -818,6 +818,14 @@ OCaml an accumulator of two values would be allocated per key, so
 register allocators keep the loop's buffer, arrays and lengths on the stack
 around the inlined walk.
 
+On OxCaml `fold_index_step` now walks four frames an iteration, as
+`fold_frames` does, so the poll, the test of the index against the bound
+and the back edge are paid once per four frames. Counted three times at a
+load average between 160 and 285, the parse falls from a median of 92.0 to
+85.2 instructions per packet and the row on `mawi` from 219.1 to 213.1;
+the header benchmark's OxCaml rows, which walk fixed-stride slots with
+`fold_frames`, are unchanged.
+
 `Wire.Codec` spends 8236.7 instructions and 1776.7 cycles per packet on the
 parse on OxCaml. macOS `sample`, 10 s of the parse row (7514 samples), puts
 21.1% of its time in closure application (`caml_apply4` 16.9%), 28.0% in

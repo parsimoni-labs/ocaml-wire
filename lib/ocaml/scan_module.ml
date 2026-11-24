@@ -537,6 +537,57 @@ let pp_fold s ~unboxed =
         s ~reject:"invalid ()" ~accept:(call s ~unboxed "valid");
       Fmt.pf s.ppf "@\n")
 
+(* [fold_index_step], which folds [within] over the frames of an index. *)
+let pp_fold_index_step s ~within =
+  let buf = s.m.src.buf in
+  Hashtbl.replace s.taken "fold_index_step" ();
+  (* As in [fold_frames], OxCaml walks [unroll] frames an iteration, so the
+     loop polls and tests its bound once per [unroll] frames. Both arrays have
+     [n] elements, so every index of the loop is in range in each. *)
+  let frames =
+    if s.m.num = Unboxed && Sset.is_empty s.m.slots then unroll else 1
+  in
+  s.m.decide
+    (Decision.Frame_loop
+       { name = "fold_index_step"; need = 0; frames; short = None; ahead = [] });
+  let frame ?(acc = "acc") i =
+    Fmt.str
+      "%s buf ~length (Array.unsafe_get offs %s) (Array.unsafe_get lens %s) \
+       ~init:%s"
+      within i i acc
+  in
+  Fmt.pf s.ppf
+    "let[@inline always] fold_index_step %s ~(offs : int array) ~(lens : int \
+     array) ~init =@\n\
+     let n = Array.length offs in@\n\
+     if Array.length lens <> n then@\n\
+     invalid_arg \"fold_index_step: offs and lens differ in length\";@\n\
+     let length = Bytes.length buf in@\n"
+    buf;
+  if s.m.num = Unboxed then begin
+    (* The accumulator may have any layout, which a [ref] cannot hold. *)
+    Fmt.pf s.ppf "let mutable acc = init in@\nlet mutable i = 0 in@\n";
+    if frames > 1 then begin
+      Fmt.pf s.ppf "while i < n - %d do@\n" (frames - 1);
+      for k = 0 to frames - 1 do
+        Fmt.pf s.ppf "acc <- %s;@\n"
+          (frame (if k = 0 then "i" else Fmt.str "(i + %d)" k))
+      done;
+      Fmt.pf s.ppf "i <- i + %d@\ndone;@\n" frames
+    end;
+    Fmt.pf s.ppf "while i < n do@\nacc <- %s;@\ni <- i + 1@\ndone;@\nacc@\n@\n"
+      (frame "i")
+  end
+  else
+    Fmt.pf s.ppf
+      "let acc = ref init in@\n\
+       for i = 0 to n - 1 do@\n\
+       acc := %s@\n\
+       done;@\n\
+       !acc@\n\
+       @\n"
+      (frame ~acc:"!acc" "i")
+
 (* [fold_step], which calls the module [m]'s functions by name, and
    [fold_index_step], which folds it over the frames of an index. Both go
    through [step_within], whose [length] is that of [buf], so that the loop
@@ -567,29 +618,7 @@ let pp_fold_step s m =
      %s buf ~length:(Bytes.length buf) off len ~init@\n\
      @\n"
     buf within;
-  Hashtbl.replace s.taken "fold_index_step" ();
-  (* On OxCaml the accumulator may have any layout, which a [ref] cannot hold.
-     Both arrays have [n] elements, so every index of the loop is in range in
-     each. *)
-  let bind, get, set =
-    if s.m.num = Unboxed then ("let mutable acc = init in", "acc", "acc <-")
-    else ("let acc = ref init in", "!acc", "acc :=")
-  in
-  Fmt.pf s.ppf
-    "let[@inline always] fold_index_step %s ~(offs : int array) ~(lens : int \
-     array) ~init =@\n\
-     let n = Array.length offs in@\n\
-     if Array.length lens <> n then@\n\
-     invalid_arg \"fold_index_step: offs and lens differ in length\";@\n\
-     let length = Bytes.length buf in@\n\
-     %s@\n\
-     for i = 0 to n - 1 do@\n\
-     %s %s buf ~length (Array.unsafe_get offs i) (Array.unsafe_get lens i) \
-     ~init:%s@\n\
-     done;@\n\
-     %s@\n\
-     @\n"
-    buf bind set within get get
+  pp_fold_index_step s ~within
 
 let pp_result_type s name hash =
   Fmt.pf s.ppf "type %s = %s{ ok : bool;@\n" name hash;
