@@ -151,17 +151,34 @@ val mli :
     Raises [Invalid_argument] as {!ml} does. *)
 
 val bridge :
-  ?maps:map list -> codec:string -> core:string -> 'r Wire.Codec.t -> string
-(** [bridge ?maps ~codec ~core c] is the source of a module that checks, when it
-    loads, that the codec [c] at the path [codec] still has the shape the module
-    at the path [core] was generated from by {!ml}, and that each map [maps]
-    names is still the very map of its field. It links [wire]; link it next to
-    [core] wherever [wire] is linked anyway. *)
+  ?maps:map list ->
+  ?record:string ->
+  codec:string ->
+  core:string ->
+  'r Wire.Codec.t ->
+  string
+(** [bridge ?maps ?record ~codec ~core c] is the source of a module that checks,
+    when it loads, that the codec [c] at the path [codec] still has the shape
+    the module at the path [core] was generated from by {!ml}, and that each map
+    [maps] names is still the very map of its field. It links [wire]; link it
+    next to [core] wherever [wire] is linked anyway.
+
+    [record], the path of the type of [c]'s records, for a module {!ml}
+    generated without [make], adds two modules that are each a [Wire.S] with the
+    same handles, [Field.<field>] for each field with no map, each reading the
+    type the codec declares: [Global], the [Global] of [core] with [field], and
+    [Interpreted], [Wire.Codec.Make] over [c]. Code written against one runs on
+    the other by changing one line. *)
 
 val bridge_mli :
-  ?maps:map list -> codec:string -> core:string -> 'r Wire.Codec.t -> string
-(** [bridge_mli ?maps ~codec ~core c] is the interface of
-    [bridge ?maps ~codec ~core c], which defines nothing: its doc comment. *)
+  ?maps:map list ->
+  ?record:string ->
+  codec:string ->
+  core:string ->
+  'r Wire.Codec.t ->
+  string
+(** [bridge_mli ?maps ?record ~codec ~core c] is the interface of
+    [bridge ?maps ?record ~codec ~core c]. *)
 
 (** {1 Scanning}
 
@@ -239,6 +256,34 @@ val scanner_mli :
 (** [scanner_mli ?target ?fields ?step ~codec c] is the interface of
     [scanner ?target ?fields ?step ~codec c], as {!mli} is that of {!ml}. Raises
     [Invalid_argument] as {!scanner} does. *)
+
+val scanner_bridge :
+  ?target:target ->
+  ?fields:string list ->
+  codec:string ->
+  core:string ->
+  'r Wire.Codec.t ->
+  string
+(** [scanner_bridge ?target ?fields ~codec ~core c] is the source of a module
+    that checks, when it loads, that the codec [c] at the path [codec] still has
+    the shape the scanner at the path [core] was generated from by {!scanner},
+    with [target] and [fields] as they were given. It defines [Global], [core]
+    as a [Wire.Scan]; [STEP], the type of the step module of such a scanner; and
+    [Interpreted_scan (K)], a [Wire.Scan] that checks each frame with
+    [Wire.Codec] and calls [K] with the outputs [core] hands out. Code written
+    against [Wire.Scan] runs on [Global], for [core] generated with [K] as its
+    step module, or on [Interpreted_scan (K)] by changing one line. It links
+    [wire]. Raises [Invalid_argument] as {!scanner} does. *)
+
+val scanner_bridge_mli :
+  ?target:target ->
+  ?fields:string list ->
+  codec:string ->
+  core:string ->
+  'r Wire.Codec.t ->
+  string
+(** [scanner_bridge_mli ?target ?fields ~codec ~core c] is the interface of
+    [scanner_bridge ?target ?fields ~codec ~core c]. *)
 
 (** {2 Views}
 

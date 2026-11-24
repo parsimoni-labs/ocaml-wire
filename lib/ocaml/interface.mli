@@ -29,7 +29,8 @@ val scanner :
     {!Scan_module.scanner}'s module for [c]. Raises [Invalid_argument] as
     {!Scan_module.scanner} does. *)
 
-val bridge : maps:bool -> codec:string -> core:string -> string
-(** [bridge ~maps ~codec ~core] is the interface of the bridge that checks
-    [core] against the codec at [codec], and with [maps] the maps of its fields:
-    a doc comment, since the bridge defines nothing. *)
+val bridge : maps:bool -> swap:bool -> codec:string -> core:string -> string
+(** [bridge ~maps ~swap ~codec ~core] is the preamble of the interface of the
+    bridge that checks [core] against the codec at [codec], and with [maps] the
+    maps of its fields; with [swap] the bridge also defines the modules that
+    swap with [core]. *)

@@ -1,35 +1,10 @@
-(* The scanner generated from [Packet_stack.capture] and the interpreted codec
-   are both a [Wire.Scan] folding [Scan_step], on a corpus of frames. *)
-
-open Wire
-
-(* [Scan_step] as the interpreted scanner takes it: each output read by name. *)
-module By_name = struct
-  type t = Scan_step.t
-
-  let invalid = Scan_step.invalid
-
-  let valid seen o =
-    let i = Codec.Outputs.int o and b = Codec.Outputs.bool o in
-    Scan_step.valid seen ~ipv4_present:(b "ipv4_present")
-      ~ipv4_protocol:(i "ipv4_protocol") ~ipv4_src:(i "ipv4_src")
-      ~ipv4_dst:(i "ipv4_dst") ~ipv4_tcp_present:(b "ipv4_tcp_present")
-      ~ipv4_tcp_dst_port:(i "ipv4_tcp_dst_port")
-      ~ipv4_udp_present:(b "ipv4_udp_present")
-      ~ipv4_udp_dst_port:(i "ipv4_udp_dst_port")
-      ~ipv6_present:(b "ipv6_present") ~ipv6_next_header:(i "ipv6_next_header")
-      ~ipv6_dst3:(i "ipv6_dst3")
-end
-
-module Capture = struct
-  type r = Packet_stack.capture
-
-  let codec = Packet_stack.capture
-end
+(* The scanner generated from [Packet_stack.capture] and its bridge's
+   interpreted twin are both a [Wire.Scan] folding [Scan_step], on a corpus of
+   frames. *)
 
 (* The swap: one line picks the scanner, the code under it is the same. *)
-module Interpreted = Codec.Scan (Capture) (By_name)
-module Generated = S_capture_step
+module Interpreted = S_capture_step_wire.Interpreted_scan (Scan_step)
+module Generated = S_capture_step_wire.Global
 module _ : Wire.Scan with type step = Scan_step.t = Generated
 module _ : Wire.Scan with type step = Scan_step.t = Interpreted
 

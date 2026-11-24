@@ -306,6 +306,14 @@ let type_of f =
   | Bits _ -> "int"
   | Bytes _ -> "string"
 
+(* The type a handle reads: the codec's, [int] or [string] where the module
+   holds the field in a carrier of its own. *)
+let schema_type f =
+  match f.store with
+  | (Bits _ | Bytes _) when has_carrier f -> (
+      match f.store with Bytes _ -> "string" | _ -> "int")
+  | _ -> type_of f
+
 (* [Value.<field> x] is [x] in the field's carrier, after the check a write
    would make: its width for a bitfield, its length for a byte array. A
    carrier's [<field>_eq] proves it is that [int] or [string], for the
@@ -1324,13 +1332,20 @@ let pp_field_module ~src ppf ~target fields =
      [get] does not state, so it is eta-expanded there. *)
   List.iter
     (fun f ->
-      let get =
-        match target with
-        | `OxCaml -> Fmt.str "(fun buf off -> Get.%s buf off)" f.label
-        | `OCaml -> "Get." ^ f.label
+      let get, view =
+        if has_carrier f then
+          let t = schema_type f in
+          ( Fmt.str "(fun buf off -> (Get.%s buf off :> %s))" f.label t,
+            Fmt.str "(fun b v -> (view_%s b v :> %s))" f.label t )
+        else
+          match target with
+          | `OxCaml ->
+              ( Fmt.str "(fun buf off -> Get.%s buf off)" f.label,
+                "view_" ^ f.label )
+          | `OCaml -> ("Get." ^ f.label, "view_" ^ f.label)
       in
-      Fmt.pf ppf "  let %s : %s t = { get = %s; view = view_%s }@\n@\n" f.label
-        (type_of f) get f.label)
+      Fmt.pf ppf "  let %s : %s t = { get = %s; view = %s }@\n@\n" f.label
+        (schema_type f) get view)
     fields;
   Fmt.pf ppf "end@\n@\n"
 
@@ -1342,7 +1357,7 @@ let pp_global_handles ppf fields =
         "    let %s : %s t =@\n\
         \      { get = Field.%s.get; view = (fun b v -> Field.%s.view b v) }@\n\
          @\n"
-        f.label (type_of f) f.label f.label)
+        f.label (schema_type f) f.label f.label)
     fields
 
 (* [Global] is the module as a [Wire.S], for code that switches between it and
@@ -1885,3 +1900,8 @@ let pp_bridge ?(maps = []) ~codec ~core ppf c =
     fields
 
 let bridge ?maps ~codec ~core c = Fmt.str "%a" (pp_bridge ?maps ~codec ~core) c
+
+let handles ?(maps = []) ~codec c =
+  match record_plan ~maps c with
+  | plan, _ -> field_fields (all_fields plan)
+  | exception Unsupported reason -> refuse ~codec reason

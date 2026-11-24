@@ -1387,7 +1387,7 @@ let of_word = Codec_run.of_word
 (* The support generated code calls into: casts from an [int] it has read, and
    the cold paths, which hand the failing input to the codec itself so the error
    is the one [decode], [validate] or [encode] raises. *)
-module Gen = struct
+module Gen_core = struct
   let to_struct = to_struct
 
   (* An [int] as a type the proof says is [int]. *)
@@ -1695,6 +1695,40 @@ module Testing = struct
         : string list)
 end
 
+module type S = sig
+  include Wire_runtime.Record.S
+
+  type r
+
+  val field : ('a, r) field -> 'a Field.t
+end
+
+type _ field_kind =
+  | Int : int field_kind
+  | UInt8 : UInt8.t field_kind
+  | UInt16 : UInt16.t field_kind
+  | UInt32 : UInt32.t field_kind
+  | SInt8 : SInt8.t field_kind
+  | SInt16 : SInt16.t field_kind
+  | SInt32 : SInt32.t field_kind
+  | String : string field_kind
+
+let rec typ_eq : type a b. a Types.typ -> b field_kind -> (a, b) Type.eq option
+    =
+ fun t k ->
+  match (t, k) with
+  | Types.Bits _, Int -> Some Type.Equal
+  | Types.Uint8, UInt8 -> Some Type.Equal
+  | Types.Uint16 _, UInt16 -> Some Type.Equal
+  | Types.Uint32 _, UInt32 -> Some Type.Equal
+  | Types.Int8, SInt8 -> Some Type.Equal
+  | Types.Int16 _, SInt16 -> Some Type.Equal
+  | Types.Int32 _, SInt32 -> Some Type.Equal
+  | Types.Byte_array _, String -> Some Type.Equal
+  | Types.Where { inner; _ }, k -> typ_eq inner k
+  | Types.Enum { base; _ }, k -> typ_eq base k
+  | _ -> None
+
 module Make (C : sig
   type r
 
@@ -1702,6 +1736,7 @@ module Make (C : sig
 end) =
 struct
   type t = C.r
+  type r = C.r
 
   let min_size = min_wire_size C.codec
   let decode buf off = decode C.codec buf off
@@ -1743,50 +1778,97 @@ struct
     { Field.get = read; view = (fun b p -> Checked.read r b p) }
 end
 
-module Outputs = Scan_outputs
+module Gen = struct
+  include Gen_core
 
-module Scan (C : sig
-  type r
+  type 'a kind = 'a field_kind =
+    | Int : int kind
+    | UInt8 : UInt8.t kind
+    | UInt16 : UInt16.t kind
+    | UInt32 : UInt32.t kind
+    | SInt8 : SInt8.t kind
+    | SInt16 : SInt16.t kind
+    | SInt32 : SInt32.t kind
+    | String : string kind
 
-  val codec : r t
-end) (K : sig
-  type t
+  let field_name (f : _ field) = f.name
+  let field_eq (f : (_, _) field) k = typ_eq f.typ k
 
-  val invalid : t -> t
-  val valid : t -> Outputs.t -> t
-end) =
-struct
-  type step = K.t
-
-  let s = to_struct C.codec
-  let () = ignore (Scan_outputs.names s : (string * bool) list)
-
-  let fold_step buf off len ~init =
-    if off < 0 || len < 0 || len > Bytes.length buf - off then K.invalid init
-    else
-      let frame = Bytes.sub buf off len in
-      match validate C.codec frame 0 with
-      | Ok () -> K.valid init (Scan_outputs.read s frame 0)
-      | Error _ -> K.invalid init
-
-  let fold_frames_step buf off len ~stride ~init =
-    if
-      stride <= 0 || off < 0 || len < 0
-      || off > Bytes.length buf
-      || len > Bytes.length buf - off
-    then invalid_arg "fold_frames_step: invalid frame bounds or stride";
-    let rec go acc i =
-      if i = len / stride then acc
-      else go (fold_step buf (off + (i * stride)) stride ~init:acc) (i + 1)
+  let field (type a r) (c : r t) name (kind : a field_kind) : (a, r) field =
+    let typ =
+      List.find_map
+        (fun (Types.Field f) ->
+          if f.field_name = Some name then Some (Types.Pack_typ f.field_typ)
+          else None)
+        (to_struct c).fields
     in
-    go init 0
+    match (typ, List.assoc_opt name (compiled c).field_access) with
+    | Some (Types.Pack_typ typ), Some (id, _) -> (
+        match typ_eq typ kind with
+        | Some Type.Equal ->
+            {
+              id;
+              name;
+              typ;
+              constraint_ = None;
+              action = None;
+              doc = None;
+              get =
+                (fun _ ->
+                  Fmt.invalid_arg "%s.%s: a field found by name has no getter"
+                    c.name name);
+            }
+        | None -> Fmt.invalid_arg "%s: field %s has another type" c.name name)
+    | _ -> Fmt.invalid_arg "%s: no field %s" c.name name
 
-  let fold_index_step buf ~offs ~lens ~init =
-    if Array.length offs <> Array.length lens then
-      invalid_arg "fold_index_step: offs and lens differ in length";
-    let rec go acc i =
-      if i = Array.length offs then acc
-      else go (fold_step buf offs.(i) lens.(i) ~init:acc) (i + 1)
-    in
-    go init 0
+  module Outputs = Scan_outputs
+
+  type scanner = bytes -> Outputs.t option
+
+  let scanner c =
+    let s = to_struct c in
+    ignore (Scan_outputs.names s : (string * bool) list);
+    fun frame ->
+      match validate c frame 0 with
+      | Ok () -> Some (Scan_outputs.read s frame 0)
+      | Error _ -> None
+
+  module Scan (K : sig
+    type t
+
+    val scanner : scanner
+    val invalid : t -> t
+    val valid : t -> Outputs.t -> t
+  end) =
+  struct
+    type step = K.t
+
+    let fold_step buf off len ~init =
+      if off < 0 || len < 0 || len > Bytes.length buf - off then K.invalid init
+      else
+        match K.scanner (Bytes.sub buf off len) with
+        | Some o -> K.valid init o
+        | None -> K.invalid init
+
+    let fold_frames_step buf off len ~stride ~init =
+      if
+        stride <= 0 || off < 0 || len < 0
+        || off > Bytes.length buf
+        || len > Bytes.length buf - off
+      then invalid_arg "fold_frames_step: invalid frame bounds or stride";
+      let rec go acc i =
+        if i = len / stride then acc
+        else go (fold_step buf (off + (i * stride)) stride ~init:acc) (i + 1)
+      in
+      go init 0
+
+    let fold_index_step buf ~offs ~lens ~init =
+      if Array.length offs <> Array.length lens then
+        invalid_arg "fold_index_step: offs and lens differ in length";
+      let rec go acc i =
+        if i = Array.length offs then acc
+        else go (fold_step buf offs.(i) lens.(i) ~init:acc) (i + 1)
+      in
+      go init 0
+  end
 end

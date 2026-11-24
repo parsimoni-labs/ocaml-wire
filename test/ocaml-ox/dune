@@ -13,6 +13,20 @@
 (copy_files
  (files ../ocaml/test_view_module.{ml,mli}))
 
+(copy_files
+ (files ../ocaml/test_scan.{ml,mli}))
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (targets
+  s_capture_step.ml
+  s_capture_step.mli
+  s_capture_step_wire.ml
+  s_capture_step_wire.mli)
+ (action
+  (run ../ocaml/gen_scan.exe --oxcaml)))
+
 (rule
  (copy ../ocaml/test.ml test.ox.ml))
 
@@ -40,6 +54,10 @@
   g_ipv4_record.mli
   g_ipv4_record_wire.ml
   g_ipv4_record_wire.mli
+  g_mixed_record.ml
+  g_mixed_record.mli
+  g_mixed_record_wire.ml
+  g_mixed_record_wire.mli
   g_checked.ml
   g_checked.mli
   g_checked_wire.ml
@@ -115,6 +133,10 @@
   g_ipv4_record.mli
   g_ipv4_record_wire.ml
   g_ipv4_record_wire.mli
+  g_mixed_record.ml
+  g_mixed_record.mli
+  g_mixed_record_wire.ml
+  g_mixed_record_wire.mli
   g_checked.ml
   g_checked.mli
   g_checked_wire.ml
@@ -193,10 +215,15 @@
   test_wire_ocaml
   test_view_module
   test_same
+  test_scan
+  s_capture_step
+  s_capture_step_wire
   g_ipv4
   g_ipv4_wire
   g_ipv4_record
   g_ipv4_record_wire
+  g_mixed_record
+  g_mixed_record_wire
   g_checked
   g_checked_wire
   g_mixed
@@ -236,6 +263,7 @@
   diff_driver
   diff_ocaml
   ocaml_index_ox
+  scan_step
   bytesrw
   fmt
   alcotest))

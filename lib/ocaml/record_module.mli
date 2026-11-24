@@ -58,6 +58,10 @@ val type_of : field -> string
 (** [type_of f] is the OCaml type of [f]'s typed value, for a field with no map.
 *)
 
+val schema_type : field -> string
+(** [schema_type f] is the OCaml type a handle of [f] reads, the codec's own:
+    [int] or [string] where {!type_of} is the field's carrier. *)
+
 val field_fields : field list -> field list
 (** [field_fields fields] is the fields among [fields] that have a handle in the
     generated module. *)
@@ -99,3 +103,11 @@ val bridge :
   string
 (** [bridge ?maps ~codec ~core c] is the module that checks the generated [core]
     against [c]; see {!Wire_ocaml.bridge}. *)
+
+val handles :
+  ?maps:(string * Planner.typ) list ->
+  codec:string ->
+  'r Wire.Codec.t ->
+  field list
+(** [handles ?maps ~codec c] is the fields of [c] with a handle. Raises
+    [Invalid_argument] as {!bridge} does. *)

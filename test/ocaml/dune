@@ -18,6 +18,10 @@
   g_ipv4_record.mli
   g_ipv4_record_wire.ml
   g_ipv4_record_wire.mli
+  g_mixed_record.ml
+  g_mixed_record.mli
+  g_mixed_record_wire.ml
+  g_mixed_record_wire.mli
   g_checked.ml
   g_checked.mli
   g_checked_wire.ml
@@ -106,7 +110,11 @@
  (libraries net scan_step wire.ocaml))
 
 (rule
- (targets s_capture_step.ml s_capture_step.mli)
+ (targets
+  s_capture_step.ml
+  s_capture_step.mli
+  s_capture_step_wire.ml
+  s_capture_step_wire.mli)
  (action
   (run ./gen_scan.exe)))
 
@@ -119,10 +127,13 @@
   test_same
   test_scan
   s_capture_step
+  s_capture_step_wire
   g_ipv4
   g_ipv4_wire
   g_ipv4_record
   g_ipv4_record_wire
+  g_mixed_record
+  g_mixed_record_wire
   g_checked
   g_checked_wire
   g_mixed

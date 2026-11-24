@@ -13,5 +13,6 @@
   scan_module
   view_module
   fstar_module
-  interface)
+  interface
+  swap)
  (libraries wire fmt))

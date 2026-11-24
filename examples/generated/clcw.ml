@@ -981,38 +981,89 @@ module Field = struct
     view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
   }
 
-  let controlwordtype : Value.controlwordtype t =
-    { get = Get.controlwordtype; view = view_controlwordtype }
+  let controlwordtype : int t =
+    {
+      get = (fun buf off -> (Get.controlwordtype buf off :> int));
+      view = (fun b v -> (view_controlwordtype b v :> int));
+    }
 
-  let clcwversion : Value.clcwversion t =
-    { get = Get.clcwversion; view = view_clcwversion }
+  let clcwversion : int t =
+    {
+      get = (fun buf off -> (Get.clcwversion buf off :> int));
+      view = (fun b v -> (view_clcwversion b v :> int));
+    }
 
-  let statusfield : Value.statusfield t =
-    { get = Get.statusfield; view = view_statusfield }
+  let statusfield : int t =
+    {
+      get = (fun buf off -> (Get.statusfield buf off :> int));
+      view = (fun b v -> (view_statusfield b v :> int));
+    }
 
-  let copineffect : Value.copineffect t =
-    { get = Get.copineffect; view = view_copineffect }
+  let copineffect : int t =
+    {
+      get = (fun buf off -> (Get.copineffect buf off :> int));
+      view = (fun b v -> (view_copineffect b v :> int));
+    }
 
-  let vcid : Value.vcid t = { get = Get.vcid; view = view_vcid }
-  let spare : Value.spare t = { get = Get.spare; view = view_spare }
-  let norf : Value.norf t = { get = Get.norf; view = view_norf }
+  let vcid : int t =
+    {
+      get = (fun buf off -> (Get.vcid buf off :> int));
+      view = (fun b v -> (view_vcid b v :> int));
+    }
 
-  let nobitlock : Value.nobitlock t =
-    { get = Get.nobitlock; view = view_nobitlock }
+  let spare : int t =
+    {
+      get = (fun buf off -> (Get.spare buf off :> int));
+      view = (fun b v -> (view_spare b v :> int));
+    }
 
-  let lockout : Value.lockout t = { get = Get.lockout; view = view_lockout }
-  let wait : Value.wait t = { get = Get.wait; view = view_wait }
+  let norf : int t =
+    {
+      get = (fun buf off -> (Get.norf buf off :> int));
+      view = (fun b v -> (view_norf b v :> int));
+    }
 
-  let retransmit : Value.retransmit t =
-    { get = Get.retransmit; view = view_retransmit }
+  let nobitlock : int t =
+    {
+      get = (fun buf off -> (Get.nobitlock buf off :> int));
+      view = (fun b v -> (view_nobitlock b v :> int));
+    }
 
-  let farmbcounter : Value.farmbcounter t =
-    { get = Get.farmbcounter; view = view_farmbcounter }
+  let lockout : int t =
+    {
+      get = (fun buf off -> (Get.lockout buf off :> int));
+      view = (fun b v -> (view_lockout b v :> int));
+    }
 
-  let spare2 : Value.spare2 t = { get = Get.spare2; view = view_spare2 }
+  let wait : int t =
+    {
+      get = (fun buf off -> (Get.wait buf off :> int));
+      view = (fun b v -> (view_wait b v :> int));
+    }
 
-  let reportvalue : Value.reportvalue t =
-    { get = Get.reportvalue; view = view_reportvalue }
+  let retransmit : int t =
+    {
+      get = (fun buf off -> (Get.retransmit buf off :> int));
+      view = (fun b v -> (view_retransmit b v :> int));
+    }
+
+  let farmbcounter : int t =
+    {
+      get = (fun buf off -> (Get.farmbcounter buf off :> int));
+      view = (fun b v -> (view_farmbcounter b v :> int));
+    }
+
+  let spare2 : int t =
+    {
+      get = (fun buf off -> (Get.spare2 buf off :> int));
+      view = (fun b v -> (view_spare2 b v :> int));
+    }
+
+  let reportvalue : int t =
+    {
+      get = (fun buf off -> (Get.reportvalue buf off :> int));
+      view = (fun b v -> (view_reportvalue b v :> int));
+    }
 end
 
 let encode t buf off =

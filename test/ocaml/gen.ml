@@ -30,7 +30,8 @@ let () =
   let simd = flag "--simd" in
   let base name = Filename.remove_extension name in
   (* Each module, and the bridge that checks it against its codec. [make] is
-     the constructor [Schemas.<codec>_make] and its type [Schemas.<codec>]. *)
+     the constructor [Schemas.<codec>_make] and its type [Schemas.<codec>], the
+     type of the codec's records. *)
   let g name ?(make = true) ?maps codec c =
     let make =
       if make then Some ("Schemas." ^ codec ^ "_make", "Schemas." ^ codec)
@@ -40,8 +41,15 @@ let () =
     and core = String.capitalize_ascii (base name) in
     write name (Wire_ocaml.ml ~target ~simd ?make ?maps ~codec c);
     write (name ^ "i") (Wire_ocaml.mli ~target ~simd ?make ?maps ~codec c);
-    write (base name ^ "_wire.ml") (Wire_ocaml.bridge ?maps ~codec ~core c);
-    write (base name ^ "_wire.mli") (Wire_ocaml.bridge_mli ?maps ~codec ~core c)
+    (* A module with its own record type has a [Global], which its bridge
+       swaps with [Interpreted]. *)
+    let record = if Option.is_none make then Some codec else None in
+    write
+      (base name ^ "_wire.ml")
+      (Wire_ocaml.bridge ?maps ?record ~codec ~core c);
+    write
+      (base name ^ "_wire.mli")
+      (Wire_ocaml.bridge_mli ?maps ?record ~codec ~core c)
   in
   let s name ?(step = false) ?(path = "Schemas.") codec c =
     let codec = path ^ codec in
@@ -61,6 +69,7 @@ let () =
   in
   g "g_ipv4.ml" "ipv4" Schemas.ipv4;
   g "g_ipv4_record.ml" ~make:false "ipv4" Schemas.ipv4;
+  g "g_mixed_record.ml" ~make:false "mixed" Schemas.mixed;
   g "g_checked.ml" "checked" Schemas.checked;
   g "g_mixed.ml" "mixed" Schemas.mixed;
   g "g_small.ml" "small" Schemas.small;

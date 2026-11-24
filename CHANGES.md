@@ -157,7 +157,15 @@
 
 - `Wire.S`, one signature for generated and interpreted codecs of fixed-size
   records (`Wire.Codec.Make`), so code moves between the two by changing one
-  line (#492, @samoht)
+  line. `Wire_ocaml.bridge ~record` writes both sides, `Global` and
+  `Interpreted`, with the same named handles, each reading the type the codec
+  declares; `field f` is the handle of a codec field on either side (#492,
+  @samoht)
+
+- `Wire.Scan`, one signature for a generated scanner's step folds and for
+  `Interpreted_scan`, which `Wire_ocaml.scanner_bridge` writes over
+  `Wire.Codec` for the same consumer, so code moves between the two by
+  changing one line (@samoht)
 
 - `Wire_ocaml.scanner`: generate a scanner that checks a record with nested
   codecs, optional fields and variable sizes, and hands out the fields chosen

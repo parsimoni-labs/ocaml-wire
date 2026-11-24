@@ -756,47 +756,47 @@ module Field : sig
   }
   (** The type for fields holding an ['a]. *)
 
-  val controlwordtype : Value.controlwordtype t
+  val controlwordtype : int t
   (** [controlwordtype] reads with {!Get.controlwordtype} and
       {!view_controlwordtype}. *)
 
-  val clcwversion : Value.clcwversion t
+  val clcwversion : int t
   (** [clcwversion] reads with {!Get.clcwversion} and {!view_clcwversion}. *)
 
-  val statusfield : Value.statusfield t
+  val statusfield : int t
   (** [statusfield] reads with {!Get.statusfield} and {!view_statusfield}. *)
 
-  val copineffect : Value.copineffect t
+  val copineffect : int t
   (** [copineffect] reads with {!Get.copineffect} and {!view_copineffect}. *)
 
-  val vcid : Value.vcid t
+  val vcid : int t
   (** [vcid] reads with {!Get.vcid} and {!view_vcid}. *)
 
-  val spare : Value.spare t
+  val spare : int t
   (** [spare] reads with {!Get.spare} and {!view_spare}. *)
 
-  val norf : Value.norf t
+  val norf : int t
   (** [norf] reads with {!Get.norf} and {!view_norf}. *)
 
-  val nobitlock : Value.nobitlock t
+  val nobitlock : int t
   (** [nobitlock] reads with {!Get.nobitlock} and {!view_nobitlock}. *)
 
-  val lockout : Value.lockout t
+  val lockout : int t
   (** [lockout] reads with {!Get.lockout} and {!view_lockout}. *)
 
-  val wait : Value.wait t
+  val wait : int t
   (** [wait] reads with {!Get.wait} and {!view_wait}. *)
 
-  val retransmit : Value.retransmit t
+  val retransmit : int t
   (** [retransmit] reads with {!Get.retransmit} and {!view_retransmit}. *)
 
-  val farmbcounter : Value.farmbcounter t
+  val farmbcounter : int t
   (** [farmbcounter] reads with {!Get.farmbcounter} and {!view_farmbcounter}. *)
 
-  val spare2 : Value.spare2 t
+  val spare2 : int t
   (** [spare2] reads with {!Get.spare2} and {!view_spare2}. *)
 
-  val reportvalue : Value.reportvalue t
+  val reportvalue : int t
   (** [reportvalue] reads with {!Get.reportvalue} and {!view_reportvalue}. *)
 end
 
@@ -860,48 +860,48 @@ module Global : sig
     }
     (** The type for fields holding an ['a]. *)
 
-    val controlwordtype : Value.controlwordtype t
+    val controlwordtype : int t
     (** [controlwordtype] reads with {!Get.controlwordtype} and
         {!view_controlwordtype}. *)
 
-    val clcwversion : Value.clcwversion t
+    val clcwversion : int t
     (** [clcwversion] reads with {!Get.clcwversion} and {!view_clcwversion}. *)
 
-    val statusfield : Value.statusfield t
+    val statusfield : int t
     (** [statusfield] reads with {!Get.statusfield} and {!view_statusfield}. *)
 
-    val copineffect : Value.copineffect t
+    val copineffect : int t
     (** [copineffect] reads with {!Get.copineffect} and {!view_copineffect}. *)
 
-    val vcid : Value.vcid t
+    val vcid : int t
     (** [vcid] reads with {!Get.vcid} and {!view_vcid}. *)
 
-    val spare : Value.spare t
+    val spare : int t
     (** [spare] reads with {!Get.spare} and {!view_spare}. *)
 
-    val norf : Value.norf t
+    val norf : int t
     (** [norf] reads with {!Get.norf} and {!view_norf}. *)
 
-    val nobitlock : Value.nobitlock t
+    val nobitlock : int t
     (** [nobitlock] reads with {!Get.nobitlock} and {!view_nobitlock}. *)
 
-    val lockout : Value.lockout t
+    val lockout : int t
     (** [lockout] reads with {!Get.lockout} and {!view_lockout}. *)
 
-    val wait : Value.wait t
+    val wait : int t
     (** [wait] reads with {!Get.wait} and {!view_wait}. *)
 
-    val retransmit : Value.retransmit t
+    val retransmit : int t
     (** [retransmit] reads with {!Get.retransmit} and {!view_retransmit}. *)
 
-    val farmbcounter : Value.farmbcounter t
+    val farmbcounter : int t
     (** [farmbcounter] reads with {!Get.farmbcounter} and {!view_farmbcounter}.
     *)
 
-    val spare2 : Value.spare2 t
+    val spare2 : int t
     (** [spare2] reads with {!Get.spare2} and {!view_spare2}. *)
 
-    val reportvalue : Value.reportvalue t
+    val reportvalue : int t
     (** [reportvalue] reads with {!Get.reportvalue} and {!view_reportvalue}. *)
   end
 end
