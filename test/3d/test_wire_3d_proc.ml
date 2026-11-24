@@ -225,7 +225,7 @@ let test_locate_3d_exe_names () =
         path
       in
       let locate () =
-        Wire_3d.Private.locate_3d_exe ~win32:false
+        Wire_3d.Private.locate_3d_exe ~win32:Sys.win32
           ~getenv:(function "PATH" -> Some dir | _ -> None)
           ~executable:Sys.file_exists
       in
