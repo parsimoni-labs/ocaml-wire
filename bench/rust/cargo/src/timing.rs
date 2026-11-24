@@ -87,18 +87,44 @@ pub fn measure<R: Display>(corpus: &str, name: &str, filter: &Filter, items: usi
     if !filter.selects(name) {
         return;
     }
-    let items = items as f64;
     let result = f();
+    let times = passes(items, runs, || {
+        black_box(f());
+    });
+    print_result(corpus, name, times, result);
+}
+
+/// `measure` for a pass `f` over a state `s` that leaves its result there,
+/// each pass rebuilding the same: `result(s)`, read once after the timed
+/// passes and not timed, is the row's result, as `Bench_lib.measure_state`
+/// reads it.
+#[allow(clippy::too_many_arguments)]
+pub fn measure_state<S, R: Display>(corpus: &str, name: &str, filter: &Filter, items: usize, runs: usize, s: &mut S, mut f: impl FnMut(&mut S), result: impl FnOnce(&S) -> R) {
+    if !filter.selects(name) {
+        return;
+    }
+    f(s);
+    let times = passes(items, runs, || f(s));
+    print_result(corpus, name, times, result(s));
+}
+
+// The CPU and wall times of `runs` passes of `f`, per item.
+fn passes(items: usize, runs: usize, mut f: impl FnMut()) -> (Vec<f64>, Vec<f64>) {
+    let items = items as f64;
     let mut cpu = Vec::with_capacity(runs);
     let mut wall = Vec::with_capacity(runs);
     for _ in 0..runs {
         let w0 = Instant::now();
         let c0 = cpu_time();
-        black_box(f());
+        f();
         let c1 = cpu_time();
         wall.push(w0.elapsed().as_nanos() as f64 / items);
         cpu.push((c1 - c0) * 1e9 / items);
     }
+    (cpu, wall)
+}
+
+fn print_result<R: Display>(corpus: &str, name: &str, (cpu, wall): (Vec<f64>, Vec<f64>), result: R) {
     let [c0, c1, c2, c3] = quantiles(cpu);
     let [w0, w1, w2, w3] = quantiles(wall);
     println!("RESULT\t{corpus}\t{name}\t{c0:.2}\t{c1:.2}\t{c2:.2}\t{c3:.2}\t{w0:.2}\t{w1:.2}\t{w2:.2}\t{w3:.2}\t{result}");

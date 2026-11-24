@@ -136,6 +136,21 @@ val measure :
     CPU time (user and system) and of the wall time per item, and the result
     printed by [pp]. It does nothing unless [filter] selects [name]. *)
 
+val measure_state :
+  corpus:string ->
+  filter:filter ->
+  name:string ->
+  items:int ->
+  runs:int ->
+  pp:'a Fmt.t ->
+  result:(unit -> 'a) ->
+  (unit -> unit) ->
+  unit
+(** [measure_state ~corpus ~filter ~name ~items ~runs ~pp ~result f] is
+    {!measure} for a pass [f] that leaves its result in a state every pass
+    rebuilds the same: [result ()], read once after the timed passes and not
+    timed, is the row's result. *)
+
 val report : unit:(string -> string) -> string list -> unit
 (** [report ~unit files] prints the [RESULT] lines of [files]: a table per
     corpus ranked by best CPU time per [unit corpus], then the best CPU time of
