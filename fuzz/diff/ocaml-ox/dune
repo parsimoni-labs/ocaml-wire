@@ -2,28 +2,77 @@
 ; [@zero_alloc] checks the compiler enforces. On any other compiler the library
 ; holds the code for the default target instead, so the lane still builds, and
 ; neither [dune runtest] (which says the lane was skipped) nor the AFL campaign
-; repeats fuzz/diff/ocaml.
+; repeats fuzz/diff/ocaml. The index is split as in fuzz/diff/ocaml.
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
+ (targets
+  ocaml_index.ml
+  ocaml_index_0.ml
+  ocaml_index_1.ml
+  ocaml_index_2.ml
+  ocaml_index_3.ml
+  ocaml_index_4.ml
+  ocaml_index_5.ml
+  ocaml_index_6.ml
+  ocaml_index_7.ml
+  ocaml_index_8.ml
+  ocaml_index_9.ml
+  ocaml_index_10.ml
+  ocaml_index_11.ml
+  ocaml_index_12.ml
+  ocaml_index_13.ml
+  ocaml_index_14.ml
+  ocaml_index_15.ml)
  (action
-  (with-stdout-to
-   ocaml_index.ml
-   (run %{dep:../../../test/diff/gen_ocaml.exe} --oxcaml))))
+  (run %{dep:../../../test/diff/gen_ocaml.exe} --oxcaml %{targets})))
 
 (rule
  (enabled_if
   (<> %{ocaml-config:ox} true))
+ (targets
+  ocaml_index.ml
+  ocaml_index_0.ml
+  ocaml_index_1.ml
+  ocaml_index_2.ml
+  ocaml_index_3.ml
+  ocaml_index_4.ml
+  ocaml_index_5.ml
+  ocaml_index_6.ml
+  ocaml_index_7.ml
+  ocaml_index_8.ml
+  ocaml_index_9.ml
+  ocaml_index_10.ml
+  ocaml_index_11.ml
+  ocaml_index_12.ml
+  ocaml_index_13.ml
+  ocaml_index_14.ml
+  ocaml_index_15.ml)
  (action
-  (with-stdout-to
-   ocaml_index.ml
-   (run %{dep:../../../test/diff/gen_ocaml.exe}))))
+  (run %{dep:../../../test/diff/gen_ocaml.exe} %{targets})))
 
 (library
  (name ocaml_index_ox)
  (wrapped false)
- (modules ocaml_index)
+ (modules
+  ocaml_index
+  ocaml_index_0
+  ocaml_index_1
+  ocaml_index_2
+  ocaml_index_3
+  ocaml_index_4
+  ocaml_index_5
+  ocaml_index_6
+  ocaml_index_7
+  ocaml_index_8
+  ocaml_index_9
+  ocaml_index_10
+  ocaml_index_11
+  ocaml_index_12
+  ocaml_index_13
+  ocaml_index_14
+  ocaml_index_15)
  (libraries wire wire.runtime fuzz_gen diff_ocaml fmt))
 
 (rule

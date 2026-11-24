@@ -10,18 +10,54 @@
 
 ; The generator (test/diff/gen_ocaml.ml) writes the module for each codec, and
 ; the scanners. test/ocaml runs the structured cases' corpora through them too.
+; They are split by size over the shards, each compiled on its own, so that no
+; compiler run holds all of them: as one module they took over 700 MB of heap.
+; ocaml_index.ml lists them.
 
 (library
  (name ocaml_index)
  (wrapped false)
- (modules ocaml_index)
+ (modules
+  ocaml_index
+  ocaml_index_0
+  ocaml_index_1
+  ocaml_index_2
+  ocaml_index_3
+  ocaml_index_4
+  ocaml_index_5
+  ocaml_index_6
+  ocaml_index_7
+  ocaml_index_8
+  ocaml_index_9
+  ocaml_index_10
+  ocaml_index_11
+  ocaml_index_12
+  ocaml_index_13
+  ocaml_index_14
+  ocaml_index_15)
  (libraries wire wire.runtime fuzz_gen diff_ocaml fmt))
 
 (rule
+ (targets
+  ocaml_index.ml
+  ocaml_index_0.ml
+  ocaml_index_1.ml
+  ocaml_index_2.ml
+  ocaml_index_3.ml
+  ocaml_index_4.ml
+  ocaml_index_5.ml
+  ocaml_index_6.ml
+  ocaml_index_7.ml
+  ocaml_index_8.ml
+  ocaml_index_9.ml
+  ocaml_index_10.ml
+  ocaml_index_11.ml
+  ocaml_index_12.ml
+  ocaml_index_13.ml
+  ocaml_index_14.ml
+  ocaml_index_15.ml)
  (action
-  (with-stdout-to
-   ocaml_index.ml
-   (run %{dep:../../../test/diff/gen_ocaml.exe}))))
+  (run %{dep:../../../test/diff/gen_ocaml.exe} %{targets})))
 
 (executable
  (name fuzz)
