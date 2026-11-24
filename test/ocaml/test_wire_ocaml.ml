@@ -1106,6 +1106,7 @@ let scan_ops name fields decode =
     scan_fields = fields;
     scan = decode;
     scan_batch = None;
+    scan_index = None;
   }
 
 (* The scanner rejects a record whose condition, size or check overflows, as
@@ -1388,7 +1389,17 @@ let test_nested_no_alloc () =
   Alcotest.(check int)
     "fold_step and fold_frames_step"
     (measured "fold_step" each)
-    (measured "fold_frames_step" batch)
+    (measured "fold_frames_step" batch);
+  let offs = Array.init frames (fun i -> i * stride)
+  and lens = Array.make frames stride in
+  let index () = S_nested.fold_index_step buf ~offs ~lens ~init:0 in
+  Alcotest.(check int)
+    "fold_step and fold_index_step"
+    (measured "fold_step" each)
+    (measured "fold_index_step" index);
+  match S_nested.fold_index_step buf ~offs ~lens:[| stride |] ~init:0 with
+  | _ -> Alcotest.fail "fold_index_step: offs and lens of different lengths"
+  | exception Invalid_argument _ -> ()
 
 let refused what generate =
   match generate () with

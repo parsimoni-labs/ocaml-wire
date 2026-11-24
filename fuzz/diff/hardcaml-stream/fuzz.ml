@@ -81,6 +81,7 @@ let adapter ~packing ~bytes ~capacity ~max_length label plan oracle =
       scan_fields = fields;
       scan;
       scan_batch = None;
+      scan_index = None;
     }
   in
   (ops, transport_fault ~bytes ~parts label sim)

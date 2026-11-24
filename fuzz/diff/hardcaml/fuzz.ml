@@ -179,6 +179,7 @@ let simulator mode label codec plan oracle =
     scan_fields = List.map fst p.outputs;
     scan = scan_input p label codec oracle;
     scan_batch = None;
+    scan_index = None;
   }
 
 let counts = ref []

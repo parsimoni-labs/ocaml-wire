@@ -89,6 +89,11 @@
   how its frame loop runs, for a tool that audits or proves the checks a
   generated scanner performs (#513, @samoht)
 
+- A scanner generated with `~step` has `fold_index_step buf ~offs ~lens
+  ~init`, which folds `fold_step` over frames of any length, such as the
+  packets of a capture, with the accumulator kept in a register. On OxCaml
+  the accumulator may be an unboxed tuple (#539, @samoht)
+
 - A generated module has a `View`: check a record once, then read its fields
   with no bounds check and no allocation. A bitfield or byte array is checked
   when it is built, as a `Value.<field>` (#442, #492, #493, @samoht)

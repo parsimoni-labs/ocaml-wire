@@ -186,15 +186,16 @@ let rec fixed_need = function
 let checks_len plan =
   match plan.nodes with Prefix (_, n) :: _ -> n > 0 | _ -> false
 
-(* The entry tests [len < 0] and [off > Bytes.length buf] unless
-   {!checks_len} holds: then the walk's first check rejects a negative [len],
-   and [len > Bytes.length buf - off] an [off] past the buffer. *)
-let pp_entry ?cuts ~name ~scope s ~reject ~accept =
+(* The entry tests [len < 0] and [off > length] unless {!checks_len} holds:
+   then the walk's first check rejects a negative [len], and
+   [len > length - off] an [off] past the buffer. [length] is the length of
+   [buf]. *)
+let pp_entry ?cuts ?(length = "Bytes.length buf") ~name ~scope s ~reject ~accept
+    =
   Fmt.pf s.ppf "if %s then %s else@\n"
-    (if checks_len s.plan then "off < 0 || len > Bytes.length buf - off"
+    (if checks_len s.plan then Fmt.str "off < 0 || len > %s - off" length
      else
-       "off < 0 || len < 0 || off > Bytes.length buf || len > Bytes.length buf \
-        - off")
+       Fmt.str "off < 0 || len < 0 || off > %s || len > %s - off" length length)
     reject;
   Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
     (if s.m.num = Unboxed then "U.of_int off" else "off")
@@ -536,16 +537,59 @@ let pp_fold s ~unboxed =
         s ~reject:"invalid ()" ~accept:(call s ~unboxed "valid");
       Fmt.pf s.ppf "@\n")
 
-(* [fold_step], which calls the module [m]'s functions by name. *)
+(* [fold_step], which calls the module [m]'s functions by name, and
+   [fold_index_step], which folds it over the frames of an index. Both go
+   through [step_within], whose [length] is that of [buf], so that the loop
+   over the index loads it once. *)
 let pp_fold_step s m =
+  let within = "step_within" and buf = s.m.src.buf in
   with_cuts s "fold_step" (fun s cuts ->
-      Fmt.pf s.ppf "let[@inline always] fold_step %s off len ~init =@\n"
-        s.m.src.buf;
-      pp_entry ?cuts ~name:"fold_step"
+      Hashtbl.replace s.taken within ();
+      let body = Buffer.create 4096 in
+      let ppf = Format.formatter_of_buffer body in
+      pp_entry ?cuts ~length:"length" ~name:"fold_step"
         ~scope:(scope s [ ("init", None) ])
-        s ~reject:(m ^ ".invalid init")
+        { s with ppf } ~reject:(m ^ ".invalid init")
         ~accept:(call ~step:true s ~unboxed:false (m ^ ".valid init"));
-      Fmt.pf s.ppf "@\n")
+      Format.pp_print_flush ppf ();
+      let body = Buffer.contents body in
+      (* A walk that reads no byte takes [buf] for its type alone. *)
+      let param =
+        if mentions "buf" body then buf
+        else
+          let i = String.index buf 'b' in
+          String.sub buf 0 i ^ "_" ^ String.sub buf i (String.length buf - i)
+      in
+      Fmt.pf s.ppf "let[@inline always] %s %s ~length off len ~init =@\n%s@\n"
+        within param body);
+  Fmt.pf s.ppf
+    "let[@inline always] fold_step %s off len ~init =@\n\
+     %s buf ~length:(Bytes.length buf) off len ~init@\n\
+     @\n"
+    buf within;
+  Hashtbl.replace s.taken "fold_index_step" ();
+  (* On OxCaml the accumulator may have any layout, which a [ref] cannot hold.
+     Both arrays have [n] elements, so every index of the loop is in range in
+     each. *)
+  let bind, get, set =
+    if s.m.num = Unboxed then ("let mutable acc = init in", "acc", "acc <-")
+    else ("let acc = ref init in", "!acc", "acc :=")
+  in
+  Fmt.pf s.ppf
+    "let[@inline always] fold_index_step %s ~(offs : int array) ~(lens : int \
+     array) ~init =@\n\
+     let n = Array.length offs in@\n\
+     if Array.length lens <> n then@\n\
+     invalid_arg \"fold_index_step: offs and lens differ in length\";@\n\
+     let length = Bytes.length buf in@\n\
+     %s@\n\
+     for i = 0 to n - 1 do@\n\
+     %s %s buf ~length (Array.unsafe_get offs i) (Array.unsafe_get lens i) \
+     ~init:%s@\n\
+     done;@\n\
+     %s@\n\
+     @\n"
+    buf bind set within get get
 
 let pp_result_type s name hash =
   Fmt.pf s.ppf "type %s = %s{ ok : bool;@\n" name hash;

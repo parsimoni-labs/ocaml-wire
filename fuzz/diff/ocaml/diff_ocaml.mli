@@ -102,6 +102,10 @@ type scan_ops = {
     option;
       (** The frame fold with a stride: each frame's outputs, or [None] when it
           rejects the bounds. *)
+  scan_index :
+    (bytes -> int array -> int array -> (string * int) list option list) option;
+      (** The fold over an index, [offs] and [lens]: each frame's outputs, in
+          order. *)
 }
 (** A generated scanner, through its decoder and its frame fold, or their
     unboxed forms. *)
