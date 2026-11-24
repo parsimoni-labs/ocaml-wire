@@ -25,7 +25,7 @@ let ports b len ~cap o proto =
     if not (H.Tcp.View.ok c) then -1
     else
       let t = H.Tcp.View.get c in
-      let off = (H.Tcp.Field.data_offset.view b t :> int) in
+      let off = H.Tcp.Field.data_offset.view b t in
       if o + (off * 4) > cap then -1
       else
         (UInt16.to_int (H.Tcp.Field.src_port.view b t) lsl 16)
@@ -50,15 +50,15 @@ let ipv4 b len ~cap o =
     if not (H.Ipv4.View.ok c) then reject ()
     else
       let ip = H.Ipv4.View.get c in
-      let hlen = (H.Ipv4.Field.ihl.view b ip :> int) * 4
+      let hlen = H.Ipv4.Field.ihl.view b ip * 4
       and total = UInt16.to_int (H.Ipv4.Field.total_length.view b ip) in
       if total < hlen || o + hlen > cap then reject ()
       else
         let proto = UInt8.to_int (H.Ipv4.Field.protocol.view b ip) in
         let ports =
           if
-            (H.Ipv4.Field.flags.view b ip :> int) land 1 <> 0
-            || (H.Ipv4.Field.fragment_offset.view b ip :> int) <> 0
+            H.Ipv4.Field.flags.view b ip land 1 <> 0
+            || H.Ipv4.Field.fragment_offset.view b ip <> 0
           then 0
           else ports b len ~cap (o + hlen) proto
         in

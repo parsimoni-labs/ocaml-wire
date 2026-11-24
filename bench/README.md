@@ -998,10 +998,11 @@ header modules are those of `swap.ml`, and its one line
 `module H = Swap.Generated` picks them; the dune rules build the interpreted
 rows from the same file with that line replaced by
 `module H = Swap.Interpreted`, and the parse-only rows by making `Flow_sum`
-the sink. The generated side is one line per header,
-`module Ipv4 = G_ipv4.Global`; the interpreted side applies `Codec.Make` and
-names the handles the loop reads (`ihl`, `src_addr`, ...) with `field`, since
-`Wire.S` declares the type of a handle but no handle.
+the sink. Each side is one line per header, `module Ipv4 =
+G_ipv4_wire.Global` or `module Ipv4 = G_ipv4_wire.Interpreted`: the bridge
+`Wire_ocaml.bridge ~record` writes next to each generated module gives both,
+with the same named handles (`ihl`, `src_addr`, ...) reading the types the
+codec declares.
 
 Per frame the loop checks Ethernet, IPv4 (its options skipped by IHL) and
 TCP or UDP with the checks of the classifier above, and hands the IPv4

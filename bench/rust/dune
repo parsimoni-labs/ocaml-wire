@@ -26,14 +26,24 @@
   g_capture.mli
   g_eth.ml
   g_eth.mli
+  g_eth_wire.ml
+  g_eth_wire.mli
   g_ipv4.ml
   g_ipv4.mli
+  g_ipv4_wire.ml
+  g_ipv4_wire.mli
   g_ipv6.ml
   g_ipv6.mli
+  g_ipv6_wire.ml
+  g_ipv6_wire.mli
   g_tcp.ml
   g_tcp.mli
+  g_tcp_wire.ml
+  g_tcp_wire.mli
   g_udp.ml
-  g_udp.mli)
+  g_udp.mli
+  g_udp_wire.ml
+  g_udp_wire.mli)
  (action
   (run ./gen.exe --ocaml)))
 
@@ -48,14 +58,24 @@
   g_capture.mli
   g_eth.ml
   g_eth.mli
+  g_eth_wire.ml
+  g_eth_wire.mli
   g_ipv4.ml
   g_ipv4.mli
+  g_ipv4_wire.ml
+  g_ipv4_wire.mli
   g_ipv6.ml
   g_ipv6.mli
+  g_ipv6_wire.ml
+  g_ipv6_wire.mli
   g_tcp.ml
   g_tcp.mli
+  g_tcp_wire.ml
+  g_tcp_wire.mli
   g_udp.ml
-  g_udp.mli)
+  g_udp.mli
+  g_udp_wire.ml
+  g_udp_wire.mli)
  (action
   (run ./gen.exe --oxcaml)))
 
@@ -171,7 +191,12 @@
   g_ipv4
   g_ipv6
   g_tcp
-  g_udp)
+  g_udp
+  g_eth_wire
+  g_ipv4_wire
+  g_ipv6_wire
+  g_tcp_wire
+  g_udp_wire)
  (libraries
   bench_lib
   headers

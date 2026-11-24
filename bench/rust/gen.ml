@@ -12,7 +12,8 @@
    g_capture.ml, the scanner of [Packet_stack.capture] with every output, whose
    views the check/view row reads; and the record modules of the fixed
    header codecs of [Headers], g_eth.ml, g_ipv4.ml, g_ipv6.ml, g_tcp.ml and
-   g_udp.ml, with their interfaces. A scanner shares its consumers' module so that the compiler
+   g_udp.ml, with their interfaces and their bridges, g_eth_wire.ml and so
+   on, whose [Global] and [Interpreted] the swap rows read. A scanner shares its consumers' module so that the compiler
    sees the fold and the consumer it inlines in one unit in every profile, and
    so checks the batch consumers' [@zero_alloc] where the dev profile hides
    other modules' code. The batch consumers take the corpus stride, which the
@@ -357,7 +358,14 @@ let () =
             (fun name c ->
               let codec = "Headers." ^ name in
               write ("g_" ^ name ^ ".ml") (Wire_ocaml.ml ~target ~codec c);
-              write ("g_" ^ name ^ ".mli") (Wire_ocaml.mli ~target ~codec c));
+              write ("g_" ^ name ^ ".mli") (Wire_ocaml.mli ~target ~codec c);
+              let core = "G_" ^ name and record = codec in
+              write
+                ("g_" ^ name ^ "_wire.ml")
+                (Wire_ocaml.bridge ~record ~codec ~core c);
+              write
+                ("g_" ^ name ^ "_wire.mli")
+                (Wire_ocaml.bridge_mli ~record ~codec ~core c));
         }
   | [ _; "--rust"; dir ] ->
       let codec = "Packet_stack.codec" in
