@@ -21,6 +21,10 @@
 //! (ns/packet) per implementation, over RUNS timed passes; `<corpus>` is the
 //! file name without its extension. An optional ROW runs only the row of
 //! that name, and fails when there is none; `--list` prints the row names.
+//!
+//! `wire-bench-rust flow FILE RUNS [ROW | --list]` runs the flow classifier of
+//! `flow.rs` on a capture instead; `wire-bench-flow-parse` runs its parsers
+//! without the table.
 
 use std::hint::black_box;
 
@@ -30,6 +34,8 @@ mod timing;
 mod eth;
 #[path = "gen/ipv4.rs"]
 mod ipv4;
+#[path = "gen/ipv6.rs"]
+mod ipv6;
 #[path = "gen/tcp.rs"]
 mod tcp;
 #[path = "gen/udp.rs"]
@@ -38,6 +44,12 @@ mod udp;
 mod stack;
 #[path = "gen/stack_selected.rs"]
 mod stack_selected;
+#[path = "gen/flow.rs"]
+mod flow_scan;
+
+// This binary runs `flow::main` only.
+#[allow(dead_code)]
+mod flow;
 
 const IPV4: u16 = 0x0800;
 
@@ -284,6 +296,9 @@ fn measure(corpus_name: &str, name: &str, filter: &timing::Filter, corpus: &[u8]
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("flow") {
+        return flow::main(&args[2..]);
+    }
     let path = std::path::Path::new(&args[1]);
     let corpus = std::fs::read(path).expect("corpus");
     let slot: usize = args[2].parse().expect("slot");

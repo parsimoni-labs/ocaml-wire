@@ -5,18 +5,22 @@
    [Packet_stack.codec] calls by name, the scanner as the submodule [G_stack]
    under its interface, then its checksum consumers;
    selected_read.ml, the same with the scanner handing out only the fields the
-   checksum reads, as [G_selected]; and the record modules of the fixed header
-   codecs of [Headers], g_eth.ml, g_ipv4.ml, g_tcp.ml and g_udp.ml, with their
-   interfaces. A scanner shares its consumers' module so that the compiler
+   checksum reads, as [G_selected]; flow_read.ml, the scanner of
+   [Packet_stack.capture] handing out the flow classifier's fields to the
+   consumer [Flow_step], as [G_flow], and the same scanner handing them to
+   [Flow_parse], which folds them into [Flow_sum], as [G_flow_parse]; and the record modules of the fixed
+   header codecs of [Headers], g_eth.ml, g_ipv4.ml, g_ipv6.ml, g_tcp.ml and
+   g_udp.ml, with their interfaces. A scanner shares its consumers' module so that the compiler
    sees the fold and the consumer it inlines in one unit in every profile, and
    so checks the batch consumers' [@zero_alloc] where the dev profile hides
    other modules' code. The batch consumers take the corpus stride, which the
    harness passes as a literal so it stays a constant after inlining.
 
    With [--rust DIR], in [DIR]: the Wire_rust modules of the fixed header
-   codecs, eth.rs, ipv4.rs, tcp.rs and udp.rs; the scanner Wire_rust writes
-   from [Packet_stack.codec], stack.rs; and the same scanner handing out only
-   the fields the checksum reads, stack_selected.rs. *)
+   codecs, eth.rs, ipv4.rs, ipv6.rs, tcp.rs and udp.rs; the scanner Wire_rust
+   writes from [Packet_stack.codec], stack.rs; the same scanner handing out
+   only the fields the checksum reads, stack_selected.rs; and the scanner of
+   [Packet_stack.capture] handing out the flow classifier's fields, flow.rs. *)
 
 let write file s =
   let oc = open_out_bin file in
@@ -175,12 +179,79 @@ let stack_reader target ~core ~fields =
   else
     "let unboxed = boxed\nlet fold_unboxed = fold\nlet batch_unboxed = batch\n"
 
+(* {1 The flow classifier}
+
+   The outputs of the scanner of [Packet_stack.capture] the classifier reads:
+   the addresses, the protocol, the ports and the IP length of each packet. *)
+let flow_fields =
+  [
+    "ipv4_present";
+    "ipv4_total_length";
+    "ipv4_protocol";
+    "ipv4_src";
+    "ipv4_dst";
+    "ipv4_tcp_present";
+    "ipv4_tcp_src_port";
+    "ipv4_tcp_dst_port";
+    "ipv4_udp_present";
+    "ipv4_udp_src_port";
+    "ipv4_udp_dst_port";
+    "ipv6_present";
+    "ipv6_payload_length";
+    "ipv6_next_header";
+    "ipv6_src0";
+    "ipv6_src1";
+    "ipv6_src2";
+    "ipv6_src3";
+    "ipv6_dst0";
+    "ipv6_dst1";
+    "ipv6_dst2";
+    "ipv6_dst3";
+    "ipv6_tcp_present";
+    "ipv6_tcp_src_port";
+    "ipv6_tcp_dst_port";
+    "ipv6_udp_present";
+    "ipv6_udp_src_port";
+    "ipv6_udp_dst_port";
+  ]
+
+(* The consumer [name] the scanner calls by name in [fold_step]: it hands the
+   packet's key to [sink], [Flow_table] as the other rows do or [Flow_sum]
+   for the rows that time the parse alone. *)
+let flow_step ~name ~sink =
+  "module " ^ name
+  ^ " = struct\n\
+     type t = int\n\n\
+     let[@inline always] invalid base = base\n\n\
+     let[@inline always] ports tcp tsp tdp udp usp udp_ =\n\
+     if tcp then (Int64.to_int tsp lsl 16) lor Int64.to_int tdp\n\
+     else if udp then (Int64.to_int usp lsl 16) lor Int64.to_int udp_\n\
+     else 0\n\n\
+     let[@inline always] valid base "
+  ^ String.concat " " (List.map (fun n -> "~" ^ n) flow_fields)
+  ^ " =\nlet i = Int64.to_int in\nif ipv4_present then\n" ^ sink
+  ^ ".add4 ~src:(i ipv4_src) ~dst:(i ipv4_dst)\n\
+     ~proto:(i ipv4_protocol)\n\
+     ~ports:(ports ipv4_tcp_present ipv4_tcp_src_port ipv4_tcp_dst_port\n\
+     ipv4_udp_present ipv4_udp_src_port ipv4_udp_dst_port)\n\
+     ~bytes:(i ipv4_total_length)\n\
+     else if ipv6_present then\n" ^ sink
+  ^ ".add6 ~s0:(i ipv6_src0) ~s1:(i ipv6_src1) ~s2:(i ipv6_src2)\n\
+     ~s3:(i ipv6_src3) ~d0:(i ipv6_dst0) ~d1:(i ipv6_dst1) ~d2:(i ipv6_dst2)\n\
+     ~d3:(i ipv6_dst3) ~proto:(i ipv6_next_header)\n\
+     ~ports:(ports ipv6_tcp_present ipv6_tcp_src_port ipv6_tcp_dst_port\n\
+     ipv6_udp_present ipv6_udp_src_port ipv6_udp_dst_port)\n\
+     ~bytes:(40 + i ipv6_payload_length);\n\
+     base\n\
+     end\n\n"
+
 (* The fixed header codecs, each written by [g name codec]. *)
 type g = { g : 'r. string -> 'r Wire.Codec.t -> unit }
 
 let headers { g } =
   g "eth" Headers.eth;
   g "ipv4" Headers.ipv4;
+  g "ipv6" Headers.ipv6;
   g "tcp" Headers.tcp;
   g "udp" Headers.udp
 
@@ -207,6 +278,22 @@ let () =
       read "stack_read.ml" ~core:"G_stack" ~fields:all ();
       read "selected_read.ml" ~core:"G_selected" ~fields:selected
         ~selected:checksum_fields ();
+      (let codec = "Packet_stack.capture" and c = Packet_stack.capture in
+       let fields = flow_fields in
+       let scanner ~core ~step ~sink ~entry =
+         flow_step ~name:step ~sink ^ "module " ^ core ^ " : sig\n"
+         ^ Wire_ocaml.scanner_mli ~target ~fields ~step ~codec c
+         ^ "\nend = struct\n"
+         ^ Wire_ocaml.scanner ~target ~fields ~step ~codec c
+         ^ "\nend\n\nlet[@inline always] " ^ entry
+         ^ " buf off len =\n  ignore (" ^ core
+         ^ ".fold_step buf off len ~init:0 : int)\n\n"
+       in
+       write "flow_read.ml"
+         (scanner ~core:"G_flow" ~step:"Flow_step" ~sink:"Flow_table"
+            ~entry:"classify"
+         ^ scanner ~core:"G_flow_parse" ~step:"Flow_parse" ~sink:"Flow_sum"
+             ~entry:"parse"));
       headers
         {
           g =
@@ -223,6 +310,10 @@ let () =
       write
         (Filename.concat dir "stack_selected.rs")
         (Wire_rust.scanner ~fields:checksum_fields ~codec Packet_stack.codec);
+      write
+        (Filename.concat dir "flow.rs")
+        (Wire_rust.scanner ~fields:flow_fields ~codec:"Packet_stack.capture"
+           Packet_stack.capture);
       headers
         {
           g =

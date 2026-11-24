@@ -259,31 +259,39 @@ let quantiles times =
   let pct p = times.((Array.length times - 1) * p / 100) in
   (times.(0), pct 10, pct 50, pct 90)
 
-(* One warm-up pass, which also gives the result, then [runs] timed passes.
-   Each pass reads the wall clock and the process CPU time (user and system,
-   from [getrusage]) around the call; CPU time leaves out the time the process
-   spends descheduled, which on a loaded machine dominates the wall clock of
-   the slower rows. rust/cargo/src/timing.rs does exactly the same. *)
+(* One warm-up pass, then [runs] timed passes. Each pass reads the wall clock
+   and the process CPU time (user and system, from [getrusage]) around the
+   call; CPU time leaves out the time the process spends descheduled, which on
+   a loaded machine dominates the wall clock of the slower rows.
+   rust/cargo/src/timing.rs does exactly the same. *)
+let passes ~corpus ~name ~items ~runs ~pp ~result f =
+  let items = float items in
+  let cpu = Array.make runs 0. and wall = Array.make runs 0. in
+  for r = 0 to runs - 1 do
+    let w0 = Unix.gettimeofday () in
+    let c0 = cpu_time () in
+    ignore (Sys.opaque_identity (f ()));
+    let c1 = cpu_time () in
+    let w1 = Unix.gettimeofday () in
+    cpu.(r) <- (c1 -. c0) *. 1e9 /. items;
+    wall.(r) <- (w1 -. w0) *. 1e9 /. items
+  done;
+  let c_best, c10, c50, c90 = quantiles cpu in
+  let w_best, w10, w50, w90 = quantiles wall in
+  Fmt.pr
+    "RESULT\t%s\t%s (%s)\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%a@."
+    corpus name compiler c_best c10 c50 c90 w_best w10 w50 w90 pp (result ())
+
 let measure ~corpus ~filter ~name ~items ~runs ~pp f =
   if selects filter name then begin
-    let items = float items in
     let result = f () in
-    let cpu = Array.make runs 0. and wall = Array.make runs 0. in
-    for r = 0 to runs - 1 do
-      let w0 = Unix.gettimeofday () in
-      let c0 = cpu_time () in
-      ignore (Sys.opaque_identity (f ()));
-      let c1 = cpu_time () in
-      let w1 = Unix.gettimeofday () in
-      cpu.(r) <- (c1 -. c0) *. 1e9 /. items;
-      wall.(r) <- (w1 -. w0) *. 1e9 /. items
-    done;
-    let c_best, c10, c50, c90 = quantiles cpu in
-    let w_best, w10, w50, w90 = quantiles wall in
-    Fmt.pr
-      "RESULT\t%s\t%s \
-       (%s)\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%a@."
-      corpus name compiler c_best c10 c50 c90 w_best w10 w50 w90 pp result
+    passes ~corpus ~name ~items ~runs ~pp ~result:(fun () -> result) f
+  end
+
+let measure_state ~corpus ~filter ~name ~items ~runs ~pp ~result f =
+  if selects filter name then begin
+    f ();
+    passes ~corpus ~name ~items ~runs ~pp ~result f
   end
 
 type row = {

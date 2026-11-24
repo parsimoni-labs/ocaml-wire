@@ -17,7 +17,11 @@ let structs =
 
 (* Variable-size schemas whose validator and default plug only C benchmark
    loops use (bench/rust/everparse): archived with the others, no OCaml stub. *)
-let c_only_structs = [ Wire.Everparse.Raw.struct_of_codec Packet_stack.codec ]
+let c_only_structs =
+  [
+    Wire.Everparse.Raw.struct_of_codec Packet_stack.codec;
+    Wire.Everparse.Raw.struct_of_codec Packet_stack.capture;
+  ]
 
 let struct_size s =
   match Wire.Everparse.Raw.struct_size s with

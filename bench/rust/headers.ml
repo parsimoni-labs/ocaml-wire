@@ -173,3 +173,50 @@ let udp =
         udp_length;
         (Field.v "checksum" uint16be $ fun (_, _, _, x) -> x);
       ]
+
+type ipv6 = {
+  version : int;
+  traffic_class : int;
+  flow_label : int;
+  payload_length : UInt16.t;
+  next_header : UInt8.t;
+  hop_limit : UInt8.t;
+  src : UInt32.t * UInt32.t * UInt32.t * UInt32.t;
+  dst : UInt32.t * UInt32.t * UInt32.t * UInt32.t;
+}
+
+let ipv6 =
+  let word name f = Codec.(Field.v name uint32be $ f) in
+  Codec.v "IPv6"
+    (fun version traffic_class flow_label payload_length next_header hop_limit
+         s0 s1 s2 s3 d0 d1 d2 d3 ->
+      {
+        version;
+        traffic_class;
+        flow_label;
+        payload_length;
+        next_header;
+        hop_limit;
+        src = (s0, s1, s2, s3);
+        dst = (d0, d1, d2, d3);
+      })
+    Codec.
+      [
+        ( Field.v "version" (bits ~width:4 U32be) ~self_constraint:(fun self ->
+              Expr.(self = int 6))
+        $ fun r -> r.version );
+        ( Field.v "traffic_class" (bits ~width:8 U32be) $ fun r ->
+          r.traffic_class );
+        (Field.v "flow_label" (bits ~width:20 U32be) $ fun r -> r.flow_label);
+        (Field.v "payload_length" uint16be $ fun r -> r.payload_length);
+        (Field.v "next_header" uint8 $ fun r -> r.next_header);
+        (Field.v "hop_limit" uint8 $ fun r -> r.hop_limit);
+        word "src0" (fun { src = x, _, _, _; _ } -> x);
+        word "src1" (fun { src = _, x, _, _; _ } -> x);
+        word "src2" (fun { src = _, _, x, _; _ } -> x);
+        word "src3" (fun { src = _, _, _, x; _ } -> x);
+        word "dst0" (fun { dst = x, _, _, _; _ } -> x);
+        word "dst1" (fun { dst = _, x, _, _; _ } -> x);
+        word "dst2" (fun { dst = _, _, x, _; _ } -> x);
+        word "dst3" (fun { dst = _, _, _, x; _ } -> x);
+      ]

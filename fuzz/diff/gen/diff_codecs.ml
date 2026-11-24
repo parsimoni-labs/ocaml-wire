@@ -989,6 +989,197 @@ let region_after_cases_scan =
       corpus = region_corpus;
     }
 
+(* {2 Captures}
+
+   Header-only frames of [Packet_stack.capture], as a MAWI trace keeps them:
+   Ethernet, IPv4 or IPv6, then a TCP header of [words] words or a UDP header,
+   with IP and UDP lengths that claim payloads the frame does not hold. *)
+
+let capture_frame ~v6 ~tcp ~ihl ~words ~fragment =
+  let ip = if v6 then 40 else ihl * 4 in
+  let l4 = if tcp then words * 4 else 8 in
+  let b = Bytes.make (14 + ip + l4) '\000' in
+  for i = 0 to 11 do
+    Bytes.set_uint8 b i (0x11 * (i + 1) land 255)
+  done;
+  Bytes.set_uint16_be b 12 (if v6 then 0x86dd else 0x0800);
+  let proto = if tcp then 6 else 17 in
+  if v6 then begin
+    Bytes.set_int32_be b 14 0x6abcdef1l;
+    Bytes.set_uint16_be b 18 1400;
+    Bytes.set_uint8 b 20 proto;
+    Bytes.set_uint8 b 21 64;
+    for i = 0 to 31 do
+      Bytes.set_uint8 b (22 + i) (((i * 37) + 1) land 255)
+    done
+  end
+  else begin
+    Bytes.set_uint8 b 14 (0x40 lor ihl);
+    Bytes.set_uint16_be b 16 1400;
+    Bytes.set_uint16_be b 20 fragment;
+    Bytes.set_uint8 b 22 64;
+    Bytes.set_uint8 b 23 proto;
+    Bytes.set_int32_be b 26 0xc0a80001l;
+    Bytes.set_int32_be b 30 0x8f000002l
+  end;
+  let t = 14 + ip in
+  Bytes.set_uint16_be b t 51000;
+  Bytes.set_uint16_be b (t + 2) 443;
+  if tcp then begin
+    Bytes.set_int32_be b (t + 4) 0x01020304l;
+    Bytes.set_uint8 b (t + 12) (words lsl 4);
+    Bytes.set_uint8 b (t + 13) 0x18
+  end
+  else Bytes.set_uint16_be b (t + 4) words;
+  b
+
+let present name x = (name, if Option.is_some x then 1 else 0)
+
+let capture_tcp prefix (t : Packet_stack.tcp option) =
+  let open Wire in
+  match t with
+  | None -> []
+  | Some t ->
+      [
+        (prefix ^ "src_port", UInt16.to_int t.src_port);
+        (prefix ^ "dst_port", UInt16.to_int t.dst_port);
+        (prefix ^ "seq", UInt32.to_int t.seq);
+        (prefix ^ "ack", UInt32.to_int t.ack);
+        (prefix ^ "data_offset", t.data_offset);
+        (prefix ^ "reserved", t.reserved);
+        (prefix ^ "flags", t.flags);
+        (prefix ^ "window", UInt16.to_int t.window);
+        (prefix ^ "checksum", UInt16.to_int t.checksum);
+        (prefix ^ "urgent", UInt16.to_int t.urgent);
+      ]
+
+let capture_udp prefix (u : Packet_stack.udp_header option) =
+  let open Wire in
+  match u with
+  | None -> []
+  | Some u ->
+      [
+        (prefix ^ "src_port", UInt16.to_int u.src_port);
+        (prefix ^ "dst_port", UInt16.to_int u.dst_port);
+        (prefix ^ "length", UInt16.to_int u.length);
+        (prefix ^ "checksum", UInt16.to_int u.checksum);
+      ]
+
+let captured_ipv4_values (ip : Packet_stack.captured_ipv4) =
+  let open Wire in
+  [
+    ("ipv4_version", ip.version);
+    ("ipv4_ihl", ip.ihl);
+    ("ipv4_dscp", ip.dscp);
+    ("ipv4_ecn", ip.ecn);
+    ("ipv4_total_length", UInt16.to_int ip.total_length);
+    ("ipv4_identification", UInt16.to_int ip.identification);
+    ("ipv4_flags", ip.flags);
+    ("ipv4_fragment_offset", ip.fragment_offset);
+    ("ipv4_ttl", UInt8.to_int ip.ttl);
+    ("ipv4_protocol", UInt8.to_int ip.protocol);
+    ("ipv4_checksum", UInt16.to_int ip.checksum);
+    ("ipv4_src", UInt32.to_int ip.src);
+    ("ipv4_dst", UInt32.to_int ip.dst);
+    present "ipv4_tcp_present" ip.tcp;
+    present "ipv4_udp_present" ip.udp;
+  ]
+  @ capture_tcp "ipv4_tcp_" ip.tcp
+  @ capture_udp "ipv4_udp_" ip.udp
+
+let ipv6_values (ip : Packet_stack.ipv6) =
+  let open Wire in
+  [
+    ("ipv6_version", ip.version);
+    ("ipv6_traffic_class", ip.traffic_class);
+    ("ipv6_flow_label", ip.flow_label);
+    ("ipv6_payload_length", UInt16.to_int ip.payload_length);
+    ("ipv6_next_header", UInt8.to_int ip.next_header);
+    ("ipv6_hop_limit", UInt8.to_int ip.hop_limit);
+    ("ipv6_src0", UInt32.to_int ip.src0);
+    ("ipv6_src1", UInt32.to_int ip.src1);
+    ("ipv6_src2", UInt32.to_int ip.src2);
+    ("ipv6_src3", UInt32.to_int ip.src3);
+    ("ipv6_dst0", UInt32.to_int ip.dst0);
+    ("ipv6_dst1", UInt32.to_int ip.dst1);
+    ("ipv6_dst2", UInt32.to_int ip.dst2);
+    ("ipv6_dst3", UInt32.to_int ip.dst3);
+    present "ipv6_tcp_present" ip.tcp;
+    present "ipv6_udp_present" ip.udp;
+  ]
+  @ capture_tcp "ipv6_tcp_" ip.tcp
+  @ capture_udp "ipv6_udp_" ip.udp
+
+let capture_values (p : Packet_stack.capture) =
+  [
+    ("ether_type", Wire.UInt16.to_int p.ether_type);
+    present "ipv4_present" p.ipv4;
+    present "ipv6_present" p.ipv6;
+  ]
+  @ Option.fold ~none:[] ~some:captured_ipv4_values p.ipv4
+  @ Option.fold ~none:[] ~some:ipv6_values p.ipv6
+
+let capture_inputs raw =
+  let n = Bytes.length raw in
+  let byte i = if n = 0 then 0 else Bytes.get_uint8 raw (i mod n) in
+  let mutate ~v6 ~tcp =
+    let b =
+      capture_frame ~v6 ~tcp
+        ~ihl:(5 + (byte 1 mod 11))
+        ~words:(if tcp then 5 + (byte 2 mod 11) else byte 2 mod 16)
+        ~fragment:(if byte 4 land 1 = 0 then 0x4000 else 0x2000)
+    in
+    for i = 5 to n - 1 do
+      Bytes.set_uint8 b (byte i mod Bytes.length b) (byte (i + 1))
+    done;
+    b
+  in
+  let v4 = mutate ~v6:false ~tcp:true and v6 = mutate ~v6:true ~tcp:false in
+  [
+    raw;
+    v4;
+    v6;
+    mutate ~v6:false ~tcp:false;
+    mutate ~v6:true ~tcp:true;
+    Bytes.sub v6 0 (byte 3 mod (Bytes.length v6 + 1));
+  ]
+
+let capture_corpus () =
+  let cases = ref [] in
+  List.iter
+    (fun (v6, tcp, ihl, words, fragment) ->
+      let b = capture_frame ~v6 ~tcp ~ihl ~words ~fragment in
+      for len = 0 to Bytes.length b do
+        cases := Bytes.sub b 0 len :: !cases
+      done;
+      let other = Bytes.copy b in
+      Bytes.set_uint16_be other 12 0x0806;
+      cases := other :: !cases)
+    [
+      (false, true, 5, 5, 0x4000);
+      (false, true, 6, 8, 0);
+      (false, true, 15, 4, 0);
+      (false, true, 5, 15, 0x2000);
+      (false, true, 5, 5, 1);
+      (false, false, 5, 8, 0);
+      (false, false, 5, 7, 0);
+      (false, false, 4, 8, 0);
+      (true, true, 5, 5, 0);
+      (true, true, 5, 10, 0);
+      (true, true, 5, 4, 0);
+      (true, false, 5, 8, 0);
+      (true, false, 5, 0, 0);
+    ];
+  let tail = capture_frame ~v6:true ~tcp:true ~ihl:5 ~words:5 ~fragment:0 in
+  cases := Bytes.cat tail (Bytes.make 6 '\x5a') :: !cases;
+  let ext = Bytes.copy tail in
+  Bytes.set_uint8 ext 20 0;
+  cases := ext :: !cases;
+  let version = Bytes.copy tail in
+  Bytes.set_uint8 version 14 0x4a;
+  cases := version :: !cases;
+  List.rev !cases
+
 let scan_cases =
   (refined_size_scan :: signed_shift_scan :: bit_guard_scans)
   @ [
@@ -1010,5 +1201,13 @@ let scan_cases =
           project = packet_values;
           inputs = packet_inputs;
           corpus = packet_corpus;
+        };
+      Scan
+        {
+          label = "scan_capture";
+          codec = Packet_stack.capture;
+          project = capture_values;
+          inputs = capture_inputs;
+          corpus = capture_corpus;
         };
     ]

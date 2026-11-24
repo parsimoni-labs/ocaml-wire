@@ -3,7 +3,15 @@ name = "wire-bench-rust"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Ethernet/IPv4/TCP/UDP header parsing: Wire_rust against etherparse and smoltcp"
+description = "Ethernet/IPv4/IPv6/TCP/UDP header parsing: Wire_rust against etherparse, smoltcp and pnet_packet"
+
+[[bin]]
+name = "wire-bench-rust"
+path = "src/main.rs"
+
+[[bin]]
+name = "wire-bench-flow-parse"
+path = "src/flow_parse.rs"
 
 [dependencies]
 etherparse = { version = "0.21", default-features = false }
@@ -11,7 +19,7 @@ etherparse = { version = "0.21", default-features = false }
 libc = "0.2"
 # medium-ethernet turns on smoltcp's sockets, which need at least one kind.
 pnet_packet = { version = "0.35", default-features = false, features = ["std"] }
-smoltcp = { version = "0.14", default-features = false, features = ["proto-ipv4", "medium-ethernet", "socket-raw"] }
+smoltcp = { version = "0.14", default-features = false, features = ["proto-ipv4", "proto-ipv6", "medium-ethernet", "socket-raw"] }
 
 # The strongest settings that stay portable: no target-cpu=native, as the
 # OCaml compilers have no equivalent for the OCaml rows.

@@ -589,6 +589,240 @@ let run file stride runs filter =
         (fun () -> f (Sys.opaque_identity buf) land mask62))
     (rows stride)
 
+(* {1 The flow classifier}
+
+   A capture, held in memory, through a flow classifier: each packet is parsed
+   by the row, its 5-tuple (addresses, protocol, and the ports unless it is a
+   fragment or has no TCP or UDP header) is hashed into [Flow_table], which
+   counts the packets and the IP bytes of each flow. Every row parses with the
+   same checks, those of [Packet_stack.capture]: each layer bounded by the
+   bytes captured, each length field covering its header but bounding nothing,
+   and a packet counted only when every header it has passes. The rows print
+   the number of flows and a checksum of the table, read after the timed
+   passes, which must agree.
+
+   The capture is a pcap file of Ethernet frames, kept whole in one buffer:
+   [index] gives the offset and the captured length of each frame in it. *)
+
+let pcap_magic_us = 0xa1b2c3d4
+let pcap_magic_ns = 0xa1b23c4d
+
+let check_pcap_header h =
+  let magic = Bytes.get_int32_le h 0 |> Int32.to_int |> ( land ) 0xffff_ffff in
+  if magic <> pcap_magic_us && magic <> pcap_magic_ns then
+    Fmt.failwith "not a little-endian pcap file (magic 0x%08x)" magic;
+  let link = Bytes.get_int32_le h 20 |> Int32.to_int in
+  if link <> 1 then Fmt.failwith "link type %d, not Ethernet (1)" link
+
+(* [flow-extract N OUT]: the pcap header and the first [n] packets of the pcap
+   stream on stdin, written to [out]. *)
+let extract n out =
+  set_binary_mode_in stdin true;
+  let header = Bytes.create 24 in
+  really_input stdin header 0 24;
+  check_pcap_header header;
+  Out_channel.with_open_bin out (fun oc ->
+      Out_channel.output_bytes oc header;
+      let record = Bytes.create 16 in
+      let packet = Bytes.create 65536 in
+      let rec go k =
+        if k < n then (
+          match really_input stdin record 0 16 with
+          | exception End_of_file -> k
+          | () ->
+              let caplen = Int32.to_int (Bytes.get_int32_le record 8) in
+              if caplen < 0 || caplen > 65536 then
+                Fmt.failwith "packet %d: captured length %d" k caplen;
+              really_input stdin packet 0 caplen;
+              Out_channel.output_bytes oc record;
+              Out_channel.output oc packet 0 caplen;
+              go (k + 1))
+        else k
+      in
+      let k = go 0 in
+      if k < n then Fmt.failwith "the trace has %d packets, not %d" k n)
+
+(* The offset and captured length of each frame of the pcap file [buf]. *)
+let index buf =
+  if Bytes.length buf < 24 then failwith "truncated pcap header";
+  check_pcap_header buf;
+  let offs = ref [] and lens = ref [] in
+  let o = ref 24 in
+  while !o < Bytes.length buf do
+    if !o + 16 > Bytes.length buf then failwith "truncated pcap record";
+    let caplen = Int32.to_int (Bytes.get_int32_le buf (!o + 8)) in
+    if caplen < 0 || !o + 16 + caplen > Bytes.length buf then
+      failwith "truncated pcap packet";
+    offs := (!o + 16) :: !offs;
+    lens := caplen :: !lens;
+    o := !o + 16 + caplen
+  done;
+  (Array.of_list (List.rev !offs), Array.of_list (List.rev !lens))
+
+(* {2 The trace's mix}
+
+   [flow-mix FILE] counts what the rows meet in the capture, read byte by
+   byte, independently of every parser here. *)
+
+(* What [mix] counts, every one printed, zeros included. *)
+let mix_keys =
+  [
+    "truncated";
+    "short Ethernet";
+    "VLAN";
+    "neither IPv4 nor IPv6";
+    "IPv4";
+    "IPv4 header cut";
+    "IPv4 version not 4";
+    "IPv4 options";
+    "IPv4 total length under header";
+    "IPv4 total length past capture";
+    "IPv4 AH";
+    "IPv4 fragment";
+    "IPv6";
+    "IPv6 header cut";
+    "IPv6 payload length past capture";
+    "IPv6 extension header";
+    "lax slicing differs";
+  ]
+
+let ipv6_extensions = [ 0; 43; 44; 50; 51; 60; 135; 139; 140; 253; 254 ]
+
+(* The transport header of a packet whose IP length ends at [end_], before
+   the capture ends at [cap]. Where the header runs past [end_] but not past
+   [cap], etherparse's lax slicing, which cuts the payload at the IP length,
+   rejects a header these rows accept. *)
+let mix_transport bump buf ~l4 ~end_ ~cap proto =
+  if proto = 6 && l4 + 13 <= cap then begin
+    let hlen = (Bytes.get_uint8 buf (l4 + 12) lsr 4) * 4 in
+    if l4 + hlen > end_ && l4 + hlen <= cap then bump "lax slicing differs"
+  end
+  else if proto = 17 && l4 + 8 <= cap && l4 + 8 > end_ then
+    bump "lax slicing differs"
+
+let mix_ipv4 bump buf ~cap ip =
+  bump "IPv4";
+  if ip + 20 > cap then bump "IPv4 header cut"
+  else
+    let b = Bytes.get_uint8 buf ip
+    and total = Bytes.get_uint16_be buf (ip + 2) in
+    let ihl = b land 15 and proto = Bytes.get_uint8 buf (ip + 9) in
+    if b lsr 4 <> 4 then bump "IPv4 version not 4";
+    if ihl > 5 then bump "IPv4 options";
+    if total < ihl * 4 then bump "IPv4 total length under header";
+    if ip + total > cap then bump "IPv4 total length past capture";
+    if proto = 51 then bump "IPv4 AH";
+    if Bytes.get_uint16_be buf (ip + 6) land 0x3fff <> 0 then
+      bump "IPv4 fragment"
+    else if ip + total < cap then
+      mix_transport bump buf ~l4:(ip + (ihl * 4)) ~end_:(ip + total) ~cap proto
+
+let mix_ipv6 bump buf ~cap ip =
+  bump "IPv6";
+  if ip + 40 > cap then bump "IPv6 header cut"
+  else
+    let len = Bytes.get_uint16_be buf (ip + 4)
+    and nh = Bytes.get_uint8 buf (ip + 6) in
+    if ip + 40 + len > cap then bump "IPv6 payload length past capture";
+    if List.mem nh ipv6_extensions then bump "IPv6 extension header"
+    else if ip + 40 + len < cap then
+      mix_transport bump buf ~l4:(ip + 40) ~end_:(ip + 40 + len) ~cap nh
+
+let mix_frame bump buf o caplen =
+  let cap = o + caplen in
+  if caplen < Int32.to_int (Bytes.get_int32_le buf (o - 4)) then
+    bump "truncated";
+  if caplen < 14 then bump "short Ethernet"
+  else
+    match Bytes.get_uint16_be buf (o + 12) with
+    | 0x8100 | 0x88a8 | 0x9100 -> bump "VLAN"
+    | 0x0800 -> mix_ipv4 bump buf ~cap (o + 14)
+    | 0x86dd -> mix_ipv6 bump buf ~cap (o + 14)
+    | _ -> bump "neither IPv4 nor IPv6"
+
+let mix file =
+  let buf = Bench_lib.read_file file in
+  let offs, lens = index buf in
+  let counts = Hashtbl.create 32 in
+  List.iter (fun k -> Hashtbl.replace counts k 0) mix_keys;
+  let bump k = Hashtbl.replace counts k (1 + Hashtbl.find counts k) in
+  Array.iteri (fun i o -> mix_frame bump buf o lens.(i)) offs;
+  let n = Array.length offs in
+  Fmt.pr "%d packets, captured lengths %d to %d bytes@." n
+    (Array.fold_left min max_int lens)
+    (Array.fold_left max 0 lens);
+  List.iter
+    (fun k ->
+      let v = Hashtbl.find counts k in
+      Fmt.pr "%-36s %10d %7.3f%%@." k v (100. *. float v /. float n))
+    mix_keys
+
+(* {2 The rows} *)
+
+(* wire.ocaml: the scanner of [Packet_stack.capture], handing out only the
+   classifier's fields to [Flow_step], which it calls by name, or to
+   [Flow_parse] for [flow_scanner_parse]. *)
+let flow_scanner buf (offs : int array) (lens : int array) =
+  for i = 0 to Array.length offs - 1 do
+    Flow_read.classify buf offs.(i) lens.(i)
+  done
+
+let flow_scanner_parse buf (offs : int array) (lens : int array) =
+  for i = 0 to Array.length offs - 1 do
+    Flow_read.parse buf offs.(i) lens.(i)
+  done
+
+(* The rows of the classifier, each on its own the parse and the table: the
+   parse rows hand their keys to [Flow_sum], and the table row takes the keys
+   from an array, as does the row folding them without a parse. *)
+let flow_rows =
+  [
+    ( "Wire.Codec capture decode",
+      Flow_rows.flow_codec,
+      Flow_rows_parse.flow_codec );
+    ( "wire.ocaml View.check/view, linked headers" ^ target,
+      Flow_rows.flow_view,
+      Flow_rows_parse.flow_view );
+    ( "wire.ocaml scanner, selected outputs, fold_step" ^ target,
+      flow_scanner,
+      flow_scanner_parse );
+  ]
+
+let pp_flows ppf (flows, sum) = Fmt.pf ppf "%d flows, %d" flows sum
+let pp_keys ppf (keys, sum) = Fmt.pf ppf "%d keys, %d" keys sum
+
+let flow file runs filter =
+  let buf = Bench_lib.read_file file in
+  let offs, lens = index buf in
+  let n = Array.length offs in
+  Flow_table.init ~capacity:(2 * n);
+  let corpus = Filename.remove_extension (Filename.basename file) in
+  let measure ~corpus ~name ~pp ~result reset f =
+    Bench_lib.measure_state ~corpus ~filter ~name ~items:n ~runs ~pp ~result
+      (fun () ->
+        reset ();
+        f ())
+  in
+  let table = measure ~pp:pp_flows ~result:Flow_table.summary Flow_table.reset
+  and parse = measure ~pp:pp_keys ~result:Flow_sum.summary Flow_sum.reset in
+  List.iter
+    (fun (name, t, p) ->
+      table ~corpus ~name (fun () -> t (Sys.opaque_identity buf) offs lens);
+      parse ~corpus:(corpus ^ " parse") ~name:(name ^ ", parse only") (fun () ->
+          p (Sys.opaque_identity buf) offs lens))
+    flow_rows;
+  let keys =
+    lazy
+      (Flow_rows_keys.flow_view buf offs lens;
+       Flow_keys.take ())
+  in
+  table ~corpus:(corpus ^ " table")
+    ~name:("flow table, keys from an array" ^ target) (fun () ->
+      Flow_rows.replay (Sys.opaque_identity (Lazy.force keys)));
+  parse ~corpus:(corpus ^ " parse")
+    ~name:("keys from an array, parse only" ^ target) (fun () ->
+      Flow_rows_parse.replay (Sys.opaque_identity (Lazy.force keys)))
+
 let () =
   match Array.to_list Sys.argv with
   | [ _; "corpus"; dir; n ] -> corpora dir (int_of_string n)
@@ -598,9 +832,18 @@ let () =
       in
       run file (int_of_string stride) (int_of_string runs) filter;
       Bench_lib.finish filter
+  | [ _; "flow-extract"; n; out ] -> extract (int_of_string n) out
+  | [ _; "flow-mix"; file ] -> mix file
+  | _ :: "flow" :: file :: runs :: rest ->
+      let filter =
+        Bench_lib.filter (match rest with [ f ] -> Some f | _ -> None)
+      in
+      flow file (int_of_string runs) filter;
+      Bench_lib.finish filter
   | _ :: "report" :: files -> Bench_lib.report ~unit:(fun _ -> "packet") files
   | _ ->
       prerr_endline
         "usage: bench.exe (corpus DIR N | run FILE STRIDE RUNS [ROW | --list] \
+         | flow-extract N OUT | flow-mix FILE | flow FILE RUNS [ROW | --list] \
          | report FILE...)";
       exit 2
