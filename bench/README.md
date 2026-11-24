@@ -578,11 +578,96 @@ checkout. Packets per second is the inverse of the best CPU time.
 
 Every row counted 342,506 flows and gave checksum `3901415651386128532`.
 
-Every OCaml row reads and writes its table through checked `Bytes`
-accessors, as the harness rules ask, where the Rust rows index a vector of
-slots; this run does not separate the cost of the table from that of the
-parse, so the gap between the OCaml and the Rust rows is not the parsers'
-alone.
+### Instructions per packet
+
+The host was loaded, so the counts below are instructions, which another
+process does not change, with cycles for scale. `bench/count.sh` runs a row
+with 1 and with 21 timed passes and divides the difference by 20 passes of
+the 1,000,000 packets, which cancels the start of the process, the read of
+the capture, the recording of the keys and the warm-up pass:
+
+```
+sh bench/count.sh 1000000 ROW HARNESS flow _build/bench-flow/mawi.pcap RUNS ROW
+sh bench/count.sh 1000000 ROW wire-bench-flow-parse _build/bench-flow/mawi.pcap RUNS ROW
+```
+
+Measured on the branch that adds the split rows, on the machine above with a
+load average of 83 before and 55 after (the OCaml 5.4.1 rows ran earlier at
+91), no idle CPU. Parse is the row on `mawi parse`, which folds its keys
+instead of counting them; table is the row on `mawi` less its parse.
+
+| Row | Total | Parse | Table | Cycles, total | Cycles, parse |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| wire.rust scanner, selected outputs | 114.4 | 69.2 | 45.2 | 102.6 | 27.7 |
+| wire.rust, linked headers | 109.9 | 66.1 | 43.8 | 97.1 | 26.8 |
+| pnet_packet 0.35 | 109.5 | 67.3 | 42.2 | 97.0 | 27.3 |
+| smoltcp 0.14 | 138.8 | 63.8 | 75.0 | 112.8 | 27.1 |
+| etherparse 0.21, lax | 478.4 | 431.2 | 47.2 | 297.8 | 100.2 |
+| wire.ocaml scanner, OxCaml | 327.0 | 117.5 | 209.5 | 197.4 | 38.8 |
+| wire.ocaml View, OxCaml | 397.4 | 200.3 | 197.1 | 222.5 | 57.9 |
+| Wire.Codec, OxCaml | 8456.7 | 8242.5 | 214.2 | 2125.8 | 1739.5 |
+| wire.ocaml scanner, OCaml flambda | 396.4 | 151.8 | 244.6 | 245.4 | 46.3 |
+| wire.ocaml View, OCaml flambda | 490.4 | 245.9 | 244.5 | 297.2 | 63.2 |
+| Wire.Codec, OCaml flambda | 10286.8 | 10036.8 | 250.0 | 2229.0 | 1882.8 |
+| wire.ocaml scanner, OCaml | 516.6 | 310.1 | 206.5 | 317.1 | 89.3 |
+| wire.ocaml View, OCaml | 422.8 | 221.1 | 201.7 | 272.9 | 64.5 |
+| Wire.Codec, OCaml | 9134.8 | 8934.3 | 200.5 | 2133.3 | 1851.4 |
+
+The table alone, `flow table, keys from an array` less the fold of `keys
+from an array, parse only`, costs 45.9 instructions per packet in Rust
+(64.3 less 18.4), 202.3 on OxCaml (271.1 less 68.8), 243.8 on OCaml flambda
+(319.0 less 75.2) and 206.3 on OCaml (274.2 less 67.9): the rows' table
+column, but for smoltcp, whose row spends 29 instructions more than its
+parse and the table do apart. Against `pnet_packet`, the OxCaml scanner
+spends 218 instructions and 100 cycles more per packet; the table is 167 of
+the instructions and 89 of the cycles.
+
+Both tables lay their slots out alike, 64 bytes each in one buffer, and probe
+alike; a `while` loop in place of the recursive probe costs 7 instructions
+more on OxCaml. What the OxCaml table spends beyond the Rust one, read in
+the disassembly of `Flow_table` and weighted by the trace (a key claims a
+slot in 34.5% of the packets and finds its slot in 65.5%; 82% are IPv4):
+
+1. checked `Bytes` accessors, about 67 instructions per packet: each access
+   untags its offset, compares it with the length and branches (4), and each
+   function recomputes the length from the block header and its last byte
+   (8) and the bound of each access width (5 or 6), 51 instructions for an
+   IPv4 key that finds its slot and 89 for one that claims a slot, where Rust
+   checks the slot index once per probe (2);
+2. the hash constant, built again for every multiplication, about 41: OCaml's
+   tagged multiplication by `0x1E37_79B9_7F4A_7C15` takes the constant and
+   its tag correction, 8 instructions per mix, 32 for the 4 mixes of an IPv4
+   key and 80 for the 10 of an IPv6 key; Rust keeps the constant in a
+   register for the whole row;
+3. calls left out of line, about 38: `add4` tail-calls the probe with 9
+   arguments, one through the domain state, the probe calls `claim`, each
+   with a frame, a stack check and a poll, and the call to `claim` saves 5
+   registers; Rust inlines `add4` and `add` (only `add6` stays a call);
+4. tagging, about 23: a 32-bit read is retagged (2), `Int32.of_int` sign
+   extends each 32-bit write (2), each xor of the hash is retagged (1);
+5. the table's global state, about 6: the buffer, the mask and the epoch are
+   loaded from a global record in every call, where Rust keeps them in
+   registers;
+6. a `dmb ishld` barrier before the 64-bit write of the byte count, 1, which
+   OCaml 5 puts before a store on arm64.
+
+The OxCaml scanner parses in 117.5 instructions where the Rust scanner takes
+69.2: about 25 in the loop over the frames, which reloads the lengths of the
+buffer (8) and of the array of lengths (3) on every frame and checks both
+array reads (8), where Rust bounds the frame in 7; about 12 in the fold,
+whose state is a global record written behind two barriers; the rest in
+tagging the fields the scanner hands out.
+
+`Wire.Codec` spends 8242.5 instructions and 1739.5 cycles per packet on the
+parse on OxCaml. macOS `sample`, 10 s of the parse row (7514 samples), puts
+21.1% of its time in closure application (`caml_apply4` 16.9%), 28.0% in
+`Codec_seal` (`apply_fwd`, the record constructors, 12.2%), 14.0% in
+`Codec_compile` (the optional nested sections and the variable-length
+fields), 12.2% in `Codec_repr` (`read_slot`, the field values read again for
+the constraints, 9.0%), 9.9% in the compiled constraint expressions, 7.4% in
+`Codec_layout` (offsets computed per decode) and 7.4% elsewhere. Allocation
+costs little: 51.1 minor words (409 bytes) per packet on OCaml 5.4.1, none
+promoted, and no GC function of the runtime reaches 5 samples.
 
 ## Compiler flags
 
