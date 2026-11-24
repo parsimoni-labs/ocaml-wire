@@ -179,25 +179,86 @@ idle, and CLCW words carry wait, retransmit and lockout and skip report
 values; writing sets lockout, wait and retransmit too, and the crate's CCSDS
 232.0 words and the codec's hash the same.
 
-Writing is where the generated OCaml is furthest from Rust. A
-`write_int` checks every field value against its width on every call,
-where LLVM proves from the loop that `(p % 2048) as u16 >> 11` is 0 and drops
-the check; stock OCaml assembles a 32-bit word on tagged integers, with an
-`int32` sign normalisation and a `sxtw` on each side of the `rev` that do
-nothing, where OxCaml builds it untagged; and each packet polls for a
-safepoint. On gateway that is 556 instructions per frame on OxCaml against
-355 in Rust. LLVM also vectorises the CLCW writer, 5.2 instructions per
-word. `Wire.Codec` writes a header with one call to a staged
-`Codec.writer`, which puts the default header and the fields that vary
-together in an `int` and stores it. These headers are at most 6 bytes,
-so no row stores a 64-bit word: the generated writes are `str w` and `strh`,
-and the only `dmb ishld` OxCaml puts in a write loop is the one before the
-per-route sequence count's `int array` store of `routing_write`. The OxCaml rows
-trail Rust on the latency chain each item carries: on routing the next
-offset is loaded from the packet, and OxCaml spends about eight dependent
-operations on it where Rust spends five (untagging, and the sign extension
-and mask `%bswap16` leaves after `rev16`), and every checked read compares
-a tagged offset.
+The released crates are the reference these rows aim to beat. Against the
+crate row with the fewest instructions on each workload, the OxCaml
+`wire.ocaml` row spends 1.6 to 3.4 times the instructions where both work
+one item at a time, and 9.5 times on `clcw_write`, whose crate loop LLVM
+vectorises. The counts below are one run of `make bench-apps-count` at commit
+`5dc37350` (the parent of the commit that adds them), on the ARM64 macOS host above under a load average of 450 to 600
+with no idle CPU (`top -l 2 -n 12 -o cpu`), so the instructions are the
+figure to compare. The loop lengths are read from `objdump -d` of the
+binaries that run counts, `_build/oxcaml/default/bench/apps/bench.exe`
+(`-O4`) and `bench/apps/cargo/target/release/wire-bench-apps`, with the
+Rust rebuilt once with line tables
+(`CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, the same code) to find each
+row's inlined loop. A loop length counts the
+instructions on the path a well-formed item takes:
+
+| Workload | Crate row | Instructions per item, crate / OxCaml | Loop, crate / OxCaml |
+| --- | --- | ---: | ---: |
+| `routing` | `gaia-ccsds-c2a` 1.2 | 25.2 / 45.5 | 24 / 47 |
+| `routing_write` | `ccsds_primary_header` 0.15 | 39.0 / 73.8 | 40 / 75 |
+| `gateway` | `chronus-gateway` + `spacepackets` | 351 / 658 per frame | 22 / 41 per packet |
+| `gateway_write` | `chronus-gateway` + `spacepackets` | 355 / 556 per frame | 21 / 33 per packet |
+| `clcw` | `gaia-ccsds-c2a` 1.2 | 12.4 / 42.2 | 12 / 43 |
+| `clcw_write` | `gaia-ccsds-c2a` 1.2 | 5.4 / 51.3 | 68 per 16 words / 51 |
+
+On routing, LLVM reads `gaia-ccsds-c2a`'s `PrimaryHeader` with two `ldrb`
+for the APID and one `ldrh` and `rev16` for the data length; the APID has 11
+bits, so it indexes the 2048-entry route table unchecked and keeps one
+check, `cmp x8, #0x3`, on the route. The OxCaml loop reads each field with a
+32-bit `ldrsw`, a `rev` and a mask, reloads the table's address (`adrp`,
+`add`, `ldr`) and checks both array indices, puts a `dmb ishld` before the
+count's `int array` store, polls for a safepoint, and keeps the offset and
+the counter tagged. The chain from one packet's offset to the next is eight
+dependent instructions in both, made of different parts: `gaia-ccsds-c2a`
+spends `add`, `cmp` and `csel` on the wrap to offset 0, then `add`, `ldrh`,
+`rev16`, `add`, `add`; OxCaml takes the wrap as a predicted branch, and spends
+`asr` to untag, a `mov`, `add`, `ldursw`, `rev`, `and #0xffff` and two `add`s
+on the tagged offset. Its cycles in this run are close, 16.0 per packet
+against 14.6. `spacepackets` and `ccsds_primary_header` read the header as a
+32-bit and a 16-bit load merged with `orr` and `lsr`, eleven instructions on
+the same chain.
+
+On writing, the crates never branch on a field's value:
+`ccsds_primary_header`'s setters and `chronus-gateway`'s
+`TmFrameHeader::to_bytes` mask each field (`seq_count & 0x3FFF`), and
+`spacepackets`' `u11::new` and `u14::new` assert, which LLVM proves cannot
+fire, so no range branch is left in their loops. The generated OCaml checks
+a value against its field's width wherever the compiler cannot prove it
+fits: on `routing_write`, the sequence count read back from the per-route
+`int array` (`lsr #14`, `cmp`, `b.eq`), where LLVM proves the `[u16; 4]`
+counts stay below 2^14 and drops `ccsds_primary_header`'s mask; on
+`gateway_write`, every field of the frame header `write_int_at` takes; on
+`clcw_write`, the four fields that vary per word. Per packet of `gateway_write`, `spacepackets` stores the
+data length from a register set before the loop and addresses both stores
+from one base, where OxCaml derives the data length again per packet (`asr`,
+`rev16`, `uxth`), computes the second store's address from the tagged offset,
+masks and untags the APID and count from the tagged packet number, and polls.
+`gaia-ccsds-c2a`'s `with_<field>` builders vectorise: 68 NEON instructions
+build 16 CLCW words, with the byte order folded into the shifts. Stock OCaml
+also assembles the 32-bit word on tagged integers, with a `sxtw` on each
+side of the `rev` that does nothing (`sxtw x3, w2`, `rev w4, w3`,
+`sxtw x5, w4`, `str w5`), where OxCaml builds it untagged. `Wire.Codec`
+writes a header with one call to a staged `Codec.writer`, which puts the
+default header and the fields that vary together in an `int` and stores it.
+These headers are at most 6 bytes, so no row stores a 64-bit word: the
+generated writes are `str w` and `strh`, and the only `dmb ishld` OxCaml puts
+in a write loop is the one before the per-route sequence count's `int array`
+store of `routing_write`.
+
+On gateway, each packet costs OxCaml 41 instructions against 22: it builds
+the two 64-bit constants each `hash_int` multiplies and adds with again with `mov` and `movk`
+pairs inside the loop, 8 instructions per packet, and a `hash_int` on a
+tagged `int` is `eor`, `orr #1` and `madd`, where LLVM's is `eor` and `mul`
+with the 63-bit mask moved out to once per frame; the loop's `ok` flag goes
+through `cset` and `cbnz`. On clcw, `gaia-ccsds-c2a`'s `CLCW` getters compile
+to two byte loads (`ldurb` of the flags byte, `ldrb` of the report value),
+one `tst #0x30` and one `tbnz #3` for the three flags, and no bounds check,
+which `chunks_exact` proves; OxCaml loads the word (`ldrsw`, `rev`), tags it,
+takes each flag with `lsr`, `orr`, `and`, `cmp` and `b.ne`, checks the word's
+bounds and polls. The NEON lanes row reads a CLCW word in 10.3 instructions,
+below the crate's 12.4, and writes one in 6.6 against the crate's 5.4.
 
 Every hash the workloads compute (the gateway checksum and the hash of a
 written buffer) is FNV-1a modulo 2^63: OCaml's native `int`, whose
