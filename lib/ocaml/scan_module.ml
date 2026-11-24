@@ -185,17 +185,31 @@ let checks_len plan =
 (* The entry tests [len < 0] and [off > length] unless {!checks_len} holds:
    then the walk's first check rejects a negative [len], and
    [len > length - off] an [off] past the buffer. [length] is the length of
-   [buf]. *)
-let pp_entry ?cuts ?(length = "Bytes.length buf") ~name ~scope s ~reject ~accept
-    =
-  Fmt.pf s.ppf "if %s then %s else@\n"
-    (if checks_len s.plan then Fmt.str "off < 0 || len > %s - off" length
-     else
-       Fmt.str "off < 0 || len < 0 || off > %s || len > %s - off" length length)
-    reject;
-  Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
-    (if s.m.num = Unboxed then "U.of_int off" else "off")
-    (if s.m.num = Unboxed then "U.of_int len" else "len");
+   [buf], an [int64_u] with [unboxed_length]: the bounds are then tested on
+   the [int64_u] position and length, as the sign of one [logor], where an
+   [int] holds no 64-bit difference of them that could wrap. *)
+let pp_entry ?cuts ?(length = "Bytes.length buf") ?(unboxed_length = false)
+    ~name ~scope s ~reject ~accept =
+  let unboxed = s.m.num = Unboxed in
+  if unboxed && unboxed_length then
+    Fmt.pf s.ppf
+      "let base = U.of_int off in@\n\
+       let stop = U.of_int len in@\n\
+       if U.compare (U.logor %s (U.sub (U.sub %s base) stop)) #0L < 0 then %s \
+       else@\n"
+      (if checks_len s.plan then "base" else "(U.logor base stop)")
+      length reject
+  else begin
+    Fmt.pf s.ppf "if %s then %s else@\n"
+      (if checks_len s.plan then Fmt.str "off < 0 || len > %s - off" length
+       else
+         Fmt.str "off < 0 || len < 0 || off > %s || len > %s - off" length
+           length)
+      reject;
+    Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
+      (if unboxed then "U.of_int off" else "off")
+      (if unboxed then "U.of_int len" else "len")
+  end;
   pp_scan ?cuts ~name ~scope s ~reject ~accept
 
 (* The types of the callbacks [fold_frames_unboxed] takes, whose accumulator
@@ -537,6 +551,12 @@ let pp_fold s ~unboxed =
         s ~reject:"invalid ()" ~accept:(call s ~unboxed "valid");
       Fmt.pf s.ppf "@\n")
 
+(* The length of [buf] as [step_within] takes it: an [int64_u] where values
+   are. *)
+let length_of s =
+  if s.m.num = Unboxed then "U.of_int (Bytes.length buf)"
+  else "Bytes.length buf"
+
 (* [fold_index_step], which folds [within] over the frames of an index. *)
 let pp_fold_index_step s ~within =
   let buf = s.m.src.buf in
@@ -562,8 +582,8 @@ let pp_fold_index_step s ~within =
      let n = Array.length offs in@\n\
      if Array.length lens <> n then@\n\
      invalid_arg \"fold_index_step: offs and lens differ in length\";@\n\
-     let length = Bytes.length buf in@\n"
-    buf;
+     let length = %s in@\n"
+    buf (length_of s);
   if s.m.num = Unboxed then begin
     (* The accumulator may have any layout, which a [ref] cannot hold. *)
     Fmt.pf s.ppf "let mutable acc = init in@\nlet mutable i = 0 in@\n";
@@ -594,11 +614,12 @@ let pp_fold_index_step s ~within =
    over the index loads it once. *)
 let pp_fold_step s m =
   let within = "step_within" and buf = s.m.src.buf in
+  let unboxed = s.m.num = Unboxed in
   with_cuts s "fold_step" (fun s cuts ->
       Hashtbl.replace s.taken within ();
       let body = Buffer.create 4096 in
       let ppf = Format.formatter_of_buffer body in
-      pp_entry ?cuts ~length:"length" ~name:"fold_step"
+      pp_entry ?cuts ~length:"length" ~unboxed_length:true ~name:"fold_step"
         ~scope:(scope s [ ("init", None) ])
         { s with ppf } ~reject:(m ^ ".invalid init")
         ~accept:(call ~step:true s ~unboxed:false (m ^ ".valid init"));
@@ -611,13 +632,15 @@ let pp_fold_step s m =
           let i = String.index buf 'b' in
           String.sub buf 0 i ^ "_" ^ String.sub buf i (String.length buf - i)
       in
-      Fmt.pf s.ppf "let[@inline always] %s %s ~length off len ~init =@\n%s@\n"
-        within param body);
+      Fmt.pf s.ppf "let[@inline always] %s %s ~%s off len ~init =@\n%s@\n"
+        within param
+        (if unboxed then "(length : int64_u)" else "length")
+        body);
   Fmt.pf s.ppf
     "let[@inline always] fold_step %s off len ~init =@\n\
-     %s buf ~length:(Bytes.length buf) off len ~init@\n\
+     %s buf ~length:(%s) off len ~init@\n\
      @\n"
-    buf within;
+    buf within (length_of s);
   pp_fold_index_step s ~within
 
 let pp_result_type s name hash =
