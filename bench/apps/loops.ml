@@ -4,7 +4,10 @@
    its view, plain checked indexing, and a record that fails its check ends
    the loop, as the Rust rows' [break] does. Writes of constant fields build
    their carriers once, outside the loop; a write whose values are computed in
-   the loop goes through [write_int_at]. *)
+   the loop goes through [write_int_at]. A record's size is the generated
+   module's constant and a gateway packet [P.size + 64] bytes
+   ([Gateway_workload.pkt_size]), as the Rust rows' [PKT_SIZE] is, so the
+   compiler folds both. *)
 
 module Buf = Wire_runtime.Buf
 module P = G_space_packet
@@ -46,7 +49,7 @@ let gateway buf =
   let open Gateway_workload in
   let (Buf.Any b) = Buf.v buf in
   let len = Buf.length b in
-  let hdr = F.size and pkt_size = pkt_size in
+  let hdr = F.size and pkt_size = P.size + 64 in
   let data_field_size = cadu_size - hdr in
   let frames = Bytes.length buf / cadu_size in
   let checksum = ref checksum_init in
@@ -104,7 +107,7 @@ let restamp buf n out =
 
 let frame n out =
   let open Gateway_workload in
-  let pkt_size = pkt_size in
+  let pkt_size = P.size + 64 in
   let (Buf.Any o) = Buf.v out in
   let olen = Buf.length o in
   let hdr = F.size in
