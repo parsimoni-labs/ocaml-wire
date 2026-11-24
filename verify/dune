@@ -22,6 +22,8 @@
   BfConstrained.3d
   ReservedFields.3d
   stack_ox.gen
+  stack_step.gen
+  stack_step_ox.gen
   bf_constrained.gen
   reserved_fields.gen)
  (enabled_if
@@ -288,7 +290,9 @@
 ; needed for safety) and answer as the code with it, which the equivalence
 ; lane proves equal to the specification (or the check is needed for
 ; semantics). The first check of fold, off < 0, and the IPv4 header check
-; are needed for safety.
+; are needed for safety. fold_frames, which raises Invalid_argument for bad
+; arguments, tests off > Bytes.length buf, which len < 0 and
+; len > Bytes.length buf - off imply.
 
 (rule
  (alias runtest)
@@ -319,5 +323,16 @@
     "(stop : int) < 34"
     --expect
     safety
+    .
+    %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128)
+   (run
+    ./main.exe
+    --classify-checks
+    --only
+    "fold_frames, any arguments"
+    --check
+    "off > (Bytes.length buf)"
+    --expect
+    redundant
     .
     %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128))))

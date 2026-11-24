@@ -87,7 +87,7 @@ and ctx = {
 (* A check of the generated code: a condition that sends it to a rejection,
    or a load that checks its own bounds. *)
 and check = { id : string; text : string; check_kind : check_kind }
-and check_kind = Branch | Checked_load
+and check_kind = Branch | Argument | Checked_load
 
 and obligation = {
   kind : kind;
@@ -830,6 +830,14 @@ let is_rejection e =
       | _ -> false)
   | _ -> false
 
+(* Whether [e] rejects a misuse of the API, with [Invalid_argument]. *)
+let is_misuse e =
+  match e.pexp_desc with
+  | Pexp_apply
+      ({ pexp_desc = Pexp_ident { txt = Lident "invalid_arg"; _ }; _ }, _) ->
+      true
+  | _ -> false
+
 let rec disjuncts e =
   match e.pexp_desc with
   | Pexp_apply
@@ -963,11 +971,11 @@ and eval ctx env path e k =
       in
       if is_rejection t then
         (* Each disjunct of a condition that rejects is a check. *)
+        let kind = if is_misuse t then Argument else Branch in
         let kept =
           List.filter
             (fun d ->
-              not
-                (meet ctx d.pexp_loc Branch (Pprintast.string_of_expression d)))
+              not (meet ctx d.pexp_loc kind (Pprintast.string_of_expression d)))
             (disjuncts c)
         in
         eval_or ctx env path kept (fun path vc ->

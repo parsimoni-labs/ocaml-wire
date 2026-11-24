@@ -19,6 +19,12 @@ let () =
   write dir "stack_ox.gen"
     (Wire_ocaml.scanner ~target:`OxCaml ~codec:"Packet_stack.codec"
        Packet_stack.codec);
+  write dir "stack_step.gen"
+    (Wire_ocaml.scanner ~step:"Step" ~codec:"Packet_stack.codec"
+       Packet_stack.codec);
+  write dir "stack_step_ox.gen"
+    (Wire_ocaml.scanner ~target:`OxCaml ~step:"Step" ~codec:"Packet_stack.codec"
+       Packet_stack.codec);
   write dir "bf_constrained.gen"
     (Wire_ocaml.ml ~codec:"Demo.bf_constrained_codec" Demo.bf_constrained_codec);
   write dir "reserved_fields.gen"

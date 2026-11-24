@@ -15,7 +15,15 @@
    --bounds-only skips the specification, --only ENTRY keeps one entry,
    --expect-refuted P succeeds when a property holding P is refuted, --jobs
    and --timeout set the Z3 processes and their seconds, --keep keeps the
-   scripts. *)
+   scripts.
+
+   --classify-checks takes each check of each entry with an answer out in
+   turn (--check LINE:COL or its text keeps one) and says whether it is
+   needed for safety, for semantics, or redundant: an entry with a
+   specification answers accept or reject, and the frame loop with any
+   arguments answers whether it raises, for its argument checks only.
+   --expect C1,C2 fails unless some check is classified and every one is of
+   those classes. *)
 
 let read file = In_channel.with_open_bin file In_channel.input_all
 
@@ -332,7 +340,13 @@ let classify_target ~z3 o t =
   let classify (e : Check.entry) =
     let ctx = Symex.v ~file:t.file src in
     ignore (Check.walk ctx e);
-    let all = Symex.checks ctx in
+    (* An entry that takes any arguments answers its argument checks only:
+       the others are those of the entries it calls, classified there. *)
+    let all =
+      List.filter
+        (fun (c : Symex.check) -> (not e.misuse) || c.check_kind = Argument)
+        (Symex.checks ctx)
+    in
     Fmt.pr "%s: %s, %d checks: %s@." (Filename.basename t.file) e.name
       (List.length all)
       (String.concat ", " (List.map (fun (c : Symex.check) -> c.id) all));
@@ -345,15 +359,19 @@ let classify_target ~z3 o t =
             let walk () = Symex.v ~file:t.file src in
             let t0 = Unix.gettimeofday () in
             let cl =
-              Check.classify ~z3 ~timeout:o.timeout ~jobs:o.jobs ~walk e c.id
+              Check.classify ~z3 ~timeout:o.timeout ~jobs:o.jobs ~walk e c
             in
             Fmt.pr "  %-6s %-40s %a (%.0fs)@." c.id c.text pp_class cl
               (Unix.gettimeofday () -. t0);
             Some (class_name cl))
       all
   in
+  (* An entry with neither a specification nor any arguments has no answer
+     to compare: its argument checks are dead under its precondition, and
+     its other checks are those of the entries it calls. *)
+  let answers (e : Check.entry) = Option.is_some e.spec || e.misuse in
   List.concat_map
-    (fun e -> if selected o e then classify e else [])
+    (fun e -> if selected o e && answers e then classify e else [])
     (t.entries (Symex.v ~file:t.file src))
 
 module Astring_free = struct
@@ -427,7 +445,7 @@ let usage () =
   prerr_endline
     "usage: main.exe [--keep] [--only ENTRY] [--jobs N] [--timeout SECONDS] \
      [--bounds-only] [--any-size] [--classify-checks [--check LINE:COL] \
-     [--expect CLASS]] [--expect-refuted PROPERTY] SPECS \
+     [--expect CLASS[,CLASS]...]] [--expect-refuted PROPERTY] SPECS \
      FILE:(record|scanner/N|scanner-ox/N):SPEC:BOUND...";
   exit 2
 
@@ -513,15 +531,21 @@ let () =
          once. *)
       let targets = List.map target_of_arg targets in
       let classes = List.concat_map (classify_target ~z3 o) targets in
-      (* With [--expect CLASS], every check classified must be of it. *)
+      (* With [--expect C1,C2], at least one check is classified and each
+         is of one of those classes. *)
       Option.iter
         (fun c ->
-          if
-            classes = []
-            || List.exists (fun c' -> not (String.equal c c')) classes
-          then (
-            Fmt.epr "a check is not %s@." c;
-            exit 1))
+          let expected = String.split_on_char ',' c in
+          if classes = [] then (
+            Fmt.epr "no check is classified@.";
+            exit 1);
+          match List.filter (fun c' -> not (List.mem c' expected)) classes with
+          | [] -> ()
+          | others ->
+              Fmt.epr "%d of %d checks are not %s: %s@." (List.length others)
+                (List.length classes) c
+                (String.concat ", " others);
+              exit 1)
         o.expect
   | specs :: (_ :: _ as targets) -> (
       let targets = List.map target_of_arg targets in

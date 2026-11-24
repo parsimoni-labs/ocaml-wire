@@ -421,24 +421,29 @@ let undecided results =
     (fun r -> match r.verdict with Unknown why -> Some why | _ -> None)
     results
 
-let accepts_of entry outcomes =
-  Smt.or_
-    (List.map (fun (pc, o) -> Smt.and_ [ pc; answer_of entry o ]) outcomes)
+(* Whether an entry that takes any arguments raises [Invalid_argument]: the
+   answer of its argument checks. *)
+let misuse_of _ = function
+  | Symex.Raised msg -> Smt.bool (String.starts_with ~prefix:"invalid_arg" msg)
+  | Symex.Returned _ -> Smt.False
+
+let accepts_of answer entry outcomes =
+  Smt.or_ (List.map (fun (pc, o) -> Smt.and_ [ pc; answer entry o ]) outcomes)
 
 (* Whether the walk of [entry] with the check [id] disabled answers as the
    walk with every check does, on every input: one query per path of the
    former, against the whole answer of the latter. Both walks read the
    window only, so the answer holds for every length. *)
-let same_answers ?stop ~z3 ~timeout ~jobs ctx (entry : entry) id =
+let same_answers ?stop ~answer ~z3 ~timeout ~jobs ctx (entry : entry) id =
   let q, _, original = walk ctx entry in
   Symex.set_disabled ctx (Some id);
   let _, _, modified = walk ctx entry in
   Symex.set_disabled ctx None;
-  let before = accepts_of entry original in
+  let before = accepts_of answer entry original in
   let jobs_ =
     List.mapi
       (fun i (pc, o) ->
-        let after = answer_of entry o in
+        let after = answer entry o in
         let goal = Smt.and_ [ pc; Smt.not_ (Smt.eq after before) ] in
         {
           property =
@@ -464,7 +469,8 @@ let same_answers ?stop ~z3 ~timeout ~jobs ctx (entry : entry) id =
    code with every check answers as the specification (the equivalence
    lane proves it), so an unchanged answer is the specification's. The
    first refutation decides. *)
-let classify ~z3 ~timeout ~jobs ~walk (entry : entry) id =
+let classify ~z3 ~timeout ~jobs ~walk (entry : entry) (check : Symex.check) =
+  let id = check.id in
   let stop _ _ = true in
   (* A loop invariant the code without the check does not keep fails the
      proof, not the code: only a read or a raise is a refutation. *)
@@ -482,20 +488,35 @@ let classify ~z3 ~timeout ~jobs ~walk (entry : entry) id =
   let invariant =
     List.filter (fun (r : result) -> not (is_access r.property)) bounds
   in
+  let answer =
+    match entry.spec with
+    | Some _ -> Some answer_of
+    | None when entry.misuse && check.check_kind = Argument -> Some misuse_of
+    | None -> None
+  in
+  (* The answers are compared even where the invariant fails: an argument
+     check answers before the loop, so an input it raises on and the code
+     without it does not is a counterexample whatever the loop does. *)
+  let answers () =
+    Option.map
+      (fun answer ->
+        same_answers ~stop ~answer ~z3 ~timeout ~jobs (walk ()) entry id)
+      answer
+  in
   match (refuted access, undecided access, refuted invariant) with
   | Some (p, cex), _, _ -> Safety (p, cex)
   | None, Some why, _ -> Undecided why
-  | None, None, Some (p, cex) ->
-      Fmt.kstr
-        (fun s -> Undecided s)
-        "no read is refuted, but %s fails: %s" p cex
+  | None, None, Some (p, cex) -> (
+      match Option.bind (answers ()) refuted with
+      | Some (p, cex) -> Semantics (p, cex)
+      | None ->
+          Fmt.kstr
+            (fun s -> Undecided s)
+            "no read is refuted, but %s fails: %s" p cex)
   | None, None, None -> (
-      match entry.spec with
+      match answers () with
       | None -> Redundant_for_safety
-      | Some _ -> (
-          let answers =
-            same_answers ~stop ~z3 ~timeout ~jobs (walk ()) entry id
-          in
+      | Some answers -> (
           match (refuted answers, undecided answers) with
           | Some (p, cex), _ -> Semantics (p, cex)
           | None, Some why -> Undecided why
@@ -508,7 +529,7 @@ let classify ~z3 ~timeout ~jobs ~walk (entry : entry) id =
 let same_as ~z3 ~timeout ~jobs ctx (entry : entry) reference =
   let q, _, mine = walk ctx entry in
   let _, _, theirs = walk ctx { entry with expr = reference } in
-  let before = accepts_of entry theirs in
+  let before = accepts_of answer_of entry theirs in
   solve_all ~z3 ~timeout ~jobs ~keep:false
     (List.mapi
        (fun i (pc, o) ->
