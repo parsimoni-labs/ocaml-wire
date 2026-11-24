@@ -52,12 +52,15 @@ type cursor = {
   mutable wpos : int;
   mutable wend : Input_end.t;
   mutable wgates : int;
-  wnamed : bool;
 }
 
-(* A record's walk in its two modes over one plan: its value, or only its
-   checks. *)
-type 'r walk = { wvalue : cursor -> 'r; wskip : cursor -> unit }
+(* A record's walk in its three modes over one plan: its value, only its
+   checks, or its value naming the errors under each field it moves over. *)
+type 'r walk = {
+  wvalue : cursor -> 'r;
+  wskip : cursor -> unit;
+  wnames : cursor -> 'r;
+}
 
 exception Unwalked
 

@@ -280,14 +280,7 @@ let extent items input_end buf off =
   | None -> layout_end items.walk input_end buf off off
   | Some e ->
       let c =
-        {
-          wbuf = buf;
-          wbase = off;
-          wpos = off;
-          wend = input_end;
-          wgates = 0;
-          wnamed = false;
-        }
+        { wbuf = buf; wbase = off; wpos = off; wend = input_end; wgates = 0 }
       in
       extent_end e c input_end buf off
 

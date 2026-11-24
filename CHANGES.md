@@ -102,7 +102,7 @@
   sub-codec field once with `View.sub` or `View.sub_option`; `enter` refuses
   an absent sub-record. `View.check` of a codec of variable size makes its
   checks without decoding: an Ethernet, IPv4 and TCP or UDP stack is checked
-  and its headers read in about 1440 instructions per packet, against 2280
+  and its headers read in about 1440 instructions per packet, against 1900
   for `decode` (#528, @samoht)
 
 - `Wire.Codec.decoder` and `Wire.Codec.encoder`: decode and encode prepared

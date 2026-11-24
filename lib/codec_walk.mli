@@ -134,9 +134,8 @@ val region :
 (** [region ~at_most ~name size sub] walks the sub-codec [sub] in the region of
     [size c] bytes at the cursor [c], against the region's end: it must end
     there, or before it when [at_most]. [c] goes on at the region's end. With
-    [name = Some n], an error under it carries [n] in its field path when the
-    cursor's [wnamed] asks for names; {!val-sub} and {!val-fixed_sub} name
-    theirs alike. *)
+    [name = Some n], an error under its [wnames] walk carries [n] in its field
+    path; {!val-sub} and {!val-fixed_sub} name theirs alike. *)
 
 val sub : name:string option -> 'a Types.walk -> 'a Types.walk
 (** [sub ~name w] walks the sub-codec [w] at the cursor, which it leaves at its
@@ -161,8 +160,11 @@ type (_, _) readers =
       (Types.cursor -> 'a) * ('rest, 'result) readers
       -> ('a -> 'rest, 'result) readers
 
-val readers : ('full, 'result) walk_readers -> ('full, 'result) readers
-(** [readers r] is how the walk reads the fields [r] describes. *)
+val readers :
+  names:bool -> ('full, 'result) walk_readers -> ('full, 'result) readers
+(** [readers ~names r] is how the walk reads the fields [r] describes: a
+    sub-codec by its [wnames] walk when [names], by its [wvalue] one otherwise.
+*)
 
 val stage : 'mid -> ('mid, 'result) readers -> (Types.cursor -> 'result) option
 (** [stage f readers] reads the fields of the record at the cursor's [wbase] and
@@ -181,18 +183,21 @@ val record :
 (** [record ~n_params ~min_size ~prefix ~where ~fail make w] is the walk of a
     sealed record of at least [min_size] bytes, built by [make] from the fields
     [w] reads: its frame, the checks of its fixed-offset fields, each field in
-    order, then its [where] clause. When a check of a fixed-offset field fails,
-    or an expression raises, [fail input_end buf off], the record's check pass,
-    raises the error. Its [wskip] makes the same checks and reads only the
-    fields they read. With it, where the walk finds each field it walks or
-    gates, as {!Codec_repr.compiled}'s [places]. [None] when the record has
-    parameters, no walk, more than 32 fields, or a [where] clause reading
-    anything but the fields [prefix] names. *)
+    order, then its [where] clause. Its [wvalue] and [wskip] raise
+    {!Types.Unwalked} at the first check that fails; its [wnames] raises that
+    check's error, which for a check of a fixed-offset field, or an expression
+    that raises, [fail input_end buf off], the record's check pass, raises. Its
+    [wskip] makes the same checks and reads only the fields they read. With it,
+    where the walk finds each field it walks or gates, as
+    {!Codec_repr.compiled}'s [places]. [None] when the record has parameters, no
+    walk, more than 32 fields, or a [where] clause reading anything but the
+    fields [prefix] names. *)
 
 val decode : 'r Types.walk -> (bytes -> int -> 'r) -> bytes -> int -> 'r
 (** [decode walk general buf off] is the record [walk] reads at [off], or
-    [general buf off] when [walk] raises {!Types.Unwalked}. A walk that fails is
-    walked again with names on, for the field path of its error. *)
+    [general buf off] when [walk] cannot name the error of a record it refuses.
+    A record [wvalue] refuses is walked again by [wnames], for its error and the
+    field path of that error. *)
 
 val accepts : 'r Types.walk -> bytes -> int -> Input_end.t -> bool
 (** [accepts walk buf off stop] is [true] iff the [wskip] of [walk] accepts the

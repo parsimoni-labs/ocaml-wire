@@ -1471,7 +1471,6 @@ module View = struct
         wpos = r;
         wend = Input_end.of_bytes buf;
         wgates = 0;
-        wnamed = false;
       }
 
   let[@inline never] enter_slow s buf len r =

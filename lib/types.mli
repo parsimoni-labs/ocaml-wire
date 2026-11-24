@@ -44,9 +44,6 @@ type cursor = {
   mutable wgates : int;
       (** The answers of the gates the record being walked has evaluated, one
           bit each. *)
-  wnamed : bool;
-      (** Whether the fields the walk moves over name the errors under them, as
-          the check pass names them. *)
 }
 (** The state of a walk, the one-pass decode of a record without parameters:
     each field is checked and read once, in order, and a sub-codec hands back
@@ -59,12 +56,17 @@ type 'r walk = {
   wskip : cursor -> unit;
       (** The same walk making only its checks: it builds no value and moves the
           cursor to the same end. *)
+  wnames : cursor -> 'r;
+      (** {!field-wvalue} with each field it moves over naming the errors under
+          it, as the check pass names them: the walk that finds the error of a
+          record {!field-wvalue} refused. *)
 }
-(** A record's walk in its two modes, both from one plan. Internal use. *)
+(** A record's walk in its three modes, all from one plan. Internal use. *)
 
 exception Unwalked
-(** Raised by a walk that does not accept the record, which then goes to the
-    general decode for its answer and its error. Internal use. *)
+(** Raised by a walk that does not accept the record without naming its error:
+    the {!field-wnames} walk then names it, or, when it raises this too, the
+    general decode gives the answer and the error. Internal use. *)
 
 (* The parse-error types are declared here, before {!typ}, so that {!typ}'s own
    [Where] / [Field] constructors win type-directed disambiguation throughout;
