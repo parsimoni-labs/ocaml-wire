@@ -97,6 +97,7 @@
    ../fstar/Plan.Word.fst
    lib/WireGen.Lib.fst
    lib/WireGen.OCaml.fst
+   lib/WireGen.Defs.fst
    lib/WireGen.Tables.fst
    lib/WireGen.Tac.fst
    lib/WireGen.Lib3d.fst

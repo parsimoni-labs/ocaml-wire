@@ -10,7 +10,13 @@ module WireGen.OCaml
    only where the planner proved the result fits, so here they require it:
    that the rendering is typable is the proof that none wraps. The
    unchecked loads require the bytes to be in the buffer: that the rendering
-   is typable is the proof that no read leaves it. *)
+   is typable is the proof that no read leaves it.
+
+   A primitive whose meaning is more than linear arithmetic is opaque to
+   Z3: a scanner is checked with its type alone, which states all its
+   checks need, and its meaning is in WireGen.Defs, which a proof loads.
+   Unfolded in the context of a long walk, the definitions of its masks,
+   shifts and loads make Z3 time out on bounds it proves alone at once. *)
 
 open WireGen.Lib
 module U = FStar.UInt
@@ -53,6 +59,7 @@ let of_pattern (r:nat{r < pow2 63}) : int = if r >= pow2 62 then r - pow2 63 els
 
 (* A mask that is not negative keeps a value between 0 and itself: the
    type says so, so that a walk's bounds need no lemma. *)
+[@@"opaque_to_smt"]
 let land (a b:int) : r:int{b >= 0 ==> 0 <= r /\ r <= b} =
   if b >= 0 then begin
     M.pow2_lt_compat 63 62;
@@ -62,6 +69,7 @@ let land (a b:int) : r:int{b >= 0 ==> 0 <= r /\ r <= b} =
   of_pattern (U.logand #63 (pattern a) (pattern b))
 (* A shift right of a value that is not negative keeps it between 0 and
    itself. *)
+[@@"opaque_to_smt"]
 let lsr (a:int) (k:nat{k < 63}) : r:int{a >= 0 ==> 0 <= r /\ r <= a} =
   if a >= 0 then begin
     M.pow2_lt_compat 63 62;
@@ -75,14 +83,21 @@ let lsr (a:int) (k:nat{k < 63}) : r:int{a >= 0 ==> 0 <= r /\ r <= a} =
 let lsl (a:int) (k:nat{k < 63})
   : Pure int (requires fits (a * pow2 k)) (ensures fun r -> r == a * pow2 k) = a * pow2 k
 
-(* Wire_runtime.Unchecked: no bounds check of their own. *)
-let u8 (b:buf) (o:int{0 <= o /\ o + 1 <= length b}) : int = M.pow2_lt_compat 62 8; be b o 1
-let u16be (b:buf) (o:int{0 <= o /\ o + 2 <= length b}) : int = M.pow2_lt_compat 62 16; be b o 2
+(* Wire_runtime.Unchecked: no bounds check of their own. A load's type
+   states the range of the value it reads. *)
+[@@"opaque_to_smt"]
+let u8 (b:buf) (o:int{0 <= o /\ o + 1 <= length b}) : r:int{0 <= r /\ r <= 0xff} =
+  assert_norm (pow2 8 == 0x100); M.pow2_lt_compat 62 8; be b o 1
+[@@"opaque_to_smt"]
+let u16be (b:buf) (o:int{0 <= o /\ o + 2 <= length b}) : r:int{0 <= r /\ r <= 0xffff} =
+  assert_norm (pow2 16 == 0x10000); M.pow2_lt_compat 62 16; be b o 2
 
 (* Int32: a 32-bit pattern, which Int32.to_int sign-extends. *)
 type int32 = w:nat{w < pow2 32}
 
+[@@"opaque_to_smt"]
 let i32be (b:buf) (o:int{0 <= o /\ o + 4 <= length b}) : int32 = be b o 4
+[@@"opaque_to_smt"]
 let int32_to_int (x:int32) : int =
   M.pow2_lt_compat 62 32;
   if x >= pow2 31 then x - pow2 32 else x
@@ -90,9 +105,36 @@ let int32_to_int (x:int32) : int =
 (* Int64: a 64-bit pattern. *)
 type int64 = w:nat{w < pow2 64}
 
+[@@"opaque_to_smt"]
 let i64be (b:buf) (o:int{0 <= o /\ o + 8 <= length b}) : int64 = be b o 8
+[@@"opaque_to_smt"]
 let shift_right_logical (w:int64) (k:nat{k < 64}) : int64 = w / pow2 k
+[@@"opaque_to_smt"]
 let to_int (w:int64) : int = of_pattern (w % pow2 63)
+
+(* {1 The meaning of the opaque primitives} which WireGen.Defs states as
+   rewrite rules. *)
+
+let land_def (a b:int) : Lemma (land a b == of_pattern (U.logand #63 (pattern a) (pattern b)))
+  = reveal_opaque (`%land) (land a b)
+let lsr_def (a:int) (k:nat{k < 63}) : Lemma (lsr a k == of_pattern (pattern a / pow2 k))
+  = reveal_opaque (`%lsr) (lsr a k)
+let u8_def (b:buf) (o:int{0 <= o /\ o + 1 <= length b}) : Lemma (u8 b o == be b o 1)
+  = reveal_opaque (`%u8) (u8 b o)
+let u16be_def (b:buf) (o:int{0 <= o /\ o + 2 <= length b}) : Lemma (u16be b o == be b o 2)
+  = reveal_opaque (`%u16be) (u16be b o)
+let i32be_def (b:buf) (o:int{0 <= o /\ o + 4 <= length b}) : Lemma (i32be b o == be b o 4)
+  = reveal_opaque (`%i32be) (i32be b o)
+let int32_to_int_def (x:int32)
+  : Lemma (int32_to_int x == (if x >= pow2 31 then x - pow2 32 else x))
+  = reveal_opaque (`%int32_to_int) (int32_to_int x)
+let i64be_def (b:buf) (o:int{0 <= o /\ o + 8 <= length b}) : Lemma (i64be b o == be b o 8)
+  = reveal_opaque (`%i64be) (i64be b o)
+let shift_right_logical_def (w:int64) (k:nat{k < 64})
+  : Lemma (shift_right_logical w k == w / pow2 k)
+  = reveal_opaque (`%shift_right_logical) (shift_right_logical w k)
+let to_int_def (w:int64) : Lemma (to_int w == of_pattern (w % pow2 63))
+  = reveal_opaque (`%to_int) (to_int w)
 
 (* {1 What the walk reads these as} once proved, as rewrite rules. *)
 
@@ -112,7 +154,8 @@ let pattern_nonneg (a:int)
 
 let lsr_nonneg (a:int) (k:nat{k < 63})
   : Lemma (requires a >= 0 /\ k >= 1) (ensures lsr a k == a / pow2 k) [SMTPat (lsr a k)]
-  = M.pow2_lt_compat 63 62; M.small_mod a (pow2 63);
+  = lsr_def a k;
+    M.pow2_lt_compat 63 62; M.small_mod a (pow2 63);
     M.lemma_div_le a (pow2 62) (pow2 k);
     M.pow2_minus 62 k;
     M.pow2_le_compat 62 (62 - k)
@@ -121,7 +164,8 @@ let land_mask (a:int) (k:nat)
   : Lemma (requires a >= 0 /\ 1 <= k /\ k <= 62)
           (ensures land a (pow2 k - 1) == a % pow2 k)
           [SMTPat (land a (pow2 k - 1))]
-  = M.pow2_le_compat 62 k;
+  = land_def a (pow2 k - 1);
+    M.pow2_le_compat 62 k;
     M.pow2_lt_compat 63 62; M.small_mod a (pow2 63);
     M.small_mod (pow2 k - 1) (pow2 63);
     U.logand_mask #63 a k;
@@ -133,7 +177,9 @@ let land_to_int_mask (w:int64) (k:nat)
   : Lemma (requires 1 <= k /\ k <= 62)
           (ensures land (to_int w) (pow2 k - 1) == w % pow2 k)
           [SMTPat (land (to_int w) (pow2 k - 1))]
-  = M.pow2_le_compat 62 k;
+  = land_def (to_int w) (pow2 k - 1);
+    to_int_def w;
+    M.pow2_le_compat 62 k;
     let r = w % pow2 63 in
     assert (pattern (to_int w) == r);
     M.small_mod (pow2 k - 1) (pow2 63);
@@ -143,7 +189,8 @@ let land_to_int_mask (w:int64) (k:nat)
 (* The low [k] bits of any int, negative ones included. *)
 let land_low (a:int) (k:nat)
   : Lemma (requires 1 <= k /\ k <= 62) (ensures land a (pow2 k - 1) == a % pow2 k)
-  = M.pow2_le_compat 62 k;
+  = land_def a (pow2 k - 1);
+    M.pow2_le_compat 62 k;
     M.pow2_lt_compat 63 62;
     M.small_mod (pow2 k - 1) (pow2 63);
     U.logand_mask #63 (pattern a) k;
@@ -154,13 +201,14 @@ let land_low (a:int) (k:nat)
 let land_int32 (x:int32) (m:Prims.int)
   : Lemma (requires m == pow2 32 - 1) (ensures land (int32_to_int x) m == x)
           [SMTPat (land (int32_to_int x) m)]
-  = land_low (int32_to_int x) 32;
+  = int32_to_int_def x;
+    land_low (int32_to_int x) 32;
     if x >= pow2 31 then M.lemma_mod_plus x (-1) (pow2 32);
     M.small_mod x (pow2 32)
 
 let to_int_small (w:int64)
   : Lemma (requires w < pow2 62) (ensures to_int w == w) [SMTPat (to_int w)]
-  = M.pow2_lt_compat 63 62; M.small_mod w (pow2 63)
+  = to_int_def w; M.pow2_lt_compat 63 62; M.small_mod w (pow2 63)
 
 let land_lit (k:nat) (m:Prims.int)
   : Lemma (requires 1 <= k /\ k <= 62 /\ m == pow2 k - 1)
@@ -196,7 +244,11 @@ let word_lit (k:nat) (m:nat) (sh:nat) (p:pos)
   = let aux (b:buf) (o:int) : Lemma ((0 <= o /\ o + 8 <= length b) ==>
                      (shift_right_logical (i64be b o) sh % p == be b (o + k) m /\
                       (k == 0 ==> shift_right_logical (i64be b o) sh == be b o m))) =
-      if 0 <= o && o + 8 <= length b then word_bytes b o k m in
+      if 0 <= o && o + 8 <= length b then begin
+        i64be_def b o;
+        shift_right_logical_def (i64be b o) sh;
+        word_bytes b o k m
+      end in
     FStar.Classical.forall_intro_2 aux
 
 (* The [m] bytes that end the big-endian word at [o], which the emitter
@@ -208,6 +260,7 @@ let word_end (k:nat) (m:nat) (p:pos)
   = let aux (b:buf) (o:int) : Lemma ((0 <= o /\ o + 8 <= length b) ==>
                      i64be b o % p == be b (o + k) m) =
       if 0 <= o && o + 8 <= length b then begin
+        i64be_def b o;
         assert_norm (pow2 0 == 1);
         word_bytes b o k m
       end in

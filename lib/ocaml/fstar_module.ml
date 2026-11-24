@@ -861,6 +861,7 @@ let proof_implementation ~codec ~m scan =
         "that the fold of its scanner is the parser 3d.exe writes";
       Fmt.pf ppf
         "open WireGen.Lib@\n\
+         open WireGen.Defs@\n\
          open %s.Scan@\n\
          module P = WireGen.OCaml@\n\
          module Flat = %s.Flat@\n\

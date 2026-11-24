@@ -2,7 +2,9 @@
    rendering calls returns in OCaml, on boundary and random operands, stated
    of its definition in WireGen.OCaml. F* checks each fact: by normalising
    for the arithmetic, by Z3 for the loads, which read a sequence of bytes,
-   and for [land], which F* defines through bit vectors. *)
+   and for [land], which F* defines through bit vectors. Z3 reads the
+   primitives WireGen.OCaml keeps opaque through the rules of
+   WireGen.Defs. *)
 
 let random = Random.State.make [| 0x3d |]
 
@@ -190,6 +192,7 @@ let () =
      operands. Do not edit. *)@\n\
      @\n\
      module P = WireGen.OCaml@\n\
+     open WireGen.Defs@\n\
      @\n\
      #push-options \"--fuel 0 --ifuel 0 --z3rlimit 20\"@\n";
   arithmetic ppf;

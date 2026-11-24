@@ -57,7 +57,10 @@ Hence, for the code F* checks:
 | `M.Flat.fsti`, `M.Flat.fst` | `flat`, the record read field by field as the 3D projection lays it out (a nested codec, an optional one as the casetype on its condition, a region as a window of its own), and `flat_is_3d`: `flat` is `answer` of 3d.exe's parser. It depends on the schema alone |
 | `M.Proof.fsti`, `M.Proof.fst` | one lemma per value of the walk that reads bytes, stating it in bytes of the buffer (`be buf (o + k) n`, `P.bits` of a word) for every position `o` it reads at, as the emitter chose it, which Z3 applies where the value occurs; then `fold == flat`, and `fold_is_3d` |
 
-The library in `lib/` is written once: `WireGen.OCaml` (the primitives),
+The library in `lib/` is written once: `WireGen.OCaml` (the primitives,
+those whose meaning is more than linear arithmetic opaque to Z3, so that
+`M.Scan` is checked with their types alone), `WireGen.Defs` (the meaning
+of each opaque primitive as a rewrite rule, which `M.Proof` loads),
 `WireGen.Lib` (big-endian reads and the LowParse equations of the
 combinators 3d.exe builds from, as SMT patterns), `WireGen.Lib3d` (a
 casetype's value, 3D's bitfields most significant bit first, shifts and
