@@ -48,9 +48,30 @@ let unfold_flat (ns:list string) : T.Tac unit =
   T.norm [delta_only interp; delta_namespace ns; zeta_full; iota; primops];
   T.smt ()
 
+(* The scanner's tests, each split into its two branches down to the
+   answers, the test rewritten to its value in each: Z3 proves each answer
+   equal to the reading on the path that leads to it, so that a query holds
+   one path, not the whole walk. *)
+let rec split_tests () : T.Tac unit =
+  match T.cur_formula () with
+  | T.Comp (T.Eq _) l _ -> (
+      match T.inspect l with
+      | T.Tv_Match c _ _ ->
+          T.cases_bool c;
+          T.iseq [ branch; branch ]
+      | _ -> T.smt ())
+  | _ -> T.smt ()
+
+and branch () : T.Tac unit =
+  T.or_else
+    (fun () -> let h = T.implies_intro () in T.grewrite_eq h)
+    T.idtac;
+  T.norm [iota];
+  split_tests ()
+
 (* For a Proof lemma: the rendering against the Flat reading, with the
    rules of WireGen.OCaml at the emitter's literals. *)
 let unfold_scan (names:list string) : T.Tac unit =
   ignore (T.pose_lemma (`WireGen.Tables.tables ()));
   T.norm [delta_only names; zeta; iota; primops];
-  T.smt ()
+  split_tests ()

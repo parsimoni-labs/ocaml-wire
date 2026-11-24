@@ -67,7 +67,8 @@ casetype's value, 3D's bitfields most significant bit first, shifts and
 masks of its unsigned words), `WireGen.Tables` (the
 rules of `WireGen.OCaml` at the literals the emitter prints, which
 `scripts/fstar-gen/tables.exe` writes) and `WireGen.Tac` (the tactics
-that unfold a 3D denotation and the scanner). It uses `Plan.Word` from
+that unfold a 3D denotation and the scanner, and split the scanner's
+proof at each of its tests, so that Z3 checks one path at a time). It uses `Plan.Word` from
 `../fstar`. `WireGen.Vectors.fst` is written by
 `scripts/fstar-gen/vectors.exe`, which runs the OCaml primitives
 (`Wire_runtime.Unchecked` loads, `Int64.to_int`,
