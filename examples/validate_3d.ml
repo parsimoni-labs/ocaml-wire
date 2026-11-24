@@ -110,6 +110,8 @@ let cases =
     Codec ("TMWithOCF", Space.tm_with_ocf_codec);
     Codec ("InnerCmd", Space.inner_cmd_codec);
     Codec ("OuterHdr", Space.outer_hdr_codec);
+    Codec ("EthernetStack", Packet_stack.codec);
+    Codec ("CapturedStack", Packet_stack.capture);
   ]
   @ doc_cases
 
