@@ -1,8 +1,8 @@
 ; The OCaml backend again, on the code Wire_ocaml writes for OxCaml, whose
-; [@zero_alloc] checks the compiler enforces. On any other compiler the library
-; holds the code for the default target instead, so the lane still builds, and
-; neither [dune runtest] (which says the lane was skipped) nor the AFL campaign
-; repeats fuzz/diff/ocaml. The index is split as in fuzz/diff/ocaml.
+; [@zero_alloc] checks the compiler enforces. Only an OxCaml compiler builds
+; the index, split as in fuzz/diff/ocaml. On any other, fuzz.exe is a stub that
+; says the lane was skipped, and the AFL campaign does not repeat
+; fuzz/diff/ocaml.
 
 (rule
  (enabled_if
@@ -28,33 +28,11 @@
  (action
   (run %{dep:../../../test/diff/gen_ocaml.exe} --oxcaml %{targets})))
 
-(rule
- (enabled_if
-  (<> %{ocaml-config:ox} true))
- (targets
-  ocaml_index.ml
-  ocaml_index_0.ml
-  ocaml_index_1.ml
-  ocaml_index_2.ml
-  ocaml_index_3.ml
-  ocaml_index_4.ml
-  ocaml_index_5.ml
-  ocaml_index_6.ml
-  ocaml_index_7.ml
-  ocaml_index_8.ml
-  ocaml_index_9.ml
-  ocaml_index_10.ml
-  ocaml_index_11.ml
-  ocaml_index_12.ml
-  ocaml_index_13.ml
-  ocaml_index_14.ml
-  ocaml_index_15.ml)
- (action
-  (run %{dep:../../../test/diff/gen_ocaml.exe} %{targets})))
-
 (library
  (name ocaml_index_ox)
  (wrapped false)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
  (modules
   ocaml_index
   ocaml_index_0
@@ -75,20 +53,37 @@
   ocaml_index_15)
  (libraries wire wire.runtime fuzz_gen diff_ocaml fmt))
 
+; An executable's enabled_if cannot read %{ocaml-config:ox}, so fuzz.exe
+; selects the fuzzer on whether the index library is enabled.
+
 (rule
- (copy ../ocaml/fuzz.ml fuzz.ml))
+ (copy ../ocaml/fuzz.ml fuzz.ox.ml))
+
+(rule
+ (with-stdout-to
+  fuzz.std.ml
+  (echo
+   "let () = Fmt.pr \"fuzz/diff/ocaml-ox: skipped, OCaml %s is not an OxCaml compiler@.\" Sys.ocaml_version\n")))
 
 (executable
  (name fuzz)
  (modules fuzz)
- (libraries fuzz_gen diff_codecs diff_driver diff_ocaml ocaml_index_ox))
+ (libraries
+  fmt
+  fuzz_gen
+  diff_codecs
+  diff_driver
+  diff_ocaml
+  (select
+   fuzz.ml
+   from
+   (ocaml_index_ox -> fuzz.ox.ml)
+   (-> fuzz.std.ml))))
 
 (rule
  (alias runtest)
  (enabled_if
-  (and
-   (<> %{profile} afl)
-   (= %{ocaml-config:ox} true)))
+  (<> %{profile} afl))
  (action
   (run
    %{exe:fuzz.exe}
@@ -98,16 +93,6 @@
    %{env:WIRE_FUZZ_REPEAT=5000}
    --budget
    %{env:WIRE_FUZZ_BUDGET=1})))
-
-(rule
- (alias runtest)
- (enabled_if
-  (and
-   (<> %{profile} afl)
-   (<> %{ocaml-config:ox} true)))
- (action
-  (echo
-   "fuzz/diff/ocaml-ox: skipped, OCaml %{ocaml_version} is not an OxCaml compiler\n")))
 
 (rule
  (alias fuzz)
