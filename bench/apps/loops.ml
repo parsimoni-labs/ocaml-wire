@@ -84,7 +84,10 @@ let restamp buf n out =
   let total = Bytes.length buf in
   let version = P.Value.version 0 and type_ = P.Value.type_ 0 in
   let sechdr = P.Value.sechdrflag 1 and seqflags = P.Value.seqflags 3 in
-  let seqs = Array.make 4 0 in
+  (* Each route's next sequence count, kept in its carrier: [seqcount_low]
+     wraps it as the Rust rows' [& 0x3FFF] does, and the carrier's type tells
+     [write_at] it fits. *)
+  let seqs = Array.make 4 (P.Value.seqcount 0) in
   let off = ref 0 and i = ref 0 in
   while !i < n do
     if !off + hdr > total then off := 0;
@@ -95,9 +98,8 @@ let restamp buf n out =
       let dlen = P.view_datalength b v in
       let route = Routing_workload.route_of_apid (apid :> int) in
       let seq = seqs.(route) in
-      seqs.(route) <- (seq + 1) land 0x3FFF;
-      P.write_at o olen !off version type_ sechdr apid seqflags
-        (P.Value.seqcount seq) dlen;
+      seqs.(route) <- P.Value.seqcount_low ((seq :> int) + 1);
+      P.write_at o olen !off version type_ sechdr apid seqflags seq dlen;
       off := !off + hdr + (dlen :> int) + 1;
       incr i
     end
