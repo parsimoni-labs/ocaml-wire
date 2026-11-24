@@ -501,16 +501,24 @@ Each row runs in a process of its own, one warm-up pass then
 times them (process CPU time and wall time around each pass). ns/packet is
 the CPU time of a pass over the packets; packets per second is its inverse.
 
-The methodology follows ixy, the user-space NIC driver written in C, Rust,
-Go, C#, Java, OCaml, Haskell, Swift, JavaScript and Python (P. Emmerich et
-al., "The Case for Writing Network Drivers in High-Level Programming
-Languages", ANCS 2019; [ixy-languages](https://github.com/ixy-languages)):
-one core, packets per second as the measure, and the same design in every
+The methodology follows ixy, the user-space driver for Intel's ixgbe NICs
+(P. Emmerich et al., "The Case for Writing Network Drivers in High-Level
+Programming Languages", ANCS 2019): the paper writes it in Rust, Go, C#,
+Java, OCaml, Haskell, Swift, JavaScript and Python, each "from scratch in
+idiomatic style" and following "the same basic architecture" as the
+reference C driver it compares them with
+([ixy-languages](https://github.com/ixy-languages) adds C++). Every test is
+"restricted to a single CPU core", forwards packets while modifying one byte
+of each, and counts packets per second, since "the limiting factor for
+network drivers is the number of packets per second, not the bandwidth".
+Here too: one core, packets per second, and the same design in every
 language, so the rows differ in the parser and not in the work around it.
-ixy measured a NIC forwarding packets and swept the batch size, which
-amortises the per-call cost of the driver; here the packets are already in
-memory and every row walks them one frame at a time, which is the batch the
-whole buffer gives, so there is no batch size to sweep.
+ixy swept the batch size, because each batch received or sent needs a
+synchronisation with the NIC, at 3.3 GHz and at 1.6 GHz, and read CPU
+counters per forwarded packet (Rust spends 65% more instructions than C at a
+batch of 32, and 6% more cycles); here the packets are already in memory and
+every row walks them one frame at a time, which is the batch the whole
+buffer gives, so there is no batch size to sweep.
 
 ```
 make bench-flow                       # needs cargo, curl and the network the first time
