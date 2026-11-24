@@ -10,7 +10,7 @@
 (library
  (name proved)
  (modules proved)
- (libraries wire headers space))
+ (libraries wire headers space bytesrw))
 
 (executable
  (name gen)

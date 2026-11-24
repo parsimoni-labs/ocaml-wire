@@ -114,3 +114,30 @@ let rec prune lines =
 let rec free x = function
   | [] -> false
   | line :: rest -> reads x line || ((not (binds x line)) && free x rest)
+
+(* [text] with each word [x] that [env] binds, unqualified, as [(env x)]. *)
+let substitute env text =
+  let n = String.length text in
+  let b = Buffer.create n in
+  let rec go i =
+    if i < n then
+      if is_ident_char text.[i] && (i = 0 || not (is_ident_char text.[i - 1]))
+      then begin
+        let j = ref i in
+        while !j < n && is_ident_char text.[!j] do
+          incr j
+        done;
+        let x = String.sub text i (!j - i) in
+        (match List.assoc_opt x env with
+        | Some e when i = 0 || text.[i - 1] <> '.' ->
+            Buffer.add_string b ("(" ^ e ^ ")")
+        | _ -> Buffer.add_string b x);
+        go !j
+      end
+      else begin
+        Buffer.add_char b text.[i];
+        go (i + 1)
+      end
+  in
+  go 0;
+  Buffer.contents b

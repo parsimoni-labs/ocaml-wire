@@ -52,17 +52,13 @@ val selected : plan -> string list option -> output list
 
 type fstar = {
   body : string;
-  functions : string list;
   notes : Emitter.note list;
   handed_out : output list;
-  prefix_fields : field list;
-  need : int;
 }
-(** The F* rendering of a scanner's [fold]: its text, the functions it is cut
-    into, what its walk states of each binding, the outputs it hands out, the
-    fields of its plan, and the bytes its record needs. *)
+(** The F* rendering of a scanner's [fold]: its text, what its walk states of
+    each binding, and the outputs it hands out. *)
 
 val fstar : ?fields:string list -> 'a Wire.Codec.t -> fstar
 (** [fstar ?fields c] is the F* rendering of [fold] in the scanner of [c]: the
-    walk of the OCaml one, which it cuts where that one does. Raises
-    {!Planner.Unsupported} on a codec that is not a record of fixed layout. *)
+    walk of the OCaml one, with in place each function the OCaml one cuts out.
+    Raises {!Planner.Unsupported} on a codec whose walk needs a slot. *)

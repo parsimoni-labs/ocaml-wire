@@ -72,12 +72,12 @@ val values : num -> Decision.values
 (** [values num] is how a walk of [num] holds integer values. *)
 
 (** What an F* walk states of the code it writes: a binding and, when it reads
-    bytes, the value it holds in bytes of the window ([be buf o n], [P.bits] of
-    a word), or a fact a test relies on, each with the bytes known to be in the
-    window there. *)
+    bytes, the value it holds in bytes of the buffer ([be buf o n], [P.bits] of
+    a word), or a fact a test relies on and the value it is about. Each value is
+    written out down to the positions it reads at. *)
 type note =
-  | Let of { var : string; rhs : string; holds : string option; known : int }
-  | Holds of { fact : string; known : int }
+  | Let of { var : string; value : string; holds : string option }
+  | Holds of { fact : string; about : string }
 
 type mode = {
   num : num;
@@ -129,6 +129,7 @@ type w = {
   views : (string * int T.expr) list;
   words : (string * int) list;
   raws : (string * (string * int)) list;
+  defs : (string * string) list ref;
   deferred : (string * (string * bool)) list ref;
   bounded : (string * string * string * string) list;
   sums : (string * sum) list;

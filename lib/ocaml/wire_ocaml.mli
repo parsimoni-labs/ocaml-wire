@@ -297,10 +297,12 @@ val fstar :
     The proof is checked with the F* and Z3 that ship with EverParse, against
     the F* module [codec] that 3d.exe writes from the [.3d] of
     [Wire.Everparse.write ~mode:`Standalone ~name:codec], and the library
-    [proofs/fstar-gen/lib] of this repository. It covers records of a fixed
-    layout whose fields are unsigned big-endian integers of up to 32 bits,
-    bitfields of such words and byte arrays, with constraints; it raises
-    [Invalid_argument] for any other codec. *)
+    [proofs/fstar-gen/lib] of this repository. It covers records whose fields
+    are unsigned big-endian integers of up to 32 bits, bitfields of such words,
+    byte arrays of any size, nested codecs, optional codecs of a variable size
+    and codecs in a sized region, with constraints; it raises [Invalid_argument]
+    for any other codec, and for one whose scanner holds an output in a mutable
+    local. *)
 
 (** {1 The plan}
 

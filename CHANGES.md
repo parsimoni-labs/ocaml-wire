@@ -96,8 +96,9 @@
 
 - `Wire_ocaml.fstar`: an F* proof that the `fold` of a generated scanner
   accepts what the parser EverParse writes for the codec accepts, and hands
-  out the same values, for records of a fixed layout. `make prove` checks
-  it for the codecs `proofs/fstar-gen` lists (@samoht)
+  out the same values, for records with variable-size fields, nested and
+  optional codecs and sized regions. `make prove` checks it for the codecs
+  `proofs/fstar-gen` lists (@samoht)
 
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an
   earlier integer field (#414, #450, @samoht)

@@ -1043,40 +1043,30 @@ let scanner ?decide ?(target = `OCaml) ?fields ?step ~codec c =
 
 (* {1 The F* rendering} *)
 
-type fstar = {
-  body : string;
-  functions : string list;
-  notes : note list;
-  handed_out : output list;
-  prefix_fields : field list;
-  need : int;
-}
+type fstar = { body : string; notes : note list; handed_out : output list }
 
-(* The F* rendering covers a record of prefixes and where clauses: its walk
-   is straight-line code over bytes at constant offsets. *)
-let fixed_layout (plan : plan) =
-  List.iter
-    (function
-      | Prefix _ | Test _ -> ()
-      | Span _ -> fail_unsupported "the F* rendering of a variable-size field"
-      | Region _ -> fail_unsupported "the F* rendering of a sized region"
-      | Gate _ -> fail_unsupported "the F* rendering of an optional field")
-    plan.nodes
+(* The F* rendering holds every value in a binding: an output under more
+   than [slot_depth] optional fields is a slot, a mutable local, which F*
+   has not. *)
+let no_slots (plan : plan) =
+  if Planner.slots plan.nodes <> [] then
+    fail_unsupported "the F* rendering of a slot"
 
-(* The name [unfold let name ...] defines. *)
-let fstar_function line =
-  let prefix = "unfold let " in
-  if String.starts_with ~prefix line then
-    let rest =
-      String.sub line (String.length prefix)
-        (String.length line - String.length prefix)
-    in
-    Some (List.hd (String.split_on_char ' ' rest))
-  else None
+(* [text] with each local function defined as F* does: [let[@local]] is a
+   hint to the OCaml compiler. *)
+let unlocal text =
+  let k = String.length Lines.local_prefix in
+  String.concat "\n"
+    (List.map
+       (fun line ->
+         if String.starts_with ~prefix:Lines.local_prefix line then
+           "let " ^ String.sub line k (String.length line - k)
+         else line)
+       (String.split_on_char '\n' text))
 
 let fstar ?fields c =
   let plan = scan_plan c in
-  fixed_layout plan;
+  no_slots plan;
   let selected = selected plan fields in
   let walk ~trace ~num ~note =
     let b = Buffer.create 4096 in
@@ -1094,8 +1084,8 @@ let fstar ?fields c =
     Format.pp_print_flush ppf ();
     Buffer.contents b
   in
-  (* The F* walk cuts where the OCaml walk does, whose text merlint
-     measures. *)
+  (* The F* walk writes in place what the OCaml walk cuts, at the places
+     the OCaml walk, whose text merlint measures, cuts. *)
   let choices = Queue.create () in
   let record b =
     Queue.push b choices;
@@ -1111,12 +1101,8 @@ let fstar ?fields c =
   let text =
     walk ~trace:replay ~num:Fstar ~note:(fun n -> notes := n :: !notes)
   in
-  let text = without_dead_bindings text in
   {
-    body = text;
-    functions = List.filter_map fstar_function (String.split_on_char '\n' text);
+    body = unlocal (without_dead_bindings text);
     notes = List.rev !notes;
     handed_out = selected;
-    prefix_fields = fields_of plan.nodes;
-    need = fixed_need plan.nodes;
   }

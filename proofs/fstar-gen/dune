@@ -29,6 +29,30 @@
   Clcw.Flat.fst
   Clcw.Proof.fsti
   Clcw.Proof.fst
+  Span.3d
+  Span.Scan.fst
+  Span.Flat.fsti
+  Span.Flat.fst
+  Span.Proof.fsti
+  Span.Proof.fst
+  Gate.3d
+  Gate.Scan.fst
+  Gate.Flat.fsti
+  Gate.Flat.fst
+  Gate.Proof.fsti
+  Gate.Proof.fst
+  Dispatch.3d
+  Dispatch.Scan.fst
+  Dispatch.Flat.fsti
+  Dispatch.Flat.fst
+  Dispatch.Proof.fsti
+  Dispatch.Proof.fst
+  Region.3d
+  Region.Scan.fst
+  Region.Flat.fsti
+  Region.Flat.fst
+  Region.Proof.fsti
+  Region.Proof.fst
   IPv4Mutant.3d
   IPv4Mutant.Scan.fst
   IPv4Mutant.Flat.fsti
@@ -75,6 +99,7 @@
    lib/WireGen.OCaml.fst
    lib/WireGen.Tables.fst
    lib/WireGen.Tac.fst
+   lib/WireGen.Lib3d.fst
    WireGen.Vectors.fst)))
 
 (rule
@@ -129,6 +154,58 @@
  (action
   (run sh prove.sh codec Clcw)))
 
+(rule
+ (targets used.Span)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files Span.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh codec Span)))
+
+(rule
+ (targets used.Gate)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files Gate.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh codec Gate)))
+
+(rule
+ (targets used.Dispatch)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files Dispatch.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh codec Dispatch)))
+
+(rule
+ (targets used.Region)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files Region.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run sh prove.sh codec Region)))
+
 ;; ihl read with three bits instead of four: the proof must fail.
 
 (rule
@@ -167,4 +244,8 @@
    %{dep:used.Ethernet}
    %{dep:used.IPv4}
    %{dep:used.Clcw}
+   %{dep:used.Span}
+   %{dep:used.Gate}
+   %{dep:used.Dispatch}
+   %{dep:used.Region}
    %{dep:used.IPv4Mutant})))

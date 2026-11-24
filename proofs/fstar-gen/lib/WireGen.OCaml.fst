@@ -51,8 +51,27 @@ let ne (a b:int) : bool = a <> b
 let pattern (a:int) : r:nat{r < pow2 63} = a % pow2 63
 let of_pattern (r:nat{r < pow2 63}) : int = if r >= pow2 62 then r - pow2 63 else r
 
-let land (a b:int) : int = of_pattern (U.logand #63 (pattern a) (pattern b))
-let lsr (a:int) (k:nat{k < 63}) : int = of_pattern (pattern a / pow2 k)
+(* A mask that is not negative keeps a value between 0 and itself: the
+   type says so, so that a walk's bounds need no lemma. *)
+let land (a b:int) : r:int{b >= 0 ==> 0 <= r /\ r <= b} =
+  if b >= 0 then begin
+    M.pow2_lt_compat 63 62;
+    M.small_mod b (pow2 63);
+    U.logand_le #63 (pattern a) (pattern b)
+  end;
+  of_pattern (U.logand #63 (pattern a) (pattern b))
+(* A shift right of a value that is not negative keeps it between 0 and
+   itself. *)
+let lsr (a:int) (k:nat{k < 63}) : r:int{a >= 0 ==> 0 <= r /\ r <= a} =
+  if a >= 0 then begin
+    M.pow2_lt_compat 63 62;
+    M.small_mod a (pow2 63);
+    M.lemma_div_le a (pow2 62) (pow2 k);
+    M.lemma_div_le a a (pow2 k);
+    M.pow2_le_compat 62 0;
+    M.lemma_div_lt_nat a 63 k
+  end;
+  of_pattern (pattern a / pow2 k)
 let lsl (a:int) (k:nat{k < 63})
   : Pure int (requires fits (a * pow2 k)) (ensures fun r -> r == a * pow2 k) = a * pow2 k
 

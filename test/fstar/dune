@@ -9,6 +9,7 @@
   wire.ocaml
   headers
   space
+  net
   schemas
   fuzz_gen
   diff_codecs

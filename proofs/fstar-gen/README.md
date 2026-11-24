@@ -27,7 +27,10 @@ value dropped of the bytes it consumed: the record is the prefix of the
 window the parser accepts. `Flat.answer` calls `invalid ()` where the
 parser fails and otherwise `valid` with each output of the scanner read
 from the parser's value: a field as an `int`, a bitfield as `P.bits` of its
-word.
+word, the presence of an optional field as whether its casetype holds its
+second case (`WireGen.Lib3d.ite_case`), whose value holds the field's codec,
+or the region it lies in; a field under an optional field that is absent
+is 0.
 
 Hence, for the code F* checks:
 
@@ -50,13 +53,15 @@ Hence, for the code F* checks:
 
 | module | what it holds |
 |--------|---------------|
-| `M.Scan.fst` | `fold` and the functions its walk is cut into, as the emitter writes them; the window a cut reads is a refinement of its parameters |
-| `M.Flat.fsti`, `M.Flat.fst` | `flat`, the record read field by field as the 3D projection lays it out, and `flat_is_3d`: `flat` is `answer` of 3d.exe's parser. It depends on the schema alone |
-| `M.Proof.fsti`, `M.Proof.fst` | one lemma per binding of the walk that reads bytes, stating its value in bytes of the window (`be buf (base + k) n`, `P.bits` of a word), as the emitter chose it; then `fold == flat`, and `fold_is_3d` |
+| `M.Scan.fst` | `fold`, as the emitter writes it, with in place each function the OCaml walk is cut into: F* checks a function on its own, without the tests on the path to its call |
+| `M.Flat.fsti`, `M.Flat.fst` | `flat`, the record read field by field as the 3D projection lays it out (a nested codec, an optional one as the casetype on its condition, a region as a window of its own), and `flat_is_3d`: `flat` is `answer` of 3d.exe's parser. It depends on the schema alone |
+| `M.Proof.fsti`, `M.Proof.fst` | one lemma per value of the walk that reads bytes, stating it in bytes of the buffer (`be buf (o + k) n`, `P.bits` of a word) for every position `o` it reads at, as the emitter chose it, which Z3 applies where the value occurs; then `fold == flat`, and `fold_is_3d` |
 
 The library in `lib/` is written once: `WireGen.OCaml` (the primitives),
 `WireGen.Lib` (big-endian reads and the LowParse equations of the
-combinators 3d.exe builds from, as SMT patterns), `WireGen.Tables` (the
+combinators 3d.exe builds from, as SMT patterns), `WireGen.Lib3d` (a
+casetype's value, 3D's bitfields most significant bit first, shifts and
+masks of its unsigned words), `WireGen.Tables` (the
 rules of `WireGen.OCaml` at the literals the emitter prints, which
 `scripts/fstar-gen/tables.exe` writes) and `WireGen.Tac` (the tactics
 that unfold a 3D denotation and the scanner). It uses `Plan.Word` from
@@ -93,10 +98,11 @@ normalisation and the loads and masks by Z3.
 `test/fstar` (part of `dune runtest`, no F* needed) reads the `fold` of
 `Wire_ocaml.scanner` and the functions it calls, and `M.Scan.fst`, with
 the OCaml parser: the bodies of the F* functions keep to the F* that is
-also OCaml (`let x = e in`, `if then else`, application, `&&`, `||`,
-`not`). It requires the same functions in the same order, each with the
-same parameters and the same body once the OCaml is read through this
-table, in `test/fstar/test_tree.ml`:
+also OCaml (`let x = e in`, a local function `let f () = e in`,
+`if then else`, application, `&&`, `||`, `not`). It requires the same
+functions in the same order, each with the same parameters and the same
+body once the OCaml is read through this table, in
+`test/fstar/test_tree.ml`:
 
 | OCaml | F* |
 |-------|----|
@@ -109,29 +115,40 @@ table, in `test/fstar/test_tree.ml`:
 | an `int64` literal `0xFFFF_FFFFL` | `0xFFFFFFFF` |
 | `(e : int)` | `e` |
 | `f ~x:e` | `f e` |
+| `let[@local] f () = e in` | `let f () = e in` |
+| `f ~x ~y`, `f` a function the F* does not define | the body of `f` |
 
 A labelled argument becomes positional only where the labels are those
 the callee declares, in order: a cut's parameters, or the outputs for
-`valid` (`Wire_ocaml.scanner_fields`). Headers differ and are not
-compared beyond the parameter names: `[@inline always]` against `unfold`,
-and the F* parameter types and refinements, which F* checks. Each binding
-`let x = e in` that `M.Proof.fst` states a fact under must be the binding
-of `x` in `M.Scan.fst`.
+`valid` (`Wire_ocaml.scanner_fields`). A function the emitter cuts out
+of the walk, so that merlint accepts the OCaml, is `[@inline always]`
+and applied to its parameters, which the call names alike: the F* writes
+its body in place, and the test reads it there, after checking that it
+reads no variable but its parameters and the definitions around it.
+Headers differ and are not compared beyond the parameter names:
+`[@inline always]` against none, and the F* parameter types, which F*
+checks.
 
 The test runs on every codec of the test corpora the F* rendering accepts:
-the proved ones, the headers of `bench/rust` and `examples/space`, the
-schemas of `test/ocaml`, the fuzzers' registry and the codecs the
-differential fuzzer samples; 70 today. Three mutants of the IPv4 OCaml (a
-literal, an operator, two labels swapped) must fail it.
+the proved ones, the packet stack of `examples/net`, the headers of
+`bench/rust` and `examples/space`, the schemas of `test/ocaml`, the
+fuzzers' registry and the codecs the differential fuzzer samples. Three
+mutants of the IPv4 OCaml (a literal, an operator, two labels swapped)
+must fail it.
 
 ## Scope
 
-The F* rendering covers records of a fixed layout: unsigned big-endian
-fields of up to 32 bits, bitfields of such words, byte arrays and their
+The F* rendering covers records of unsigned big-endian fields of up to 32
+bits, bitfields of such words, byte arrays of any size, nested codecs,
+optional codecs of a variable size (3D reads them as a casetype on their
+condition) and codecs in a region of a size the record gives, with their
 constraints. `Wire_ocaml.fstar` raises `Invalid_argument` for anything
-else: variable-size fields, sized regions, optional fields, the frame loop,
-the step and OxCaml scanners, the record module, and the Rust Wire_rust
-writes, which has a walk of its own and stays under `make fuzz-rust`.
+else: an optional codec of a fixed size, which 3D reads as a list of
+elements, signed and little-endian fields, checked arithmetic, a scanner
+that holds an output in a mutable local (more than four optional fields
+deep), the frame loop, the step and OxCaml scanners, the record module,
+and the Rust Wire_rust writes, which has a walk of its own and stays under
+`make fuzz-rust`.
 
 ## Opting a codec in
 
@@ -141,8 +158,11 @@ targets of `dune` and add a `prove.sh codec M` rule to the `prove` alias.
 `M.Proof`. The proved set is Tiny (two fields and a constraint), the
 Ethernet and IPv4 headers of `bench/rust/headers.ml` (shared 64-bit loads,
 bitfields, a constraint across two bitfields tested as one range of their
-word) and the CLCW of `examples/space` (fourteen bitfields of a 32-bit
-word).
+word), the CLCW of `examples/space` (fourteen bitfields of a 32-bit word),
+Span (a field read at a position a variable-size one gives), Gate (an
+optional codec), Dispatch (two on one tag, which the scanner tests as one
+tree) and Region (an optional codec in a region of at most a field's
+bytes).
 
 `IPv4Mutant` is the IPv4 scanner with `ihl` read with three bits instead
 of four: `prove.sh refused` requires its Scan and Flat to verify and its
@@ -171,3 +191,9 @@ them (`WireGen.Tables` 99 s, `WireGen.Vectors` 113 s) and IPv4's `Flat`,
 the costliest module, 269 s; from a full cache it takes 3.5 minutes, nearly
 all of it the mutant's `Proof` (about 180 s), which fails and so is checked
 again on every run. An F* process peaks at 740 MB.
+
+The CPU each module takes is steadier than its wall time on a loaded
+machine. Measured with EverParse v2026.10.27 on a Mac whose load stood
+between 200 and 470, so that wall time ran ten times the CPU: the
+`Proof` of each codec takes 9 to 13 s of CPU (Clcw 51 s, IPv4 44 s), its
+`Flat` 3 to 37 s (IPv4 181 s), its `Scan` under 1 s.

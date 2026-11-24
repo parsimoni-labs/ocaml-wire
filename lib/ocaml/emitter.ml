@@ -123,12 +123,13 @@ let values : num -> Decision.values = function
   | Boxed -> `Int64
   | Unboxed -> `Int64_u
 
-(* What an F* walk states of the code it writes, in bytes of the window:
+(* What an F* walk states of the code it writes, in bytes of the buffer:
    a binding and, when it reads bytes, the value it holds, or a fact a test
-   relies on. [known] is the bytes known to be in the window there. *)
+   relies on and the value it is about. Each value is written out down to
+   the positions it reads at. *)
 type note =
-  | Let of { var : string; rhs : string; holds : string option; known : int }
-  | Holds of { fact : string; known : int }
+  | Let of { var : string; value : string; holds : string option }
+  | Holds of { fact : string; about : string }
 
 (* The [n] bytes at [k] from [o], read big-endian, as F* states them. *)
 let window_bytes ~o ~k n =
@@ -183,6 +184,8 @@ type w = {
   raws : (string * (string * int)) list;
       (* A big-endian field as the variable holding its bytes read
          little-endian, and its width in bits. *)
+  defs : (string * string) list ref;
+      (* In an F* walk, the value of each binding in scope, written out. *)
   deferred : (string * (string * bool)) list ref;
       (* A field bound where code first reads it, its value and whether that
          loads from the buffer: a test of its raw bytes reads it in neither
@@ -248,9 +251,10 @@ let flush w =
 (* [f ()] with the deferred bindings as they are now, which the code it writes
    binds in a scope of its own; they are deferred again after it. *)
 let scoped w f =
-  let saved = !(w.deferred) in
+  let saved = !(w.deferred) and defs = !(w.defs) in
   let r = f () in
   w.deferred := saved;
+  w.defs := defs;
   r
 
 (* {2 Slots}
@@ -302,7 +306,14 @@ let output_value m (o : output) =
 let lit num n =
   match num with
   | Tagged -> int_lit n
-  | Fstar -> if n < 0 then Fmt.str "(%d)" n else string_of_int n
+  | Fstar ->
+      (* As [Tagged] writes it, a literal past 31 bits through [int64]. *)
+      let wide = String.starts_with ~prefix:"(Int64" (int_lit n) in
+      if wide && n < 0 then
+        fail_unsupported "the F* rendering of %d, a negative int64 literal" n
+      else if wide then Fmt.str "(P.to_int %d)" n
+      else if n < 0 then Fmt.str "(%d)" n
+      else string_of_int n
   | Boxed -> if n < 0 then Fmt.str "(%dL)" n else Fmt.str "%dL" n
   | Unboxed ->
       if n < 0 then Fmt.str "(-#%LdL)" (Int64.neg (Int64.of_int n))
@@ -802,10 +813,18 @@ let num_type w =
 let bind ?ty w v = { w with scope = (v, ty) :: w.scope }
 let bind_num w v = bind ?ty:(num_type w) w v
 
+(* [rhs] written out down to the positions it reads at. *)
+let written_out w rhs = substitute !(w.defs) rhs
+
 (* [let var = rhs in], noted with the value it [holds] in bytes. *)
 let write_let ?holds w var rhs =
   pf w "let %s = %s in@\n" var rhs;
-  w.m.note (Let { var; rhs; holds; known = w.known })
+  if w.m.num = Fstar then begin
+    let value = written_out w rhs in
+    let holds = Option.map (written_out w) holds in
+    w.defs := (var, value) :: !(w.defs);
+    w.m.note (Let { var; value; holds })
+  end
 
 (* The text of the value of [o]: its literal where it is settled. An integer
    output is only ever settled absent. *)
@@ -824,7 +843,9 @@ let output_text w (o : output) =
    arguments. Each is [[@inline always]], so the compiled walk is the one
    function it would be without the cuts. A cut is refused where the rest
    jumps to a join outside it, which must stay in the function that defines
-   it, and in a walk with slots, which a function would capture. *)
+   it, and in a walk with slots, which a function would capture. An F* walk
+   writes the body in place: F* checks a function on its own, without the
+   tests on the path to its call, which its loads and its arithmetic need. *)
 
 let max_depth = 4
 let max_decisions = 9
@@ -872,39 +893,12 @@ let function_name c label =
   in
   go 1
 
-(* The function [name] of an F* walk, whose body is [lines]: an [unfold let],
-   so that a proof sees one function, which takes its [params] in order. The
-   window it reads lies in the buffer, and holds the bytes known there. *)
-let fstar_cut w c ~name ~params lines =
-  let has v = List.mem_assoc v params in
-  let refine v =
-    match v with
-    | "stop" when has "buf" && has "base" ->
-        if w.known > 0 then
-          Fmt.str "{window buf base stop /\\ stop >= %d}" w.known
-        else "{window buf base stop}"
-    | "base" when has "buf" && not (has "stop") ->
-        Fmt.str "{0 <= base /\\ base + %d <= P.length buf}" w.known
-    | _ -> ""
-  in
-  let param (v, ty) =
-    match ty with
-    | Some t -> Fmt.str "(%s:%s%s)" v t (refine v)
-    | None -> fail_unsupported "the F* rendering of %s, which has no type" v
-  in
-  let formal, actual =
-    if params = [] then ("(_:unit)", "()")
-    else
-      ( String.concat " " (List.map param params),
-        String.concat " " (List.map fst params) )
-  in
-  Fmt.pf (Fmt.with_buffer c.defs) "unfold let %s (#r:Type) %s : r =\n%s\n\n%!"
-    name formal (String.concat "\n" lines);
-  pf w "%s %s@\n" name actual
-
-(* [body] written as the function [label], and a call of it in its place. *)
+(* [body] written as the function [label], and a call of it in its place;
+   in place in an F* walk. *)
 let cut w ~label body =
   match w.cuts with
+  | Some _ when can_cut w && w.m.num = Fstar ->
+      scoped w (fun () -> body { w with fn = { chars = 0; decisions = 0 } })
   | Some c when can_cut w ->
       let b = Buffer.create 4096 in
       let ppf = Format.formatter_of_buffer b in
@@ -926,22 +920,18 @@ let cut w ~label body =
       in
       let name = function_name c label in
       w.m.decide (Cut { name; window = w.limit; known = w.known });
-      if w.m.num = Fstar then fstar_cut w c ~name ~params lines
-      else begin
-        let param (v, ty) =
-          match ty with None -> "~" ^ v | Some t -> Fmt.str "~(%s : %s)" v t
-        in
-        let formal, actual =
-          if params = [] then ("()", "()")
-          else
-            ( String.concat " " (List.map param params),
-              String.concat " " (List.map (fun (v, _) -> "~" ^ v) params) )
-        in
-        Fmt.pf (Fmt.with_buffer c.defs)
-          "let[@inline always] %s %s%s =\n%s\n\n%!" name c.poly formal
-          (String.concat "\n" lines);
-        pf w "%s %s@\n" name actual
-      end
+      let param (v, ty) =
+        match ty with None -> "~" ^ v | Some t -> Fmt.str "~(%s : %s)" v t
+      in
+      let formal, actual =
+        if params = [] then ("()", "()")
+        else
+          ( String.concat " " (List.map param params),
+            String.concat " " (List.map (fun (v, _) -> "~" ^ v) params) )
+      in
+      Fmt.pf (Fmt.with_buffer c.defs) "let[@inline always] %s %s%s =\n%s\n\n%!"
+        name c.poly formal (String.concat "\n" lines);
+      pf w "%s %s@\n" name actual
   | _ -> body w
 
 (* The ranges and facts passed checks establish, for the code after them. *)
@@ -1270,8 +1260,8 @@ let range_check w bitwords f g (word, lo, hi) =
   pf w "if %s then %s else@\n" test (w.m.fail Bounds);
   let conditions = List.map (fun c -> c.cond) (f.checks @ g.checks) in
   if num = Fstar then begin
-    let fact = range_fact w bitwords [ f; g ] test conditions in
-    w.m.note (Holds { fact; known = w.known })
+    let fact = written_out w (range_fact w bitwords [ f; g ] test conditions) in
+    w.m.note (Holds { fact; about = written_out w word })
   end;
   refine { w with depth = w.depth + 1 } conditions
 
@@ -1909,6 +1899,7 @@ let initial ?cuts ?(scope = []) ~m ~ppf ~ranges ~base ~limit ~known () =
     views = [];
     words = [];
     raws = [];
+    defs = ref [];
     deferred = ref [];
     bounded = [];
     sums = [];

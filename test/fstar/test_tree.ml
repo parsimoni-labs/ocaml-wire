@@ -2,7 +2,8 @@
    [Wire_ocaml.fstar]) and the OCaml that runs ([Wire_ocaml.scanner]) are one
    tree up to the token table below. Both texts are read by the OCaml parser,
    since the bodies of the F* functions keep to the F* that is also OCaml,
-   into [tree], the OCaml side through the table; the trees must be equal. *)
+   into [tree], the OCaml side through the table, with in place each
+   function the OCaml cuts out of the walk; the trees must be equal. *)
 
 open Asttypes
 open Parsetree
@@ -53,6 +54,7 @@ type tree =
   | Int of string
   | App of tree * tree list
   | Let of string * tree * tree
+  | Fun of string * string list * tree * tree
   | If of tree * tree * tree option
 
 let rec pp ppf = function
@@ -60,6 +62,10 @@ let rec pp ppf = function
   | App (f, args) ->
       Fmt.pf ppf "@[<2>(%a@ %a)@]" pp f Fmt.(list ~sep:sp pp) args
   | Let (x, e, body) -> Fmt.pf ppf "@[<v>let %s = %a in@ %a@]" x pp e pp body
+  | Fun (f, params, e, body) ->
+      Fmt.pf ppf "@[<v>let %s %a = %a in@ %a@]" f
+        Fmt.(list ~sep:sp string)
+        params pp e pp body
   | If (c, a, None) -> Fmt.pf ppf "@[<2>if %a@ then %a@]" pp c pp a
   | If (c, a, Some b) ->
       Fmt.pf ppf "@[<v>@[<2>if %a@ then %a@]@ else %a@]" pp c pp a pp b
@@ -151,6 +157,13 @@ let rec spine e args =
   | Pexp_apply (f, more) -> spine f (more @ args)
   | _ -> (e, args)
 
+let rec param_name p =
+  match p.ppat_desc with
+  | Ppat_var { txt; _ } -> txt
+  | Ppat_construct ({ txt = Lident "()"; _ }, None) -> "()"
+  | Ppat_constraint (p, _) -> param_name p
+  | _ -> fail_outside "the parameter %a" Pprintast.pattern p
+
 let rec tree side e =
   if e.pexp_attributes <> [] then
     fail_outside "the attribute of %a" Pprintast.expression e;
@@ -177,6 +190,29 @@ let rec tree side e =
           {
             pvb_pat =
               { ppat_desc = Ppat_var { txt; _ }; ppat_attributes = []; _ };
+            pvb_expr =
+              { pexp_desc = Pexp_function (params, None, Pfunction_body e); _ };
+            pvb_constraint = None;
+            pvb_attributes;
+            _;
+          };
+        ],
+        body )
+    when List.for_all
+           (fun a -> side.ocaml && a.attr_name.txt = "local")
+           pvb_attributes ->
+      let param p =
+        match p.pparam_desc with
+        | Pparam_val (Nolabel, None, pat) -> param_name pat
+        | _ -> fail_outside "a parameter of the local function %s" txt
+      in
+      Fun (txt, List.map param params, tree side e, tree side body)
+  | Pexp_let
+      ( Nonrecursive,
+        [
+          {
+            pvb_pat =
+              { ppat_desc = Ppat_var { txt; _ }; ppat_attributes = []; _ };
             pvb_expr;
             pvb_constraint = None;
             pvb_attributes = [];
@@ -196,7 +232,7 @@ let rec tree side e =
 let children = function
   | Id _ | Int _ -> []
   | App (f, args) -> f :: args
-  | Let (_, e, body) -> [ e; body ]
+  | Let (_, e, body) | Fun (_, _, e, body) -> [ e; body ]
   | If (c, a, b) -> c :: a :: Option.to_list b
 
 let node = function
@@ -204,6 +240,7 @@ let node = function
   | Int x -> `Int x
   | App (_, args) -> `App (List.length args)
   | Let (x, _, _) -> `Let x
+  | Fun (f, params, _, _) -> `Fun (f, params)
   | If (_, _, b) -> `If (Option.is_some b)
 
 (* The smallest subtrees where [a] and [b] differ. *)
@@ -218,19 +255,11 @@ let rec difference a b =
     | Some (x, y) -> difference x y
     | None -> (a, b)
 
-let rec bindings acc = function
-  | Id _ | Int _ -> acc
-  | App (f, args) -> List.fold_left bindings (bindings acc f) args
-  | Let (x, e, body) -> bindings ((x, e) :: bindings acc e) body
-  | If (c, a, b) ->
-      let acc = bindings (bindings acc c) a in
-      Option.fold ~none:acc ~some:(bindings acc) b
-
 let rec names acc = function
   | Id x -> x :: acc
   | Int _ -> acc
   | App (f, args) -> List.fold_left names (names acc f) args
-  | Let (_, e, body) -> names (names acc e) body
+  | Let (_, e, body) | Fun (_, _, e, body) -> names (names acc e) body
   | If (c, a, b) ->
       let acc = names (names acc c) a in
       Option.fold ~none:acc ~some:(names acc) b
@@ -245,13 +274,6 @@ let parse_expression what text =
   try Parse.expression (Lexing.from_string (raw text))
   with (Syntaxerr.Error _ | Lexer.Error _) as e ->
     fail_outside "%s does not parse: %s" what (Printexc.to_string e)
-
-let rec param_name p =
-  match p.ppat_desc with
-  | Ppat_var { txt; _ } -> txt
-  | Ppat_construct ({ txt = Lident "()"; _ }, None) -> "()"
-  | Ppat_constraint (p, _) -> param_name p
-  | _ -> fail_outside "the parameter %a" Pprintast.pattern p
 
 (* The top-level definitions of the OCaml scanner, each read where [fold]
    reaches it: the others, the frame loop among them, are fail_outside the
@@ -354,17 +376,13 @@ let fstar_params header =
 
 (* The definitions of [<M>.Scan.fst]: each function, whose header ends in
    [: r =], and each constant [let x = e]. The module's other paragraphs
-   are its header, the window a cut reads and the type of [valid], which
-   the proof states. *)
+   are its header and the type of [valid], which the proof states. *)
 let fstar_defs side text =
   List.filter_map
     (fun lines ->
       let header = List.hd lines in
       let starts prefix = String.starts_with ~prefix header in
-      if
-        starts "module " || starts "(*" || starts "let window "
-        || starts "type valid_t "
-      then None
+      if starts "module " || starts "(*" || starts "type valid_t " then None
       else
         let rest =
           match
@@ -394,21 +412,6 @@ let fstar_defs side text =
               }
         | _ -> fail_outside "the F* definition %S" header)
     (paragraphs text)
-
-(* The bindings [let x = e in] that [<M>.Proof.fst] states facts under. *)
-let proof_lets text =
-  List.filter_map
-    (fun line ->
-      match suffix ~prefix:"  let " line with
-      | Some rest when String.ends_with ~suffix:" in" rest -> (
-          match String.index_opt rest '=' with
-          | Some k ->
-              let x = String.trim (String.sub rest 0 k) in
-              let e = String.sub rest (k + 1) (String.length rest - k - 4) in
-              Some (x, e)
-          | None -> None)
-      | _ -> None)
-    (String.split_on_char '\n' text)
 
 (* {1 The comparison} *)
 
@@ -456,14 +459,70 @@ let labels ~outputs defs calls =
           pp_labels got pp_labels want)
     calls
 
-(* Whether the OCaml scanner [ocaml] and the F* of its proof, [scan] and
-   [proof], are one tree; if not, where they differ. *)
-let agree ~outputs ~ocaml ~scan ~proof =
+(* The identifiers [t] reads that it does not bind. *)
+let rec free bound acc = function
+  | Id x -> if List.mem x bound then acc else x :: acc
+  | Int _ -> acc
+  | App (f, args) -> List.fold_left (free bound) (free bound acc f) args
+  | Let (x, e, body) -> free (x :: bound) (free bound acc e) body
+  | Fun (f, params, e, body) ->
+      free (f :: bound) (free (params @ bound) acc e) body
+  | If (c, a, b) ->
+      let acc = free bound (free bound acc c) a in
+      Option.fold ~none:acc ~some:(free bound acc) b
+
+(* A function of the OCaml that the F* writes in place: the cuts the
+   emitter makes so that merlint accepts the OCaml, each applied to its
+   parameters, which the emitter names alike at the call. Its body read
+   in place is the call, as it reads no variable but its parameters and
+   the definitions around it. *)
+let rec inline ~globals defs = function
+  | App (Id f, args) when List.mem_assoc f defs ->
+      let d = List.assoc f defs in
+      let params = List.map snd d.params in
+      if List.map (function Id x -> x | _ -> "") args <> params then
+        fail_outside "%s is applied to other than its parameters" f;
+      List.iter
+        (fun x ->
+          if not (List.mem x globals || String.contains x '.') then
+            fail_outside "%s reads %s, which is not a parameter" f x)
+        (free (params @ common) [] d.body);
+      inline ~globals defs d.body
+  | (Id _ | Int _) as t -> t
+  | App (f, args) ->
+      App (inline ~globals defs f, List.map (inline ~globals defs) args)
+  | Let (x, e, body) ->
+      Let (x, inline ~globals defs e, inline ~globals defs body)
+  | Fun (f, params, e, body) ->
+      Fun (f, params, inline ~globals defs e, inline ~globals defs body)
+  | If (c, a, b) ->
+      If
+        ( inline ~globals defs c,
+          inline ~globals defs a,
+          Option.map (inline ~globals defs) b )
+
+(* Whether the OCaml scanner [ocaml] and the F* of its proof, [scan], are
+   one tree; if not, where they differ. *)
+let agree ~outputs ~ocaml ~scan =
   match
     let o = { ocaml = true; calls = ref [] } in
     let f = { ocaml = false; calls = ref [] } in
-    let odefs = reachable (ocaml_defs o ocaml) in
+    let all = reachable (ocaml_defs o ocaml) in
     let fdefs = fstar_defs f scan in
+    let defined d = List.exists (fun e -> e.name = d.name) fdefs in
+    let placed =
+      List.filter_map
+        (fun d -> if defined d then None else Some (d.name, d))
+        all
+    in
+    let globals = List.map (fun d -> d.name) all in
+    let odefs =
+      List.filter_map
+        (fun d ->
+          if defined d then Some { d with body = inline ~globals placed d.body }
+          else None)
+        all
+    in
     expect "the definitions"
       Fmt.(Dump.list string)
       (List.map (fun d -> d.name) odefs)
@@ -476,22 +535,7 @@ let agree ~outputs ~ocaml ~scan ~proof =
           (List.map snd od.params) (List.map snd fd.params);
         same od.name od.body fd.body)
       odefs fdefs;
-    labels ~outputs odefs !(o.calls);
-    let scanned = List.concat_map (fun d -> bindings [] d.body) fdefs in
-    List.iter
-      (fun (x, e) ->
-        let e = tree f (parse_expression x e) in
-        match List.filter (fun (y, _) -> x = y) scanned with
-        | [] -> fail_outside "the fact's binding %s, which the scanner lacks" x
-        | bound ->
-            List.iter
-              (fun (_, rhs) ->
-                if rhs <> e then
-                  let rhs, e = difference rhs e in
-                  fail_outside "the binding %s: Scan has %a, Proof %a" x pp rhs
-                    pp e)
-              bound)
-      (proof_lets proof)
+    labels ~outputs all !(o.calls)
   with
   | () -> Ok ()
   | exception Outside why -> Error why
@@ -503,6 +547,7 @@ type codec = Codec : string * 'a Wire.Codec.t -> codec
 let corpus =
   List.map (fun (Proved.Codec (n, c)) -> Codec (n, c)) Proved.all
   @ [
+      Codec ("Packet_stack.codec", Packet_stack.codec);
       Codec ("Headers.tcp", Headers.tcp);
       Codec ("Headers.udp", Headers.udp);
       Codec ("Space.packet", Space.packet_codec);
@@ -543,16 +588,13 @@ let texts c =
   match Wire_ocaml.fstar ~codec:"M" c with
   | exception Invalid_argument _ -> None
   | files ->
-      Some
-        ( Wire_ocaml.scanner ~codec:"M" c,
-          List.assoc "M.Scan.fst" files,
-          List.assoc "M.Proof.fst" files )
+      Some (Wire_ocaml.scanner ~codec:"M" c, List.assoc "M.Scan.fst" files)
 
 let outputs c = List.map fst (Wire_ocaml.scanner_fields c)
 
 (* The codecs of the corpus the F* flavour accepts today: a change that
    makes it refuse some shows here. *)
-let at_least = 70
+let at_least = 88
 
 let test_corpus () =
   let compared =
@@ -560,8 +602,8 @@ let test_corpus () =
       (fun n (Codec (name, c)) ->
         match texts c with
         | None -> n
-        | Some (ocaml, scan, proof) -> (
-            match agree ~outputs:(outputs c) ~ocaml ~scan ~proof with
+        | Some (ocaml, scan) -> (
+            match agree ~outputs:(outputs c) ~ocaml ~scan with
             | Ok _ -> n + 1
             | Error why -> Alcotest.failf "%s: %s" name why))
       0 corpus
@@ -574,15 +616,15 @@ let test_corpus () =
 let mutant ~from ~into () =
   match texts Headers.ipv4 with
   | None -> Alcotest.fail "the F* flavour refuses IPv4"
-  | Some (ocaml, scan, proof) -> (
+  | Some (ocaml, scan) -> (
       if not (contains ocaml from) then
         Alcotest.failf "no %S in the IPv4 scanner" from;
       let outputs = outputs Headers.ipv4 in
-      (match agree ~outputs ~ocaml ~scan ~proof with
+      (match agree ~outputs ~ocaml ~scan with
       | Ok () -> ()
       | Error why -> Alcotest.failf "IPv4: %s" why);
       let ocaml = replace ~from ~into ocaml in
-      match agree ~outputs ~ocaml ~scan ~proof with
+      match agree ~outputs ~ocaml ~scan with
       | Ok () -> Alcotest.failf "%S as %S: the trees still agree" from into
       | Error why -> Fmt.pr "%S as %S: %s@." from into why)
 
