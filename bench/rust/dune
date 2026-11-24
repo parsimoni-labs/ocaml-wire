@@ -55,6 +55,27 @@
  (action
   (run ./gen.exe --oxcaml)))
 
+;; The integers Flow_sum computes the flow key on: int64 on OxCaml, which keeps
+;; it unboxed as Rust keeps its u64, and int on OCaml, where an int64 handed
+;; to a call is boxed.
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   flow_int.ml
+   (echo "include Int64\n"))))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   flow_int.ml
+   (echo
+    "include Int\nexternal of_int : int -> int = \"%identity\"\nexternal to_int : int -> int = \"%identity\"\n"))))
+
 ;; flow_rows.ml over the sinks Flow_sum and Flow_keys, as copies in which
 ;; Flow_table stands for the sink: OCaml without flambda calls the sink of a
 ;; functor through a closure, a copy calls it directly.
@@ -128,6 +149,7 @@
   stack_read
   selected_read
   flow_table
+  flow_int
   flow_sum
   flow_keys
   flow_rows

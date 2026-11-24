@@ -844,16 +844,30 @@ The header benchmark's OxCaml scanner rows fall by 1.2 to 4.2 instructions
 per packet on every corpus (`selected outputs, batch` from 65.6 to 63.7 on
 `fixed64-random`, where `pnet_packet` takes 113.8).
 
-Most of what the OxCaml parse spends beyond `pnet_packet` is in the consumer
-and the compiler rather than the scanner. `Flow_parse` turns each `int64`
-the scanner hands it into an `int` and computes the key tagged: about half
-of the 24 instructions of an IPv4 TCP key tag its values, build the tag's
-constant 1 and the key's constant part again for each key, or keep in a
-register a mask applied before tagging. A consumer that computes the key on
-the `int64` values, as `Sum` does on `u64`, parses in 73.1. The loop over
-the index adds the address computation of each tagged index (2 per frame)
-and the untagging of the offset and the length (2), and the IPv6 key folds 8
-words one by one where LLVM folds them as vectors.
+On OxCaml the key is now computed on `int64`, as `Sum` in Rust computes it
+on `u64`: `Flow_sum` folds it so, and the scanner's consumer `Flow_parse`
+hands it the `int64` values the scanner gives, which stay unboxed. On OCaml
+and OCaml flambda it stays an `int`, the type a user of those compilers
+folds it in, because an `int64` handed to a call is boxed there (`Flow_int`,
+written by `bench/rust/dune`, names the type for each compiler). An IPv4 TCP
+key then takes 17 instructions on OxCaml instead of 24: no tag on each
+value, no constant 1 built for each tag; the code of the other compilers is
+unchanged. Counted three times at a load average between 300 and 450, before
+and after:
+
+| Row on `mawi`, parse only | OCaml | OCaml flambda | OxCaml |
+| --- | ---: | ---: | ---: |
+| scanner | 299.9 to 299.4 | 144.8 to 144.5 | 82.0 to 73.3 |
+| `View` | 223.5 to 222.9 | 249.6 to 250.5 | 200.2 to 198.3 |
+
+The rows with the table do not fold the key. `pnet_packet` takes 66.9 on the
+parse and 108.3 with the table, the Rust scanner 69.2 and 113.5.
+
+What the OxCaml parse still spends beyond `pnet_packet` is mostly the
+compiler's: the key's constant part is built again for each key, the loop
+over the index computes the address of each tagged index (2 per frame) and
+untags the offset and the length (2), and the IPv6 key folds 8 words one by
+one where LLVM folds them as vectors.
 
 `Wire.Codec` spends 8236.7 instructions and 1776.7 cycles per packet on the
 parse on OxCaml. macOS `sample`, 10 s of the parse row (7514 samples), puts
