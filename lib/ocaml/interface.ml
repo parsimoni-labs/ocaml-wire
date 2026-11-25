@@ -694,12 +694,15 @@ let pp_digest target ppf =
 (* The members of a fixed record: its size, values, record, checks,
    decoders, writes, reads and views, on [bytes] and on a bigarray. *)
 let pp_record ?(views = false) ?(buffer = `Bytes) ppf r =
-  pp_val r.target ppf "size" "int"
-    (Fmt.str "[size] is the size of a record in bytes, [%d]." r.size);
-  pp_val r.target ppf "min_size" "int" "[min_size] is {!val-size}.";
+  pp_val r.target ppf "min_size" "int"
+    (Fmt.str "[min_size] is the size of a record in bytes, [%d]." r.size);
   pp_values ppf r;
   let record = Option.is_none r.make in
-  if record then pp_record_type ppf r;
+  if record then begin
+    pp_record_type ppf r;
+    pp_val r.target ppf "size" "t -> int"
+      (Fmt.str "[size r] is {!min_size}: every record takes %d bytes." r.size)
+  end;
   match buffer with
   | `Bigstring -> pp_buffer ppf r (bigstring_buf r.target)
   | `Bytes -> (

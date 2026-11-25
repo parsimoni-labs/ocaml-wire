@@ -28,11 +28,8 @@ val digest : string
 (** [digest] is the digest of the shape of the codec this module was generated
     from. *)
 
-val size : int
-(** [size] is the size of a record in bytes, [4]. *)
-
 val min_size : int
-(** [min_size] is {!val-size}. *)
+(** [min_size] is the size of a record in bytes, [4]. *)
 
 (** {1:values Field values} *)
 
@@ -224,6 +221,9 @@ val v :
 
 val pp : Format.formatter -> t -> unit
 (** [pp ppf r] prints an unspecified representation of [r] on [ppf]. *)
+
+val size : t -> int
+(** [size r] is {!min_size}: every record takes 4 bytes. *)
 
 (** {1:checks Validating and decoding} *)
 

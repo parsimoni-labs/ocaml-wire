@@ -6,7 +6,7 @@
    does. Writes of constant fields build
    their carriers once, outside the loop; a write whose values are computed in
    the loop goes through [write_int_at]. A record's size is the generated
-   module's constant and a gateway packet [P.size + 64] bytes
+   module's [min_size] and a gateway packet [P.min_size + 64] bytes
    ([Gateway_workload.pkt_size]), as the Rust rows' [PKT_SIZE] is, so the
    compiler folds both. *)
 
@@ -18,7 +18,7 @@ module C = G_clcw
 let routing buf n =
   let (Buf.Any b) = Buf.v buf in
   let len = Buf.length b in
-  let hdr = P.size in
+  let hdr = P.min_size in
   let total = Bytes.length buf in
   let counts = Array.make 4 0 in
   let off = ref 0 and i = ref 0 in
@@ -47,7 +47,7 @@ let gateway buf =
   let open Gateway_workload in
   let (Buf.Any b) = Buf.v buf in
   let len = Buf.length b in
-  let hdr = F.size and pkt_size = P.size + 64 in
+  let hdr = F.min_size and pkt_size = P.min_size + 64 in
   let data_field_size = cadu_size - hdr in
   let frames = Bytes.length buf / cadu_size in
   let checksum = ref checksum_init in
@@ -78,7 +78,7 @@ let restamp buf n out =
   let len = Buf.length b in
   let (Buf.Any o) = Buf.v out in
   let olen = Buf.length o in
-  let hdr = P.size in
+  let hdr = P.min_size in
   let total = Bytes.length buf in
   let version = P.Value.version 0 and type_ = P.Value.type_ 0 in
   let sechdr = P.Value.sechdrflag 1 and seqflags = P.Value.seqflags 3 in
@@ -108,16 +108,16 @@ let restamp buf n out =
 
 let frame n out =
   let open Gateway_workload in
-  let pkt_size = P.size + 64 in
+  let pkt_size = P.min_size + 64 in
   let (Buf.Any o) = Buf.v out in
   let olen = Buf.length o in
-  let hdr = F.size in
+  let hdr = F.min_size in
   let data_field_size = cadu_size - hdr in
   (* The fields every packet header shares are carriers built once, so each
      header is [write_at], which tests no range. *)
   let version = P.Value.version 0 and type_ = P.Value.type_ 0 in
   let sechdr = P.Value.sechdrflag 1 and seqflags = P.Value.seqflags 3 in
-  let dlen = Wire_runtime.UInt16.v (pkt_size - P.size - 1) in
+  let dlen = Wire_runtime.UInt16.v (pkt_size - P.min_size - 1) in
   let carry = ref 0 and p = ref 0 in
   for f = 0 to n - 1 do
     let base = f * cadu_size in
@@ -142,7 +142,7 @@ let report n out =
   let (Buf.Any o) = Buf.v out in
   let olen = Buf.length o in
   for i = 0 to n - 1 do
-    C.write_int_at o olen (i * C.size) ~controlwordtype:0 ~clcwversion:0
+    C.write_int_at o olen (i * C.min_size) ~controlwordtype:0 ~clcwversion:0
       ~statusfield:0 ~copineffect:1 ~vcid:7 ~spare:0 ~norf:0 ~nobitlock:0
       ~lockout:(((i land 0xFFF) + 1) lsr 12)
       ~wait:(((i land 0x3F) + 1) lsr 6)
@@ -154,10 +154,10 @@ let report n out =
 let clcw buf =
   let (Buf.Any b) = Buf.v buf in
   let len = Buf.length b in
-  let words = Bytes.length buf / C.size in
+  let words = Bytes.length buf / C.min_size in
   let anomalies = ref 0 and expected = ref 0 and i = ref 0 in
   while !i < words do
-    let c = C.check b len (!i * C.size) in
+    let c = C.check b len (!i * C.min_size) in
     if C.ok c then begin
       let w = C.view_lockout_word b (C.get c) in
       let report = C.reportvalue_of_word w in

@@ -977,3 +977,5 @@ let[@inline] view_spare2_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
 let[@inline] view_reportvalue_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
   Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let size (_ : t) = min_size

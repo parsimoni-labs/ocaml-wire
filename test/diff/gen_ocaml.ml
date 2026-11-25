@@ -132,7 +132,7 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     "{@\n\
     \      Diff_ocaml.decode =@\n\
     \        (fun b o ->@\n\
-    \          let out = Diff_ocaml.big (Bytes.create %s.size) in@\n\
+    \          let out = Diff_ocaml.big (Bytes.create %s.min_size) in@\n\
     \          %s.encode (%s.decode_exn (%s) o) out 0;@\n\
     \          Diff_ocaml.string_of_big out);@\n\
     \      validate = (fun b o -> %s.validate_exn (%s) o);@\n\
@@ -189,7 +189,7 @@ let pp_ops_views ppf fields =
     "{@\n\
     \      Diff_ocaml.decode =@\n\
     \        (fun b o ->@\n\
-    \          let out = Bytes.create M.size in@\n\
+    \          let out = Bytes.create M.min_size in@\n\
     \          M.encode (M.decode_exn b o) out 0;@\n\
     \          Bytes.to_string out);@\n\
     \      validate = (fun b o -> M.validate_exn b o);@\n\

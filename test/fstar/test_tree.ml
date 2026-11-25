@@ -214,6 +214,7 @@ let rec spine e args =
 let rec param_name p =
   match p.ppat_desc with
   | Ppat_var { txt; _ } -> txt
+  | Ppat_any -> "_"
   | Ppat_construct ({ txt = Lident "()"; _ }, None) -> "()"
   | Ppat_constraint (p, _) -> param_name p
   | _ -> fail_outside "the parameter %a" Pprintast.pattern p

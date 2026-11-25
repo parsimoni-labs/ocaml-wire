@@ -6,11 +6,11 @@ open Expect
    [Expect], shared with OCaml, cannot state: each is passed eta-expanded. *)
 
 let checked () =
-  round_trip "checked" ~size:S_checked.size
+  round_trip "checked" ~size:S_checked.min_size
     ~decode:(fun b o -> S_checked.decode_exn b o)
     ~encode:(fun t b o -> S_checked.encode t b o)
     [ 0x45; 0; 20; 64; 6 ];
-  big_round_trip "checked" ~size:S_checked_big.size
+  big_round_trip "checked" ~size:S_checked_big.min_size
     ~decode:(fun b o -> S_checked_big.decode_exn b o)
     ~encode:(fun t b o -> S_checked_big.encode t b o)
     [ 0x45; 0; 20; 64; 6 ];
@@ -32,13 +32,13 @@ let checked () =
         ((S_checked.proto b v :> int) = 17 && S_checked.ihl b v = 5)
 
 let eth () =
-  round_trip "eth" ~size:S_eth.size
+  round_trip "eth" ~size:S_eth.min_size
     ~decode:(fun b o -> S_eth.decode_exn b o)
     ~encode:(fun t b o -> S_eth.encode t b o)
     (List.init 14 (fun i -> i * 17))
 
 let signed () =
-  round_trip "signed" ~size:S_signed.size
+  round_trip "signed" ~size:S_signed.min_size
     ~decode:(fun b o -> S_signed.decode_exn b o)
     ~encode:(fun t b o -> S_signed.encode t b o)
     [ 0xfe; 0x80; 0 ];
@@ -47,7 +47,7 @@ let signed () =
     (fun () -> S_signed.validate_exn (bytes_of [ 0xfa; 0; 0 ]) 0)
 
 let refined () =
-  round_trip "refined" ~size:S_refined.size
+  round_trip "refined" ~size:S_refined.min_size
     ~decode:(fun b o -> S_refined.decode_exn b o)
     ~encode:(fun t b o -> S_refined.encode t b o)
     [ 0x13; 2; 20 ];

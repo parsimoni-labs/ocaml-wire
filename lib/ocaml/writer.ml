@@ -263,6 +263,13 @@ let accessor t =
 
 let body ?decide t =
   let accessor = accessor t in
+  (* A record's [size] is a function of the record, as for any shape, bound
+     last: the module's own code reads the constant. *)
+  let size =
+    match (t.record, t.make) with
+    | Some _, None -> "let size (_ : t) = min_size\n"
+    | _ -> ""
+  in
   let record, after =
     match t.record with
     | None -> ("", "")
@@ -313,7 +320,7 @@ let body ?decide t =
         in
         (walk, Scan_module.without_dead_bindings views, mask32)
   in
-  (walk ^ record, views ^ after, views_mask32)
+  (walk ^ record, views ^ after ^ size, views_mask32)
 
 let ml ?decide t =
   let code, views, _ = body ?decide t in
