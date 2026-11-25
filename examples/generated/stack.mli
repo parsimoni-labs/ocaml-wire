@@ -191,6 +191,66 @@ module Stack_tcp : sig
 
   val urgent : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [urgent b v] is the field [urgent] of the record [v]. *)
+
+  val set_src_port :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_src_port b v x] writes [x] in place as the field {!val-src_port}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. *)
+
+  val set_dst_port :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_dst_port b v x] writes [x] in place as the field {!val-dst_port}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. *)
+
+  val set_seq :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t -> unit
+  (** [set_seq b v x] writes [x] in place as the field {!val-seq} reads in the
+      record [v]. It checks none of the record's constraints: check the record
+      again after a batch of writes. *)
+
+  val set_ack :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t -> unit
+  (** [set_ack b v x] writes [x] in place as the field {!val-ack} reads in the
+      record [v]. It checks none of the record's constraints: check the record
+      again after a batch of writes. *)
+
+  val set_data_offset : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_data_offset b v x] writes [x] in place as the field
+      {!val-data_offset} reads in the record [v]. It checks none of the record's
+      constraints: check the record again after a batch of writes. Raises
+      [Invalid_argument] if [x] does not fit in 4 bits. *)
+
+  val set_reserved : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_reserved b v x] writes [x] in place as the field {!val-reserved}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. Raises [Invalid_argument] if [x]
+      does not fit in 3 bits. *)
+
+  val set_flags : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_flags b v x] writes [x] in place as the field {!val-flags} reads in
+      the record [v]. It checks none of the record's constraints: check the
+      record again after a batch of writes. Raises [Invalid_argument] if [x]
+      does not fit in 9 bits. *)
+
+  val set_window :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_window b v x] writes [x] in place as the field {!val-window} reads in
+      the record [v]. It checks none of the record's constraints: check the
+      record again after a batch of writes. *)
+
+  val set_checksum :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_checksum b v x] writes [x] in place as the field {!val-checksum}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. *)
+
+  val set_urgent :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_urgent b v x] writes [x] in place as the field {!val-urgent} reads in
+      the record [v]. It checks none of the record's constraints: check the
+      record again after a batch of writes. *)
 end
 
 (** The views of the records of [StackUDP]. *)
@@ -222,6 +282,30 @@ module Stack_udp : sig
 
   val checksum : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [checksum b v] is the field [checksum] of the record [v]. *)
+
+  val set_src_port :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_src_port b v x] writes [x] in place as the field {!val-src_port}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. *)
+
+  val set_dst_port :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_dst_port b v x] writes [x] in place as the field {!val-dst_port}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. *)
+
+  val set_length :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_length b v x] writes [x] in place as the field {!val-length} reads in
+      the record [v]. It checks none of the record's constraints: check the
+      record again after a batch of writes. *)
+
+  val set_checksum :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_checksum b v x] writes [x] in place as the field {!val-checksum}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. *)
 end
 
 (** The views of the records of [StackIPv4]. *)
@@ -307,6 +391,83 @@ module Stack_ipv4 : sig
   (** [opaque_present b v] is [true] iff the optional field it names is present
       in the record [v]. If bytes of [b] written since the check move it out of
       [b], raises [Wire_runtime.Errors.Parse_error]. *)
+
+  val set_version : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_version b v x] writes [x] in place as the field {!val-version} reads
+      in the record [v]. It checks none of the record's constraints: check the
+      record again after a batch of writes. Raises [Invalid_argument] if [x]
+      does not fit in 4 bits. *)
+
+  val set_ihl : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_ihl b v x] writes [x] in place as the field {!val-ihl} reads in the
+      record [v]. It checks none of the record's constraints: check the record
+      again after a batch of writes. Raises [Invalid_argument] if [x] does not
+      fit in 4 bits. *)
+
+  val set_dscp : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_dscp b v x] writes [x] in place as the field {!val-dscp} reads in the
+      record [v]. It checks none of the record's constraints: check the record
+      again after a batch of writes. Raises [Invalid_argument] if [x] does not
+      fit in 6 bits. *)
+
+  val set_ecn : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_ecn b v x] writes [x] in place as the field {!val-ecn} reads in the
+      record [v]. It checks none of the record's constraints: check the record
+      again after a batch of writes. Raises [Invalid_argument] if [x] does not
+      fit in 2 bits. *)
+
+  val set_total_length :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_total_length b v x] writes [x] in place as the field
+      {!val-total_length} reads in the record [v]. It checks none of the
+      record's constraints: check the record again after a batch of writes. *)
+
+  val set_identification :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_identification b v x] writes [x] in place as the field
+      {!val-identification} reads in the record [v]. It checks none of the
+      record's constraints: check the record again after a batch of writes. *)
+
+  val set_flags : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_flags b v x] writes [x] in place as the field {!val-flags} reads in
+      the record [v]. It checks none of the record's constraints: check the
+      record again after a batch of writes. Raises [Invalid_argument] if [x]
+      does not fit in 3 bits. *)
+
+  val set_fragment_offset : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+  (** [set_fragment_offset b v x] writes [x] in place as the field
+      {!val-fragment_offset} reads in the record [v]. It checks none of the
+      record's constraints: check the record again after a batch of writes.
+      Raises [Invalid_argument] if [x] does not fit in 13 bits. *)
+
+  val set_ttl : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt8.t -> unit
+  (** [set_ttl b v x] writes [x] in place as the field {!val-ttl} reads in the
+      record [v]. It checks none of the record's constraints: check the record
+      again after a batch of writes. *)
+
+  val set_protocol :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt8.t -> unit
+  (** [set_protocol b v x] writes [x] in place as the field {!val-protocol}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. *)
+
+  val set_checksum :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+  (** [set_checksum b v x] writes [x] in place as the field {!val-checksum}
+      reads in the record [v]. It checks none of the record's constraints: check
+      the record again after a batch of writes. *)
+
+  val set_src :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t -> unit
+  (** [set_src b v x] writes [x] in place as the field {!val-src} reads in the
+      record [v]. It checks none of the record's constraints: check the record
+      again after a batch of writes. *)
+
+  val set_dst :
+    'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t -> unit
+  (** [set_dst b v x] writes [x] in place as the field {!val-dst} reads in the
+      record [v]. It checks none of the record's constraints: check the record
+      again after a batch of writes. *)
 end
 
 type 'b view = private int
@@ -347,3 +508,9 @@ val ipv4 :
     fixed bytes lie in [b]. The check of [v] made the record's checks and none
     runs again: if bytes of [b] were written since, a read may return a value
     they break, never a byte outside [b]. *)
+
+val set_ether_type :
+  'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
+(** [set_ether_type b v x] writes [x] in place as the field {!val-ether_type}
+    reads in the record [v]. It checks none of the record's constraints: check
+    the record again after a batch of writes. *)

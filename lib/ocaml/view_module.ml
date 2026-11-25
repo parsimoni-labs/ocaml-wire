@@ -172,6 +172,13 @@ let record_of ~reserved ~id ~codec_name ~module_name ~fixed_size s =
     @ if module_name = None then reserved @ root_names else sub_names
   in
   let members = List.map (escape reserved) (members_of subs plan.nodes) in
+  (* A setter is named after its accessor: [set_x] for [x]. *)
+  let names = List.map member_name members in
+  List.iter
+    (fun n ->
+      if List.mem ("set_" ^ n) names then
+        fail_unsupported "the fields %s and set_%s both define set_%s" n n n)
+    names;
   {
     id;
     codec_name;
@@ -850,11 +857,82 @@ let pp_ok_get ppf ~name =
    that reads it. *)
 let read_names = [ "mask32"; "not" ]
 
+(* {2 Writing a field in place} *)
+
+(* The fields of [r] a setter writes: an integer or a bitfield at a constant
+   offset inside the bytes a view of [r] holds. *)
+let settable (r : record) =
+  List.filter_map
+    (function
+      | Scalar { name; field = f } when direct r f -> (
+          match f.store with
+          | Int _ | Bits _ -> Some (name, f)
+          | Bytes _ -> None)
+      | _ -> None)
+    r.members
+
+let setter_name name = "set_" ^ name
+
+(* [set_<f> b v x] stores [x] as the field [f] of the record [v], in place:
+   one store for an integer, a load and a store of its word for a bitfield,
+   which keeps the word's other bits. A bitfield's [int] is tested against
+   its width first; any other carrier holds its range by construction. *)
+let setter ppf (name, (f : field)) =
+  let u = "Wire_runtime.Unchecked" in
+  let at = Fmt.str "(v + %d)" f.offset in
+  let sfx e = endian_suffix e in
+  Fmt.pf ppf
+    "let[@inline] %s (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =@\n\
+     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n"
+    (setter_name name);
+  match f.store with
+  | Int { width = 8; _ } ->
+      Fmt.pf ppf "%s.set_u8 buf %s ((x : %s :> int) land 0xff)@\n@\n" u at
+        (carrier_type f)
+  | Int { width = 16; endian; _ } ->
+      Fmt.pf ppf "%s.set_u16%s buf %s ((x : %s :> int) land 0xffff)@\n@\n" u
+        (sfx endian) at (carrier_type f)
+  | Int { endian; _ } ->
+      Fmt.pf ppf "%s.set_i32%s buf %s (%s.to_int32 x)@\n@\n" u (sfx endian) at
+        (fst (Option.get (carrier f)))
+  | Bits { base; shift; width } -> (
+      Fmt.pf ppf
+        "if x lsr %d <> 0 then@\n\
+         invalid_arg \"%s: the value does not fit in %d bits\";@\n"
+        width (setter_name name) width;
+      let mask = mask width in
+      match base with
+      | T.U8 ->
+          Fmt.pf ppf
+            "let w = %s.u8 buf %s in@\n\
+             %s.set_u8 buf %s (w land lnot (%s lsl %d) lor (x lsl %d))@\n\
+             @\n"
+            u at u at mask shift shift
+      | T.U16 e ->
+          Fmt.pf ppf
+            "let w = %s.u16%s buf %s in@\n\
+             %s.set_u16%s buf %s@\n\
+             (w land lnot (%s lsl %d) lor (x lsl %d) land 0xffff)@\n\
+             @\n"
+            u (sfx e) at u (sfx e) at mask shift shift
+      | T.U32 e ->
+          Fmt.pf ppf
+            "let w = %s.i32%s buf %s in@\n\
+             %s.set_i32%s buf %s@\n\
+             (Int32.logor@\n\
+             (Int32.logand w (Int32.lognot (Int32.shift_left (Int32.of_int %s) \
+             %d)))@\n\
+             (Int32.shift_left (Int32.of_int x) %d))@\n\
+             @\n"
+            u (sfx e) at u (sfx e) at mask shift shift)
+  | Bytes _ -> ()
+
 let pp_members ppf ~target ~t ~ends (r : record) =
   let late, early =
     List.partition (fun m -> List.mem (member_name m) read_names) r.members
   in
-  List.iter (accessor ppf ~target ~t ~ends r) (early @ late)
+  List.iter (accessor ppf ~target ~t ~ends r) (early @ late);
+  List.iter (setter ppf) (settable r)
 
 (* The modules of the sub-records, then the root's members; the root's
    [check] is the scanner's. The writer binds [Int32_u] and [Int64_u] where
@@ -962,6 +1040,21 @@ let pp_member_val ~target ~t ppf (r : record) = function
             read may return a value they break, never a byte outside [b]."
            name name m)
 
+let pp_setter_val ~target ppf (name, (f : field)) =
+  pp_val ~target ppf (setter_name name)
+    (String.concat " -> "
+       [ "'b Wire_runtime.Buf.t"; "'b view"; carrier_type f; "unit" ])
+    (Fmt.str
+       "[%s b v x] writes [x] in place as the field {!val-%s} reads in the \
+        record [v]. It checks none of the record's constraints: check the \
+        record again after a batch of writes.%s"
+       (setter_name name) name
+       (match f.store with
+       | Bits { width; _ } ->
+           Fmt.str " Raises [Invalid_argument] if [x] does not fit in %s."
+             (if width = 1 then "1 bit" else Fmt.str "%d bits" width)
+       | Int _ | Bytes _ -> ""))
+
 let mli ppf ~target t =
   Fmt.pf ppf "(** {1:views Views} *)@\n@\n";
   List.iter
@@ -971,6 +1064,7 @@ let mli ppf ~target t =
       pp_types ppf ~codec:r.codec_name;
       pp_ok_get_val ~target ppf;
       List.iter (pp_member_val ~target ~t ppf r) r.members;
+      List.iter (pp_setter_val ~target ppf) (settable r);
       Fmt.pf ppf "end@\n@\n")
     t.records;
   pp_types ppf ~codec:t.root.codec_name;
@@ -982,7 +1076,8 @@ let mli ppf ~target t =
      [length]. It never raises: bad bounds or a bad record give an answer \
      {!ok} refuses.";
   pp_ok_get_val ~target ppf;
-  List.iter (pp_member_val ~target ~t ppf t.root) t.root.members
+  List.iter (pp_member_val ~target ~t ppf t.root) t.root.members;
+  List.iter (pp_setter_val ~target ppf) (settable t.root)
 
 let of_codec ?(reserved = []) c = v ~reserved (Gen.to_struct c)
 

@@ -1323,10 +1323,10 @@ let nested_budget target n =
 
 (* The scanner's text before its views, and its views, which start with the
    type of a view. A level of [gated] or [nested] costs the views a module
-   of some 55 lines and 370 words, on either target: its types, [ok], [get],
+   of some 62 lines and 440 words, on either target: its types, [ok], [get],
    an accessor per field, each of which tests the presence again and places
-   the field after the optional one, and the function that finds where the
-   record ends. *)
+   the field after the optional one, a setter per field at a constant offset,
+   and the function that finds where the record ends. *)
 let scan_and_views src =
   let marker = "type 'b view = int" in
   let n = String.length marker in
@@ -1338,7 +1338,7 @@ let scan_and_views src =
   let i = find 0 in
   (String.sub src 0 i, String.sub src i (String.length src - i))
 
-let views_budget n = ((60 * n) + 40, (400 * n) + 300)
+let views_budget n = ((65 * n) + 40, (460 * n) + 300)
 
 let test_size () =
   List.iter

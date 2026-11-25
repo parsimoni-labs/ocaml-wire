@@ -44,7 +44,7 @@ let test_views () =
   in
   let ip = Option.get p.ipv4 and tcp = Option.get (Option.get p.ipv4).tcp in
   match Buf.v frame with
-  | Buf.Any b ->
+  | Buf.Any b -> (
       let len = Buf.length b in
       let c = C.check b len ~off:0 ~len:54 in
       Alcotest.(check bool) "accepted" true (C.ok c);
@@ -82,7 +82,26 @@ let test_views () =
         (C.ok (C.check b len ~off:1 ~len:54));
       Alcotest.check_raises "get of a failed check"
         (Invalid_argument "CapturedStack.get: the check failed") (fun () ->
-          ignore (C.get (C.check b len ~off:(-1) ~len:54)))
+          ignore (C.get (C.check b len ~off:(-1) ~len:54)));
+      (* A setter of a nested record writes it in place, as the codec reads
+         it back, and the bitfields beside it keep their bits. *)
+      let t = C.Stack_tcp.get (C.Captured_ipv4.tcp b len i) in
+      C.Stack_tcp.set_src_port b t (UInt16.v 4321);
+      C.Stack_tcp.set_reserved b t 5;
+      C.Captured_ipv4.set_ttl b i (UInt8.v 9);
+      match Codec.decode Packet_stack.capture frame 0 with
+      | Error e -> Alcotest.failf "after the writes: %a" pp_parse_error e
+      | Ok p' ->
+          let ip' = Option.get p'.ipv4 in
+          let tcp' = Option.get ip'.tcp in
+          Alcotest.(check int) "src_port" 4321 (UInt16.to_int tcp'.src_port);
+          Alcotest.(check int) "reserved" 5 tcp'.reserved;
+          Alcotest.(check int) "data_offset" tcp.data_offset tcp'.data_offset;
+          Alcotest.(check int) "ttl" 9 (UInt8.to_int ip'.ttl);
+          Alcotest.(check int)
+            "dst_port"
+            (UInt16.to_int tcp.dst_port)
+            (UInt16.to_int tcp'.dst_port))
 
 (* What a test expects of the views of a frame. *)
 type expect = {

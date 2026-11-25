@@ -762,6 +762,65 @@ module Stack_tcp = struct
       Wire_runtime.UInt16.t =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
     cast Wire_runtime.UInt16.int_eq (Wire_runtime.Unchecked.u16be buf (v + 18))
+
+  let[@inline] set_src_port (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 0)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_dst_port (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 2)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_seq (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_i32be buf (v + 4)
+      (Wire_runtime.UInt32.to_int32 x)
+
+  let[@inline] set_ack (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_i32be buf (v + 8)
+      (Wire_runtime.UInt32.to_int32 x)
+
+  let[@inline] set_data_offset (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 4 <> 0 then
+      invalid_arg "set_data_offset: the value does not fit in 4 bits";
+    let w = Wire_runtime.Unchecked.u16be buf (v + 12) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 12)
+      (w land lnot (0xf lsl 12) lor (x lsl 12) land 0xffff)
+
+  let[@inline] set_reserved (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 3 <> 0 then
+      invalid_arg "set_reserved: the value does not fit in 3 bits";
+    let w = Wire_runtime.Unchecked.u16be buf (v + 12) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 12)
+      (w land lnot (0x7 lsl 9) lor (x lsl 9) land 0xffff)
+
+  let[@inline] set_flags (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 9 <> 0 then
+      invalid_arg "set_flags: the value does not fit in 9 bits";
+    let w = Wire_runtime.Unchecked.u16be buf (v + 12) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 12)
+      (w land lnot (0x1ff lsl 0) lor (x lsl 0) land 0xffff)
+
+  let[@inline] set_window (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 14)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_checksum (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 16)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_urgent (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 18)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
 end
 
 module Stack_udp = struct
@@ -793,6 +852,26 @@ module Stack_udp = struct
       Wire_runtime.UInt16.t =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
     cast Wire_runtime.UInt16.int_eq (Wire_runtime.Unchecked.u16be buf (v + 6))
+
+  let[@inline] set_src_port (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 0)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_dst_port (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 2)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_length (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 4)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_checksum (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 6)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
 end
 
 module Stack_ipv4 = struct
@@ -909,6 +988,87 @@ module Stack_ipv4 = struct
     not
       (((bw1 land 16383 : int) = 0 && (f10_protocol : int) = 6)
       || ((bw1 land 16383 : int) = 0 && (f10_protocol : int) = 17))
+
+  let[@inline] set_version (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 4 <> 0 then
+      invalid_arg "set_version: the value does not fit in 4 bits";
+    let w = Wire_runtime.Unchecked.u8 buf (v + 0) in
+    Wire_runtime.Unchecked.set_u8 buf (v + 0)
+      (w land lnot (0xf lsl 4) lor (x lsl 4))
+
+  let[@inline] set_ihl (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 4 <> 0 then invalid_arg "set_ihl: the value does not fit in 4 bits";
+    let w = Wire_runtime.Unchecked.u8 buf (v + 0) in
+    Wire_runtime.Unchecked.set_u8 buf (v + 0)
+      (w land lnot (0xf lsl 0) lor (x lsl 0))
+
+  let[@inline] set_dscp (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 6 <> 0 then
+      invalid_arg "set_dscp: the value does not fit in 6 bits";
+    let w = Wire_runtime.Unchecked.u8 buf (v + 1) in
+    Wire_runtime.Unchecked.set_u8 buf (v + 1)
+      (w land lnot (0x3f lsl 2) lor (x lsl 2))
+
+  let[@inline] set_ecn (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 2 <> 0 then invalid_arg "set_ecn: the value does not fit in 2 bits";
+    let w = Wire_runtime.Unchecked.u8 buf (v + 1) in
+    Wire_runtime.Unchecked.set_u8 buf (v + 1)
+      (w land lnot (0x3 lsl 0) lor (x lsl 0))
+
+  let[@inline] set_total_length (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 2)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_identification (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 4)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_flags (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 3 <> 0 then
+      invalid_arg "set_flags: the value does not fit in 3 bits";
+    let w = Wire_runtime.Unchecked.u16be buf (v + 6) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 6)
+      (w land lnot (0x7 lsl 13) lor (x lsl 13) land 0xffff)
+
+  let[@inline] set_fragment_offset (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    if x lsr 13 <> 0 then
+      invalid_arg "set_fragment_offset: the value does not fit in 13 bits";
+    let w = Wire_runtime.Unchecked.u16be buf (v + 6) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 6)
+      (w land lnot (0x1fff lsl 0) lor (x lsl 0) land 0xffff)
+
+  let[@inline] set_ttl (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u8 buf (v + 8)
+      ((x : Wire_runtime.UInt8.t :> int) land 0xff)
+
+  let[@inline] set_protocol (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u8 buf (v + 9)
+      ((x : Wire_runtime.UInt8.t :> int) land 0xff)
+
+  let[@inline] set_checksum (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_u16be buf (v + 10)
+      ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
+
+  let[@inline] set_src (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_i32be buf (v + 12)
+      (Wire_runtime.UInt32.to_int32 x)
+
+  let[@inline] set_dst (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.set_i32be buf (v + 16)
+      (Wire_runtime.UInt32.to_int32 x)
 end
 
 let failed = Invalid_argument "EthernetStack.get: the check failed"
@@ -930,3 +1090,8 @@ let[@inline always] ipv4 (b : 'b Wire_runtime.Buf.t)
   if not ((f3_ether_type : int) = 2048) then -1
   else if v + 14 > len - 20 then -1
   else v + 14
+
+let[@inline] set_ether_type (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  Wire_runtime.Unchecked.set_u16be buf (v + 12)
+    ((x : Wire_runtime.UInt16.t :> int) land 0xffff)

@@ -127,9 +127,56 @@ let test_record_clash () =
   Alcotest.(check bool) "folds" true (contains src "fold ");
   Alcotest.(check bool) "no record" false (contains src "decode_exn")
 
+(* The fields of the record at [off], read with no check of its
+   constraints. *)
+let fields buf off =
+  [
+    (G_checked.Get.version buf off :> int);
+    (G_checked.Get.ihl buf off :> int);
+    UInt16.to_int (G_checked.Get.length buf off);
+    UInt8.to_int (G_checked.Get.ttl buf off);
+    UInt8.to_int (G_checked.Get.proto buf off);
+  ]
+
+(* A setter writes its field in place and leaves the bytes of every other
+   field as they were; a bitfield too wide for its field is refused, the
+   bytes untouched. *)
+let test_setters () =
+  for _ = 1 to 2000 do
+    let buf, off = input () in
+    let len = Bytes.length buf - off in
+    match Buf.v buf with
+    | Buf.Any b ->
+        let c = G_checked.check b (Buf.length b) ~off ~len in
+        if G_checked.ok c then begin
+          let v = G_checked.get c in
+          let before = fields buf off in
+          let i = Random.State.int rand 5 in
+          let x = Random.State.int rand (if i < 2 then 16 else 256) in
+          (match i with
+          | 0 -> G_checked.set_version b v x
+          | 1 -> G_checked.set_ihl b v x
+          | 2 -> G_checked.set_length b v (UInt16.v (x * 251))
+          | 3 -> G_checked.set_ttl b v (UInt8.v x)
+          | _ -> G_checked.set_proto b v (UInt8.v x));
+          let want =
+            List.mapi
+              (fun j y -> if j = i then if i = 2 then x * 251 else x else y)
+              before
+          in
+          Alcotest.(check (list int)) "set" want (fields buf off);
+          let copy = Bytes.copy buf in
+          (match G_checked.set_ihl b v 16 with
+          | () -> Alcotest.fail "set_ihl 16"
+          | exception Invalid_argument _ -> ());
+          Alcotest.(check bytes) "refused" copy buf
+        end
+  done
+
 let suite =
   ( "writer",
     [
+      Alcotest.test_case "setters" `Quick test_setters;
       Alcotest.test_case "a fixed record's views and folds" `Quick test_fixed;
       Alcotest.test_case "one module for ml and scanner" `Quick test_one_module;
       Alcotest.test_case "accessors named apart" `Quick test_escaped;
