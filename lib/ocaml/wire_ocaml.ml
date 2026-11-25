@@ -291,6 +291,9 @@ let main ts =
       | `Mli, twin -> write file (to_mli ~twin ~visitors m))
     written
 
+(* The module of a codec, as [Plan] reads it. *)
+let declared = v
+
 (* {1 The plan, for other backends} *)
 
 module Plan = struct
@@ -408,10 +411,10 @@ module Plan = struct
 
   let pp_decision = Decision.pp
 
-  let decisions ?target ?fields ?step c =
+  let decisions ?(target = `OCaml) ?(folds = [ fold "fold" ]) ?visitors c =
     let acc = ref [] in
     let decide d = acc := d :: !acc in
-    ignore (Writer.ml ~decide (walk ?target ?fields ?step ~codec:"c" c));
+    ignore (Writer.ml ~decide (writer ?visitors (declared ~target ~folds c)));
     List.rev !acc
 
   let select t names =

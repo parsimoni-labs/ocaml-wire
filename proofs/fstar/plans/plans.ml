@@ -739,7 +739,14 @@ let check : type a. string -> a Wire.Codec.t -> P.t -> unit =
  fun name c p ->
   let wf, d, d' = well_formed name p in
   let runs =
-    [ P.decisions c; P.decisions ~step:"Step" c; P.decisions ~target:`OxCaml c ]
+    [
+      P.decisions c;
+      P.decisions
+        ~folds:Wire_ocaml.[ fold "fold"; fold "fold_step" ]
+        ~visitors:[ ("fold_step", "step.ml") ]
+        c;
+      P.decisions ~target:`OxCaml c;
+    ]
   in
   let all = List.concat runs in
   let spans = span_bounds name ~all d d' in
@@ -883,7 +890,11 @@ let () =
     dump "packet stack"
       [
         ("ocaml", P.decisions c);
-        ("step", P.decisions ~step:"Step" c);
+        ( "step",
+          P.decisions
+            ~folds:Wire_ocaml.[ fold "fold"; fold "fold_step" ]
+            ~visitors:[ ("fold_step", "step.ml") ]
+            c );
         ("oxcaml", P.decisions ~target:`OxCaml c);
       ];
     exit 0

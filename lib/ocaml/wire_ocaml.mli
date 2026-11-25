@@ -673,15 +673,16 @@ module Plan : sig
 
   val decisions :
     ?target:target ->
-    ?fields:string list ->
-    ?step:string ->
+    ?folds:fold list ->
+    ?visitors:(string * string) list ->
     'r Wire.Codec.t ->
     decision list
-  (** [decisions ?target ?fields ?step c] is the decisions
-      [scanner ?target ?fields ?step ~codec c] takes, in the order it writes
-      them, each case of an optional field included. A [window] is the variable
-      holding the window's length: the frame's, or a region's size. Raises
-      [Invalid_argument] as {!scanner} does. *)
+  (** [decisions ?target ?folds ?visitors c] is the decisions
+      [to_ml ?visitors (v ~target ~folds c)] takes, in the order it writes them,
+      each case of an optional field included, with [target] [`OCaml] and
+      [folds] one fold [fold] of every output by default. A [window] is the
+      variable holding the window's length: the frame's, or a region's size.
+      Raises [Invalid_argument] as {!v} does. *)
 
   val outputs : t -> output list
   (** [outputs t] is the outputs of [t], in declaration order. *)

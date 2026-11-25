@@ -159,20 +159,22 @@ let test_accessors () =
       let v = G_eth.get (G_eth.check b (Buf.length b) 0) in
       [ G_eth.src b v ])
 
+(* The module of [c] and its interface, with its default fold ([ml]) or with
+   that fold declared ([scanner]), for the OCaml target. *)
+let ml c = Wire_ocaml.(to_ml (v ~target:`OCaml c))
+let mli c = Wire_ocaml.(to_mli (v ~target:`OCaml c))
+let folds = Wire_ocaml.[ fold "fold" ]
+let scanner c = Wire_ocaml.(to_ml (v ~target:`OCaml ~folds c))
+let scanner_mli c = Wire_ocaml.(to_mli (v ~target:`OCaml ~folds c))
+
 type codec = Codec : 'r Codec.t -> codec
 
-(* [ml] and [scanner] write one module for one codec. *)
+(* A module with its default fold and with that fold declared is one module. *)
 let test_one_module () =
   List.iter
     (fun (name, Codec c) ->
-      Alcotest.(check string)
-        name
-        (Wire_ocaml.ml ~codec:"c" c)
-        (Wire_ocaml.scanner ~codec:"c" c);
-      Alcotest.(check string)
-        (name ^ " interface")
-        (Wire_ocaml.mli ~codec:"c" c)
-        (Wire_ocaml.scanner_mli ~codec:"c" c))
+      Alcotest.(check string) name (ml c) (scanner c);
+      Alcotest.(check string) (name ^ " interface") (mli c) (scanner_mli c))
     [
       ("ipv4", Codec Schemas.ipv4);
       ("checked", Codec Schemas.checked);
@@ -187,29 +189,29 @@ let pair n1 n2 =
 (* A field named as a value the module defines takes a trailing ['_'] as its
    accessor, as a keyword does; its fold label keeps its name. *)
 let test_escaped () =
-  let src = Wire_ocaml.scanner ~codec:"c" (pair "size" "size_") in
+  let src = scanner (pair "size" "size_") in
   List.iter
     (fun name ->
       Alcotest.(check bool)
         name true
         (contains src ("let[@inline always] " ^ name ^ " ")))
     [ "size_"; "size__" ];
-  let src = Wire_ocaml.scanner ~codec:"c" (pair "ok" "b") in
+  let src = scanner (pair "ok" "b") in
   Alcotest.(check bool) "ok_" true (contains src "let[@inline always] ok_ ");
   Alcotest.(check bool) "~ok" true (contains src "~ok");
   Alcotest.(check (list (pair string bool)))
     "outputs"
     [ ("ok", false); ("b", false) ]
-    (Wire_ocaml.scanner_fields (pair "ok" "b"))
+    (Wire_ocaml.outputs (pair "ok" "b"))
 
 (* Names a record's members would define twice refuse [ml], which needs
    them, and leave them out of the module [scanner] writes. *)
 let test_record_clash () =
   let c = pair "cast" "b" in
-  (match Wire_ocaml.ml ~codec:"c" c with
+  (match ml c with
   | _ -> Alcotest.fail "ml: a field Get.cast"
   | exception Invalid_argument _ -> ());
-  let src = Wire_ocaml.scanner ~codec:"c" c in
+  let src = scanner c in
   Alcotest.(check bool) "folds" true (contains src "fold ");
   Alcotest.(check bool) "no record" false (contains src "module Get")
 
