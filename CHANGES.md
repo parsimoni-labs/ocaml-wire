@@ -129,17 +129,22 @@
   record of at most 7 bytes as one `int`, then take each field from it (#496,
   @samoht)
 
-- `wire.ocaml` (`Wire_ocaml.ml`, `Wire_ocaml.scanner`): generate one OCaml
-  module per codec, of any shape the walk covers, that links only the new
-  `wire.runtime` and builds on OCaml, js_of_ocaml, wasm_of_ocaml and OxCaml
-  (#436, #459, #488, #492, #501, #503, #504, #562, @samoht)
+- `wire.ocaml`: generate one OCaml module per codec, of any shape the walk
+  covers, that links only the new `wire.runtime` and builds on OCaml,
+  js_of_ocaml, wasm_of_ocaml and OxCaml. A generator declares each module with
+  `Wire_ocaml.v` and `Wire_ocaml.main` writes the files one dune rule names,
+  for the compiler that builds it (#436, #459, #488, #492, #501, #503, #504,
+  #562, #PR, @samoht)
 
 - A generated module decodes, validates and encodes its codec with the
-  codec's errors; a fixed record adds `pp`, a getter per field and `write buf
-  off ~field ...`, with each field under its label (#436, #492, #562, @samoht)
+  codec's errors into a record of its own, sized by `size r` and `min_size`;
+  a fixed record adds a getter per field and `write buf off ~field ...`, with
+  each field under its label, a field under a map in the map's type (#436,
+  #492, #562, #PR, @samoht)
 
-- `Wire_ocaml.ml ~buffer:`Bigstring` generates the module on a bigarray of
-  bytes instead of `bytes`: generate one module per buffer kind (#562, @samoht)
+- `Wire_ocaml.v ~buffer:`Bigstring` generates the module on a bigarray of
+  bytes instead of `bytes`: generate one module per buffer kind (#562, #PR,
+  @samoht)
 
 - `Wire_ocaml.Plan.decisions`: the decisions a scanner takes beyond its
   plan, as data: which bounds it tests and which it leaves to a later
@@ -148,10 +153,13 @@
   proves the checks a generated scanner performs (#513, #519,
   @samoht)
 
-- A scanner generated with `~step` has `fold_index_step buf ~offs ~lens
-  ~init`, which folds `fold_step` over frames of any length, such as the
-  packets of a capture, with the accumulator kept in a register. On OxCaml
-  the accumulator may be an unboxed tuple (#539, @samoht)
+- `Wire_ocaml.fold`: a module declares its folds, each with its outputs. One
+  without a visitor takes its consumer as arguments; one whose visitor's
+  source file the dune rule names (`--visitor n=%{dep:v.ml}`) calls it by
+  name, with no closure call, as `n`, `n_frames` and `n_index`, which folds
+  frames of any length, such as the packets of a capture, with the
+  accumulator in a register, on OxCaml an unboxed tuple too (#539, #PR,
+  @samoht)
 
 - A generated module checks a record once (`check`, `ok`, `get`), then reads
   a field with its accessor or writes one with `set_<field>`, with no bounds
@@ -161,37 +169,31 @@
   `check b length off`, as `Wire.Codec.View.check` does; any other shape
   checks a window, `check b length ~off ~len` (#562, @samoht)
 
-- `Wire_ocaml.mli`, `scanner_mli` and `bridge_mli`: generate a documented
-  interface for each generated module. `examples/generated` has two modules
-  with their interfaces (#501, @samoht)
-
-- `Wire.S`, one signature for generated and interpreted codecs of fixed-size
-  records (`Wire.Codec.Make`), so code moves between the two by changing one
-  line. `Wire_ocaml.bridge ~record` writes both sides, `Global` and
-  `Interpreted`, with the same named handles, each reading the type the codec
-  declares; `field f` is the handle of a codec field on either side (#492,
+- `Wire_ocaml.to_mli`: a documented interface for each generated module.
+  `examples/generated` has two modules with their interfaces (#501, #PR,
   @samoht)
 
-- `Wire.Scan`, one signature for a generated scanner's step folds and for
-  `Interpreted_scan`, which `Wire_ocaml.scanner_bridge` writes over
-  `Wire.Codec` for the same consumer, so code moves between the two by
-  changing one line (@samoht)
+- The interpreted twin of a generated module, the unit `<name>_codec` beside
+  it: `Make (struct type r = ... let codec = ... end)` reads the codec value
+  with the module's views, `validate` and folds, so code moves between the
+  two by changing one line; it checks the codec's shape when applied and
+  links `wire` (#492, #PR, @samoht)
 
-- `Wire_ocaml.scanner`: generate a scanner that checks a record with nested
-  codecs, optional fields and variable sizes, and hands out the fields chosen
-  with `~fields` without building a value. It skips a bound check that a
+- A fold of a generated module checks a record with nested codecs, optional
+  fields and variable sizes, and hands out the fields chosen with `~outputs`
+  without building a value. It skips a bound check that a
   later check, a region's constant start or the range of a region's size
   already covers, and tests two adjacent bitfields with one comparison.
-  `fold_frames` walks four frames per loop iteration. `fold_step`
-  and `fold_frames_step` pass integer outputs to the consumer as `int64`,
-  which OCaml keeps in registers. `Wire_ocaml.Plan` gives its plan to other
+  A fold's `n_frames` walks four frames per loop iteration. A fold with a
+  visitor passes integer outputs to it as `int64`, which OCaml keeps in
+  registers. `Wire_ocaml.Plan` gives its plan to other
   backends (#447, #473, #498, #501, #504, #509, #510, #517, #520, @samoht)
 
 - On OxCaml, generated code takes buffers allocated on the stack, is
   `portable`, allocates nothing (`[@zero_alloc]` is checked) and keeps 32-bit
   and 64-bit values unboxed (#492, #493, #498, #501, #504, @samoht)
 
-- `Wire_ocaml.ml ~simd:true`, on OxCaml for arm64 or amd64: read and write
+- `Wire_ocaml.v ~simd:true`, on OxCaml for arm64 or amd64: read and write
   four records of four one-byte fields at a time, with NEON or SSE (#493,
   @samoht)
 
@@ -249,14 +251,14 @@
   once; `decode` uses the same word tests (#435, #445, #496, #512, #521,
   @samoht)
 
-- The scanner's `fold_frames` (and its unboxed and step forms) reads the
+- A fold's `n_frames` (and its unboxed form) reads the
   IPv4 protocol, or whatever field chooses a frame's nested optional fields,
   of all four frames of a loop iteration before checking the first. On
   packets whose kind changes from one frame to the next, the
   Ethernet/IPv4/TCP-or-UDP scan takes about 8% fewer cycles on OxCaml, as
   many as wire.rust's, and about 6% fewer on OCaml (#516, #520, @samoht)
 
-- The scanner's `fold_index_step` loads the next frame's offset, length
+- A fold's `n_index` loads the next frame's offset, length
   and dispatch fields before it walks the current one. On the MAWI trace
   the parse takes about 28% fewer cycles on OxCaml, fewer than
   `pnet_packet`, and 18 to 29% fewer on OCaml (#558, @samoht)
