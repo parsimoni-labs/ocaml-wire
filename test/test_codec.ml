@@ -1512,9 +1512,114 @@ let test_staged_decoder () =
         Alcotest.(check bytes) "encode" a b
   done
 
+(* -- Codec.get on bad input -- *)
+
+(* [Codec.get] answers the error of the field it reads where its bytes do not
+   make a value, at the field's offset and under its name, as [decode] names
+   it, and never raises on them. *)
+let answers_error name read buf off ~expected : unit =
+  ignore (read buf off);
+  Alcotest.failf "%s: read a value, expected %a" name Error.pp expected
+
+let test_get_bad_input () =
+  let head () = Codec.(Field.v "h" uint8 $ fst) in
+  let even = Field.v "v" uint8 in
+  let v =
+    Codec.(
+      Field.v "v"
+        ~action:
+          (Action.on_success
+             [ Action.return_bool Expr.(Field.ref even mod int 2 = int 0) ])
+        uint8
+      $ snd)
+  in
+  let c = Codec.v "GetAction" (fun h v -> (h, v)) [ head (); v ] in
+  answers_error "an action that aborts"
+    (Staged.unstage (Codec.get c v))
+    (Bytes.of_string "\x00\x00\x43")
+    1
+    ~expected:
+      {
+        at = 2;
+        field = [ "v" ];
+        kind = Constraint_failed { which = Action; value = None };
+      };
+  let e = Codec.(Field.v "e" (enum "E" [ ("A", 1); ("B", 2) ] uint8) $ snd) in
+  let c = Codec.v "GetEnum" (fun h e -> (h, e)) [ head (); e ] in
+  answers_error "a closed enum outside its cases"
+    (Staged.unstage (Codec.get c e))
+    (Bytes.of_string "\x00\x00\x07")
+    1
+    ~expected:
+      {
+        at = 2;
+        field = [ "e" ];
+        kind = Invalid_enum { value = 7; valid = [ 1; 2 ] };
+      };
+  let l = Codec.(Field.v "l" (lookup [ "x"; "y" ] uint8) $ snd) in
+  let c = Codec.v "GetLookup" (fun h l -> (h, l)) [ head (); l ] in
+  answers_error "a lookup past its table"
+    (Staged.unstage (Codec.get c l))
+    (Bytes.of_string "\x00\x05")
+    0
+    ~expected:{ at = 1; field = [ "l" ]; kind = Invalid_tag 5 };
+  let b = Codec.(Field.v "b" uint16be $ snd) in
+  let c = Codec.v "GetShort" (fun h b -> (h, b)) [ head (); b ] in
+  let read = Staged.unstage (Codec.get c b) in
+  let buf = Bytes.of_string "\x00\x00\x01" in
+  answers_error "a field cut by the buffer" read buf 1
+    ~expected:
+      {
+        at = 2;
+        field = [ "b" ];
+        kind = Unexpected_eof { expected = 2; got = 1 };
+      };
+  answers_error "a field past the buffer" read buf 3
+    ~expected:
+      {
+        at = 4;
+        field = [ "b" ];
+        kind = Unexpected_eof { expected = 2; got = 0 };
+      };
+  let len = Field.v "len" uint8 in
+  let p =
+    Codec.(Field.v "p" (byte_array ~size:(Field.ref len)) $ fun (_, p, _) -> p)
+  in
+  let t = Codec.(Field.v "t" uint8 $ fun (_, _, t) -> t) in
+  let c =
+    Codec.v "GetSpan"
+      (fun len p t -> (len, p, t))
+      Codec.[ (len $ fun (len, _, _) -> len); p; t ]
+  in
+  let buf = Bytes.of_string "\x05ab" in
+  answers_error "a span past the buffer"
+    (Staged.unstage (Codec.get c p))
+    buf 0
+    ~expected:
+      {
+        at = 1;
+        field = [ "p" ];
+        kind = Unexpected_eof { expected = 5; got = 2 };
+      };
+  answers_error "a field after a span past the buffer"
+    (Staged.unstage (Codec.get c t))
+    buf 0
+    ~expected:
+      {
+        at = 6;
+        field = [ "t" ];
+        kind = Unexpected_eof { expected = 1; got = 0 };
+      };
+  (* A negative offset is misuse, not input. *)
+  Alcotest.check_raises "a negative offset"
+    (Invalid_argument "Codec: negative offset -1") (fun () ->
+      ignore (read (Bytes.of_string "\x00\x00\x01") (-1)))
+
 let suite =
   ( "codec",
     [
+      Alcotest.test_case "get: bad input answers an error" `Quick
+        test_get_bad_input;
       Alcotest.test_case "set: dependent byte refinement" `Quick
         test_set_dependent_byte_refinement;
       Alcotest.test_case "rename: projection name" `Quick test_rename_projection;
