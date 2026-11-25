@@ -26,5 +26,8 @@ let () =
      which must not verify. *)
   List.iter
     (fun (Proved.Codec (name, c)) ->
-      if name = "Tiny" then write dir "TinyOxMutant" c)
+      if name = "Tiny" then write dir "TinyOxMutant" c;
+      (* Region, whose OxCaml index loop make prove reads [tag] ahead from
+         the byte after it, which must not verify. *)
+      if name = "Region" then write dir "RegionIndexMutant" c)
     Proved.all

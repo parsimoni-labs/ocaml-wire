@@ -5,10 +5,11 @@
 #   prove.sh lib FILE...          check the fixed library, in order
 #   prove.sh codec NAME           3d.exe on NAME.3d, then every module of
 #                                 NAME (MODULES below) must verify
-#   prove.sh refused NAME SED [WALK]
+#   prove.sh refused NAME SED [WALK [walk]]
 #                                 SED applied to NAME.WALK.fst (Scan, Step,
-#                                 OxScan or OxStep): the walk and Flat verify,
-#                                 its proof must not
+#                                 Frames, Index, or each with Ox): the walk and
+#                                 Flat verify, its proof must not; with walk,
+#                                 the walk itself must not
 #   prove.sh prune USED...        remove from the cache all but the entries
 #                                 the USED files list
 #
@@ -91,7 +92,10 @@ schema() {
 # proof, then the step functions and theirs.
 MODULES="Scan.fst Flat.fsti Flat.fst Proof.fsti Proof.fst Visitor.fsti
   Step.fst StepProof.fsti StepProof.fst OxScan.fst OxProof.fsti OxProof.fst
-  OxStep.fst OxStepProof.fsti OxStepProof.fst"
+  OxStep.fst OxStepProof.fsti OxStepProof.fst
+  Frames.fst FramesProof.fsti FramesProof.fst Index.fst IndexProof.fsti IndexProof.fst
+  OxFrames.fst OxFramesProof.fsti OxFramesProof.fst
+  OxIndex.fst OxIndexProof.fsti OxIndexProof.fst"
 
 # work NAME SED WALK: a directory of NAME's modules, SED applied to its WALK.
 work() {
@@ -136,7 +140,7 @@ refused)
   case $walk in
   Scan) needed="Scan.fst Flat.fsti Flat.fst Proof.fsti" proof=Proof ;;
   OxScan) needed="OxScan.fst Flat.fsti Flat.fst OxProof.fsti" proof=OxProof ;;
-  Step | OxStep)
+  Step | OxStep | Frames | OxFrames | Index | OxIndex)
     proof=${walk}Proof
     needed="Visitor.fsti $walk.fst Flat.fsti Flat.fst $proof.fsti"
     ;;
@@ -145,7 +149,14 @@ refused)
     exit 2
     ;;
   esac
-  refused=$proof
+  # With "walk", the mutated walk itself must not verify: a load its type
+  # does not allow, which F* refuses before any proof.
+  if [ "${5:-}" = walk ]; then
+    needed=$(echo "$needed" | sed "s/ *$walk.fst//; s/ *$proof.fsti//")
+    refused=$walk
+  else
+    refused=$proof
+  fi
   dir=$(work "$2" "$3" "$walk")
   for m in $needed; do
     verify "$dir/$2.$m" "$dir" "$out"

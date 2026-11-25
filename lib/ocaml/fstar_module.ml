@@ -1106,6 +1106,158 @@ let walk_modules ~walk ~codec ~scan ~stepped =
       step_proof_implementation ~walk ~codec ~m:codec stepped );
   ]
 
+(* {2 The walks of the frame loops}
+
+   [<M>.Frames] and [<M>.Index] are the walk of a frame of the loops of
+   [fold_frames_step] and [fold_index_step], as the emitter writes it for
+   a frame the loop knows to hold the bytes it tests, and [<M>.FramesProof]
+   and [<M>.IndexProof] prove each equal to 3d.exe's parser on the frame's
+   bytes. *)
+
+let frame_name ~index w =
+  (if w.ox then "Ox" else "") ^ if index then "Index" else "Frames"
+
+let frame_proof_name ~index w = frame_name ~index w ^ "Proof"
+
+(* The function a frame's walk is, by its parameters: [stop] when it reads
+   the frame's length, [stride] otherwise, which the statement quantifies
+   over. *)
+let frame_of (scan : Scan_module.fstar) =
+  match scan.frame with
+  | Some f -> f
+  | None -> invalid_arg "Fstar_module.frame_of: not the walk of a frame"
+
+let frame_call (scan : Scan_module.fstar) =
+  let f = frame_of scan in
+  let names = List.map fst f.params in
+  let stop = if List.mem "stop" names then "stop" else "stride" in
+  (Fmt.str "%s %s" f.name (String.concat " " names), stop)
+
+(* The arguments of [frame_is_3d]: the function's, and [stride] when it
+   does not read [stop]. *)
+let frame_arguments (scan : Scan_module.fstar) =
+  let f = frame_of scan in
+  List.map fst f.params
+  @ if List.mem_assoc "stop" f.params then [] else [ "stride" ]
+
+let frame_binders (scan : Scan_module.fstar) ~need ~position =
+  let params = (frame_of scan).params in
+  let binders = List.map (fun (v, t) -> Fmt.str "(%s:%s)" v t) params in
+  if List.mem_assoc "stop" params then String.concat " " binders
+  else
+    String.concat " "
+      (binders
+      @ [
+          Fmt.str "(stride:%s{%d <= stride /\\ base + stride <= P.length buf})"
+            position need;
+        ])
+
+let frame_statement (scan : Scan_module.fstar) =
+  let call, stop = frame_call scan in
+  Fmt.str
+    "%s ==\n\
+    \           Flat.answer (fun () -> S.invalid current) (visit current)\n\
+    \             (Flat.spec (Seq.slice buf base (base + %s)))"
+    call stop
+
+let frame_module ~walk ~index ~codec ~m (scan : Scan_module.fstar) =
+  Fmt.str "%a%s"
+    (fun ppf () ->
+      header ppf ~codec
+        ~m:(m ^ "." ^ frame_name ~index walk)
+        (Fmt.str "the walk of a frame of the loop of %s in its %s, as F*"
+           (if index then "fold_index_step" else "fold_frames_step")
+           (scanner_name walk));
+      Fmt.pf ppf "module P = WireGen.OCaml@\nmodule %s = %s.Visitor@\n@\n" step
+        m)
+    () scan.body
+
+let frame_proof_interface ~walk ~index ~need ~codec ~m scan =
+  Fmt.str "%a"
+    (fun ppf () ->
+      header ppf ~codec
+        ~m:(m ^ "." ^ frame_proof_name ~index walk)
+        (Fmt.str
+           "that the walk of a frame of the loop of %s in its %s is the parser \
+            3d.exe writes"
+           (if index then "fold_index_step" else "fold_frames_step")
+           (scanner_name walk));
+      Fmt.pf ppf
+        "open %s.%s@\n\
+         module P = WireGen.OCaml@\n\
+         module S = %s.Visitor@\n\
+         module Flat = %s.Flat@\n\
+         @\n"
+        m (frame_name ~index walk) m m;
+      pp_visit ppf scan;
+      Fmt.pf ppf
+        "(* A frame the loop knows to lie in the buffer and to hold the %d \
+         bytes it tests, with the fields it loads ahead: its walk answers what \
+         3d.exe's parser answers on the frame's bytes. *)@\n\
+         val frame_is_3d %s@\n\
+        \  : Lemma (%s)@\n"
+        need
+        (frame_binders scan ~need ~position:(position walk))
+        (frame_statement scan))
+    ()
+
+let frame_proof_implementation ~walk ~index ~need ~codec ~m scan =
+  Fmt.str "%a"
+    (fun ppf () ->
+      header ppf ~codec
+        ~m:(m ^ "." ^ frame_proof_name ~index walk)
+        (Fmt.str
+           "that the walk of a frame of the loop of %s in its %s is the parser \
+            3d.exe writes"
+           (if index then "fold_index_step" else "fold_frames_step")
+           (scanner_name walk));
+      Fmt.pf ppf
+        "open WireGen.Lib@\n\
+         open WireGen.Defs@\n\
+         open %s.%s@\n\
+         module P = WireGen.OCaml@\n\
+         module S = %s.Visitor@\n\
+         module Flat = %s.Flat@\n\
+         @\n"
+        m (frame_name ~index walk) m m;
+      pp_facts ~tables:"tables64" ~position:(position walk) ppf scan;
+      let call, stop = frame_call scan in
+      Fmt.pf ppf
+        "#push-options \"--z3rlimit 200 --fuel 1 --ifuel 1\"@\n\
+         let frame_is_flat %s@\n\
+        \  : Lemma (%s ==@\n\
+        \           Flat.flat (fun () -> S.invalid current) (visit current)@\n\
+        \             (Seq.slice buf base (base + %s)))@\n\
+        \  = assert (%s ==@\n\
+        \           Flat.flat (fun () -> S.invalid current) (visit current)@\n\
+        \             (Seq.slice buf base (base + %s)))@\n\
+        \      by (WireGen.Tac.unfold_step [`%%%s.%s.%s; `%%%s.Flat.flat; \
+         `%%visit])@\n\
+         #pop-options@\n\
+         @\n\
+         let frame_is_3d %s =@\n\
+        \  frame_is_flat %s;@\n\
+        \  Flat.flat_is_3d (fun () -> S.invalid current) (visit current)@\n\
+        \    (Seq.slice buf base (base + %s))@\n"
+        (frame_binders scan ~need ~position:(position walk))
+        call stop call stop m (frame_name ~index walk) (frame_of scan).name m
+        (String.concat " " (frame_arguments scan))
+        (String.concat " " (frame_arguments scan))
+        stop)
+    ()
+
+let frame_modules ~walk ~index ~codec scan =
+  let need = (frame_of scan).need in
+  let file name ext = Fmt.str "%s.%s.%s" codec name ext in
+  [
+    ( file (frame_name ~index walk) "fst",
+      frame_module ~walk ~index ~codec ~m:codec scan );
+    ( file (frame_proof_name ~index walk) "fsti",
+      frame_proof_interface ~walk ~index ~need ~codec ~m:codec scan );
+    ( file (frame_proof_name ~index walk) "fst",
+      frame_proof_implementation ~walk ~index ~need ~codec ~m:codec scan );
+  ]
+
 let modules ?fields ~codec c =
   let scan = Scan_module.fstar ?fields c in
   let stepped = Scan_module.fstar_step ?fields ~step c in
@@ -1125,3 +1277,16 @@ let modules ?fields ~codec c =
   ]
   @ walk_modules ~walk:stock ~codec ~scan ~stepped
   @ walk_modules ~walk:oxcaml ~codec ~scan:ox_scan ~stepped:ox_stepped
+  @ List.concat_map
+      (fun walk ->
+        List.concat_map
+          (fun index ->
+            let frame =
+              Scan_module.fstar_frame ?fields ~ox:walk.ox ~index ~step c
+            in
+            (* A loop over frames that need no byte has no walk of its
+               own for a frame of the index. *)
+            if index && (frame_of frame).need = 0 then []
+            else frame_modules ~walk ~index ~codec frame)
+          [ false; true ])
+      [ stock; oxcaml ]

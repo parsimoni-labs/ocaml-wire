@@ -21,6 +21,18 @@
   Tiny.OxStep.fst
   Tiny.OxStepProof.fsti
   Tiny.OxStepProof.fst
+  Tiny.Frames.fst
+  Tiny.FramesProof.fsti
+  Tiny.FramesProof.fst
+  Tiny.Index.fst
+  Tiny.IndexProof.fsti
+  Tiny.IndexProof.fst
+  Tiny.OxFrames.fst
+  Tiny.OxFramesProof.fsti
+  Tiny.OxFramesProof.fst
+  Tiny.OxIndex.fst
+  Tiny.OxIndexProof.fsti
+  Tiny.OxIndexProof.fst
   Ethernet.3d
   Ethernet.Scan.fst
   Ethernet.Flat.fsti
@@ -37,6 +49,18 @@
   Ethernet.OxStep.fst
   Ethernet.OxStepProof.fsti
   Ethernet.OxStepProof.fst
+  Ethernet.Frames.fst
+  Ethernet.FramesProof.fsti
+  Ethernet.FramesProof.fst
+  Ethernet.Index.fst
+  Ethernet.IndexProof.fsti
+  Ethernet.IndexProof.fst
+  Ethernet.OxFrames.fst
+  Ethernet.OxFramesProof.fsti
+  Ethernet.OxFramesProof.fst
+  Ethernet.OxIndex.fst
+  Ethernet.OxIndexProof.fsti
+  Ethernet.OxIndexProof.fst
   IPv4.3d
   IPv4.Scan.fst
   IPv4.Flat.fsti
@@ -53,6 +77,18 @@
   IPv4.OxStep.fst
   IPv4.OxStepProof.fsti
   IPv4.OxStepProof.fst
+  IPv4.Frames.fst
+  IPv4.FramesProof.fsti
+  IPv4.FramesProof.fst
+  IPv4.Index.fst
+  IPv4.IndexProof.fsti
+  IPv4.IndexProof.fst
+  IPv4.OxFrames.fst
+  IPv4.OxFramesProof.fsti
+  IPv4.OxFramesProof.fst
+  IPv4.OxIndex.fst
+  IPv4.OxIndexProof.fsti
+  IPv4.OxIndexProof.fst
   Clcw.3d
   Clcw.Scan.fst
   Clcw.Flat.fsti
@@ -69,6 +105,18 @@
   Clcw.OxStep.fst
   Clcw.OxStepProof.fsti
   Clcw.OxStepProof.fst
+  Clcw.Frames.fst
+  Clcw.FramesProof.fsti
+  Clcw.FramesProof.fst
+  Clcw.Index.fst
+  Clcw.IndexProof.fsti
+  Clcw.IndexProof.fst
+  Clcw.OxFrames.fst
+  Clcw.OxFramesProof.fsti
+  Clcw.OxFramesProof.fst
+  Clcw.OxIndex.fst
+  Clcw.OxIndexProof.fsti
+  Clcw.OxIndexProof.fst
   Span.3d
   Span.Scan.fst
   Span.Flat.fsti
@@ -85,6 +133,18 @@
   Span.OxStep.fst
   Span.OxStepProof.fsti
   Span.OxStepProof.fst
+  Span.Frames.fst
+  Span.FramesProof.fsti
+  Span.FramesProof.fst
+  Span.Index.fst
+  Span.IndexProof.fsti
+  Span.IndexProof.fst
+  Span.OxFrames.fst
+  Span.OxFramesProof.fsti
+  Span.OxFramesProof.fst
+  Span.OxIndex.fst
+  Span.OxIndexProof.fsti
+  Span.OxIndexProof.fst
   Gate.3d
   Gate.Scan.fst
   Gate.Flat.fsti
@@ -101,6 +161,18 @@
   Gate.OxStep.fst
   Gate.OxStepProof.fsti
   Gate.OxStepProof.fst
+  Gate.Frames.fst
+  Gate.FramesProof.fsti
+  Gate.FramesProof.fst
+  Gate.Index.fst
+  Gate.IndexProof.fsti
+  Gate.IndexProof.fst
+  Gate.OxFrames.fst
+  Gate.OxFramesProof.fsti
+  Gate.OxFramesProof.fst
+  Gate.OxIndex.fst
+  Gate.OxIndexProof.fsti
+  Gate.OxIndexProof.fst
   Dispatch.3d
   Dispatch.Scan.fst
   Dispatch.Flat.fsti
@@ -117,6 +189,18 @@
   Dispatch.OxStep.fst
   Dispatch.OxStepProof.fsti
   Dispatch.OxStepProof.fst
+  Dispatch.Frames.fst
+  Dispatch.FramesProof.fsti
+  Dispatch.FramesProof.fst
+  Dispatch.Index.fst
+  Dispatch.IndexProof.fsti
+  Dispatch.IndexProof.fst
+  Dispatch.OxFrames.fst
+  Dispatch.OxFramesProof.fsti
+  Dispatch.OxFramesProof.fst
+  Dispatch.OxIndex.fst
+  Dispatch.OxIndexProof.fsti
+  Dispatch.OxIndexProof.fst
   Region.3d
   Region.Scan.fst
   Region.Flat.fsti
@@ -133,6 +217,18 @@
   Region.OxStep.fst
   Region.OxStepProof.fsti
   Region.OxStepProof.fst
+  Region.Frames.fst
+  Region.FramesProof.fsti
+  Region.FramesProof.fst
+  Region.Index.fst
+  Region.IndexProof.fsti
+  Region.IndexProof.fst
+  Region.OxFrames.fst
+  Region.OxFramesProof.fsti
+  Region.OxFramesProof.fst
+  Region.OxIndex.fst
+  Region.OxIndexProof.fsti
+  Region.OxIndexProof.fst
   IPv4Mutant.3d
   IPv4Mutant.Scan.fst
   IPv4Mutant.Flat.fsti
@@ -149,6 +245,18 @@
   IPv4Mutant.OxStep.fst
   IPv4Mutant.OxStepProof.fsti
   IPv4Mutant.OxStepProof.fst
+  IPv4Mutant.Frames.fst
+  IPv4Mutant.FramesProof.fsti
+  IPv4Mutant.FramesProof.fst
+  IPv4Mutant.Index.fst
+  IPv4Mutant.IndexProof.fsti
+  IPv4Mutant.IndexProof.fst
+  IPv4Mutant.OxFrames.fst
+  IPv4Mutant.OxFramesProof.fsti
+  IPv4Mutant.OxFramesProof.fst
+  IPv4Mutant.OxIndex.fst
+  IPv4Mutant.OxIndexProof.fsti
+  IPv4Mutant.OxIndexProof.fst
   ClcwStepMutant.3d
   ClcwStepMutant.Scan.fst
   ClcwStepMutant.Flat.fsti
@@ -165,6 +273,18 @@
   ClcwStepMutant.OxStep.fst
   ClcwStepMutant.OxStepProof.fsti
   ClcwStepMutant.OxStepProof.fst
+  ClcwStepMutant.Frames.fst
+  ClcwStepMutant.FramesProof.fsti
+  ClcwStepMutant.FramesProof.fst
+  ClcwStepMutant.Index.fst
+  ClcwStepMutant.IndexProof.fsti
+  ClcwStepMutant.IndexProof.fst
+  ClcwStepMutant.OxFrames.fst
+  ClcwStepMutant.OxFramesProof.fsti
+  ClcwStepMutant.OxFramesProof.fst
+  ClcwStepMutant.OxIndex.fst
+  ClcwStepMutant.OxIndexProof.fsti
+  ClcwStepMutant.OxIndexProof.fst
   TinyOxMutant.3d
   TinyOxMutant.Scan.fst
   TinyOxMutant.Flat.fsti
@@ -180,7 +300,47 @@
   TinyOxMutant.OxProof.fst
   TinyOxMutant.OxStep.fst
   TinyOxMutant.OxStepProof.fsti
-  TinyOxMutant.OxStepProof.fst)
+  TinyOxMutant.OxStepProof.fst
+  TinyOxMutant.Frames.fst
+  TinyOxMutant.FramesProof.fsti
+  TinyOxMutant.FramesProof.fst
+  TinyOxMutant.Index.fst
+  TinyOxMutant.IndexProof.fsti
+  TinyOxMutant.IndexProof.fst
+  TinyOxMutant.OxFrames.fst
+  TinyOxMutant.OxFramesProof.fsti
+  TinyOxMutant.OxFramesProof.fst
+  TinyOxMutant.OxIndex.fst
+  TinyOxMutant.OxIndexProof.fsti
+  TinyOxMutant.OxIndexProof.fst
+  RegionIndexMutant.3d
+  RegionIndexMutant.Scan.fst
+  RegionIndexMutant.Flat.fsti
+  RegionIndexMutant.Flat.fst
+  RegionIndexMutant.Proof.fsti
+  RegionIndexMutant.Proof.fst
+  RegionIndexMutant.Visitor.fsti
+  RegionIndexMutant.Step.fst
+  RegionIndexMutant.StepProof.fsti
+  RegionIndexMutant.StepProof.fst
+  RegionIndexMutant.OxScan.fst
+  RegionIndexMutant.OxProof.fsti
+  RegionIndexMutant.OxProof.fst
+  RegionIndexMutant.OxStep.fst
+  RegionIndexMutant.OxStepProof.fsti
+  RegionIndexMutant.OxStepProof.fst
+  RegionIndexMutant.Frames.fst
+  RegionIndexMutant.FramesProof.fsti
+  RegionIndexMutant.FramesProof.fst
+  RegionIndexMutant.Index.fst
+  RegionIndexMutant.IndexProof.fsti
+  RegionIndexMutant.IndexProof.fst
+  RegionIndexMutant.OxFrames.fst
+  RegionIndexMutant.OxFramesProof.fsti
+  RegionIndexMutant.OxFramesProof.fst
+  RegionIndexMutant.OxIndex.fst
+  RegionIndexMutant.OxIndexProof.fsti
+  RegionIndexMutant.OxIndexProof.fst)
  (action
   (run %{exe:../../scripts/fstar-gen/gen.exe} .)))
 
@@ -435,6 +595,34 @@
    "s/(P.shift_right_logical bw1 18) 63/(P.shift_right_logical bw1 17) 63/"
    Step)))
 
+;; The walk of a frame of Region's OxCaml index loop given [tag] as read
+;; ahead one byte on, its 16-bit load ending one byte past the two the loop
+;; knows: the walk itself must not verify.
+
+(rule
+ (targets used.RegionIndexMutant)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files RegionIndexMutant.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run
+   sh
+   prove.sh
+   refused
+   RegionIndexMutant
+   "s/(P.int64_logand (P.int64_of_int (P.u16le_at buf base)) 255)})/(P.int64_logand (P.int64_of_int (P.u16le_at buf (P.int64_add base 1))) 255)})/"
+   OxIndex
+   walk)))
+
 ;; The OxCaml fold of Tiny with [a] read from the low byte of the 16-bit
 ;; load one byte on, the byte after [a]: the OxCaml proof must fail.
 
@@ -490,4 +678,5 @@
    %{dep:used.Region}
    %{dep:used.IPv4Mutant}
    %{dep:used.ClcwStepMutant}
-   %{dep:used.TinyOxMutant})))
+   %{dep:used.TinyOxMutant}
+   %{dep:used.RegionIndexMutant})))

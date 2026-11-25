@@ -1002,7 +1002,16 @@ let walks ?decide ~target ~selected ?step ?size ~taken plan =
 
 (* {1 The F* rendering} *)
 
-type fstar = { body : string; notes : note list; handed_out : output list }
+(* The walk of a frame of a frame loop, rendered as a function: its name,
+   its parameters with their types, and the bytes the loop knows. *)
+type frame = { name : string; params : (string * string) list; need : int }
+
+type fstar = {
+  body : string;
+  notes : note list;
+  handed_out : output list;
+  frame : frame option;
+}
 
 (* The F* rendering holds every value in a binding: an output under more
    than [slot_depth] optional fields is a slot, a mutable local, which F*
@@ -1026,6 +1035,55 @@ let unlocal text =
 (* The F* rendering of the function [write] writes, a walk of [plan] held as
    [num] whose OCaml holds values as [rep num]. *)
 
+(* {2 The walks of the frame loops}
+
+   The loops of [fold_frames_step] and [fold_index_step] walk each frame
+   that holds the bytes they test, [need], with the walk below: knowing
+   those bytes, and on the index loop with the fields it loads ahead as
+   variables. The OCaml cuts it out as [frames_step_record] and
+   [index_step_record]; F* renders it as a function of the same name and
+   parameters, each typed with what the loop ensures of it. *)
+
+(* The walk of a frame of the loop of [fold_frames_step] ([index] false)
+   or of [fold_index_step], which calls [m] by name. *)
+let pp_frame_walk ?trace ~frame ~index s m =
+  let name = if index then "fold_index_step" else "fold_frames_step" in
+  let need = fixed_need s.plan.nodes in
+  let ahead =
+    if index then List.map snd (read_aheads ~leading:true s ~need)
+    else List.map snd (read_aheads s ~need)
+  in
+  with_cuts ?trace s name (fun s cuts ->
+      let names, _ = frames_scope ~step:m s ~unboxed:false in
+      let body =
+        frames_body ?cuts ~step:m ~ahead s ~name ~names ~unboxed:false
+          ~invalid:(m ^ ".invalid") ~valid:(m ^ ".valid") ~known:need
+      in
+      let pos = if rep s.m.num = Unboxed then "P.int64" else "P.int" in
+      let param (v, typ) = if mentions v body then Some (v, typ) else None in
+      let params =
+        List.filter_map param
+          ([
+             ("buf", "P.buf");
+             ( "base",
+               Fmt.str "%s{0 <= base /\\ base + %d <= P.length buf}" pos need );
+             ( "stop",
+               Fmt.str "%s{%d <= stop /\\ base + stop <= P.length buf}" pos need
+             );
+             ("current", m ^ ".t");
+           ]
+          @ List.map
+              (fun (v, value) ->
+                (v, Fmt.str "P.int64{%s == %s}" v (value "base")))
+              ahead)
+      in
+      let cut = Fmt.str "%s_record" (cut_prefix name) in
+      Fmt.pf s.ppf "let %s %s : %s.t =@\n%s@\n" cut
+        (String.concat " "
+           (List.map (fun (v, t) -> Fmt.str "(%s:%s)" v t) params))
+        m body;
+      frame := Some { name = cut; params; need })
+
 let rendered ?fields c ~num write =
   let plan = scan_plan c in
   no_slots plan;
@@ -1042,9 +1100,10 @@ let rendered ?fields c ~num write =
         taken = Hashtbl.create 16;
       }
     in
-    write ~trace s;
+    let frame = ref None in
+    write ~trace ~frame s;
     Format.pp_print_flush ppf ();
-    Buffer.contents b
+    (Buffer.contents b, !frame)
   in
   (* The F* walk writes in place what the OCaml walk cuts, at the places
      the OCaml walk, whose text merlint measures, cuts. *)
@@ -1060,23 +1119,33 @@ let rendered ?fields c ~num write =
     | None -> invalid_arg "Wire_ocaml.fstar: the F* walk left the OCaml one"
   in
   let notes = ref [] in
-  let text = walk ~trace:replay ~num ~note:(fun n -> notes := n :: !notes) in
+  let text, frame =
+    walk ~trace:replay ~num ~note:(fun n -> notes := n :: !notes)
+  in
   {
     body = unlocal (without_dead_bindings text);
     notes = List.rev !notes;
     handed_out = selected;
+    frame;
   }
 
 let fstar ?fields c =
-  rendered ?fields c ~num:Fstar (fun ~trace s ->
+  rendered ?fields c ~num:Fstar (fun ~trace ~frame:_ s ->
       pp_fold ~trace s ~unboxed:false)
 
 let fstar_step ?fields ~step c =
-  rendered ?fields c ~num:Fstar64 (fun ~trace s -> pp_step_within ~trace s step)
+  rendered ?fields c ~num:Fstar64 (fun ~trace ~frame:_ s ->
+      pp_step_within ~trace s step)
 
 let fstar_ox ?fields c =
-  rendered ?fields c ~num:Fstar_u (fun ~trace s ->
+  rendered ?fields c ~num:Fstar_u (fun ~trace ~frame:_ s ->
       pp_fold ~trace s ~unboxed:false)
 
 let fstar_ox_step ?fields ~step c =
-  rendered ?fields c ~num:Fstar_u (fun ~trace s -> pp_step_within ~trace s step)
+  rendered ?fields c ~num:Fstar_u (fun ~trace ~frame:_ s ->
+      pp_step_within ~trace s step)
+
+let fstar_frame ?fields ~ox ~index ~step c =
+  rendered ?fields c
+    ~num:(if ox then Fstar_u else Fstar64)
+    (fun ~trace ~frame s -> pp_frame_walk ~trace ~frame ~index s step)

@@ -61,13 +61,20 @@ val selected : plan -> string list option -> output list
     when [names] is [None]. Raises {!Planner.Unsupported} on a name [plan] does
     not hand out. *)
 
+type frame = { name : string; params : (string * string) list; need : int }
+(** The walk of a frame of a frame loop rendered as an F* function: its name,
+    its parameters each with its F* type, which states what the loop ensures of
+    it, and the bytes the loop knows a frame holds. *)
+
 type fstar = {
   body : string;
   notes : Emitter.note list;
   handed_out : output list;
+  frame : frame option;
 }
 (** The F* rendering of a scanner's [fold]: its text, what its walk states of
-    each binding, and the outputs it hands out. *)
+    each binding, the outputs it hands out and, for the walk of a frame, the
+    function it is. *)
 
 val fstar : ?fields:string list -> 'a Wire.Codec.t -> fstar
 (** [fstar ?fields c] is the F* rendering of [fold] in the scanner of [c]: the
@@ -88,3 +95,16 @@ val fstar_ox_step :
   ?fields:string list -> step:string -> 'a Wire.Codec.t -> fstar
 (** [fstar_ox_step ?fields ~step c] is {!fstar_step} for the OxCaml scanner of
     [c]. *)
+
+val fstar_frame :
+  ?fields:string list ->
+  ox:bool ->
+  index:bool ->
+  step:string ->
+  'a Wire.Codec.t ->
+  fstar
+(** [fstar_frame ?fields ~ox ~index ~step c] is the F* rendering of the walk of
+    a frame of the loop of [fold_frames_step], or with [index] of
+    [fold_index_step], in the scanner of [c] with [~step], of OxCaml with [ox]:
+    the walk of a frame the loop knows to hold the bytes it tests, with the
+    fields it loads ahead as parameters. *)

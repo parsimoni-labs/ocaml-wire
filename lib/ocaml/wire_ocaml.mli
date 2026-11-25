@@ -394,6 +394,12 @@ val fstar :
     [S.valid init] given each output as its [int64]. [<codec>.OxScan],
     [<codec>.OxProof], [<codec>.OxStep] and [<codec>.OxStepProof] are the same
     of [scanner ~target:`OxCaml], each [int64_u] written as its 64-bit pattern.
+    [<codec>.Frames] and [<codec>.Index] (and [<codec>.OxFrames],
+    [<codec>.OxIndex]) are the walks of a frame of the loops of
+    [fold_frames_step] and [fold_index_step], each a function whose parameters
+    are typed with what the loop ensures of them, and their [Proof] modules
+    prove [frame_is_3d]: such a walk answers what the parser answers on the
+    frame's bytes.
 
     The proof is checked with the F* and Z3 that ship with EverParse, against
     the F* module [codec] that 3d.exe writes from the [.3d] of

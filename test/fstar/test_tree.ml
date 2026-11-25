@@ -719,32 +719,47 @@ let corpus =
 (* The texts of a codec the F* flavour accepts: the OCaml scanner, with
    the step functions of a module [S], and the F* of its [fold] and of its
    step functions; then the same of the OxCaml scanner. *)
-type walks = { ocaml : string; scan : string; step : string }
+type walks = {
+  ocaml : string;
+  scan : string;
+  step : string;
+  frames : string;
+  index : string option;
+}
+
 type texts = { stock : walks; ox : walks }
 
 let texts c =
   match Wire_ocaml.fstar ~codec:"M" c with
   | exception Invalid_argument _ -> None
   | files ->
-      let walks target scan step =
+      let walks target ox =
+        let file name = List.assoc_opt ("M." ^ ox ^ name ^ ".fst") files in
         {
           ocaml = Wire_ocaml.scanner ~target ~step:"S" ~codec:"M" c;
-          scan = List.assoc ("M." ^ scan ^ ".fst") files;
-          step = List.assoc ("M." ^ step ^ ".fst") files;
+          scan = Option.get (file "Scan");
+          step = Option.get (file "Step");
+          frames = Option.get (file "Frames");
+          index = file "Index";
         }
       in
-      Some
-        {
-          stock = walks `OCaml "Scan" "Step";
-          ox = walks `OxCaml "OxScan" "OxStep";
-        }
+      Some { stock = walks `OCaml ""; ox = walks `OxCaml "Ox" }
 
 let outputs c = List.map fst (Wire_ocaml.scanner_fields c)
 
-(* Whether both walks of [w] agree with their F*. *)
+(* Whether the walks of [w] agree with their F*: [fold], the step
+   functions and the walks of a frame of their loops. *)
 let agree_walks ~outputs w =
-  Result.bind (agree ~outputs ~ocaml:w.ocaml ~scan:w.scan ()) (fun () ->
-      agree ~root:"fold_step" ~outputs ~ocaml:w.ocaml ~scan:w.step ())
+  let ( let* ) = Result.bind in
+  let* () = agree ~outputs ~ocaml:w.ocaml ~scan:w.scan () in
+  let* () = agree ~root:"fold_step" ~outputs ~ocaml:w.ocaml ~scan:w.step () in
+  let* () =
+    agree ~root:"frames_step_record" ~outputs ~ocaml:w.ocaml ~scan:w.frames ()
+  in
+  match w.index with
+  | None -> Ok ()
+  | Some index ->
+      agree ~root:"index_step_record" ~outputs ~ocaml:w.ocaml ~scan:index ()
 
 (* Whether the walks of both scanners agree with their F*. *)
 let agree_both ~outputs t =
@@ -772,8 +787,10 @@ let test_corpus () =
     Alcotest.failf "%d codecs compared, expected at least %d" compared at_least
 
 (* The IPv4 scanner with one token of its OCaml changed, in [fold] or, with
-   [step], in the step functions; with [ox], of the OxCaml scanner. *)
-let mutant ?(ox = false) ?(step = false) ~from ~into () =
+   [step], in the step functions or, with [index], in the walk of a frame of
+   the loop of [fold_index_step]; with [ox], of the OxCaml scanner. *)
+let mutant ?(ox = false) ?(step = false) ?(index = false) ?(all = false) ~from
+    ~into () =
   match texts Headers.ipv4 with
   | None -> Alcotest.fail "the F* flavour refuses IPv4"
   | Some t -> (
@@ -784,9 +801,11 @@ let mutant ?(ox = false) ?(step = false) ~from ~into () =
       (match agree_both ~outputs t with
       | Ok () -> ()
       | Error why -> Alcotest.failf "IPv4: %s" why);
-      let ocaml = replace ~from ~into w.ocaml in
+      let ocaml = replace ~all ~from ~into w.ocaml in
       let root, scan =
-        if step then ("fold_step", w.step) else ("fold", w.scan)
+        if index then ("index_step_record", Option.get w.index)
+        else if step then ("fold_step", w.step)
+        else ("fold", w.scan)
       in
       match agree ~root ~outputs ~ocaml ~scan () with
       | Ok () -> Alcotest.failf "%S as %S: the trees still agree" from into
@@ -817,6 +836,14 @@ let suite =
       Alcotest.test_case "OxCaml mutant comparison" `Quick
         (mutant ~ox:true ~from:"(U.compare stop #20L < 0)"
            ~into:"(U.compare stop #20L <= 0)");
+      Alcotest.test_case "index mutant label" `Quick
+        (mutant ~index:true
+           ~from:"S.valid current ~version:f1_version ~ihl:f2_ihl"
+           ~into:"S.valid current ~ihl:f1_version ~version:f2_ihl");
+      Alcotest.test_case "OxCaml index mutant shift" `Quick
+        (mutant ~ox:true ~index:true ~all:true
+           ~from:"let f1_version = (U.shift_right_logical bw1 4)"
+           ~into:"let f1_version = (U.shift_right_logical bw1 3)");
       Alcotest.test_case "OxCaml step mutant conversion" `Quick
         (mutant ~ox:true ~step:true ~from:"~version:(U.to_int64 f1_version)"
            ~into:"~version:(U.to_int64 f2_ihl)");

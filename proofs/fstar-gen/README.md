@@ -90,9 +90,50 @@ where it would wrap the answer would differ from the parser's, which the
 proof excludes. The sign of one `logor` that tests `off` and `len` in its
 `step_within` rejects exactly the windows that leave the buffer.
 
+### The walks of the frame loops
+
+The loops of `fold_frames_step` and `fold_index_step` walk a frame that
+holds the bytes they test (`need`, the leading prefixes) with a walk of
+their own, which the OCaml cuts out as `frames_step_record` and
+`index_step_record`: it knows those bytes, so it checks none of their
+bounds, and on the index loop it reads the fields the loop loaded ahead
+(the IPv4 protocol, a tag) from variables instead of the buffer. `M.Frames`
+and `M.Index`, and `M.OxFrames` and `M.OxIndex` on OxCaml, render each as
+a function of the same name and parameters, printed by the same walk, each
+parameter typed with what the loop ensures of it: the frame at `base`
+lies in the buffer and holds `need` bytes, its length `stop` at least
+those, and each field loaded ahead is its load at `base`.
+`M.FramesProof.frame_is_3d` (and `M.IndexProof`, `M.OxFramesProof`,
+`M.OxIndexProof`), for every such frame:
+
+```
+frames_step_record buf base stop current ==
+  Flat.answer (fun () -> S.invalid current) (visit current)
+    (Flat.spec (Seq.slice buf base (base + stop)))
+```
+
+so the walk of a frame answers what 3d.exe's parser answers on the
+frame's bytes, reads no byte outside the buffer, and reads none before
+it is known. A walk that reads none of `stop` is stated for every frame
+length `stride` of at least `need` bytes.
+
+The loops themselves (the cursor, `last`, four frames an iteration, the
+batch too short for the loop, the index's offsets and lengths, the test
+`known` and the loads ahead they guard) are not rendered: F* has no
+`while` or `ref` that the OCaml's tree maps to. `Plan.Frames` and
+`Plan.Loop` prove of the plan model of `fold_frames`' control that it
+visits the frames `len / stride` counts, in order, each in the buffer,
+and that a field it loads ahead lies in its frame; the model of
+`fold_index_step`'s pipelined loop is being written apart. What the
+frames' theorems above leave to the loop is exactly their premises: that
+the frame lies in the buffer and holds `need` bytes when walked with this
+walk, and that a field passed in was loaded at the frame's start. The
+theorem the loops call for, their result as the fold of the frames'
+answers in order, is not stated here.
+
 ## What is generated
 
-`Wire_ocaml.fstar ~codec:M c` returns fifteen modules, which
+`Wire_ocaml.fstar ~codec:M c` returns twenty-seven modules, which
 `scripts/fstar-gen/gen.exe` writes with `M.3d` (`Wire.Everparse.write
 ~mode:`Standalone ~name:M`):
 
@@ -106,6 +147,9 @@ proof excludes. The sign of one `logor` that tests `off` and `len` in its
 | `M.StepProof.fsti`, `M.StepProof.fst` | `visit`; the lemmas of `M.Proof` for the step walk's values (`P.bits64` of a word); then `step_within == flat` on the buffer's length, `step_within_is_3d` and `fold_step_is_3d`, through the same `M.Flat` |
 | `M.OxScan.fst`, `M.OxProof.fsti`, `M.OxProof.fst` | the same as `M.Scan` and `M.Proof`, of the OxCaml scanner's `fold` |
 | `M.OxStep.fst`, `M.OxStepProof.fsti`, `M.OxStepProof.fst` | the same as `M.Step` and `M.StepProof`, of the OxCaml scanner's step functions, which call the same `M.Visitor` |
+| `M.Frames.fst`, `M.FramesProof.fsti`, `M.FramesProof.fst` | `frames_step_record`, the walk of a frame of the loop of `fold_frames_step`, typed with what the loop ensures, and `frame_is_3d` |
+| `M.Index.fst`, `M.IndexProof.fsti`, `M.IndexProof.fst` | the same of `index_step_record`, of the loop of `fold_index_step`, with the fields it reads ahead; only for a codec whose frames need bytes, as only then has the loop a walk of its own |
+| `M.OxFrames...`, `M.OxIndex...` | the same of the OxCaml scanner |
 
 The library in `lib/` is written once: `WireGen.OCaml` (the primitives,
 those whose meaning is more than linear arithmetic opaque to Z3, so that
@@ -178,8 +222,9 @@ promote` writes it again.
 `test/fstar` (part of `dune runtest`, no F* needed) reads the `fold` of
 `Wire_ocaml.scanner ~step:"S"` and the functions it calls, and
 `M.Scan.fst`, then its `fold_step` and the functions it calls, and
-`M.Step.fst`, then the same of `Wire_ocaml.scanner ~target:`OxCaml
-~step:"S"` and `M.OxScan.fst` and `M.OxStep.fst`, with
+`M.Step.fst`, then `frames_step_record` and `index_step_record` and
+`M.Frames.fst` and `M.Index.fst`, then the same of `Wire_ocaml.scanner
+~target:`OxCaml ~step:"S"` and the `M.Ox*.fst`, with
 the OCaml parser: the bodies of the F* functions keep to the F* that is
 also OCaml (`let x = e in`, a local function `let f () = e in`,
 `if then else`, application, `&&`, `||`, `not`). It requires the same
@@ -235,8 +280,9 @@ the proved ones, the packet stack of `examples/net`, the headers of
 fuzzers' registry and the codecs the differential fuzzer samples. Three
 mutants of the IPv4 OCaml `fold` (a literal, an operator, two labels
 swapped) and three of its step walk (a shift, an `int64` comparison, two
-labels swapped) and three of the OxCaml one (a literal, a comparison, an
-output given another field's value) must fail it.
+labels swapped), three of the OxCaml one (a literal, a comparison, an
+output given another field's value) and two of the walk of a frame of the
+index loop (two labels swapped; on OxCaml, a shift) must fail it.
 
 ## Scope
 
@@ -249,17 +295,22 @@ else: an optional codec of a fixed size, which 3D reads as a list of
 elements, signed and little-endian fields, checked arithmetic, a scanner
 that holds an output in a mutable local (more than four optional fields
 deep), a negative `int64` literal and an `int64` normalised to 63 bits in
-the step walks. Outside the rendering stay the frame loops (`fold_frames`,
-`fold_frames_step`, `fold_frames_unboxed`, `fold_index_step`), the
-OxCaml `fold_unboxed` and `decode_unboxed`, the views, the record module,
-and the Rust Wire_rust writes, which has a walk of its own and stays
-under `make fuzz-rust`.
+the step walks. The control of the frame loops is not rendered: the cursor,
+`last`, the unrolled iterations, the batch too short for the loop, the
+index's offsets and lengths, its `known` test and the loads ahead it
+guards stay outside F*, and no theorem states a loop's result as the fold
+of its frames' answers (above). Outside the rendering stay too the walks
+of a frame of `fold_frames` and `fold_frames_unboxed`,
+which call closures (the same walk as `fold_frames_step`'s, its consumer a
+parameter), the OxCaml `fold_unboxed` and `decode_unboxed`, the views,
+the record module, and the Rust Wire_rust writes, which has a walk of its
+own and stays under `make fuzz-rust`.
 
 ## Opting a codec in
 
-Add it to `scripts/fstar-gen/proved.ml`, list its sixteen files in the
+Add it to `scripts/fstar-gen/proved.ml`, list its twenty-eight files in the
 targets of `dune` and add a `prove.sh codec M` rule to the `prove` alias.
-`make prove` then runs 3d.exe on `M.3d` and F* on each of its fifteen
+`make prove` then runs 3d.exe on `M.3d` and F* on each of its
 modules. The proved set is Tiny (two fields and a constraint), the
 Ethernet and IPv4 headers of `bench/rust/headers.ml` (shared 64-bit loads,
 bitfields, a constraint across two bitfields tested as one range of their
@@ -277,6 +328,10 @@ requires its Step and Flat to verify and its StepProof to fail.
 `TinyOxMutant` is Tiny's OxCaml `fold` with `a` read as the low byte of
 the 16-bit load one byte on, the byte after `a`: `prove.sh refused ...
 OxScan` requires its OxScan and Flat to verify and its OxProof to fail.
+`RegionIndexMutant` is Region's OxCaml `index_step_record` given its tag
+as read ahead one byte on, a 16-bit load ending one byte past the two
+bytes the loop knows: `prove.sh refused ... OxIndex walk` requires the
+walk itself not to verify, as the load's type refuses it.
 
 ## Cost
 
@@ -330,3 +385,8 @@ through a byte of a 16-bit load is bounded by them). IPv4's `OxProof`
 (98 s) is as sensitive: with these rules in `WireGen.Defs` instead, or
 with a lemma for each field the OxCaml walk binds where it first reads it,
 it ran out a 50-minute `WIRE_PROVE_TIMEOUT`.
+
+The walks of a frame add four proofs per codec, `FramesProof`,
+`IndexProof` and their OxCaml twins, of 9 to 19 s of CPU each (IPv4 50 to
+65 s), their walks under 1 s each; the index mutant is refused in 1 s, its
+walk failing to type-check.
