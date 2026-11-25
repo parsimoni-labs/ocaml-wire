@@ -174,20 +174,30 @@ let guarded_populate : type a r.
 
 (* A field's two validators. [check_only] fills the field's int slot and tests
    its constraint; [full] adds the field action. Decode and [Codec.validate_exn]
-   both run [full], so an action never fires on one path only. *)
-let field_validators ~field_idx ~validator_off ~populate ~check ~act =
+   both run [full], so an action never fires on one path only. A failure names
+   the offset [access] locates the field at, which an earlier variable-size
+   field makes depend on the input. *)
+let field_validators ~field_idx ~access ~populate ~check ~act =
+  let at = access_at access in
   let check_only arr runtime input_end buf base =
     populate arr runtime input_end buf base;
-    let at = at_of base validator_off in
     match check with
-    | Some f when not (eval_arr_at ~at f arr) ->
-        raise_field_constraint ~field_idx ~at arr
-    | _ -> ()
+    | Some f -> (
+        match f arr with
+        | true -> ()
+        | false ->
+            raise_field_constraint ~field_idx
+              ~at:(at runtime input_end buf base)
+              arr
+        | exception Parse_error e -> relocate at runtime input_end buf base e)
+    | None -> ()
   in
   let full arr runtime input_end buf base =
     check_only arr runtime input_end buf base;
     match act with
-    | Some f -> eval_arr_at ~at:(at_of base validator_off) f arr
+    | Some f -> (
+        try f arr
+        with Parse_error e -> relocate at runtime input_end buf base e)
     | None -> ()
   in
   (check_only, full)
@@ -579,7 +589,7 @@ let field_fault ~field_idx ~check ~act cf (fld : (_, _) field) full =
   match fld.typ with
   | Codec _ ->
       let _, f =
-        field_validators ~field_idx ~validator_off:cf.validator_off
+        field_validators ~field_idx ~access:cf.field_access
           ~populate:cf.populate ~check ~act
       in
       prepend_field_check fld.name f
@@ -595,7 +605,7 @@ let apply_compiled : type a f r.
   let check = compile_field_check cc fld in
   let act = compile_action cc fld.action in
   let check_only, full =
-    field_validators ~field_idx ~validator_off:cf.validator_off
+    field_validators ~field_idx ~access:cf.field_access
       ~populate:(guarded_populate cf fld.typ)
       ~check ~act
   in

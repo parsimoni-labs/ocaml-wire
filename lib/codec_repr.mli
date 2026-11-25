@@ -105,6 +105,17 @@ val access_at : field_access -> runtime -> Input_end.t -> bytes -> int -> int
 (** [access_at a runtime input_end buf base] is the absolute offset of the field
     [a] locates in the record at [base]. *)
 
+val relocate :
+  (runtime -> Input_end.t -> bytes -> int -> int) ->
+  runtime ->
+  Input_end.t ->
+  bytes ->
+  int ->
+  Types.parse_error ->
+  'a
+(** [relocate at runtime input_end buf base e] raises [e] at the offset
+    [at runtime input_end buf base]. *)
+
 val immediate_access_off : field_access -> int
 (** [immediate_access_off a] is the static offset of [a]; [0] for a dynamic one.
 *)

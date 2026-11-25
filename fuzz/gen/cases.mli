@@ -14,6 +14,10 @@ val sized_cases : string -> Alcobar.test_case list
 (** [sized_cases group] round-trips a length/data codec whose data span is sized
     by a cross-field reference, for several length-source field types. *)
 
+val span_fault_cases : string -> Alcobar.test_case list
+(** [span_fault_cases label] requires a check refusing a field after a
+    variable-size one to report the field's offset, for each kind of check. *)
+
 val nested_cases : string -> int -> Alcobar.test_case list
 (** [nested_cases label depth] runs the checks of {!test_cases} over an
     arbitrary nested codec per sample, composed up to [depth] levels. *)

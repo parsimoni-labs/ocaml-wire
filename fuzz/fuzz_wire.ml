@@ -39,8 +39,10 @@ let suite =
     ( "wire",
       registry_tests ()
       @ reject_cases "action_abort" action_abort
-      @ sized_cases "sized" @ nested_tests () @ validate_agrees_tests ()
-      @ entry_point_tests () @ api_tests ()
+      @ sized_cases "sized"
+      @ span_fault_cases "span_fault"
+      @ nested_tests () @ validate_agrees_tests () @ entry_point_tests ()
+      @ api_tests ()
       @ semantic_invariant_cases "semantic"
       @ construction_guard_cases "construction"
       @ invariant_cases "invariants" )

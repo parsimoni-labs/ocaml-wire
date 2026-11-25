@@ -290,6 +290,10 @@ val sized_cases : string -> Alcobar.test_case list
     coverage for cross-field size expressions that read an unusual size-source
     field. *)
 
+val span_fault_cases : string -> Alcobar.test_case list
+(** [span_fault_cases label] requires a check refusing a field after a
+    variable-size one to report the field's offset, for each kind of check. *)
+
 (** {1 Scalar leaves} *)
 
 val uint8 : Wire.UInt8.t t

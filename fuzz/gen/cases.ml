@@ -446,3 +446,85 @@ let reject_cases label g =
         check_reject random random_env;
         check_reject adversarial adversarial_env);
   ]
+
+(* A field after a variable-size one sits where the input puts it, and a check
+   that refuses it names that offset. The offset properties compare one base
+   with another, which a failure reported at the record's base passes too, and
+   decode and validate are compared on the reason alone: neither sees a wrong
+   [at], so it is checked here against where the bytes put the field. Each
+   trailing field refuses a byte of 128 or more through a different check. *)
+type span_fault = Span_fault : string * 'a Wire.Field.t -> span_fault
+
+let span_faults =
+  let x = Wire.Field.v "X" Wire.uint8 in
+  let refused = Wire.(Expr.(Field.ref x >= int 128)) in
+  [
+    Span_fault
+      ( "constraint",
+        Wire.Field.v "X"
+          ~self_constraint:(fun s -> Wire.(Expr.(s < int 128)))
+          Wire.uint8 );
+    Span_fault
+      ( "enum",
+        Wire.Field.v "X"
+          (Wire.enum "E"
+             (List.init 128 (fun i -> (Fmt.str "V%d" i, i)))
+             Wire.uint8) );
+    Span_fault
+      ( "lookup",
+        Wire.Field.v "X" (Wire.lookup (List.init 128 Fun.id) Wire.uint8) );
+    Span_fault
+      ( "action",
+        Wire.Field.v "X"
+          ~action:
+            (Wire.Action.on_success
+               [ Wire.Action.if_ refused [ Wire.Action.abort ] None ])
+          Wire.uint8 );
+  ]
+
+let span_fault_case label (Span_fault (name, x)) =
+  let len = Wire.Field.v "Len" Wire.uint8 in
+  let codec =
+    Wire.Codec.v ("Span_" ^ name)
+      (fun l d x -> (l, d, x))
+      Wire.Codec.
+        [
+          (len $ fun (l, _, _) -> l);
+          ( Wire.Field.v "Data" (Wire.byte_slice ~size:(Wire.Field.ref len))
+          $ fun (_, d, _) -> d );
+          (x $ fun (_, _, x) -> x);
+        ]
+  in
+  let label = Fmt.str "%s %s" label name in
+  let check what pad data byte = function
+    | Ok _ when byte < 128 -> ()
+    | Ok _ -> Alcobar.failf "%s: %s accepted the byte %d" label what byte
+    | Error (e : Wire.parse_error) when byte < 128 ->
+        Alcobar.failf "%s: %s refused the byte %d: %a" label what byte
+          Wire.pp_parse_error e
+    | Error e ->
+        let at = pad + 1 + String.length data in
+        if e.at <> at || e.field <> [ "X" ] then
+          Alcobar.failf "%s: %s reported %a, but X is at %d" label what
+            Wire.pp_parse_error e at
+  in
+  Alcobar.test_case (label ^ " offset")
+    Alcobar.[ range 4; bytes; uint8 ]
+    (fun pad data byte ->
+      let data = String.sub data 0 (min 255 (String.length data)) in
+      let buf =
+        Bytes.concat Bytes.empty
+          [
+            Bytes.make pad '\xff';
+            Bytes.make 1 (Char.chr (String.length data));
+            Bytes.of_string data;
+            Bytes.make 1 (Char.chr byte);
+          ]
+      in
+      check "decode" pad data byte (Wire.Codec.decode codec buf pad);
+      check "validate" pad data byte
+        (match Wire.Codec.validate_exn codec buf pad with
+        | () -> Ok ()
+        | exception Wire.Parse_error e -> Error e))
+
+let span_fault_cases label = List.map (span_fault_case label) span_faults

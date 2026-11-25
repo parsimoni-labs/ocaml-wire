@@ -278,6 +278,10 @@
 
 ### Fixed
 
+- `decode` and `validate` report a field after a variable-size one at its
+  own offset. A failed constraint, enum, lookup, `where` or action on such a
+  field reported the offset of the record instead (#560, @samoht)
+
 - `decode`, `validate` and the code `Wire_ocaml` and `Wire_rust` generate
   report a field that fails its check before the end of input, as the
   validator 3D generates does. A record that did not fit its input

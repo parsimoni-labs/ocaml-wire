@@ -77,12 +77,13 @@ let domain_local_slots n =
 let set_int_slot s idx v = s.ints.(idx) <- v
 let set_int64_slot s idx v = s.int64s.(idx) <- v
 
-(* The absolute offset of a field that failed: the record's [base] plus the
-   field's own offset inside it, or [base] alone when the layout makes that
-   offset dynamic ([-1]) and there is nothing better to say. [Types.parse_error]
-   promises [at] is "the absolute byte offset of the failing field", so a caller
-   that locates the field from [at] reads or rewrites the wrong bytes for every
-   field but the first if the record's base is reported instead. *)
+(* The absolute offset of a field that failed at a fixed offset: the record's
+   [base] plus the field's own offset inside it. [Types.parse_error] promises
+   [at] is "the absolute byte offset of the failing field", so a caller that
+   locates the field from [at] reads or rewrites the wrong bytes for every field
+   but the first if the record's base is reported instead. A field after a
+   variable-size one has no fixed offset ([-1]); its checks locate it with
+   [access_at] and [relocate] instead. *)
 let at_of base field_off = if field_off >= 0 then base + field_off else base
 
 (* Raise a field-constraint failure, reporting the offending field's value so a
@@ -425,6 +426,13 @@ let access_at : field_access -> runtime -> Input_end.t -> bytes -> int -> int =
       fun _runtime _input_end _buf base -> base + byte_off
   | Dynamic off_fn | Variable_dynamic { off_fn; _ } ->
       fun runtime input_end buf base -> base + off_fn runtime input_end buf base
+
+(* [relocate at runtime input_end buf base e] raises [e] at the offset [at]
+   resolves for the field that failed. A check calls it only once it has
+   failed, so a field an earlier variable-size one moves pays nothing to locate
+   itself when the check passes. *)
+let[@inline never] relocate at runtime input_end buf base e =
+  raise (Parse_error { e with at = at runtime input_end buf base })
 
 (* [access_at] for the environment-free readers, which never see an offset that
    depends on the buffer: [build_immediate_staged_reader] hands back [None] for

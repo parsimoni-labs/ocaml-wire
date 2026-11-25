@@ -1507,21 +1507,37 @@ let absent_optional_or : type a r.
     ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
     ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
 
+(* [check] applied to what [read] reads, a failure named at [cf]'s offset. A
+   field after a variable-size one has no fixed offset: its check reports at
+   the base and [relocate] finds the field only once the check has failed, so
+   a read that passes does not walk the record again. *)
+let checked_read cf check read =
+  match cf.validator_off with
+  | off when off >= 0 ->
+      fun runtime input_end buf base ->
+        check ~at:(base + off) (read runtime input_end buf base)
+  | _ -> (
+      let at = access_at cf.field_access in
+      fun runtime input_end buf base ->
+        let v = read runtime input_end buf base in
+        try check ~at:base v
+        with Parse_error e -> relocate at runtime input_end buf base e)
+
 (* An enum's populate: the base's, then membership on the slot's int. A wide
    carrier's value can be refused by the conversion to that int, which reports
    byte 0, so name the field instead, as the reader does. *)
 let enum_populate ~base cf int_check =
-  if Types.int_view_is_total base then (fun arr runtime input_end buf base ->
-    cf.populate arr runtime input_end buf base;
-    ignore
-      (int_check
-         ~at:(at_of base cf.validator_off)
-         (cf.int_reader runtime input_end buf base)))
-  else fun arr runtime input_end buf base ->
-    cf.populate arr runtime input_end buf base;
-    let at = at_of base cf.validator_off in
-    Types.relocate_at ~at (fun () ->
-        ignore (int_check ~at (cf.int_reader runtime input_end buf base)))
+  if Types.int_view_is_total base then (
+    let check = checked_read cf int_check cf.int_reader in
+    fun arr runtime input_end buf base ->
+      cf.populate arr runtime input_end buf base;
+      ignore (check runtime input_end buf base))
+  else
+    let at = access_at cf.field_access in
+    fun arr runtime input_end buf base ->
+      cf.populate arr runtime input_end buf base;
+      try ignore (int_check ~at:base (cf.int_reader runtime input_end buf base))
+      with Parse_error e -> relocate at runtime input_end buf base e
 
 let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
@@ -1546,11 +1562,7 @@ let rec compile_field : type a r.
       in
       {
         cf with
-        raw_reader =
-          (fun runtime input_end buf off ->
-            check
-              ~at:(at_of off cf.validator_off)
-              (cf.raw_reader runtime input_end buf off));
+        raw_reader = checked_read cf check cf.raw_reader;
         raw_writer =
           (fun v runtime buf base write_off ->
             encode_check (get v);
@@ -1601,11 +1613,13 @@ and compile_map : type a w r.
     }
   in
   let cf = compile_field ctx inner_fld in
-  let decode = Types.map_decode ~index_bound decode in
-  let checked_reader runtime input_end buf off =
-    decode
-      ~at:(at_of off cf.validator_off)
-      (cf.raw_reader runtime input_end buf off)
+  let checked_reader =
+    match index_bound with
+    | None ->
+        fun runtime input_end buf base ->
+          decode (cf.raw_reader runtime input_end buf base)
+    | Some _ ->
+        checked_read cf (Types.map_decode ~index_bound decode) cf.raw_reader
   in
   {
     cf with
