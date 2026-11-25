@@ -12,7 +12,9 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
 
 val sized_cases : string -> Alcobar.test_case list
 (** [sized_cases group] round-trips a length/data codec whose data span is sized
-    by a cross-field reference, for several length-source field types. *)
+    by a cross-field reference, for several length-source field types, and one
+    whose data is a region ({!Wire.nested}, {!Wire.nested_at_most},
+    {!Wire.zeroterm_at_most}) sized by the length field. *)
 
 val span_fault_cases : string -> Alcobar.test_case list
 (** [span_fault_cases label] requires a check refusing a field after a

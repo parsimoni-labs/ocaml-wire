@@ -1136,10 +1136,12 @@ val struct_nz : struct_ -> bool
 
 (** {1 Shared with the 3D projection and sizing} *)
 
-val size_in_ctx : eval_ctx -> int expr -> int option
-(** [size_in_ctx ctx e] is the size expression [e] resolved as far as the
+val size_in_ctx :
+  ?field:(string -> int option) -> eval_ctx -> int expr -> int option
+(** [size_in_ctx ?field ctx e] is the size expression [e] resolved as far as the
     encode-side context allows: a bound input parameter answers, a reference to
-    a sibling field or a position does not. *)
+    a sibling field answers through [field] (default: never), and a position
+    does not. *)
 
 val has_wire_size_expr : 'a typ -> bool
 (** [has_wire_size_expr t] is [true] when [t] exposes a wire size the 3D

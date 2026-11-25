@@ -1846,3 +1846,34 @@ and compile_optional_or_variable : type a r.
       cf.raw_writer v runtime buf base write_off)
     ~int_reader:cf.int_reader ~size_delta:0 ~next_off:cf.next_off
     ~populate:cf.populate ()
+
+(* Bitfields share a base word; [cf.size_delta] is the correct non-overlapping
+   contribution. Key this off the compiled access rather than the field's type:
+   wrapped bitfields such as [bit (bits ...)] arrive here as [Map]/[Where]/[Enum]
+   even though they still pack into the current word. *)
+let field_size_of_value (fld : (_, _) field) cf ~value_ints =
+  match cf.field_access with
+  | Bitfield _ -> fun _ _ -> cf.size_delta
+  | _ when sized_by_field fld.typ ->
+      (* A size naming an earlier field reads it from the record, as decode
+         reads it from the buffer. *)
+      fun ctx v ->
+        let field name =
+          match List.assoc_opt name value_ints with
+          | Some int_of -> int_of v
+          | None -> None
+        in
+        size_of_typ_value ~field ctx fld.typ (fld.get v)
+  | _ -> fun ctx v -> size_of_typ_value ctx fld.typ (fld.get v)
+
+(* The integer a later size reads [fld] as, from a record value: an
+   [optional_or] holds its default when absent, as its [int_reader] does. *)
+let rec value_int : type a. a typ -> a -> int option =
+ fun typ v ->
+  match typ with
+  | Optional_or { inner; _ } -> value_int inner v
+  | _ -> Types.int_of typ v
+
+let field_value_int (fld : (_, _) field) =
+  let typ = fld.typ and get = fld.get in
+  (fld.name, fun v -> value_int typ (get v))

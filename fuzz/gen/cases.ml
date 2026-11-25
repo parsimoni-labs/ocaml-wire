@@ -186,6 +186,40 @@ let sized_source ~of_len name make_len bytes_of_len =
     adversarial_value = None;
   }
 
+(* A region sized by the length field. Its size names a field of the record,
+   which [size_of_value] has to read from the value as decode reads it from the
+   buffer; the [byte_array] sources above measure the string instead, so they
+   never reach that path. *)
+let region_source name region ~min ?(count = 7) data =
+  let len_field = Wire.Field.v "Len" Wire.uint8 in
+  let data_field = Wire.Field.v "Data" (region (Wire.Field.ref len_field)) in
+  let codec =
+    Wire.Codec.v ("Region" ^ name)
+      (fun len data -> (len, data))
+      Wire.Codec.[ len_field $ fst; data_field $ snd ]
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min count; Alcobar.uint8 ]
+      (fun len b ->
+        let value, bytes = data len b in
+        ((Wire.UInt8.v len, value), Bytes.cat (u8_size_bytes len) bytes))
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive;
+    random = bytes_any;
+    adversarial = bytes_any;
+    equal = ( = );
+    env = None;
+    fields = pair_fields ("Len", len_field) ("Data", data_field);
+    adversarial_value = None;
+  }
+
+let padded len prefix =
+  Bytes.cat prefix (Bytes.make (len - Bytes.length prefix) '\000')
+
 let sized_cases group =
   (* The u8 sources carry their length in a [Wire.UInt8.t] and the u16be one in
      a [Wire.UInt16.t], so the sources cannot sit in one list; each is turned
@@ -218,6 +252,23 @@ let sized_cases group =
            (fun () ->
              Wire.Field.v "Len" (Wire.where Wire.Expr.true_ Wire.uint8))
            u8_size_bytes);
+      case "nested"
+        (region_source "Nested"
+           (fun size -> Wire.nested ~size Wire.uint8)
+           ~min:1 ~count:1
+           (fun _ b -> (Wire.UInt8.v b, u8_size_bytes b)));
+      case "nested_at_most"
+        (region_source "NestedAtMost"
+           (fun size -> Wire.nested_at_most ~size Wire.uint8)
+           ~min:1
+           (fun len b -> (Wire.UInt8.v b, padded len (u8_size_bytes b))));
+      case "zeroterm_at_most"
+        (region_source "ZerotermAtMost"
+           (fun size -> Wire.zeroterm_at_most ~size)
+           ~min:1
+           (fun len _ ->
+             let s = String.make (len - 1) 'a' in
+             (s, padded len (Bytes.of_string s))));
     ]
 
 (* Drive a freshly generated nested composition per sample: the positive case

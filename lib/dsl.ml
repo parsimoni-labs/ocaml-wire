@@ -596,16 +596,22 @@ and int_binop leaf f a b =
 let const_int_expr e = int_expr_with (fun _ -> None) e
 
 (* A size expression resolved as far as the encode-side context allows. A bound
-   input parameter answers; a reference to a sibling field or to a position does
-   not, because a value on its own does not carry the record around it. *)
-let rec size_in_ctx ctx e =
+   input parameter answers; a reference to a sibling field answers through
+   [field], which only the record around the value can supply; a position does
+   not answer. *)
+let rec param_in_ctx ctx name =
   match ctx with
   | Unbound -> None
-  | Checked ctx -> size_in_ctx ctx e
-  | Bound _ ->
-      int_expr_with
-        (function Param_ref p -> Some (eval_param ctx p.name) | _ -> None)
-        e
+  | Checked ctx -> param_in_ctx ctx name
+  | Bound _ -> Some (eval_param ctx name)
+
+let size_in_ctx ?(field = fun _ -> None) ctx e =
+  int_expr_with
+    (function
+      | Param_ref p -> param_in_ctx ctx p.name
+      | Ref (_, name) -> field name
+      | _ -> None)
+    e
 
 (* [fold_size e] is [e] with a reference-free constant folded to its literal.
    Every smart constructor taking a size or length expression runs its argument

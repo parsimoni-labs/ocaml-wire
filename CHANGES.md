@@ -282,6 +282,11 @@
   own offset. A failed constraint, enum, lookup, `where` or action on such a
   field reported the offset of the record instead (#560, @samoht)
 
+- `encode` and `size_of_value` measure a `nested`, `nested_at_most`,
+  `zeroterm_at_most` or `uint_var` field sized by an earlier field of the
+  record. They raised `Invalid_argument` asking for an `?env`, so a decoded
+  record could not be encoded back (#561, @samoht)
+
 - `decode`, `validate` and the code `Wire_ocaml` and `Wire_rust` generate
   report a field that fails its check before the end of input, as the
   validator 3D generates does. A record that did not fit its input

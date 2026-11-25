@@ -5,27 +5,28 @@ open Dsl
    reads the value for variable byte fields. Sub-codecs delegate to the
    value-driven [codec_size_of_value] baked in at codec construction.
 
-   Typs whose size depends on a parameter or sibling field ([Uint_var]
-   with non-constant size, dynamic [Optional]/[Optional_or], parametric
-   [Repeat] / [Single_elem]) are not handled here -- they only appear
-   inside a codec, which threads its own value-driven size at seal. *)
+   A size that names an input parameter resolves through the context, and one
+   that names a sibling field through [field], which the codec holding the
+   value supplies from the record being encoded. *)
 
-(* A field whose byte extent is an input parameter cannot be measured from the
-   value alone. Returning 0 would under-report the whole field, and a caller
-   sizing a buffer from that answer writes past it, so refuse instead. *)
-
-(** Compute wire size of a type (None for variable-size types). *)
+(* A field whose byte extent neither the context nor the record resolves cannot
+   be measured from the value alone. Returning 0 would under-report the whole
+   field, and a caller sizing a buffer from that answer writes past it, so
+   refuse instead. *)
 let unsized_field what =
   Fmt.invalid_arg
     "Codec.size_of_value: the %s field's size is an input parameter; pass ?env \
      so it can be resolved."
     what
 
-let resolved_size ctx size what =
-  match size_in_ctx ctx size with Some n -> n | None -> unsized_field what
+let resolved_size ?field ctx size what =
+  match size_in_ctx ?field ctx size with
+  | Some n -> n
+  | None -> unsized_field what
 
-let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
- fun ctx typ v ->
+let rec size_of_typ_value : type a.
+    ?field:(string -> int option) -> eval_ctx -> a typ -> a -> int =
+ fun ?field ctx typ v ->
   match typ with
   | Uint8 -> 1
   | Uint16 _ -> 2
@@ -45,7 +46,8 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
   | All_zeros -> String.length v
   | Zeroterm -> String.length v + 1
   | Zeroterm_at_most { size = Int n } -> n
-  | Zeroterm_at_most { size } -> resolved_size ctx size "zeroterm_at_most"
+  | Zeroterm_at_most { size } ->
+      resolved_size ?field ctx size "zeroterm_at_most"
   | Byte_array { size = Int n } -> n
   | Byte_array _ -> String.length v
   | Byte_array_where { size = Int n; _ } -> n
@@ -53,36 +55,36 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
   | Byte_slice { size = Int n } -> n
   | Byte_slice _ -> Bytesrw.Bytes.Slice.length v
   | Uint_var { size = Int n; _ } -> n
-  | Uint_var { size; _ } -> resolved_size ctx size "uint_var"
-  | Map { inner; encode; _ } -> size_of_typ_value ctx inner (encode v)
-  | Where { inner; _ } -> size_of_typ_value ctx inner v
-  | Enum { base; _ } -> size_of_typ_value ctx base v
+  | Uint_var { size; _ } -> resolved_size ?field ctx size "uint_var"
+  | Map { inner; encode; _ } -> size_of_typ_value ?field ctx inner (encode v)
+  | Where { inner; _ } -> size_of_typ_value ?field ctx inner v
+  | Enum { base; _ } -> size_of_typ_value ?field ctx base v
   | Optional { present = Bool true; inner } ->
-      size_of_typ_value ctx inner (Option.get v)
+      size_of_typ_value ?field ctx inner (Option.get v)
   | Optional { present = Bool false; _ } -> 0
   | Optional { inner; _ } -> (
       (* Dynamic gate: value drives presence at encode time. The
          buffer-driven [present_fn] is the decode-side oracle and would
          disagree with [v] here, so consult [v] directly. *)
       match v with
-      | Some inner_v -> size_of_typ_value ctx inner inner_v
+      | Some inner_v -> size_of_typ_value ?field ctx inner inner_v
       | None -> 0)
   | Optional_or { present = Bool true; inner; _ } ->
-      size_of_typ_value ctx inner v
+      size_of_typ_value ?field ctx inner v
   | Optional_or { present = Bool false; _ } -> 0
   | Optional_or { inner; _ } ->
       (* Dynamic gate: encode always has a value (the default fills in
          for [None]); the encoder writes the inner regardless of what
          the runtime gate would have said at decode. *)
-      size_of_typ_value ctx inner v
+      size_of_typ_value ?field ctx inner v
   | Codec { codec_size_of_value; _ } -> codec_size_of_value ctx v
   | Single_elem { size = Int n; elem; at_most } ->
-      let actual = size_of_typ_value ctx elem v in
+      let actual = size_of_typ_value ?field ctx elem v in
       check_nested_size ~at_most ~expected:n ~actual;
       n
   | Single_elem { size; elem; at_most } ->
-      let n = resolved_size ctx size "nested" in
-      let actual = size_of_typ_value ctx elem v in
+      let n = resolved_size ?field ctx size "nested" in
+      let actual = size_of_typ_value ?field ctx elem v in
       check_nested_size ~at_most ~expected:n ~actual;
       n
   | Repeat { size = Int expected; elem; seq } ->
@@ -121,7 +123,7 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
           let total = Stdlib.ref 0 in
           s.iter (fun e -> total := !total + size_of_typ_value ctx elem e) v;
           !total)
-  | Apply { typ; _ } -> size_of_typ_value ctx typ v
+  | Apply { typ; _ } -> size_of_typ_value ?field ctx typ v
   | Casetype { tag; cases; _ } ->
       (* Tag bytes plus the matched case's body: find the branch whose
          [project] accepts [v], then size its inner from the projected body.
@@ -136,7 +138,7 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
         | Case_branch { cb_inner; cb_project; _ } :: rest -> (
             match cb_project v with
             | Some (_tag, body) ->
-                tag_size + size_of_typ_value ctx cb_inner body
+                tag_size + size_of_typ_value ?field ctx cb_inner body
             | None -> find rest)
       in
       find cases
@@ -146,13 +148,34 @@ let rec size_of_typ_value : type a. eval_ctx -> a typ -> a -> int =
         | [] -> Encode_guard.raise_no_matching_case ()
         | Case_branch { cb_inner; cb_project; _ } :: rest -> (
             match cb_project v with
-            | Some (_tag, body) -> size_of_typ_value ctx cb_inner body
+            | Some (_tag, body) -> size_of_typ_value ?field ctx cb_inner body
             | None -> find rest)
       in
       find cases
   | Struct _ -> 0
   | Type_ref _ -> 0
   | Qualified_ref _ -> 0
+
+(* Whether measuring a value of [typ] reads a size that is not a literal, so
+   that [size_of_typ_value] may need the record's fields to resolve it: the
+   branches above that pass [field] on, down to a [resolved_size]. *)
+let rec sized_by_field : type a. a typ -> bool = function
+  | Zeroterm_at_most { size = Int _ } | Uint_var { size = Int _; _ } -> false
+  | Zeroterm_at_most _ | Uint_var _ -> true
+  | Single_elem { size = Int _; elem; _ } -> sized_by_field elem
+  | Single_elem _ -> true
+  | Map { inner; _ } -> sized_by_field inner
+  | Where { inner; _ } -> sized_by_field inner
+  | Optional { inner; _ } -> sized_by_field inner
+  | Optional_or { inner; _ } -> sized_by_field inner
+  | Enum { base; _ } -> sized_by_field base
+  | Apply { typ; _ } -> sized_by_field typ
+  | Casetype { cases; _ } -> List.exists case_sized_by_field cases
+  | Union { cases; _ } -> List.exists case_sized_by_field cases
+  | _ -> false
+
+and case_sized_by_field : type a k. (a, k) case_branch -> bool =
+ fun (Case_branch { cb_inner; _ }) -> sized_by_field cb_inner
 
 (* An array of a literal count of fixed-width elements is a byte count too. *)
 let array_len ~combinator len elem =

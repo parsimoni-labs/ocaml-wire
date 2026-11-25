@@ -1124,6 +1124,10 @@ type ('f, 'r) record =
              instead of the buffer-driven [wire_size.compute] when sizing
              scratch buffers, because the latter misreads variable tails
              (all_bytes / rest_bytes / all_zeros) as "remaining buffer". *)
+      value_ints_rev : (string * ('r -> int option)) list;
+          (* Each named field's integer view, read from the record value: what
+             a size naming an earlier field resolves to when [size_of_value]
+             measures the value, as decode reads it from the buffer. *)
       min_wire_size : int;
           (* sum of all fixed-size fields -- minimum buffer size *)
       next_off : next_off; (* where the next field starts *)
@@ -1336,6 +1340,7 @@ let record_start ?where ?doc name make =
           };
       prefix = [];
       size_of_value_rev = [];
+      value_ints_rev = [];
       min_wire_size = 0;
       next_off = Static 0;
       fixed_prefix = Stdlib.ref 0;
@@ -1367,3 +1372,15 @@ let bind (f : 'a Field.t) get =
   }
 
 let ( $ ) = bind
+
+(* What the walk skips a field with: a sub-record's own skip, else nothing. *)
+let walk_skip : type a. a walk_read -> _ = function
+  | Walk w -> Some w.wskip
+  | Scalar _ | String _ | Slice _ -> None
+
+(* Where the walk's dynamic part starts: the offset of the first field whose
+   extent is dynamic. *)
+let walk_start wstart ~before ~after =
+  match (wstart, before, after) with
+  | None, Static n, Dynamic _ -> Some n
+  | wstart, _, _ -> wstart

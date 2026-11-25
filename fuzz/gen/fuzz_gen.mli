@@ -286,9 +286,12 @@ val sized_cases : string -> Alcobar.test_case list
 (** [sized_cases group] round-trips a two-field length/data codec whose data
     byte span is sized by a cross-field reference to the preceding length field,
     for each of several int-valued length-source field types (a plain scalar, a
-    mapped scalar, a static optional-or field, and a refined field). Regression
+    mapped scalar, a static optional-or field, and a refined field), and a
+    length/region codec whose {!Wire.nested}, {!Wire.nested_at_most} or
+    {!Wire.zeroterm_at_most} region is sized by the length field. Regression
     coverage for cross-field size expressions that read an unusual size-source
-    field. *)
+    field, and for {!Wire.Codec.size_of_value} reading such a size from the
+    value. *)
 
 val span_fault_cases : string -> Alcobar.test_case list
 (** [span_fault_cases label] requires a check refusing a field after a

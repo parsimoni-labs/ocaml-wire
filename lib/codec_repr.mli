@@ -431,6 +431,7 @@ type ('f, 'r) record =
       walk : ('full, 'f) walk option;
       prefix : (string * packed_scalar) list;
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
+      value_ints_rev : (string * ('r -> int option)) list;
       min_wire_size : int;
       next_off : next_off;
       fixed_prefix : int ref;
@@ -630,3 +631,11 @@ val checked_runtime : Types.eval_ctx
 val clear_ints : slots -> int -> unit
 (** [clear_ints s n] zeroes the first [n] integer slots of [s], and leaves its
     [int64] half alone. *)
+
+val walk_skip : 'a walk_read -> (Types.cursor -> unit) option
+(** [walk_skip r] is how the walk skips the field [r] reads: a sub-record's own
+    skip, else [None]. *)
+
+val walk_start : int option -> before:next_off -> after:next_off -> int option
+(** [walk_start s ~before ~after] is where the walk's dynamic part starts once a
+    field moves the next offset from [before] to [after]. *)
