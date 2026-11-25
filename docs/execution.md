@@ -275,8 +275,8 @@ random bytes: the record modules on the sampled fixed records, the scanners
 on every sampled shape and on hand-written structured cases, and, with
 `BUILD_EVERPARSE=1`, those cases with the EverParse C validators of their
 standalone and FFI projections for acceptance and the bytes consumed, and
-with every scalar member of the FFI projection's default plug, nested fields
-and presence flags included ([the FFI plug](projection.md#the-ffi-plug)), an
+with every scalar member of the FFI projection's default visitor, nested fields
+and presence flags included ([the FFI visitor](projection.md#the-ffi-visitor)), an
 absent field as zero. The sampled shapes are compared with those validators
 too, on acceptance, the bytes consumed and their top-level integer members.
 On OxCaml the scanners hold integers as `int64_u`; the

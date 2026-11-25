@@ -222,11 +222,11 @@ let test_name_collision () =
   rejects "same .3d file (dune)" generate_dune [ "header"; "Header" ]
     [ "Header.3d" ];
   (* [TMFrame] and [Tmframe] write two files that share the [TmframeFields]
-     plug struct tag and the [TMFRAME_FIELDS_H] include guard, so a
-     translation unit including both takes one plug layout for the other. *)
+     visitor struct tag and the [TMFRAME_FIELDS_H] include guard, so a
+     translation unit including both takes one visitor layout for the other. *)
   rejects "same C identifier" generate_3d [ "TMFrame"; "Tmframe" ]
     [ "\"TMFrame\""; "\"Tmframe\""; "Tmframe" ];
-  rejects "same C identifier (plug)"
+  rejects "same C identifier (visitor)"
     (fun schemas -> Wire_3d.write_fields ~outdir:tmpdir schemas)
     [ "TMFrame"; "Tmframe" ] [ "Tmframe" ];
   rejects "post-digit C identifier" generate_3d [ "Foo2Bar"; "Foo2bar" ]
@@ -340,7 +340,7 @@ let doc_codec name =
 
 let test_generate_dune_standalone () =
   (* The doc pipeline emits a single-file [dune.inc]: the package name becomes a
-     CamelCase module name and there is no FFI plug or test harness. *)
+     CamelCase module name and there is no FFI visitor or test harness. *)
   let tmpdir = Filename.temp_dir "wire_3d_dune_doc" "" in
   Wire_3d.generate_dune_standalone ~outdir:tmpdir ~package:"my-pkg"
     [ Wire_3d.pack (doc_codec "Pkt") ];
@@ -395,7 +395,7 @@ let test_generate_dune_standalone () =
     (has "%{env:BUILD_EVERPARSE=}");
   Alcotest.(check bool)
     "C rule never auto-regenerates" false (has "mode fallback");
-  Alcotest.(check bool) "no FFI plug" false (has "_Fields");
+  Alcotest.(check bool) "no FFI visitor" false (has "_Fields");
   Alcotest.(check bool) "no FFI test harness" false (has "test.c")
 
 let test_generate_dune_standalone_name_override () =

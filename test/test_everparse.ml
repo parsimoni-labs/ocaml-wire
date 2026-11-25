@@ -756,7 +756,7 @@ let test_3d_optional_over_param_codec () =
           $ fun (_, v) -> v );
         ]
   in
-  (* The FFI projection flattens the sub-codec into the plug, so its struct
+  (* The FFI projection flattens the sub-codec into the visitor, so its struct
      also takes [ctx], after its own formal. *)
   let check mode ~formals ~args =
     let out = flatten (to_3d (Everparse.project ~mode c).module_) in
@@ -1025,7 +1025,7 @@ let test_ffi_single_field_codec () =
     [ "} OneF;"; "} OneF_b;"; "OneF a"; "OneF_b(ctx) b[:byte-size" ]
 
 let test_ffi_unflattened_shapes () =
-  (* Without an embedded codec the plug is the entrypoint's fields, and an
+  (* Without an embedded codec the visitor is the entrypoint's fields, and an
      optional has no flag. A codec inside an array is validated, not flattened:
      it keeps its own scope. *)
   let f_g = Field.v "g" uint8 in
@@ -1917,7 +1917,7 @@ let suite =
         test_3d_absent_optional_projects_to_unit;
       Alcotest.test_case "3d: optional over a parametric sub-codec" `Quick
         test_3d_optional_over_param_codec;
-      Alcotest.test_case "ffi: nested plug paths" `Quick
+      Alcotest.test_case "ffi: nested visitor paths" `Quick
         test_ffi_nested_plug_paths;
       Alcotest.test_case "ffi: a member is as wide as its setter's value" `Quick
         test_ffi_member_widths;

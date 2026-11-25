@@ -592,7 +592,7 @@ let anon_counter = Stdlib.ref 0
 (* The documentation projection renders an enum field as its named 3D enum type
    (e.g. [Status StatusCode;]), which makes EverParse enforce membership through
    the type. The codegen projection keeps the base type plus an explicit
-   membership refinement, because its FFI plug reads the field as the base type.
+   membership refinement, because its FFI visitor reads the field as the base type.
    Toggled around rendering by [to_3d]/[to_3d_file], mirroring [anon_counter]. *)
 let render_enum_as_type = Stdlib.ref false
 

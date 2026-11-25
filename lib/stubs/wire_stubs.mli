@@ -2,9 +2,10 @@
 
     [Wire_stubs] generates C stubs and matching OCaml [external] declarations so
     OCaml code can call EverParse-generated validators. Each stub stack-
-    allocates the schema's default plug struct ([<Name>Fields] from {!Wire_3d}),
-    runs the EverParse validator against it, then marshals the populated struct
-    members into an OCaml record. On validation failure, [Failure] is raised.
+    allocates the schema's default visitor struct ([<Name>Fields] from
+    {!Wire_3d}), runs the EverParse validator against it, then marshals the
+    populated struct members into an OCaml record. On validation failure,
+    [Failure] is raised.
 
     {b Typical usage} (in a code-generation executable):
     {[
@@ -27,8 +28,8 @@
     ]}
 
     This writes [wire_ffi.c] + [stubs.ml] into [outdir]. The [WIRECTX] socket
-    and the [<Name>_Fields] plug come from {!Wire_3d}; this module is just one
-    particular consumer of that plug. *)
+    and the [<Name>_Fields] visitor come from {!Wire_3d}; this module is just
+    one particular consumer of that visitor. *)
 
 type packed_codec = C : _ Wire.Codec.t -> packed_codec
 
@@ -43,7 +44,7 @@ val check_names : Wire.Everparse.Raw.struct_ -> unit
 (** [check_names s] raises [Invalid_argument] naming both fields when
     {!of_structs} would refuse [s] because two of its fields spell one
     identifier: one 3D name in its FFI projection, one macro or member of its
-    plug ({!Wire_3d.check_plug_names}), or one record label of its stubs. It
+    visitor ({!Wire_3d.check_plug_names}), or one record label of its stubs. It
     writes nothing. *)
 
 (** {1 Individual generators}
@@ -61,14 +62,14 @@ val to_c_stubs : Wire.Everparse.Raw.struct_ list -> string
 val build_codec_archive :
   ?cflags:string list -> schema_dir:string -> archive:string -> unit -> unit
 (** [build_codec_archive ~schema_dir ~archive ()] compiles each generated
-    validator and [_Fields] plug in [schema_dir] as its own translation unit and
-    archives them into [archive] (pass [lib<name>.a] to consume it from a dune
-    [(foreign_archives <name>)]). The [wire_ffi.c] from {!to_c_stubs} includes
-    only the headers and calls the validators across this link, so per-codec
-    shared types stay translation-unit-local and any set of codecs links.
-    [cflags] (default none, so [cc]'s own optimisation level) are passed to
-    every compilation. [test.c] and [<Name>Wrapper.c] are skipped. Requires [cc]
-    and [ar]. *)
+    validator and [_Fields] visitor in [schema_dir] as its own translation unit
+    and archives them into [archive] (pass [lib<name>.a] to consume it from a
+    dune [(foreign_archives <name>)]). The [wire_ffi.c] from {!to_c_stubs}
+    includes only the headers and calls the validators across this link, so
+    per-codec shared types stay translation-unit-local and any set of codecs
+    links. [cflags] (default none, so [cc]'s own optimisation level) are passed
+    to every compilation. [test.c] and [<Name>Wrapper.c] are skipped. Requires
+    [cc] and [ar]. *)
 
 val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
 (** Generate OCaml external declarations and record types for all structs. A

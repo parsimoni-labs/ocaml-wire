@@ -354,14 +354,14 @@ let test_check_names () =
       (List.map (Fmt.str "%S") names)
       (fun () -> Wire_stubs.check_names (s names))
   in
-  refused "one plug macro and label" [ "X"; "x" ];
+  refused "one visitor macro and label" [ "X"; "x" ];
   refused "not an identifier" [ "a-b" ];
   Wire_stubs.check_names (s [ "end"; "int"; "typeof"; "done"; "local_"; "X" ]);
   Wire_stubs.check_names
     (s [ "end"; "end_"; "restrict"; "restrict_"; "local_"; "local__" ])
 
 (* A label that is a keyword of OCaml, or of OxCaml, is escaped, so the stub
-   compiles on either compiler; the C side reads the plug member, which escapes
+   compiles on either compiler; the C side reads the visitor member, which escapes
    C's keywords on its own. *)
 let test_keyword_fields () =
   let s =
@@ -476,7 +476,7 @@ let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~structs ~module_ ~test_ml
     Wire_stubs.of_structs ~schema_dir:dir ~outdir:dir structs;
     write_file (Filename.concat dir "main.ml") test_ml;
     (* 3. Compile. [wire_ffi.c] includes only the headers; the EverParse
-       validators ([<Name>.c]) and [_Fields] plugs are compiled as their own
+       validators ([<Name>.c]) and [_Fields] visitors are compiled as their own
        translation units and linked, so shared types stay
        translation-unit-local. The [<Name>Wrapper.c] convenience entry is left
        out: it calls a user-supplied [<Name>EverParseError] the FFI path never
@@ -710,7 +710,7 @@ let plug_field_names s =
 
 (* Invariant 2: [plug_fields] enumerates exactly the named fields of the
    source struct in declaration order, with consecutive indices starting at
-   0. Catches indexing drift between the schema pipeline and the plug
+   0. Catches indexing drift between the schema pipeline and the visitor
    generator. *)
 let check_plug_completeness codec =
   let schema = Wire.Everparse.project ~mode:`Ffi codec in
@@ -880,7 +880,7 @@ let test_e2e_output_parse () =
     let schema = Wire.Everparse.project ~mode:`Ffi codec in
     Wire.Everparse.write ~mode:`Ffi ~outdir:dir [ schema ];
     Wire_3d.run_everparse ~outdir:dir [ schema ];
-    (* 3. Emit default ExternalTypedefs + _Fields plug (Fields plug is what
+    (* 3. Emit default ExternalTypedefs + _Fields visitor (Fields visitor is what
        wire.stubs now stack-allocates against in wire_ffi.c). *)
     Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
     Wire_3d.write_fields ~outdir:dir [ schema ];
@@ -905,7 +905,7 @@ let test_e2e_output_parse () =
   Printf.printf "OK: id=0x%x length=%d tag=%d\n" r.Stubs.id r.Stubs.length r.Stubs.tag
 |};
     (* 7. Compile everything. [wire_ffi.c] is headers-only; the validator and
-       [_Fields] plug compile as separate translation units and link (the
+       [_Fields] visitor compile as separate translation units and link (the
        [<Name>Wrapper.c] convenience entry, which needs a user-supplied
        [<Name>EverParseError], is left out). *)
     let cmd =
@@ -1001,7 +1001,7 @@ int main(void) {
     run (Filename.concat dir "stack_test")
   end
 
-(* A 64-bit integer under [map] in an embedded codec reaches the default plug
+(* A 64-bit integer under [map] in an embedded codec reaches the default visitor
    whole: the member the verified validator fills is compared with what the
    codec decodes, on a value with bits above the 32nd. *)
 let test_e2e_nested_wide () =
@@ -1124,7 +1124,7 @@ let suite =
       Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;
       Alcotest.test_case "e2e: full stack (eth+ipv4+tcp linked)" `Slow
         test_e2e_full_stack;
-      Alcotest.test_case "e2e: a nested 64-bit member (plug vs codec)" `Slow
+      Alcotest.test_case "e2e: a nested 64-bit member (visitor vs codec)" `Slow
         test_e2e_nested_wide;
       Alcotest.test_case "e2e: GC stress under the debug runtime" `Slow
         test_e2e_gc_stress;
@@ -1139,11 +1139,11 @@ let suite =
         test_action_forms_constrained;
       Alcotest.test_case "action forms: with user action" `Quick
         test_action_forms_with_action;
-      Alcotest.test_case "plug completeness: scalars" `Quick
+      Alcotest.test_case "visitor completeness: scalars" `Quick
         test_plug_completeness_scalars;
-      Alcotest.test_case "plug completeness: mixed" `Quick
+      Alcotest.test_case "visitor completeness: mixed" `Quick
         test_plug_completeness_mixed;
-      Alcotest.test_case "plug completeness: bytes" `Quick
+      Alcotest.test_case "visitor completeness: bytes" `Quick
         test_plug_completeness_bytes;
       Alcotest.test_case "setter scoping: disjoint across schemas" `Quick
         test_setter_scoping;

@@ -1902,7 +1902,7 @@ module Everparse : sig
       [.3d] that EverParse compiles to a standalone verified C parser, which
       also reads as a protocol specification. [`Ffi] emits the [WireCtx] extern
       and per-field setter callbacks ([<Name>Set*]), so the C validator is
-      callable from OCaml and extracts every field through the plug (used by
+      callable from OCaml and extracts every field through the visitor (used by
       benchmarks and differential testing). *)
 
   val project : ?mode:mode -> 'r Codec.t -> t
@@ -1933,14 +1933,14 @@ module Everparse : sig
     setter : string;
     val_c_type : string;
   }
-  (** Plug info: the data needed to materialise a typed struct and [<Name>Set*]
-      dispatchers for a schema. See {!Everparse.plug_field}. *)
+  (** Visitor info: the data needed to materialise a typed struct and
+      [<Name>Set*] dispatchers for a schema. See {!Everparse.plug_field}. *)
 
   val plug_member : string -> string
-  (** [plug_member name] is the plug struct member a field named [name] takes:
-      [name] escaped against C's keywords and the macros of the headers the plug
-      includes ([int_], [NULL_], and [int__] for [int_]), so distinct names stay
-      distinct members. *)
+  (** [plug_member name] is the visitor struct member a field named [name]
+      takes: [name] escaped against C's keywords and the macros of the headers
+      the visitor includes ([int_], [NULL_], and [int__] for [int_]), so
+      distinct names stay distinct members. *)
 
   val plug_fields : t -> plug_field list
   (** [plug_fields s] enumerates the named fields of the source struct in

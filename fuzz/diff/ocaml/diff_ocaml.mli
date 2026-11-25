@@ -142,8 +142,8 @@ val check_scan :
     outputs, acceptance against {!Wire.Codec.decode}, its general path and
     {!Wire.Codec.validate_exn}, [fold_frames] at several strides, and, with
     [oracle], the acceptance and consumed prefix of the EverParse C validators
-    of the standalone and FFI projections, and the plug scalars of the FFI one.
-    A read must not change [buf]. Fails with {!Alcobar.failf}. *)
+    of the standalone and FFI projections, and the visitor scalars of the FFI
+    one. A read must not change [buf]. Fails with {!Alcobar.failf}. *)
 
 val scan_corpus :
   ?oracle:Diff_codecs.c_oracle -> Diff_codecs.scan_case -> scan_ops list -> unit

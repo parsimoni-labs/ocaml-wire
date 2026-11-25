@@ -28,12 +28,12 @@ combinator must reject when it is built. The README's
 - A struct with one field (after bitfield packing) is read as that field,
   and a field of its type cannot carry an action when the struct's own
   field carries one ("this field cannot be read because it has multiple
-  actions"). The FFI plug therefore does not flatten such a sub-codec
+  actions"). The FFI visitor therefore does not flatten such a sub-codec
   where the field holding it has a setter: as a field of the entrypoint,
   or under a user action.
 - A literal has no big-endian type (`(UINT16BE) 0` is a `UINT16`), so an
   action cannot pass a constant to a big-endian setter: the validator
-  cannot clear the plug members of an absent optional.
+  cannot clear the visitor members of an absent optional.
 
 ## Arithmetic
 
@@ -132,11 +132,11 @@ statements after it are written into both of its branches. An output whose
 type a native int cannot hold (a `uint64`, or a `uint32` on a 32-bit target)
 receives the 64 bits the C stores.
 
-## The FFI plug
+## The FFI visitor
 
 `Everparse.project ~mode:`Ffi` gives the entrypoint a `ctx` parameter and
 each named field a setter call, and `Wire_3d` writes the default
-`<Name>_Fields` plug, one member per setter index. A codec that embeds
+`<Name>_Fields` visitor, one member per setter index. A codec that embeds
 another codec (as a field, under an `optional`, or in a `nested` region)
 also flattens it: the sub-codec's struct and the optional casetype or
 region wrapper around it take `ctx`, and each of its scalar fields calls the
@@ -153,10 +153,10 @@ or a casetype body is validated but not flattened.
 
 The validator writes a member only for what it parses. A presence flag is
 written on every successful validation, 1 or 0; the fields under an absent
-optional are not written and keep the plug's initial value. The generated
-stubs, the differential oracle and the benchmark loops zero the plug before
+optional are not written and keep the visitor's initial value. The generated
+stubs, the differential oracle and the benchmark loops zero the visitor before
 each validation, so those fields read 0, as in `Wire_ocaml.scanner`. A
-caller that reuses a plug without zeroing it reads them only when their
+caller that reuses a visitor without zeroing it reads them only when their
 flag is 1.
 
 ## Generated C

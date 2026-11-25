@@ -1,7 +1,7 @@
 /* TM frame reassembly -- application logic with EverParse field extraction.
 
    Uses EverParse-generated TmframeValidateWireTmframe and
-   SpacePacketValidateWireSpacePacket to extract fields into typed struct plugs.
+   SpacePacketValidateWireSpacePacket to extract fields into typed struct visitors.
    Application logic (checksum computation) reads named struct members.
    No hand-written bitfield manipulation. */
 

@@ -940,7 +940,7 @@ let casetype_decls_of_struct (s : struct_) : decl list =
 
    The 3D side validates wire framing only; case dispatch is the caller's
    job (OCaml [parse_casetype] already does this on its side, and C
-   consumers receive both spans through the plug and dispatch with their
+   consumers receive both spans through the visitor and dispatch with their
    own [strcmp] table -- exactly what real protocol implementations like
    OpenSSH do). No 3D-side extern, no scratch slot, no runtime helper.
 

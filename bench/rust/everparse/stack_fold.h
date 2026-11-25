@@ -1,5 +1,5 @@
-/* The checksum fold of the inline-plug row (stack_inline.c) over a corpus of
-   [stride]-byte slots, which stack_c.c times beside its default-plug row. */
+/* The checksum fold of the inline-visitor row (stack_inline.c) over a corpus of
+   [stride]-byte slots, which stack_c.c times beside its default-visitor row. */
 
 #ifndef STACK_FOLD_H
 #define STACK_FOLD_H

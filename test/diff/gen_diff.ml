@@ -126,7 +126,7 @@ let generate_schemas schema_dir included =
   end
 
 (* The generated OCaml that reads one codec's field values back out of the C
-   plug. [<lower>_parse_k] applies its continuation to one argument per named
+   visitor. [<lower>_parse_k] applies its continuation to one argument per named
    field, in declaration order and in the OCaml type [field_kinds] gives it, so
    the continuation only has to name the arguments and keep the compared ones.
    A field the comparison leaves out ([Diff_codecs.compared_fields]) gets a
@@ -217,7 +217,7 @@ let fixed schema_dir =
   pr "  |]\n\n";
   pr "(* Each codec's label paired with a [bytes -> (string * int64) list]\n";
   pr "   reader of the field values the EverParse validator extracted, taken\n";
-  pr "   from the default <Name>Fields plug through the generated FFI\n";
+  pr "   from the default <Name>Fields visitor through the generated FFI\n";
   pr "   continuation. Scoped by [Diff_codecs.compared_fields], which the\n";
   pr "   OCaml side of the comparison scopes off too. *)\n";
   pr "let values : (string * (bytes -> (string * int64) list)) array =\n  [|\n";
@@ -226,7 +226,7 @@ let fixed schema_dir =
   Format.pp_print_flush ppf ();
   close_out oc
 
-(* The scalar members of a schema's default plug, with the width of their C
+(* The scalar members of a schema's default visitor, with the width of their C
    type: a byte span's member holds an offset, not a value, and a float has no
    integer view, so neither is compared. *)
 let scalar_members (schema : Wire.Everparse.t) =
@@ -247,8 +247,8 @@ let scalar_members (schema : Wire.Everparse.t) =
     (Wire.Everparse.plug_fields schema)
 
 (* Each structured case through its FFI projection: the stub runs the verified
-   validator with a zeroed default plug, as the generated stubs do, and copies
-   each of [members], a plug field's name and what the oracle calls it, into
+   validator with a zeroed default visitor, as the generated stubs do, and copies
+   each of [members], a visitor field's name and what the oracle calls it, into
    [out]. It returns the consumed prefix, or [-1] for
    a rejected or out-of-bounds frame. *)
 let pp_scan_stub ppf i (schema : Wire.Everparse.t) members =
@@ -434,15 +434,16 @@ static int scan_ok(uint64_t end, uint64_t len) {
           l
       in
       Fmt.pf ppf
-        "(* Each case's label, the scalar members of its plug with their width \
-         in bits, the stub of its FFI projection and the stub of its \
+        "(* Each case's label, the scalar members of its visitor with their \
+         width in bits, the stub of its FFI projection and the stub of its \
          standalone one. *)@\n";
       Fmt.pf ppf "let covered = [\n";
       entries ~first:0 structured;
       Fmt.pf ppf "]@\n@\n";
       Fmt.pf ppf
-        "(* The same for each sampled shape the OCaml scanner takes, its plug \
-         members its top-level fields, each named by its OCaml label. *)@\n";
+        "(* The same for each sampled shape the OCaml scanner takes, its \
+         visitor members its top-level fields, each named by its OCaml label. \
+         *)@\n";
       Fmt.pf ppf "let sampled = [\n";
       entries ~first:(List.length structured) sampled;
       Fmt.pf ppf "]@.";

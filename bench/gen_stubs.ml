@@ -4,7 +4,7 @@
 
     1. Generates .3d files with output pattern (extern callbacks). 2. Runs
     EverParse to produce C validators. 3. Writes the default [<Name>_Fields]
-    plug (typed struct + switch dispatchers) and the FFI parse / timed-loop C
+    visitor (typed struct + switch dispatchers) and the FFI parse / timed-loop C
     stubs that consume it. *)
 
 let ml_only = Array.length Sys.argv > 1 && Sys.argv.(1) = "--ml-only"
@@ -15,7 +15,7 @@ let structs =
   Demo_bench_cases.projection_structs
   @ [ Space.clcw_struct; Space.packet_struct; Space.tm_frame_struct ]
 
-(* Variable-size schemas whose validator and default plug only C benchmark
+(* Variable-size schemas whose validator and default visitor only C benchmark
    loops use (bench/rust/everparse): archived with the others, no OCaml stub. *)
 let c_only_structs =
   [
@@ -183,7 +183,7 @@ let () =
     (* 1. Generate .3d *)
     Wire_3d.generate_3d ~outdir:schema_dir schemas;
 
-    (* 2. Run EverParse, then write default ExternalTypedefs + _Fields plug *)
+    (* 2. Run EverParse, then write default ExternalTypedefs + _Fields visitor *)
     let quiet = Sys.getenv_opt "EVERPARSE_VERBOSE" = None in
     Wire_3d.run_everparse ~quiet ~outdir:schema_dir schemas;
     Wire_3d.write_external_typedefs ~outdir:schema_dir schemas;

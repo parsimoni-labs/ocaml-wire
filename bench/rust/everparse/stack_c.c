@@ -2,11 +2,11 @@
 
    The validator EverParse generates and verifies for Packet_stack.codec,
    called once per corpus slot with the slot as its input, as the OCaml rows
-   bound each frame by its slot. In the default-plug row the fields come from
-   the default EthernetStack_Fields plug, zeroed before each validation, and
+   bound each frame by its slot. In the default-visitor row the fields come from
+   the default EthernetStack_Fields visitor, zeroed before each validation, and
    are folded into the checksum bench.ml and cargo/src/main.rs compute; the
-   inline-plug row (stack_inline.c) folds the same members of a custom plug.
-   No field is read from the bytes here: every value is a named plug member
+   inline-visitor row (stack_inline.c) folds the same members of a custom visitor.
+   No field is read from the bytes here: every value is a named visitor member
    the validator set.
 
    Each pass is timed in process CPU time (getrusage, user and system) and
@@ -83,8 +83,8 @@ struct row {
 };
 
 static const struct row rows[] = {
-    {"EverParse C, default plug", stack_default_fold},
-    {"EverParse C, inline plug", stack_inline_fold},
+    {"EverParse C, default visitor", stack_default_fold},
+    {"EverParse C, inline visitor", stack_inline_fold},
 };
 
 #define ROWS (sizeof rows / sizeof rows[0])
@@ -182,11 +182,11 @@ CAMLprim value ep_stack_run(value v_row, value v_corpus, value v_buf,
 /* The flow classifier on a capture, as bench.exe flow and wire-bench-rust
    flow run it: the validator of Packet_stack.capture once per frame, bounded
    by its captured length, the 5-tuple and IP length read from the default
-   CapturedStack_Fields plug, zeroed per frame, and counted in a flow table of
+   CapturedStack_Fields visitor, zeroed per frame, and counted in a flow table of
    the layout and hash of bench/rust/flow_table.std.ml and cargo/src/flow.rs. The
    table's checksum is read after the timed passes, as theirs is. */
 
-#define FLOW_ROW "EverParse C, default plug"
+#define FLOW_ROW "EverParse C, default visitor"
 #define FLOW_ROW_NAME FLOW_ROW " (" CC_NAME ")"
 
 typedef struct {

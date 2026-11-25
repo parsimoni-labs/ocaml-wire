@@ -194,7 +194,7 @@ let bytes_setter schema_name : setter_info =
     val_typ = Types.Pack_typ (Types.Uint32 Types.Little);
   }
 
-(* {2 The plug}
+(* {2 The visitor}
 
    One slot per named field of the entrypoint. A codec that embeds another
    codec (as a field, under an [optional], or in a [nested] region, seen
@@ -212,9 +212,9 @@ let bytes_setter schema_name : setter_info =
 
    The validator writes a slot only for what it parses: a presence flag is
    written on every validation, 1 or 0, but the fields under an absent optional
-   are not written at all and keep the value the caller gave the plug. 3D gives
+   are not written at all and keep the value the caller gave the visitor. 3D gives
    a literal no big-endian type ([(UINT16BE) 0] is a [UINT16]), so the
-   validator cannot pass a zero to a big-endian setter. Initialising the plug
+   validator cannot pass a zero to a big-endian setter. Initialising the visitor
    to zero before each validation, as the generated stubs do, makes them read 0,
    the value [Wire_ocaml.scanner] gives an absent field. *)
 
@@ -271,7 +271,7 @@ let projected_field_count fields =
 let flattens ~direct_ok (c : Types.struct_) =
   direct_ok || projected_field_count c.fields > 1
 
-(* Whether a field's type embeds a codec on a path the plug flattens.
+(* Whether a field's type embeds a codec on a path the visitor flattens.
    [direct_ok] says whether a codec directly at this position may be
    flattened (see [flattens]). *)
 let rec embeds : type a. direct_ok:bool -> a Types.typ -> bool =
@@ -441,7 +441,7 @@ and thread : type a.
       Types.Where { x with inner = thread w ~direct_ok ~path x.inner }
   | t -> t
 
-(* The entrypoint's fields with their setter calls, and the plug's slots in
+(* The entrypoint's fields with their setter calls, and the visitor's slots in
    index order. Byte offsets are static while every field before them has a
    fixed size, as before. Every named field of the entrypoint has a setter,
    so a codec directly in one flattens only if [flattens] allows it. *)
@@ -469,15 +469,15 @@ let flatten schema (s : Types.struct_) =
   in
   let slots = List.rev !(w.slots) in
   (* A path can spell a field's own name ([ip_src] beside [ip.src]): refuse it,
-     as the plug cannot hold both. Spellings that differ but fold alike are
-     refused where the plug is written ([Wire_3d.check_plug_names]). *)
+     as the visitor cannot hold both. Spellings that differ but fold alike are
+     refused where the visitor is written ([Wire_3d.check_plug_names]). *)
   let seen = Hashtbl.create 16 in
   List.iter
     (fun sl ->
       if Hashtbl.mem seen sl.member then
         Fmt.invalid_arg
-          "Everparse: in %S, two fields flatten to the plug member %S; rename \
-           one of them"
+          "Everparse: in %S, two fields flatten to the visitor member %S; \
+           rename one of them"
           s.name sl.member;
       Hashtbl.add seen sl.member ())
     slots;
@@ -562,7 +562,7 @@ let rewrite_absent_optional (Types.Field f) =
   | _ -> Types.Field f
 
 (* The FFI declarations, and whether embedded codecs were flattened into the
-   plug: their structs then name [WireCtx] and the setters, which must be
+   visitor: their structs then name [WireCtx] and the setters, which must be
    declared ahead of them. *)
 let ffi_decls (s : Types.struct_) : bool * Types.decl list =
   let s = { s with fields = List.map rewrite_absent_optional s.fields } in
@@ -636,7 +636,7 @@ let coalesced_wire_size fields =
 let ffi_of_struct (s : Types.struct_) : t =
   (* Split string-tagged casetype fields up-front so [source] and
      [ffi_decls] see the same field list. Downstream codegen
-     (plug fields, stubs) walks [source] to expose every named field --
+     (visitor fields, stubs) walks [source] to expose every named field --
      it must include the synthesised body field of each casetype. *)
   let s = Types.split_string_casetype_fields s in
   let name = Types.struct_name s in
@@ -679,7 +679,7 @@ type mode = [ `Ffi | `Standalone ]
 
 (* [`Ffi] emits the [WireCtx] extern plus a per-field setter callback, so the
    generated C validator is callable from OCaml and extracts fields through the
-   plug (the bridge used by benchmarks and differential testing). [`Standalone]
+   visitor (the bridge used by benchmarks and differential testing). [`Standalone]
    emits a clean [.3d] with no FFI scaffolding, which EverParse compiles to a
    standalone verified C parser; it also reads as a protocol specification. *)
 let project : type r. ?mode:mode -> r Codec.t -> t =

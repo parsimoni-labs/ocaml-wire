@@ -99,11 +99,11 @@ type compared_field = { name : string; width : int }
      ([Everparse.Raw.int_slots]). A bitfield shares its base word with its
      neighbours, so it has no slot; a float is not an integer; a byte span, an
      array and a nested record are not scalars. None of those are compared.
-   - The default plug must report the field's value. A byte span, a nested
+   - The default visitor must report the field's value. A byte span, a nested
      region and a variable-width integer all route to [<Name>SetBytes], which
      hands back the field's byte offset instead, so there is no value on the C
      side to compare. That drops [uint], the one whole-byte integer the
-     plug does not carry.
+     visitor does not carry.
 
    What is left is the fixed-width scalars -- [uint8] .. [uint64], [int8] ..
    [int64], and the enums, lookups, maps and refinements layered over them. *)
@@ -478,7 +478,7 @@ let optional_scan ~region =
             [ 0; 1; 2; 255 ]);
     }
 
-(* An optional scalar of an embedded codec: the scanners and the plug hand
+(* An optional scalar of an embedded codec: the scanners and the visitor hand
    out its value and its presence by path. *)
 let nested_optional_scan =
   let open Wire in

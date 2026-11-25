@@ -35,7 +35,7 @@
 
 - Generated names escape every keyword of the target language (`effect` is
   `effect_`, `end_` is `end__`), so a field named after a keyword compiles.
-  Update code that names a generated `Wire_stubs` label or C plug member
+  Update code that names a generated `Wire_stubs` label or C visitor member
   (#434, #438, #471, @samoht)
 
 - 3D enum constants carry their enum's name (`Color_Red`), so two enums may
@@ -46,14 +46,14 @@
   name that is not an identifier (`a-b`) and two codecs whose names differ
   only in case. They gave broken output before. Rename them (#434, @samoht)
 
-- The default C plug (`<Name>Fields`) has one member per scalar of a nested
+- The default C visitor (`<Name>Fields`) has one member per scalar of a nested
   codec (`ipv4_tcp_src_port`), so C code reads a whole packet stack through
-  it. Rebuild custom plugs from the regenerated `<Name>_Fields.c` (#446,
+  it. Rebuild custom visitors from the regenerated `<Name>_Fields.c` (#446,
   @samoht)
 
 - An integer under `map`, `where`, `enum` or an optional that is always
   present keeps its own C type, where `uint32_t` lost the high half of a
-  `uint64`. Regenerate the C and rebuild plugs that name those members (#502,
+  `uint64`. Regenerate the C and rebuild visitors that name those members (#502,
   @frejsoya)
 
 - `wire.diff-gen` (`Wire_diff_gen`) is removed: its runner passed every input

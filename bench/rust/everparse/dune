@@ -1,8 +1,8 @@
 ; The EverParse C rows of the packet-stack benchmark: the verified validator of
 ; Packet_stack.codec in a C loop, reading the fields through the default
-; EthernetStack_Fields plug (stack_c.c, linked against the validators
+; EthernetStack_Fields visitor (stack_c.c, linked against the validators
 ; bench/gen_stubs.exe archives, as the application benchmarks are), and
-; through a custom plug compiled with the validator's C (stack_inline.c).
+; through a custom visitor compiled with the validator's C (stack_inline.c).
 ; Built only with EverParse (BUILD_EVERPARSE=1).
 
 (library

@@ -148,7 +148,7 @@ let member_c_type mk =
   let fields = Everparse.plug_fields (Everparse.project ~mode:`Ffi c) in
   match List.find_opt (fun f -> f.Everparse.name = "a") fields with
   | Some f -> f.c_type
-  | None -> Alcotest.failf "no plug field a"
+  | None -> Alcotest.failf "no visitor field a"
 
 let test_plug_member_c_types () =
   let id t = map ~decode:Fun.id ~encode:Fun.id t in
@@ -197,5 +197,6 @@ let suite =
       Alcotest.test_case "a new word" `Quick test_new_word;
       Alcotest.test_case "agrees with the codec" `Quick test_agrees_with_codec;
       Alcotest.test_case "leaf types" `Quick test_leaf;
-      Alcotest.test_case "plug member C types" `Quick test_plug_member_c_types;
+      Alcotest.test_case "visitor member C types" `Quick
+        test_plug_member_c_types;
     ] )

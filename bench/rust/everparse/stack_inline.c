@@ -1,19 +1,19 @@
-/* Packet-stack benchmark, EverParse C row with a custom plug.
+/* Packet-stack benchmark, EverParse C row with a custom visitor.
 
-   The same verified validator as the default-plug row, compiled in this
-   translation unit after a plug copied from the shipped EthernetStack_Fields.c
+   The same verified validator as the default-visitor row, compiled in this
+   translation unit after a visitor copied from the shipped EthernetStack_Fields.c
    and trimmed to the members the checksum reads. The setters are static
    inline and write into a local struct, so the compiler inlines them into the
    validator and folds each switch on its constant index: what is left is the
    validator's own work. The checksum is the one stack_c.c computes from the
-   default plug. */
+   default visitor. */
 
 #include <stdint.h>
 #include <string.h>
 
 #include "EthernetStack_Fields.h"
 
-/* The custom WIRECTX the ExternalTypedefs.h guard lets a plug supply. */
+/* The custom WIRECTX the ExternalTypedefs.h guard lets a visitor supply. */
 #define WIRECTX_DEFINED
 typedef struct StackOut {
   uint16_t ether_type;
@@ -86,7 +86,7 @@ static inline void EthernetStackSetU32be(WIRECTX *ctx, uint32_t idx,
   }
 }
 
-/* The validator, under a name of its own: the default-plug row links the
+/* The validator, under a name of its own: the default-visitor row links the
    shipped one from libbenchcodecs.a into the same executable. Its
    ExternalAPI.h declarations of the setters above take their internal
    linkage. */
