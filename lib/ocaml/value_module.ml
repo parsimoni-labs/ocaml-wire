@@ -861,7 +861,7 @@ let pp_error_at ppf t (r : V.record) =
   in
   let param x = if Record_module.uses pass x then x else "_" ^ x in
   Fmt.pf ppf "let check_pass ~%s %s %s %s %s =@\n%s()@\n@\n"
-    (if Record_module.uses pass "all" then "all" else "all:_")
+    (if Record_module.uses pass "all" then "all" else "all:_all")
     (param "buf") (param "length") (param "p0") (param "path") pass;
   let body = Scan_module.without_dead_bindings (Buffer.contents b ^ q) in
   Fmt.pf ppf "%s" (Buffer.contents e.edefs);

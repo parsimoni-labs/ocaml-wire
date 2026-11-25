@@ -2,7 +2,9 @@
 
 let digest = "01291a455857cfa5842e6415d7372553"
 let codec_name = "CLCW"
-let[@inline] cast : type a b. (a, b) Type.eq -> b -> a = fun Type.Equal v -> v
+
+let[@inline] cast : type a b. (a, b) Type.eq -> b -> a =
+ fun eq v -> match eq with Type.Equal -> v
 
 let[@inline never] no_error () =
   invalid_arg (codec_name ^ ": the generated code found no error to report")
@@ -14,6 +16,137 @@ let () =
        more than 31 bits, which needs ints wider than 32 bits"
 
 let mask32 = Int64.to_int 0xFFFF_FFFFL
+
+let[@inline always] fold_record ~buf ~base ~stop ~invalid ~valid =
+  if (stop : int) < 4 then invalid ()
+  else
+    let bw1 =
+      Int32.to_int (Wire_runtime.Unchecked.i32be buf base) land mask32
+    in
+    let f1_controlwordtype = bw1 lsr 31 in
+    let f2_clcwversion = (bw1 lsr 29) land 0x3 in
+    let f3_statusfield = (bw1 lsr 26) land 0x7 in
+    let f4_copineffect = (bw1 lsr 24) land 0x3 in
+    let f5_vcid = (bw1 lsr 18) land 0x3f in
+    let f6_spare = (bw1 lsr 16) land 0x3 in
+    let f7_norf = (bw1 lsr 15) land 0x1 in
+    let f8_nobitlock = (bw1 lsr 14) land 0x1 in
+    let f9_lockout = (bw1 lsr 13) land 0x1 in
+    let f10_wait = (bw1 lsr 12) land 0x1 in
+    let f11_retransmit = (bw1 lsr 11) land 0x1 in
+    let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
+    let f13_spare2 = (bw1 lsr 8) land 0x1 in
+    let f14_reportvalue = bw1 land 0xff in
+    valid ~controlwordtype:f1_controlwordtype ~clcwversion:f2_clcwversion
+      ~statusfield:f3_statusfield ~copineffect:f4_copineffect ~vcid:f5_vcid
+      ~spare:f6_spare ~norf:f7_norf ~nobitlock:f8_nobitlock ~lockout:f9_lockout
+      ~wait:f10_wait ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter
+      ~spare2:f13_spare2 ~reportvalue:f14_reportvalue
+
+let[@inline always] fold buf off len ~invalid ~valid =
+  if off < 0 || len > Bytes.length buf - off then invalid ()
+  else
+    let base = off in
+    let stop = len in
+    fold_record ~buf ~base ~stop ~invalid ~valid
+
+let[@inline never] fold_frames_short buf ~stride ~last ~off ~init ~invalid
+    ~valid =
+  let acc = ref init in
+  let cursor = ref off in
+  while !cursor <= last do
+    let base = !cursor in
+    let current = !acc in
+    acc :=
+      fold buf base stride
+        ~invalid:(fun () -> invalid current)
+        ~valid:(valid current);
+    cursor := base + stride
+  done;
+  !acc
+
+let[@inline always] frames_record ~buf ~base ~current ~valid =
+  let bw1 = Int32.to_int (Wire_runtime.Unchecked.i32be buf base) land mask32 in
+  let f1_controlwordtype = bw1 lsr 31 in
+  let f2_clcwversion = (bw1 lsr 29) land 0x3 in
+  let f3_statusfield = (bw1 lsr 26) land 0x7 in
+  let f4_copineffect = (bw1 lsr 24) land 0x3 in
+  let f5_vcid = (bw1 lsr 18) land 0x3f in
+  let f6_spare = (bw1 lsr 16) land 0x3 in
+  let f7_norf = (bw1 lsr 15) land 0x1 in
+  let f8_nobitlock = (bw1 lsr 14) land 0x1 in
+  let f9_lockout = (bw1 lsr 13) land 0x1 in
+  let f10_wait = (bw1 lsr 12) land 0x1 in
+  let f11_retransmit = (bw1 lsr 11) land 0x1 in
+  let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
+  let f13_spare2 = (bw1 lsr 8) land 0x1 in
+  let f14_reportvalue = bw1 land 0xff in
+  valid current ~controlwordtype:f1_controlwordtype ~clcwversion:f2_clcwversion
+    ~statusfield:f3_statusfield ~copineffect:f4_copineffect ~vcid:f5_vcid
+    ~spare:f6_spare ~norf:f7_norf ~nobitlock:f8_nobitlock ~lockout:f9_lockout
+    ~wait:f10_wait ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter
+    ~spare2:f13_spare2 ~reportvalue:f14_reportvalue
+
+let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
+  if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then
+    invalid_arg "fold_frames: invalid frame bounds or stride";
+  let acc = ref init in
+  let cursor = ref off in
+  let last = off + len - stride in
+  if stride < 4 then
+    acc := fold_frames_short buf ~stride ~last ~off ~init:!acc ~invalid ~valid
+  else (
+    (if stride <= len / 4 then
+       let last_4 = off + len - (4 * stride) in
+       let stride_2 = 2 * stride in
+       let stride_3 = 3 * stride in
+       let stride_4 = 4 * stride in
+       while !cursor <= last_4 do
+         let base_1 = !cursor + stride in
+         let base_2 = !cursor + stride_2 in
+         let base_3 = !cursor + stride_3 in
+         let base = !cursor in
+         let current = !acc in
+         let next = frames_record ~buf ~base ~current ~valid in
+         acc := next;
+         let base = base_1 in
+         let current = !acc in
+         let next = frames_record ~buf ~base ~current ~valid in
+         acc := next;
+         let base = base_2 in
+         let current = !acc in
+         let next = frames_record ~buf ~base ~current ~valid in
+         acc := next;
+         let base = base_3 in
+         let current = !acc in
+         let next = frames_record ~buf ~base ~current ~valid in
+         acc := next;
+         cursor := !cursor + stride_4
+       done);
+    while !cursor <= last do
+      let base = !cursor in
+      let current = !acc in
+      let next = frames_record ~buf ~base ~current ~valid in
+      acc := next;
+      cursor := !cursor + stride
+    done);
+  !acc
+
+type 'b view = int
+type 'b check = int
+
+let[@inline always] check_record ~stop ~off =
+  if (stop : int) < 4 then -1 else off
+
+let[@inline always] check (_b : 'b Wire_runtime.Buf.t)
+    (length : 'b Wire_runtime.Buf.length) off : 'b check =
+  let length = (length : _ Wire_runtime.Buf.length :> int) in
+  let len = 4 in
+  if off > length - len then -1
+  else
+    let stop = len in
+    check_record ~stop ~off
+
 let size = 4
 let min_size = size
 
@@ -653,136 +786,6 @@ let encode t buf off =
     ~spare:t.spare ~norf:t.norf ~nobitlock:t.nobitlock ~lockout:t.lockout
     ~wait:t.wait ~retransmit:t.retransmit ~farmbcounter:t.farmbcounter
     ~spare2:t.spare2 ~reportvalue:t.reportvalue
-
-let[@inline always] fold_record ~buf ~base ~stop ~invalid ~valid =
-  if (stop : int) < 4 then invalid ()
-  else
-    let bw1 =
-      Int32.to_int (Wire_runtime.Unchecked.i32be buf base) land mask32
-    in
-    let f1_controlwordtype = bw1 lsr 31 in
-    let f2_clcwversion = (bw1 lsr 29) land 0x3 in
-    let f3_statusfield = (bw1 lsr 26) land 0x7 in
-    let f4_copineffect = (bw1 lsr 24) land 0x3 in
-    let f5_vcid = (bw1 lsr 18) land 0x3f in
-    let f6_spare = (bw1 lsr 16) land 0x3 in
-    let f7_norf = (bw1 lsr 15) land 0x1 in
-    let f8_nobitlock = (bw1 lsr 14) land 0x1 in
-    let f9_lockout = (bw1 lsr 13) land 0x1 in
-    let f10_wait = (bw1 lsr 12) land 0x1 in
-    let f11_retransmit = (bw1 lsr 11) land 0x1 in
-    let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
-    let f13_spare2 = (bw1 lsr 8) land 0x1 in
-    let f14_reportvalue = bw1 land 0xff in
-    valid ~controlwordtype:f1_controlwordtype ~clcwversion:f2_clcwversion
-      ~statusfield:f3_statusfield ~copineffect:f4_copineffect ~vcid:f5_vcid
-      ~spare:f6_spare ~norf:f7_norf ~nobitlock:f8_nobitlock ~lockout:f9_lockout
-      ~wait:f10_wait ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter
-      ~spare2:f13_spare2 ~reportvalue:f14_reportvalue
-
-let[@inline always] fold buf off len ~invalid ~valid =
-  if off < 0 || len > Bytes.length buf - off then invalid ()
-  else
-    let base = off in
-    let stop = len in
-    fold_record ~buf ~base ~stop ~invalid ~valid
-
-let[@inline never] fold_frames_short buf ~stride ~last ~off ~init ~invalid
-    ~valid =
-  let acc = ref init in
-  let cursor = ref off in
-  while !cursor <= last do
-    let base = !cursor in
-    let current = !acc in
-    acc :=
-      fold buf base stride
-        ~invalid:(fun () -> invalid current)
-        ~valid:(valid current);
-    cursor := base + stride
-  done;
-  !acc
-
-let[@inline always] frames_record ~buf ~base ~current ~valid =
-  let bw1 = Int32.to_int (Wire_runtime.Unchecked.i32be buf base) land mask32 in
-  let f1_controlwordtype = bw1 lsr 31 in
-  let f2_clcwversion = (bw1 lsr 29) land 0x3 in
-  let f3_statusfield = (bw1 lsr 26) land 0x7 in
-  let f4_copineffect = (bw1 lsr 24) land 0x3 in
-  let f5_vcid = (bw1 lsr 18) land 0x3f in
-  let f6_spare = (bw1 lsr 16) land 0x3 in
-  let f7_norf = (bw1 lsr 15) land 0x1 in
-  let f8_nobitlock = (bw1 lsr 14) land 0x1 in
-  let f9_lockout = (bw1 lsr 13) land 0x1 in
-  let f10_wait = (bw1 lsr 12) land 0x1 in
-  let f11_retransmit = (bw1 lsr 11) land 0x1 in
-  let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
-  let f13_spare2 = (bw1 lsr 8) land 0x1 in
-  let f14_reportvalue = bw1 land 0xff in
-  valid current ~controlwordtype:f1_controlwordtype ~clcwversion:f2_clcwversion
-    ~statusfield:f3_statusfield ~copineffect:f4_copineffect ~vcid:f5_vcid
-    ~spare:f6_spare ~norf:f7_norf ~nobitlock:f8_nobitlock ~lockout:f9_lockout
-    ~wait:f10_wait ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter
-    ~spare2:f13_spare2 ~reportvalue:f14_reportvalue
-
-let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
-  if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then
-    invalid_arg "fold_frames: invalid frame bounds or stride";
-  let acc = ref init in
-  let cursor = ref off in
-  let last = off + len - stride in
-  if stride < 4 then
-    acc := fold_frames_short buf ~stride ~last ~off ~init:!acc ~invalid ~valid
-  else (
-    (if stride <= len / 4 then
-       let last_4 = off + len - (4 * stride) in
-       let stride_2 = 2 * stride in
-       let stride_3 = 3 * stride in
-       let stride_4 = 4 * stride in
-       while !cursor <= last_4 do
-         let base_1 = !cursor + stride in
-         let base_2 = !cursor + stride_2 in
-         let base_3 = !cursor + stride_3 in
-         let base = !cursor in
-         let current = !acc in
-         let next = frames_record ~buf ~base ~current ~valid in
-         acc := next;
-         let base = base_1 in
-         let current = !acc in
-         let next = frames_record ~buf ~base ~current ~valid in
-         acc := next;
-         let base = base_2 in
-         let current = !acc in
-         let next = frames_record ~buf ~base ~current ~valid in
-         acc := next;
-         let base = base_3 in
-         let current = !acc in
-         let next = frames_record ~buf ~base ~current ~valid in
-         acc := next;
-         cursor := !cursor + stride_4
-       done);
-    while !cursor <= last do
-      let base = !cursor in
-      let current = !acc in
-      let next = frames_record ~buf ~base ~current ~valid in
-      acc := next;
-      cursor := !cursor + stride
-    done);
-  !acc
-
-type 'b view = int
-type 'b check = int
-
-let[@inline always] check_record ~stop ~off =
-  if (stop : int) < 4 then -1 else off
-
-let[@inline always] check (_b : 'b Wire_runtime.Buf.t)
-    (length : 'b Wire_runtime.Buf.length) off : 'b check =
-  let length = (length : _ Wire_runtime.Buf.length :> int) in
-  let len = 4 in
-  if off > length - len then -1
-  else
-    let stop = len in
-    check_record ~stop ~off
 
 let[@inline] set_bits'i32be (b : _ Wire_runtime.Buf.t) at ~mask ~shift x msg =
   if x land lnot mask <> 0 then invalid_arg msg;

@@ -2,7 +2,9 @@
 
 let digest = "76f7855858dd52433e8b5cfabfbf489d"
 let codec_name = "EthernetStack"
-let[@inline] cast : type a b. (a, b) Type.eq -> b -> a = fun Type.Equal v -> v
+
+let[@inline] cast : type a b. (a, b) Type.eq -> b -> a =
+ fun eq v -> match eq with Type.Equal -> v
 
 let[@inline never] no_error () =
   invalid_arg (codec_name ^ ": the generated code found no error to report")
@@ -958,7 +960,7 @@ module Stack_tcp = struct
 
   let size r = encode_at ~write:false r Bytes.empty 0
 
-  let check_pass ~all:_ buf length p0 path =
+  let check_pass ~all:_all buf length p0 path =
     if p0 + 14 <= length then begin
       let f5_data_offset =
         (Bytes.get_uint16_be buf (p0 + 12) lsr 12) land 0xf

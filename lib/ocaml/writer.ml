@@ -183,8 +183,10 @@ let text f =
   Format.pp_print_flush ppf ();
   Buffer.contents b
 
-(* The record's members, then the walks and the views. The walks' functions
-   are named apart from every name the record defines. *)
+(* The walks, then the record's members and the views: [fold] and the
+   functions it calls come first, as in the F* rendering they are compared
+   with. The walks' functions are named apart from every name the record
+   defines. *)
 (* The accessor of each field of a fixed record in the module's views, found
    by the field's name: the views plan the record apart, under variables of
    their own. *)
@@ -259,7 +261,7 @@ let body ?decide t =
         in
         (walk, Scan_module.without_dead_bindings views, mask32)
   in
-  (record ^ walk, views ^ after, views_mask32)
+  (walk ^ record, views ^ after, views_mask32)
 
 let ml ?decide t =
   let code, views, _ = body ?decide t in

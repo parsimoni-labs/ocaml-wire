@@ -423,10 +423,11 @@ let member f valid =
    to its field's type, in field order; then the frame; then each bitfield's
    width, byte array's length and enum case, in field order. *)
 let pp_first_error ~src ppf ~target fields =
-  (* A 32-bit value is in range as an [int32]: only an enum tests it. *)
+  (* A 32-bit value is in range as an [int32]: only an enum tests it. Its
+     parameter is named, as every parameter the F* rendering compares is. *)
   let param f =
     match (f.store, f.enum) with
-    | Int { width = 32; _ }, None -> "_"
+    | Int { width = 32; _ }, None -> "_" ^ f.id
     | _ -> f.id
   in
   Fmt.pf ppf "let%s first_error %s off %a =@\n" (cold_attr target) src.buf
@@ -841,10 +842,12 @@ let pp_header ppf ~codec ~name ~digest ~uses =
     codec digest;
   if uses "codec_name" || uses "no_error" then
     Fmt.pf ppf "let codec_name = %S@\n" name;
+  (* [cast]'s parameters are variables, as the F* rendering's are: the
+     witness is matched in its body. *)
   if uses "cast" then
     Fmt.pf ppf
-      "let[@@inline] cast : type a b. (a, b) Type.eq -> b -> a = fun \
-       Type.Equal v -> v@\n";
+      "let[@@inline] cast : type a b. (a, b) Type.eq -> b -> a = fun eq v ->@\n\
+      \  match eq with Type.Equal -> v@\n";
   Fmt.pf ppf "@\n";
   if uses "no_error" then
     Fmt.pf ppf
