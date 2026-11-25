@@ -31,8 +31,9 @@ type record = {
 
 type t = { root : record; records : record list }
 
-(* The values a scanner exports at its top level, and a view module in its
-   own: an accessor of that name would be a second value of the module. *)
+(* The values the module of every codec exports at its top level, and a
+   view module in its own: an accessor of that name would be a second value
+   of the module. *)
 let root_names =
   [
     "check";
@@ -47,15 +48,36 @@ let root_names =
     "fold_unboxed";
     "fold_frames_unboxed";
     "decode";
-    "decode_unboxed";
-    "box";
+    "decode_exn";
+    "validate";
+    "validate_exn";
+    "is_valid";
+    "encode";
+    "size";
+    "min_size";
     "pp";
   ]
 
 let sub_names = [ "ok"; "get"; "end_at" ]
 
-(* The modules the scanner defines on OxCaml. *)
-let reserved_modules = [ "U"; "B"; "L"; "Int32_u"; "Int64_u" ]
+(* The modules the walks define on OxCaml, and those of a fixed record's
+   members. *)
+let reserved_modules =
+  [
+    "U";
+    "B";
+    "L";
+    "Int32_u";
+    "Int64_u";
+    "Value";
+    "Get";
+    "Valid";
+    "View";
+    "Field";
+    "Global";
+    "Bigstring";
+    "X4";
+  ]
 
 (* [CapturedIPv4] is [Captured_ipv4], [StackUDPHeader] [Stack_udp_header]: a
    word starts at a capital after a small letter or a digit, or at the last
@@ -130,19 +152,20 @@ let rec members_of subs nodes =
 let member_name = function
   | Scalar { name; _ } | Present { name; _ } | Sub { name; _ } -> name
 
-let record_of ~id ~codec_name ~module_name ~fixed_size s =
+(* An accessor takes its field's name, suffixed with ['_'] where that is a
+   name the module defines, as a keyword is: [size] is [size_] and [size_]
+   [size__], so no two fields take one name. *)
+let escape reserved = function
+  | Scalar s -> Scalar { s with name = Names.escape reserved s.name }
+  | Present p -> Present { p with name = Names.escape reserved p.name }
+  | Sub s -> Sub { s with name = Names.escape reserved s.name }
+
+let record_of ~reserved ~id ~codec_name ~module_name ~fixed_size s =
   let plan, subs = plan_apart s in
-  let members = members_of subs plan.nodes in
-  let reserved = if module_name = None then root_names else sub_names in
-  List.iter
-    (fun m ->
-      let name = member_name m in
-      if List.mem name reserved then
-        fail_unsupported
-          "the field name %S is ambiguous: the generated module defines a \
-           value of that name"
-          name)
-    members;
+  let reserved =
+    if module_name = None then reserved @ root_names else sub_names
+  in
+  let members = List.map (escape reserved) (members_of subs plan.nodes) in
   {
     id;
     codec_name;
@@ -156,9 +179,10 @@ let record_of ~id ~codec_name ~module_name ~fixed_size s =
 
 (* The records under the root, each once, those a record holds before it,
    with a module name of its own. *)
-let v (s : T.struct_) =
+let v ~reserved (s : T.struct_) =
   let root =
-    record_of ~id:(-1) ~codec_name:s.name ~module_name:None ~fixed_size:None s
+    record_of ~reserved ~id:(-1) ~codec_name:s.name ~module_name:None
+      ~fixed_size:None s
   in
   let seen = Hashtbl.create 8 and names = Hashtbl.create 8 in
   List.iter (fun n -> Hashtbl.replace names n ()) reserved_modules;
@@ -176,7 +200,7 @@ let v (s : T.struct_) =
           let name = pick 1 in
           Hashtbl.replace names name ();
           let r =
-            record_of ~id:sub.codec_id ~codec_name:sub.codec_name
+            record_of ~reserved ~id:sub.codec_id ~codec_name:sub.codec_name
               ~module_name:(Some name) ~fixed_size:sub.fixed_size sub.codec
           in
           visit r;
@@ -803,7 +827,8 @@ let pp_members ppf ~target ~t ~ends (r : record) =
   List.iter (accessor ppf ~target ~t ~ends r) (early @ late)
 
 (* The modules of the sub-records, then the root's members; the root's
-   [check] is the scanner's. A record's [end_at] is written when an accessor
+   [check] is the scanner's. The writer binds [Int32_u] and [Int64_u] where
+   the text reads them. A record's [end_at] is written when an accessor
    needs it, so the records are written to text parents first, then put
    children first. With the text, whether it reads [mask32]. *)
 let ml ~target t =
@@ -835,17 +860,6 @@ let ml ~target t =
       (List.rev t.records)
   in
   let text = String.concat "" (modules @ [ root ]) in
-  (* On OxCaml a 32-bit or 64-bit value is held unboxed, as in a record
-     module. *)
-  let alias m =
-    let path = m ^ "." in
-    let n = String.length path in
-    let rec used i =
-      i + n <= String.length text && (String.sub text i n = path || used (i + 1))
-    in
-    if used 0 then Fmt.str "module %s = Wire_runtime.Target.%s\n" m m else ""
-  in
-  let text = alias "Int32_u" ^ alias "Int64_u" ^ text in
   let reads_mask32 =
     List.exists
       (fun l ->
@@ -940,7 +954,7 @@ let mli ppf ~target t =
   pp_ok_get_val ~target ppf;
   List.iter (pp_member_val ~target ~t ppf t.root) t.root.members
 
-let of_codec c = v (Gen.to_struct c)
+let of_codec ?(reserved = []) c = v ~reserved (Gen.to_struct c)
 
 (* {1 The plan} *)
 

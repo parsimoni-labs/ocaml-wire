@@ -20,7 +20,7 @@ let expected bytes =
         accepted = true;
         consumed = Wire.Codec.wire_size_at Packet_stack.codec bytes 0;
         contribution =
-          Int64.of_int (Stack_read.boxed 0 bytes 0 (Bytes.length bytes));
+          Int64.of_int (Stack_read.fold 0 bytes 0 (Bytes.length bytes));
       }
 
 let run ~stalls ~resets frames =

@@ -142,53 +142,6 @@ val fold_frames :
     [stride] bytes at [off], each checked on its own, from [init]. Raises
     [Invalid_argument] if [stride] is not positive or the bounds are bad. *)
 
-(** {1:outputs Outputs} *)
-
-type t = {
-  ok : bool;
-  ether_type : int;
-  ipv4_present : bool;
-  ipv4_version : int;
-  ipv4_ihl : int;
-  ipv4_dscp : int;
-  ipv4_ecn : int;
-  ipv4_total_length : int;
-  ipv4_identification : int;
-  ipv4_flags : int;
-  ipv4_fragment_offset : int;
-  ipv4_ttl : int;
-  ipv4_protocol : int;
-  ipv4_checksum : int;
-  ipv4_src : int;
-  ipv4_dst : int;
-  ipv4_tcp_present : bool;
-  ipv4_tcp_src_port : int;
-  ipv4_tcp_dst_port : int;
-  ipv4_tcp_seq : int;
-  ipv4_tcp_ack : int;
-  ipv4_tcp_data_offset : int;
-  ipv4_tcp_reserved : int;
-  ipv4_tcp_flags : int;
-  ipv4_tcp_window : int;
-  ipv4_tcp_checksum : int;
-  ipv4_tcp_urgent : int;
-  ipv4_udp_present : bool;
-  ipv4_udp_src_port : int;
-  ipv4_udp_dst_port : int;
-  ipv4_udp_length : int;
-  ipv4_udp_checksum : int;
-  ipv4_opaque_present : bool;
-}
-(** The type for the outputs of a scan: [ok] is [false] for a bad record, whose
-    outputs are then [0] and [false]. *)
-
-val decode : bytes -> int -> int -> t
-(** [decode buf off len] is the outputs of the record at [off] in the [len]
-    bytes there. *)
-
-val pp : Format.formatter -> t -> unit
-(** [pp ppf v] prints an unspecified representation of [v] on [ppf]. *)
-
 (** {1:views Views} *)
 
 (** The views of the records of [StackTCP]. *)

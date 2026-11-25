@@ -2,32 +2,61 @@
 
     Each interface states the public API of its module and nothing else, with
     doc comments generated from the codec and, for the OxCaml target, the modes
-    and allocation checks of the implementation. Internal to {!Wire_ocaml}. *)
+    and allocation checks of the implementation. {!Writer} puts the parts of one
+    together. Internal to {!Wire_ocaml}. *)
 
-val record :
-  ?target:[ `OCaml | `OxCaml ] ->
-  ?simd:bool ->
-  ?make:string * string ->
-  ?maps:(string * string * Planner.typ) list ->
-  codec:string ->
-  'a Wire.Codec.t ->
-  string
-(** [record ?target ?simd ?make ?maps ~codec c] is the interface of
-    {!Record_module.ml}'s module for [c]. [make] is the constructor's path and
-    the path of the type it returns; each of [maps] is a map's path, the OCaml
-    type of its values and the map. Raises [Invalid_argument] as
-    {!Record_module.ml} does. *)
+type target = [ `OCaml | `OxCaml ]
 
-val scanner :
-  ?target:[ `OCaml | `OxCaml ] ->
-  ?fields:string list ->
-  ?step:string ->
+val pp_digest : target -> Format.formatter -> unit
+(** [pp_digest target ppf] states the module's [digest]. *)
+
+val record_preamble :
+  Format.formatter ->
+  target:target ->
+  simd:bool ->
+  make:(string * string) option ->
+  maps:(string * string * Planner.typ) list ->
   codec:string ->
-  'a Wire.Codec.t ->
-  string
-(** [scanner ?target ?fields ?step ~codec c] is the interface of
-    {!Scan_module.scanner}'s module for [c]. Raises [Invalid_argument] as
-    {!Scan_module.scanner} does. *)
+  plan:Planner.plan ->
+  size:int ->
+  unit
+(** [record_preamble ppf ~target ~simd ~make ~maps ~codec ~plan ~size] is the
+    head of the interface of the module of a fixed record of [size] bytes: what
+    it is and its fields. [make] is the constructor's path and the path of the
+    type it returns; each of [maps] is a map's path, the OCaml type of its
+    values and the map. *)
+
+val record_members :
+  Format.formatter ->
+  target:target ->
+  simd:bool ->
+  make:(string * string) option ->
+  maps:(string * string * Planner.typ) list ->
+  codec:string ->
+  plan:Planner.plan ->
+  size:int ->
+  unit
+(** [record_members ppf ~target ~simd ~make ~maps ~codec ~plan ~size] states the
+    members a fixed record adds: its size, record, decoders, writes, reads and
+    views, on [bytes] and on a bigarray. *)
+
+val scan_preamble :
+  Format.formatter ->
+  codec:string ->
+  plan:Planner.plan ->
+  selected:Planner.output list ->
+  unit
+(** [scan_preamble ppf ~codec ~plan ~selected] is the head of the interface of a
+    module whose folds hand out [selected]. *)
+
+val scan_members :
+  Format.formatter ->
+  target:target ->
+  selected:Planner.output list ->
+  step:string option ->
+  unit
+(** [scan_members ppf ~target ~selected ~step] states the folds, with the step
+    folds of the module [step]. *)
 
 val bridge : maps:bool -> swap:bool -> codec:string -> core:string -> string
 (** [bridge ~maps ~swap ~codec ~core] is the preamble of the interface of the

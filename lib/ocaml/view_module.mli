@@ -37,14 +37,20 @@ val module_of_codec : string -> string
 (** [module_of_codec name] is the module of the records of the codec [name]:
     [CapturedIPv4] is [Captured_ipv4]. *)
 
-val of_codec : 'r Wire.Codec.t -> t
-(** [of_codec c] is the views of [c]. Raises {!Planner.Unsupported} on a shape
-    the scanner does not handle, or on a field named as a value of the module.
-*)
+val root_names : string list
+(** [root_names] is the values the module of every codec defines at its top
+    level. *)
+
+val of_codec : ?reserved:string list -> 'r Wire.Codec.t -> t
+(** [of_codec ?reserved c] is the views of [c]. An accessor takes its field's
+    name, suffixed with ['_'] where that is a value of the module, one of
+    {!root_names} or of [reserved], as a keyword is. Raises
+    {!Planner.Unsupported} on a shape the scanner does not handle. *)
 
 val ml : target:target -> t -> string * bool
-(** [ml ~target t] is the views of [t] but the root's [check], which the scanner
-    writes, and whether they read [mask32]. *)
+(** [ml ~target t] is the views of [t] but the root's [check], which the walks
+    write, and whether they read [mask32]. They read [Int32_u] and [Int64_u]
+    unbound. *)
 
 val mli : Format.formatter -> target:target -> t -> unit
 (** [mli ppf ~target t] prints the interface of the views of [t]. *)

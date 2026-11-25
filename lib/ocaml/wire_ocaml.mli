@@ -111,6 +111,9 @@ val ml :
     returns. It defaults to a generated record, which a codec with a map field
     cannot use.
 
+    It is the one module of [c]: without [maps], it also holds the folds, the
+    check and the views {!scanner} writes, with every output.
+
     A field under a {!Wire.map} is specialised when [maps] names the map. The
     generated module calls the map's functions by its path; {!bridge} checks
     that the field still holds that very map.
@@ -212,8 +215,7 @@ val scanner :
     [valid] with each output as a labelled [int] (a [bool] for a presence), or
     [invalid ()] when the record or the bounds are bad. An absent field is 0.
     [fields] selects the outputs: the others are not read unless a check needs
-    them, and every check still runs. [decode buf off len] returns the outputs
-    in a record with an [ok] flag, which [pp] prints.
+    them, and every check still runs.
 
     [n] optional fields give code linear in [n], whether they follow each other
     or nest, and whatever outputs are handed out.
@@ -241,10 +243,13 @@ val scanner :
     slower than [fold]. The module must be in scope where the generated code is
     compiled.
 
-    On OxCaml the outputs are [int64_u] inside, and [fold_unboxed],
-    [fold_frames_unboxed] (whose accumulator has layout [bits64]) and
-    [decode_unboxed] hand them out unboxed; [box] makes the record of an unboxed
-    one. *)
+    On OxCaml the outputs are [int64_u] inside, and [fold_unboxed] and
+    [fold_frames_unboxed] (whose accumulator has layout [bits64]) hand them out
+    unboxed.
+
+    The module is the one {!ml} writes for [c], the members a fixed record of
+    named scalars adds included: it is the same module, with the folds that
+    [fields] and [step] select. *)
 
 val scanner_mli :
   ?target:target ->
@@ -302,8 +307,9 @@ val scanner_bridge_mli :
     check guarantees is one load; any other is placed again from the bytes that
     place it, with a bound check, and a presence or a tag is tested again, so an
     accessor reads no byte outside [b] even when bytes are written after the
-    check. A field named as a value the module exports is refused as ambiguous.
-*)
+    check. An accessor named as a value the module defines ([size], [check],
+    [decode], ...) takes a trailing ['_'], as a keyword does: [size] is [size_]
+    and [size_] [size__]. *)
 
 type view = { module_name : string option; members : view_member list }
 (** The views of a record: its module, [None] for the codec's own, and its

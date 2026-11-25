@@ -71,33 +71,28 @@ let checksum_contribution ~zero get =
 
 let reader_modes name =
   ( List.mem name [ "batch"; "batch_unboxed" ],
-    List.mem name [ "unboxed"; "fold_unboxed"; "batch_unboxed" ],
-    List.mem name [ "fold"; "fold_unboxed"; "batch"; "batch_unboxed" ] )
+    List.mem name [ "fold_unboxed"; "batch_unboxed" ] )
 
-let reader_invocation ~core ~fields ~decode ~fold ~batch ~wide get =
-  if fold then
-    let call =
-      if batch then
-        (if wide then
-           ".fold_frames_unboxed buf off len ~stride ~init:(U.of_int base)"
-         else ".fold_frames buf off len ~stride ~init:base")
-        ^ " ~invalid:(fun x -> x) ~valid:(fun[@inline always] base "
-      else
-        (if wide then ".fold_unboxed" else ".fold")
-        ^ " buf off len ~invalid:(fun () -> base) ~valid:(fun[@inline always] "
-    in
-    let args =
-      List.map
-        (fun (name, _) ->
-          "~" ^ name ^ if List.mem name checksum_fields then "" else ":_")
-        fields
-    in
-    core ^ call ^ String.concat " " args ^ " ->\n"
-  else
-    "let v = " ^ core ^ "." ^ decode ^ " buf off len in\nif not " ^ get "ok"
-    ^ " then base else\n"
+let reader_invocation ~core ~fields ~batch ~wide =
+  let call =
+    if batch then
+      (if wide then
+         ".fold_frames_unboxed buf off len ~stride ~init:(U.of_int base)"
+       else ".fold_frames buf off len ~stride ~init:base")
+      ^ " ~invalid:(fun x -> x) ~valid:(fun[@inline always] base "
+    else
+      (if wide then ".fold_unboxed" else ".fold")
+      ^ " buf off len ~invalid:(fun () -> base) ~valid:(fun[@inline always] "
+  in
+  let args =
+    List.map
+      (fun (name, _) ->
+        "~" ^ name ^ if List.mem name checksum_fields then "" else ":_")
+      fields
+  in
+  core ^ call ^ String.concat " " args ^ " ->\n"
 
-let reader_wrappers ~wide ~fold ~batch =
+let reader_wrappers ~wide ~batch =
   let first = if wide && batch then "U.to_int (" else "" in
   let inside =
     if wide then
@@ -105,9 +100,7 @@ let reader_wrappers ~wide ~fold ~batch =
     else ""
   in
   let last =
-    (if wide then ")" else "")
-    ^ (if fold then ")\n" else "")
-    ^ if wide && batch then ")\n" else ""
+    (if wide then ")" else "") ^ ")\n" ^ if wide && batch then ")\n" else ""
   in
   (first, inside, last)
 
@@ -134,17 +127,16 @@ let step ~fields =
   ^ checksum_contribution ~zero:"0L" Fun.id
   ^ " in\nbase + contribution\nend\n\n"
 
-let checksum_reader target ~core ~fields name decode access =
-  let batch, wide, fold = reader_modes name in
-  let get n = if fold then n else "v." ^ access ^ n in
-  let first, inside, last = reader_wrappers ~wide ~fold ~batch in
+let checksum_reader target ~core ~fields name =
+  let batch, wide = reader_modes name in
+  let first, inside, last = reader_wrappers ~wide ~batch in
   let annotation = if batch && target = `OxCaml then "[@zero_alloc]" else "" in
   let base = if wide && not batch then "U.of_int base" else "base" in
   "let[@inline always]" ^ annotation ^ " " ^ name
   ^ (if batch then " ~stride" else "")
   ^ " base buf off len =\n"
   ^
-  if fold && not wide then
+  if not wide then
     let call =
       core
       ^
@@ -154,9 +146,9 @@ let checksum_reader target ~core ~fields name decode access =
     "Int64.to_int (" ^ call ^ " ~init:(Int64.of_int base))\n"
   else
     first
-    ^ reader_invocation ~core ~fields ~decode ~fold ~batch ~wide get
+    ^ reader_invocation ~core ~fields ~batch ~wide
     ^ inside ^ "let contribution = "
-    ^ checksum_contribution ~zero:(if wide then "#0L" else "0") get
+    ^ checksum_contribution ~zero:(if wide then "#0L" else "0") Fun.id
     ^ " in\n" ^ base ^ " + contribution\n" ^ last
 
 let stack_reader target ~core ~fields =
@@ -173,14 +165,10 @@ let stack_reader target ~core ~fields =
         let ( lsl ) = U.shift_left\n\
         end\n"
      else "")
-  ^ reader "boxed" "decode" "" ^ reader "fold" "" "" ^ reader "batch" "" ""
+  ^ reader "fold" ^ reader "batch"
   ^
-  if target = `OxCaml then
-    reader "unboxed" "decode_unboxed" "#"
-    ^ reader "fold_unboxed" "" ""
-    ^ reader "batch_unboxed" "" ""
-  else
-    "let unboxed = boxed\nlet fold_unboxed = fold\nlet batch_unboxed = batch\n"
+  if target = `OxCaml then reader "fold_unboxed" ^ reader "batch_unboxed"
+  else "let fold_unboxed = fold\nlet batch_unboxed = batch\n"
 
 (* {1 The flow classifier}
 

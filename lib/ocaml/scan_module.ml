@@ -14,9 +14,7 @@ let codec_plan c =
 let scan_plan c =
   let plan = codec_plan c in
   (match
-     Names.clash
-       (("ok", "ok")
-       :: List.map (fun (o : output) -> (o.id, o.name)) plan.outputs)
+     Names.clash (List.map (fun (o : output) -> (o.id, o.name)) plan.outputs)
    with
   | Some (_, _, n) -> fail_unsupported "the output name %S is ambiguous" n
   | None -> ());
@@ -824,96 +822,6 @@ let pp_fold_step s m =
     buf within (length_of s);
   pp_fold_index_step s ~within ~m
 
-let pp_result_type s name hash =
-  Fmt.pf s.ppf "type %s = %s{ ok : bool;@\n" name hash;
-  List.iter
-    (fun (o : output) ->
-      Fmt.pf s.ppf "%s : %s;@\n" o.name
-        (if o.is_bool then "bool"
-         else if hash = "#" && s.m.num = Unboxed then "int64_u"
-         else "int"))
-    s.selected;
-  Fmt.pf s.ppf "}@\n"
-
-let pp_fields s ppf conv =
-  List.iter
-    (fun (o : output) -> Fmt.pf ppf "%s = %s;" o.name (conv o))
-    s.selected
-
-let output_id (o : output) = o.id
-
-(* [decode], which folds into the record of a rejected frame or the one
-   [decode_accepted] builds. *)
-let pp_decoder s =
-  let zero (o : output) = if o.is_bool then "false" else "0" in
-  Hashtbl.replace s.taken "decode" ();
-  Hashtbl.replace s.taken "decode_rejected" ();
-  Hashtbl.replace s.taken "decode_accepted" ();
-  Fmt.pf s.ppf "let decode_rejected : t = {ok = false;%a}@\n@\n" (pp_fields s)
-    zero;
-  Fmt.pf s.ppf
-    "let[@inline always] decode_accepted %a : t = {ok = true;%a}@\n@\n"
-    (pp_args ~fstar:false ~conv:output_id)
-    s.selected (pp_fields s) output_id;
-  Fmt.pf s.ppf
-    "let[@inline always] decode %s off len : t =@\n\
-     fold buf off len ~invalid:(fun () -> decode_rejected) \
-     ~valid:decode_accepted@\n\
-     @\n"
-    s.m.src.buf
-
-(* [pp ppf v] prints the outputs [v] as an OCaml record, with [Format]'s
-   primitives only. *)
-let pp_printer s =
-  Hashtbl.replace s.taken "pp" ();
-  Fmt.pf s.ppf
-    "let pp ppf (v : t) =@\n\
-     let field name pp_v x =@\n\
-     Format.pp_print_space ppf ();@\n\
-     Format.pp_print_string ppf (name ^ \" = \");@\n\
-     pp_v ppf x;@\n\
-     Format.pp_print_char ppf ';'@\n\
-     in@\n\
-     Format.pp_open_hvbox ppf 2;@\n\
-     Format.pp_print_char ppf '{';@\n\
-     field \"ok\" Format.pp_print_bool v.ok;@\n";
-  List.iter
-    (fun (o : output) ->
-      Fmt.pf s.ppf "field %S Format.pp_print_%s v.%s;@\n" o.name
-        (if o.is_bool then "bool" else "int")
-        o.name)
-    s.selected;
-  Fmt.pf s.ppf
-    "Format.pp_print_string ppf \" }\";@\nFormat.pp_close_box ppf ()@\n@\n"
-
-(* [decode_unboxed], which returns an unboxed record. Its walk stays one
-   function and builds the record with local functions: built in a function
-   the walk is cut into, or by a top-level function, the record costs
-   flambda2 one spill and a permutation of register moves on each path,
-   some two instructions a frame. *)
-let pp_unboxed_decoder s =
-  let zero (o : output) = if o.is_bool then "false" else lit s.m.num 0 in
-  Hashtbl.replace s.taken "decode_unboxed" ();
-  Fmt.pf s.ppf
-    "let[@inline always][@zero_alloc] decode_unboxed %s off len : unboxed =@\n"
-    s.m.src.buf;
-  Fmt.pf s.ppf "let invalid () = #{ok = false;%a} in@\n" (pp_fields s) zero;
-  Fmt.pf s.ppf "let valid %a = #{ok = true;%a} in@\n"
-    (pp_args ~fstar:false ~conv:output_id)
-    s.selected (pp_fields s) output_id;
-  pp_entry ~name:"decode_unboxed" ~scope:(scope s []) s ~reject:"invalid ()"
-    ~accept:(call s ~unboxed:true "valid")
-
-let pp_box s =
-  Fmt.pf s.ppf "let[@inline] box (v : unboxed) : t = {ok = v.#ok;";
-  List.iter
-    (fun (o : output) ->
-      Fmt.pf s.ppf "%s = %s;" o.name
-        (if s.m.num = Unboxed && not o.is_bool then "U.to_int v.#" ^ o.name
-         else "v.#" ^ o.name))
-    s.selected;
-  Fmt.pf s.ppf "}@\n"
-
 (* [check b length ~off ~len], the walk of [fold] with no output, which
    answers [off] for a record it accepts and [-1] otherwise. *)
 let pp_check s =
@@ -961,7 +869,7 @@ let selected (plan : plan) = function
 let without_dead_bindings text =
   String.concat "\n" (Lines.prune (String.split_on_char '\n' text))
 
-(* The scanner after its header: the walks, the outputs and their printer. *)
+(* The walks of a scanner: its folds, then [check]. *)
 let pp_body ?step s =
   let unboxed = s.m.num = Unboxed in
   if unboxed then
@@ -991,56 +899,19 @@ let pp_body ?step s =
     pp_fold s ~unboxed:true;
     pp_frames s ~unboxed:true
   end;
-  pp_result_type s "t" "";
-  pp_decoder s;
-  pp_printer s;
-  if unboxed then begin
-    pp_result_type s "unboxed" "#";
-    pp_unboxed_decoder s;
-    pp_box s
-  end
+  Fmt.pf s.ppf "type 'b view = int@\ntype 'b check = int@\n@\n";
+  pp_check s
 
-let scanner ?decide ?(target = `OCaml) ?fields ?step ~codec c =
-  try
-    let plan = scan_plan c in
-    let num = if target = `OxCaml then Unboxed else Tagged in
-    let b = Buffer.create 4096 in
-    let ppf = Format.formatter_of_buffer b in
-    let selected = selected plan fields in
-    let s =
-      {
-        plan;
-        selected;
-        m = scan_mode ?decide plan ~num selected;
-        ppf;
-        taken = Hashtbl.create 16;
-      }
-    in
-    let views = View_module.of_codec c in
-    List.iter
-      (fun m -> Hashtbl.replace s.taken (View_module.member_name m) ())
-      views.root.members;
-    List.iter (fun n -> Hashtbl.replace s.taken n ()) [ "check"; "ok"; "get" ];
-    pp_body ?step s;
-    Fmt.pf ppf "type 'b view = int@\ntype 'b check = int@\n@\n";
-    pp_check s;
-    Format.pp_print_flush ppf ();
-    let scan = without_dead_bindings (Buffer.contents b) in
-    let view, view_mask32 =
-      View_module.ml
-        ~target:(if target = `OxCaml then `OxCaml else `OCaml)
-        views
-    in
-    let body = scan ^ without_dead_bindings view in
-    (* An accessor named after a helper does not define it. *)
-    let uses name = uses scan name || (name = "mask32" && view_mask32) in
-    Fmt.str "%a%a%s"
-      (fun ppf () ->
-        pp_header ppf ~codec ~name:plan.record ~digest:(Gen.digest c) ~uses)
-      ()
-      (fun ppf () -> pp_wide ppf ~codec ~wide:plan.wide ~uses)
-      () body
-  with Unsupported why -> refuse ~codec why
+let walks ?decide ~target ~selected ?step ~taken plan =
+  let num = if target = `OxCaml then Unboxed else Tagged in
+  let b = Buffer.create 4096 in
+  let ppf = Format.formatter_of_buffer b in
+  let s =
+    { plan; selected; m = scan_mode ?decide plan ~num selected; ppf; taken }
+  in
+  pp_body ?step s;
+  Format.pp_print_flush ppf ();
+  without_dead_bindings (Buffer.contents b)
 
 (* {1 The F* rendering} *)
 

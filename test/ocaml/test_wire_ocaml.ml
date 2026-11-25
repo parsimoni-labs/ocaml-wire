@@ -1154,23 +1154,22 @@ let scan_ops name fields decode =
 let test_scan_overflow () =
   let sized =
     scan_ops "S_sized" [ "n"; "body_present"; "tail" ] (fun b o n ->
-        let v = S_sized.decode b o n in
-        if v.ok then
-          Some
-            [
-              ("n", v.n);
-              ("body_present", if v.body_present then 1 else 0);
-              ("tail", v.tail);
-            ]
-        else None)
+        S_sized.fold b o n
+          ~invalid:(fun () -> None)
+          ~valid:(fun ~n ~body_present ~tail ->
+            Some
+              [
+                ("n", n);
+                ("body_present", if body_present then 1 else 0);
+                ("tail", tail);
+              ]))
   in
   let overflow =
     scan_ops "S_overflow" [ "a"; "hi"; "lo"; "b"; "c" ] (fun b o n ->
-        let v = S_overflow.decode b o n in
-        if v.ok then
-          Some
-            [ ("a", v.a); ("hi", v.hi); ("lo", v.lo); ("b", v.b); ("c", v.c) ]
-        else None)
+        S_overflow.fold b o n
+          ~invalid:(fun () -> None)
+          ~valid:(fun ~a ~hi ~lo ~b ~c ->
+            Some [ ("a", a); ("hi", hi); ("lo", lo); ("b", b); ("c", c) ]))
   in
   List.iter
     (fun n ->
@@ -1206,18 +1205,18 @@ let test_scan_skipped () =
   let skipped =
     scan_ops "S_skipped" [ "n"; "x"; "a_present"; "a"; "b_present"; "b" ]
       (fun b o n ->
-        let v = S_skipped.decode b o n in
-        if v.ok then
-          Some
-            [
-              ("n", v.n);
-              ("x", v.x);
-              ("a_present", if v.a_present then 1 else 0);
-              ("a", v.a);
-              ("b_present", if v.b_present then 1 else 0);
-              ("b", v.b);
-            ]
-        else None)
+        S_skipped.fold b o n
+          ~invalid:(fun () -> None)
+          ~valid:(fun ~n ~x ~a_present ~a ~b_present ~b ->
+            Some
+              [
+                ("n", n);
+                ("x", x);
+                ("a_present", if a_present then 1 else 0);
+                ("a", a);
+                ("b_present", if b_present then 1 else 0);
+                ("b", b);
+              ]))
   in
   List.iter
     (fun n ->
@@ -1260,8 +1259,9 @@ let test_huge_prefix () =
   ignore (Wire_ocaml.ml ~codec:"array" array : string);
   let huge =
     scan_ops "S_huge" [ "flag"; "tail" ] (fun b o n ->
-        let v = S_huge.decode b o n in
-        if v.ok then Some [ ("flag", v.flag); ("tail", v.tail) ] else None)
+        S_huge.fold b o n
+          ~invalid:(fun () -> None)
+          ~valid:(fun ~flag ~tail -> Some [ ("flag", flag); ("tail", tail) ]))
   and step =
     scan_ops "S_huge step" [] (fun b o n ->
         if Int.compare (S_huge.fold_step b o n ~init:0) 0 >= 0 then Some []
@@ -1451,8 +1451,6 @@ let test_scanner_refusals () =
   in
   refused "two outputs of one name" (fun () ->
       Wire_ocaml.scanner ~codec:"c" (pair "a_b" "a_B"));
-  refused "an output named ok" (fun () ->
-      Wire_ocaml.scanner ~codec:"c" (pair "ok" "b"));
   refused "an unknown output" (fun () ->
       Wire_ocaml.scanner ~fields:[ "c" ] ~codec:"c" (pair "a" "b"));
   refused "a structured codec through the record module" (fun () ->

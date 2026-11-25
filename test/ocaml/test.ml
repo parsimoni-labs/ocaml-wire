@@ -3,6 +3,7 @@ let () =
     [
       Test_wire_ocaml.suite;
       Test_view_module.suite;
+      Test_writer.suite;
       Test_same.suite;
       Test_scan.suite;
     ]

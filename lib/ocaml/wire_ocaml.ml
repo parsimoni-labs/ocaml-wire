@@ -8,9 +8,10 @@ open Scan_module
 
 (* The generator is built in phases, one module each, in dependency order:
    [Planner] (a codec read as a plan of nodes), [Emitter] (the checks and reads
-   of a plan as OCaml text), [Record_module] (the record, its decoder, encoder
-   and accessors) and [Scan_module] (the scanner over structured codecs). This
-   module holds the interface. *)
+   of a plan as OCaml text), then the parts of the one module of a codec,
+   [Record_module] (a fixed record's members), [Scan_module] (the walks and
+   folds) and [View_module] (the views), which [Writer] puts together with
+   their interface ([Interface]). This module holds the interface. *)
 
 type target = [ `OCaml | `OxCaml ]
 type map = { path : string; ocaml : string; typ : Planner.typ }
@@ -21,11 +22,14 @@ let typs_of = List.map (fun m -> (m.path, m.typ))
 let typs = Option.map typs_of
 let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
 
+let record ?target ?simd ?make ?maps ~codec c =
+  Writer.v ?target ?simd ?make ?maps:(named maps) ~require:`Record ~codec c
+
 let ml ?target ?simd ?make ?maps ~codec c =
-  ml ?target ?simd ?make:(Option.map fst make) ?maps:(typs maps) ~codec c
+  Writer.ml (record ?target ?simd ?make ?maps ~codec c)
 
 let mli ?target ?simd ?make ?maps ~codec c =
-  Interface.record ?target ?simd ?make ?maps:(named maps) ~codec c
+  Writer.mli (record ?target ?simd ?make ?maps ~codec c)
 
 let bridge ?maps ?record ~codec ~core c =
   let maps = typs maps in
@@ -47,10 +51,14 @@ let bridge_mli ?(maps = []) ?record ~codec ~core c =
 
 let scanner_fields = scanner_fields
 
-let scanner ?target ?fields ?step ~codec c =
-  scanner ?target ?fields ?step ~codec c
+let walk ?target ?fields ?step ~codec c =
+  Writer.v ?target ?fields ?step ~require:`Walk ~codec c
 
-let scanner_mli = Interface.scanner
+let scanner ?target ?fields ?step ~codec c =
+  Writer.ml (walk ?target ?fields ?step ~codec c)
+
+let scanner_mli ?target ?fields ?step ~codec c =
+  Writer.mli (walk ?target ?fields ?step ~codec c)
 
 type view = { module_name : string option; members : view_member list }
 
@@ -59,12 +67,10 @@ and view_member =
   | Bool of { name : string; output : string }
   | Record of { name : string; presence : string option; view : view }
 
-(* The outputs of a record reached by the path [prefix] are named after it. *)
+(* The outputs of a record reached by the path [prefix] are named after it,
+   with the field's name as the folds hand it out, unescaped. *)
 let scanner_views c =
-  let t =
-    try View_module.of_codec c
-    with Unsupported why -> refuse ~codec:(Gen.to_struct c).name why
-  in
+  let t = Option.get (Writer.views (walk ~codec:(Gen.to_struct c).name c)) in
   let global prefix name = if prefix = "" then name else prefix ^ "_" ^ name in
   let rec view prefix (r : View_module.record) =
     {
@@ -72,10 +78,13 @@ let scanner_views c =
       members =
         List.map
           (function
-            | View_module.Scalar { name; _ } ->
-                Int { name; output = global prefix name }
-            | Present { name; _ } -> Bool { name; output = global prefix name }
+            | View_module.Scalar { name; field } ->
+                let o = Option.get field.output in
+                Int { name; output = global prefix o.name }
+            | Present { name; presence } ->
+                Bool { name; output = global prefix presence.name }
             | Sub { name; sub; presence } ->
+                let path = String.concat "_" (Option.get sub.path) in
                 Record
                   {
                     name;
@@ -84,7 +93,7 @@ let scanner_views c =
                         (fun (o : output) -> global prefix o.name)
                         presence;
                     view =
-                      view (global prefix name)
+                      view (global prefix path)
                         (List.find
                            (fun (r : View_module.record) -> r.id = sub.codec_id)
                            t.records);
@@ -240,7 +249,7 @@ module Plan = struct
   let decisions ?target ?fields ?step c =
     let acc = ref [] in
     let decide d = acc := d :: !acc in
-    ignore (Scan_module.scanner ~decide ?target ?fields ?step ~codec:"c" c);
+    ignore (Writer.ml ~decide (walk ?target ?fields ?step ~codec:"c" c));
     List.rev !acc
 
   let select t names =

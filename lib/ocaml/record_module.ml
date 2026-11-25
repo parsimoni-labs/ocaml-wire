@@ -1775,26 +1775,10 @@ let names_of f =
   in
   ("Get." ^ l) :: ("read_" ^ l) :: ("view_" ^ l) :: derived
 
-(* Who defines a name: the generated module itself, or a field. *)
-type source = Own | Field of string
-
-(* A later definition would shadow an earlier one of the same name. Two fields
-   of one label also define one getter, so this covers the record's fields
-   too. *)
-let check_names ~codec fields =
-  let own = List.map (fun n -> (Own, n)) (own_names @ getters_own fields) in
-  let defined =
-    List.concat_map
-      (fun f -> List.map (fun n -> (Field f.name, n)) (names_of f))
-      fields
-  in
-  match Names.clash (own @ defined) with
-  | Some (Own, Field f, n) | Some (Field f, Own, n) ->
-      Fmt.kstr (refuse ~codec)
-        "field %S defines %s, which the generated module defines for itself" f n
-  | Some (Field g, Field f, n) ->
-      Fmt.kstr (refuse ~codec) "fields %S and %S both define %s" g f n
-  | Some (Own, Own, _) | None -> ()
+(* The names a field of the record defines, those in [Get] qualified, and
+   those [Get]'s reads call. *)
+let field_names fields =
+  (getters_own fields, List.map (fun f -> (f.name, names_of f)) fields)
 
 (* The record module covers a fixed record of named scalars, each one
    argument of [make]: a nested record, an optional field, a slice or an
@@ -1833,50 +1817,7 @@ let record_plan ~maps c =
   | [ Prefix (_, n) ] | [ Prefix (_, n); Test _ ] -> (plan, n)
   | _ -> fail_unsupported "its size is not fixed"
 
-let prepare ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ~codec c =
-  match record_plan ~maps c with
-  | exception Unsupported reason -> refuse ~codec reason
-  | _, size when Wire.Codec.wire_size_opt c <> Some size ->
-      refuse ~codec "its size is not fixed"
-  | plan, _
-    when Option.is_none make
-         && List.exists (fun f -> Option.is_some f.map) (all_fields plan) ->
-      refuse ~codec
-        "a field is a map, and the generated record cannot name its type; pass \
-         ~make"
-  | _ when simd && target <> `OxCaml ->
-      refuse ~codec "~simd needs the OxCaml target"
-  | plan, size ->
-      check_names ~codec (all_fields plan);
-      (plan, size)
-
-let pp ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ~codec ppf c =
-  let digest = Gen.digest c in
-  let plan, size = prepare ~target ~simd ?make ~maps ~codec c in
-  let fields = all_fields plan in
-  (* The body first: the header defines only the helpers it uses. *)
-  let body =
-    Fmt.str "%a"
-      (fun ppf () ->
-        pp_maps ppf fields;
-        pp_body ~simd ppf ~target ~make ~plan ~size)
-      ()
-  in
-  let uses = uses body in
-  pp_header ppf ~codec ~name:plan.record ~digest ~uses;
-  (* On OxCaml a 32-bit or 64-bit value is held unboxed. *)
-  if target = `OxCaml then
-    Fmt.pf ppf
-      "module Int32_u = Wire_runtime.Target.Int32_u@\n\
-       module Int64_u = Wire_runtime.Target.Int64_u@\n\
-       @\n";
-  pp_wide ppf ~codec ~wide:plan.wide ~uses;
-  Fmt.pf ppf "%s" body
-
 let ident = label
-
-let ml ?target ?simd ?make ?maps ~codec c =
-  Fmt.str "%a" (pp ?target ?simd ?make ?maps ~codec) c
 
 let pp_bridge ?(maps = []) ~codec ~core ppf c =
   let fields =

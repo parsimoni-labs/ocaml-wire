@@ -176,7 +176,7 @@ let pp_case ppf (label, c, (src, intf)) =
 
 (* {1 Scanners}
 
-   Each scanner is handed to [Diff_ocaml] as its [decode] and [fold_frames],
+   Each scanner is handed to [Diff_ocaml] as its [fold] and [fold_frames],
    as its [fold_step] and [fold_frames_step], and on OxCaml also as the
    unboxed forms of the first two. A structured case gets the scanner
    of every output, one of every other output, one of none, and on OxCaml one
@@ -200,6 +200,17 @@ let labels fields =
   else
     String.concat " " (List.map (fun (n, _) -> "~" ^ n ^ ":field_" ^ n) fields)
 
+(* [fold], or [fold_unboxed], handing each output to a snapshot. *)
+let pp_fold ppf ~m ~unboxed fields =
+  Fmt.pf ppf
+    "(fun b o n -> %s.%s b o n ~invalid:(fun () -> None) ~valid:(fun %s -> \
+     Some %a))"
+    m
+    (if unboxed then "fold_unboxed" else "fold")
+    (labels fields)
+    (fun ppf () -> snapshot ppf ~unboxed ~var:(fun n -> "field_" ^ n) fields)
+    ()
+
 let pp_backend ppf ~m ~unboxed fields =
   let args = labels fields in
   let values ppf () =
@@ -222,19 +233,11 @@ let pp_backend ppf ~m ~unboxed fields =
         m args values ()
   in
   Fmt.pf ppf
-    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> let \
-     v = %s.%s b o n in if v.%sok then Some %a else None); scan_batch = %a; \
-     scan_index = None };@\n"
+    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = %a; scan_batch = \
+     %a; scan_index = None };@\n"
     (m ^ if unboxed then " unboxed" else "")
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields m
-    (if unboxed then "decode_unboxed" else "decode")
-    (if unboxed then "#" else "")
-    (fun ppf () ->
-      snapshot ppf ~unboxed
-        ~var:(fun n -> "v." ^ (if unboxed then "#" else "") ^ n)
-        fields)
-    () batch ()
+    fields (pp_fold ~m ~unboxed) fields batch ()
 
 (* The module [fold_step] and [fold_frames_step] call by name: it conses each
    frame's snapshot onto the accumulator. It takes the integer outputs as
@@ -253,7 +256,7 @@ let pp_step ppf fields =
         fields)
     ()
 
-(* [fold_step], [fold_frames_step] and [fold_index_step], as the [decode],
+(* [fold_step], [fold_frames_step] and [fold_index_step], as the [fold],
    [fold_frames] and fold over an index of one more backend. *)
 let pp_step_backend ppf ~m fields =
   Fmt.pf ppf
@@ -311,21 +314,20 @@ and view_member ~m ~path = function
         (presence_is 0) (view_zeros ~fill view)
 
 (* The backend of the views of the scanner [m], which hands out every output,
-   checked against [m]'s [decode] and against the codec [codec]. *)
+   checked against [m]'s [fold] and against the codec [codec]. *)
 let pp_view_backend ppf ~m ~codec c =
   let fields = Wire_ocaml.scanner_fields c in
   let wrap, codec = codec in
   Fmt.pf ppf
-    "%s Diff_ocaml.view_scan ~name:%S ~codec:%s ~fields:[%a] ~full:(fun b o n \
-     -> let v = %s.decode b o n in if v.ok then Some %a else None) (fun b o n \
-     -> match Wire_runtime.Buf.v b with Wire_runtime.Buf.Any bb -> let len = \
+    "%s Diff_ocaml.view_scan ~name:%S ~codec:%s ~fields:[%a] ~full:%a (fun b o \
+     n -> match Wire_runtime.Buf.v b with Wire_runtime.Buf.Any bb -> let len = \
      Wire_runtime.Buf.length bb in let c = %s.check bb len ~off:o ~len:n in if \
      %s.ok c then (let %s = %s.get c in Some %s) else None));@\n"
     wrap (m ^ " views") codec
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields m
-    (fun ppf () -> snapshot ppf ~unboxed:false ~var:(fun n -> "v." ^ n) fields)
-    () m m
+    fields
+    (pp_fold ~m ~unboxed:false)
+    fields m m
     (if (Wire_ocaml.scanner_views c).members = [] then "_" else "v")
     m
     (view_outputs ~m ~path:m (Wire_ocaml.scanner_views c))

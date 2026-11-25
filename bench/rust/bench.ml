@@ -598,20 +598,6 @@ let view_linked ~stride buf =
   done;
   !acc
 
-let generated ~stride buf =
-  let acc = ref 0 in
-  for i = 0 to (Bytes.length buf / stride) - 1 do
-    acc := Stack_read.boxed !acc buf (i * stride) stride
-  done;
-  !acc
-
-let generated_unboxed ~stride buf =
-  let acc = ref 0 in
-  for i = 0 to (Bytes.length buf / stride) - 1 do
-    acc := Stack_read.unboxed !acc buf (i * stride) stride
-  done;
-  !acc
-
 let generated_fold ~stride buf =
   let acc = ref 0 in
   for i = 0 to (Bytes.length buf / stride) - 1 do
@@ -638,7 +624,6 @@ let rows stride =
       codec_stack_view ~stride frame_codec packet );
     ("Wire.Codec check/read, linked headers", codec_linked ~stride);
     ("wire.ocaml View.check/view, linked headers" ^ target, view_linked ~stride);
-    ("wire.ocaml fused stack" ^ target, generated ~stride);
     ("wire.ocaml fused stack, fold" ^ target, generated_fold ~stride);
     ( "wire.ocaml fused stack, batch" ^ target,
       fun buf -> Stack_read.batch ~stride 0 buf 0 (Bytes.length buf) );
@@ -661,7 +646,6 @@ let rows stride =
       ( "wire.ocaml selected outputs, unboxed batch",
         fun buf ->
           Selected_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
-      ("wire.ocaml fused stack, unboxed API", generated_unboxed ~stride);
     ]
   else []
 

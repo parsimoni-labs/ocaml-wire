@@ -1,8 +1,9 @@
-(** The module generated for a record codec.
+(** The members of the module generated for a fixed record of named scalars.
 
     The record type, its decoder, encoder, getters and views, on [bytes] and on
-    a bigarray of bytes, and the bridge that checks the module against its
-    codec. Internal to {!Wire_ocaml}. *)
+    a bigarray of bytes, which {!Writer} writes into the module of such a codec,
+    and the bridge that checks the module against its codec. Internal to
+    {!Wire_ocaml}. *)
 
 open Planner
 open Emitter
@@ -39,9 +40,6 @@ val refuse : codec:string -> string -> 'a
 (** [refuse ~codec reason] raises [Invalid_argument]: [codec] cannot be
     specialised, for [reason]. *)
 
-(** Who defines a name: the generated module itself, or a field. *)
-type source = Own | Field of string
-
 val all_fields : plan -> field list
 (** [all_fields plan] is the fields of the record [plan] reads, in wire order.
 *)
@@ -70,30 +68,35 @@ val lanes : plan -> size:int -> (field * (int * int)) list option
 (** [lanes plan ~size] is each field with its shift and width in a SIMD lane, or
     [None] when the record has no lanes. *)
 
-val prepare :
-  ?target:[ `OCaml | `OxCaml ] ->
+val record_plan : maps:(string * typ) list -> 'a Wire.Codec.t -> plan * int
+(** [record_plan ~maps c] is the plan of [c] and its size, when [c] is a record
+    of named scalars, each at a constant offset. Raises {!Planner.Unsupported}
+    otherwise. *)
+
+val own_names : string list
+(** [own_names] is the names the record's members define, at top level or in
+    [Bigstring]. *)
+
+val field_names : field list -> string list * (string * string list) list
+(** [field_names fields] is the names [Get]'s reads call, and each field's name
+    with the names it defines, those in [Get] qualified. *)
+
+val pp_maps : Format.formatter -> field list -> unit
+(** [pp_maps ppf fields] binds each map of [fields] once. *)
+
+val pp_body :
   ?simd:bool ->
-  ?make:string ->
-  ?maps:(string * typ) list ->
-  codec:string ->
-  'a Wire.Codec.t ->
-  plan * int
-(** [prepare ?target ?simd ?make ?maps ~codec c] is the plan and the size of the
-    module generated for [c]. Raises [Invalid_argument] as {!ml} does. *)
+  Format.formatter ->
+  target:[ `OCaml | `OxCaml ] ->
+  make:string option ->
+  plan:plan ->
+  size:int ->
+  unit
+(** [pp_body ?simd ppf ~target ~make ~plan ~size] writes the record's members
+    for a record of [size] bytes; see {!Wire_ocaml.ml}. *)
 
 val ident : string -> string
 (** [ident name] is the OCaml label of the field [name]. *)
-
-val ml :
-  ?target:[ `OCaml | `OxCaml ] ->
-  ?simd:bool ->
-  ?make:string ->
-  ?maps:(string * typ) list ->
-  codec:string ->
-  'a Wire.Codec.t ->
-  string
-(** [ml ?target ?simd ?make ?maps ~codec c] is the module generated for [c]; see
-    {!Wire_ocaml.ml}. *)
 
 val bridge :
   ?maps:(string * typ) list ->

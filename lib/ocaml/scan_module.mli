@@ -33,17 +33,26 @@ val slots : plan -> output list -> output list
 (** [slots plan outputs] is the outputs among [outputs] that are slots; see
     {!Wire_ocaml.Plan.slots}. *)
 
-val scanner :
+val walks :
   ?decide:(Decision.t -> unit) ->
-  ?target:[> `OCaml | `OxCaml ] ->
-  ?fields:string list ->
+  target:[ `OCaml | `OxCaml ] ->
+  selected:output list ->
   ?step:string ->
-  codec:string ->
-  'a Wire.Codec.t ->
+  taken:(string, unit) Hashtbl.t ->
+  plan ->
   string
-(** [scanner ?decide ?target ?fields ?step ~codec c] is the scanner generated
-    for [c]; see {!Wire_ocaml.scanner}. [decide] is given each decision its
-    walks take, in the order it writes them. *)
+(** [walks ?decide ~target ~selected ?step ~taken plan] is the walks of a module
+    over [plan]: [fold], [fold_frames], with [step] the step folds, on OxCaml
+    the unboxed folds, then [check]. Each function it writes is named apart from
+    [taken], which it adds to. [decide] is given each decision the walks take,
+    in the order it writes them. *)
+
+val without_dead_bindings : string -> string
+(** [without_dead_bindings text] is [text] without the bindings it never reads.
+*)
+
+val mentions : string -> string -> bool
+(** [mentions x text] is [true] when the identifier [x] occurs in [text]. *)
 
 val selected : plan -> string list option -> output list
 (** [selected plan names] is the outputs of [plan] named in [names], all of them
