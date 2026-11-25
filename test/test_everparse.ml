@@ -1532,7 +1532,7 @@ let test_3d_dep_size_roundtrip () =
   | Ok v ->
       Alcotest.(check int) "frame_length" 7 (UInt16.to_int v.frame_length);
       Alcotest.(check string) "data" "HELLO" v.data
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  | Error e -> Alcotest.failf "%a" Error.pp e
 
 type param_frame = { pf_data : string }
 

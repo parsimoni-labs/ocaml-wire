@@ -19,7 +19,7 @@ let parse_error what ?(field = []) ~at kind f =
   | _ -> check (what ^ ": no error") false
   | exception Errors.Parse_error e ->
       check
-        (Fmt.str "%s: %a" what Errors.pp_parse_error e)
+        (Fmt.str "%s: %a" what Error.pp e)
         (e.at = at && e.field = field && e.kind = kind)
 
 let invalid what f =

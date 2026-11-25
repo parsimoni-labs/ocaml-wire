@@ -77,8 +77,8 @@ let test_view_bounds_check () =
   in
   let buf = Bytes.create 2 in
   match Codec.decode codec buf 0 with
-  | Error { kind = Unexpected_eof _; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Error { Error.kind = Unexpected_eof _; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
 let test_view_with_offset () =

@@ -70,14 +70,14 @@ val multi_record_codec : multi_record Codec.t
 
 (** {1 Decode assertions} *)
 
-val decode_ok : ('a, parse_error) result -> 'a
+val decode_ok : ('a, Error.t) result -> 'a
 (** [decode_ok r] returns the decoded value, failing the test on [Error]. *)
 
-val expect_constraint_fail : ('a, parse_error) result -> unit
+val expect_constraint_fail : ('a, Error.t) result -> unit
 (** [expect_constraint_fail r] asserts [r] is [Error] with a [Constraint_failed]
     kind, failing the test otherwise. *)
 
-val expect_kind : (error_kind -> bool) -> ('a, parse_error) result -> unit
+val expect_kind : (Error.kind -> bool) -> ('a, Error.t) result -> unit
 (** [expect_kind pred r] asserts [r] is [Error] whose [kind] satisfies [pred].
 *)
 
@@ -105,7 +105,7 @@ val render_3d : 'r Codec.t -> string
 val encode_record : 'r Codec.t -> 'r -> (string, 'e) result
 (** [encode_record codec v] is [Ok] of the encoding of [v] with [codec]. *)
 
-val decode_record : 'r Codec.t -> string -> ('r, parse_error) result
+val decode_record : 'r Codec.t -> string -> ('r, Error.t) result
 (** [decode_record codec s] decodes [s] with [codec], reporting an
     [Unexpected_eof] when [s] is shorter than the codec's wire size. *)
 

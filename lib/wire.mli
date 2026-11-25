@@ -579,9 +579,9 @@ module Field : sig
       [on] must be integer-valued (an integer, a bitfield, an enum or a
       {!val-variants}) and declared before the union; every {!Wire.case} gives
       its [~index] in [on]'s type. Decoding a tag no case claims fails with
-      {!constructor-Invalid_tag} unless a {!Wire.default} branch catches it.
-      Encoding raises [Invalid_argument] when the value's case is not the one
-      the tag field holds.
+      {!Error.constructor-Invalid_tag} unless a {!Wire.default} branch catches
+      it. Encoding raises [Invalid_argument] when the value's case is not the
+      one the tag field holds.
 
       Projects to a 3D [casetype] named [casetype], taking the tag as its
       parameter, and to a field [casetype(on) name]. *)
@@ -794,9 +794,9 @@ val lookup : 'a list -> 'b typ -> 'a typ
     [t] may be any integer-valued description, as for {!bit}.
 
     The decoded integer selects the corresponding element from the list. An
-    out-of-range index produces an {!Invalid_tag} parse error (reported via
-    [result] in {!of_reader} / {!of_string} / {!of_bytes}). Encoding raises
-    [Invalid_argument] if the value is not in the table. *)
+    out-of-range index produces an {!Error.constructor-Invalid_tag} error
+    (reported via [result] in {!of_reader} / {!of_string} / {!of_bytes}).
+    Encoding raises [Invalid_argument] if the value is not in the table. *)
 
 val empty : unit typ
 (** [empty] is a description carrying no bytes and producing [()]. *)
@@ -813,8 +813,8 @@ val all_zeros : string typ
 
     This is mainly useful as the final field of a struct or record-shaped
     layout. Encoding a value with a non-zero byte raises [Invalid_argument]:
-    decode reports it as {!constructor-Non_zero_padding}, so writing it would
-    produce bytes that fail to read back. *)
+    decode reports it as {!Error.constructor-Non_zero_padding}, so writing it
+    would produce bytes that fail to read back. *)
 
 val zeroterm : string typ
 (** [zeroterm] is a NUL-terminated string: the bytes up to (but excluding) the
@@ -1029,81 +1029,18 @@ val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
 val size : 'a typ -> int option
 (** [size t] is the fixed wire size of a description, if known statically. *)
 
-(** {1 Parsing Errors}
+(** {1 Parsing Errors} *)
 
-    Direct decoding reports failures as values of type {!type-parse_error}. The
-    cases distinguish structural failure on input, such as unexpected end of
-    input or a constraint violation, from semantic failure such as an invalid
-    enum or tag. *)
+module Error = Wire_runtime.Error
+(** Why a decoder refuses its input. Every decoder of this library answers an
+    {!Error.t} as a value: the cases distinguish structural failure on input,
+    such as unexpected end of input or a constraint violation, from semantic
+    failure such as an invalid enum or tag. *)
 
-(** Which predicate a {!Constraint_failed} came from. *)
-type predicate = Wire_runtime.Errors.predicate =
-  | Where
-  | Field
-  | Action
-  | Per_byte
-
-(** Parse failure categories. {!constructor-Unexpected_eof} counts bytes, not
-    buffer positions: [expected] is how many the value needed and [got] how many
-    were left where it starts, so both are the same whatever offset the frame is
-    read at. For {!constructor-Constraint_failed}, [value] is the offending
-    field's value for a single-field self-constraint and [None] for a
-    cross-field or where predicate. *)
-type error_kind = Wire_runtime.Errors.error_kind =
-  | Unexpected_eof of { expected : int; got : int }
-  | Trailing_bytes of int
-  | Invalid_enum of { value : int; valid : int list }
-  | Invalid_tag of int
-  | Missing_terminator
-  | Non_zero_padding
-  | Value_out_of_range of { value : int64 }
-  | Zero_divisor
-  | Constraint_failed of { which : predicate; value : int64 option }
-
-type parse_error = Wire_runtime.Errors.parse_error = {
-  at : int;
-  field : string list;
-  kind : error_kind;
-}
-(** [at] is the absolute byte offset of the failing field. Alongside it the
-    parse error records the path of field names leading to that field (root to
-    leaf, empty at a top-level or anonymous position) and the failure kind. *)
-
-exception Parse_error of parse_error
+exception Parse_error of Error.t
 (** Raised by the [_exn] direct decoders ({!of_string_exn}, {!of_bytes_exn},
     {!of_reader_exn}), by {!Codec.decode_exn}, and by {!Codec.validate_exn} on
     parse or constraint failure. *)
-
-val pp_parse_error : Format.formatter -> parse_error -> unit
-(** Pretty-printer for decode errors, including the offset and field path. *)
-
-val pp_error_kind : Format.formatter -> error_kind -> unit
-(** Pretty-print an error kind without its location. *)
-
-val equal_parse_error : parse_error -> parse_error -> bool
-(** Structural equality on parse errors. *)
-
-val equal_error_kind : error_kind -> error_kind -> bool
-(** Structural equality on error kinds, ignoring location. *)
-
-val compare_parse_error : parse_error -> parse_error -> int
-(** Total order on parse errors. *)
-
-val parse_error : ?at:int -> ?field:string list -> error_kind -> parse_error
-(** [parse_error kind] builds a decode error carrying [kind]. The byte offset
-    defaults to 0 and the field path to [[]] (a top-level or whole-buffer
-    failure), so a caller synthesizing an error outside a codec run, such as a
-    length pre-check or a mapping decoder, need only give the kind. *)
-
-val eof :
-  ?at:int ->
-  ?field:string list ->
-  expected:int ->
-  got:int ->
-  unit ->
-  parse_error
-(** [eof ~expected ~got ()] is [parse_error (Unexpected_eof { expected; got })]:
-    the input ended with [got] bytes where [expected] were needed. *)
 
 (** {1 Direct Decoding and Encoding}
 
@@ -1118,13 +1055,13 @@ val eof :
     repeated access to individual fields in an existing buffer, without
     allocating an OCaml record for each read.
 
-    The [parse_error] result covers failures of the input: truncation,
-    constraint violations, a byte span the data sizes out of range. A
-    description that cannot be decoded whatever the input, such as {!field_pos}
-    in a size expression, is a programmer error and raises [Invalid_argument],
-    the same way encoding does. *)
+    The {!Error.t} result covers failures of the input: truncation, constraint
+    violations, a byte span the data sizes out of range. A description that
+    cannot be decoded whatever the input, such as {!field_pos} in a size
+    expression, is a programmer error and raises [Invalid_argument], the same
+    way encoding does. *)
 
-val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
+val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, Error.t) result
 (** Decodes one value from the current reader position.
 
     If the description references parameters, bind them with {!Param.bind}
@@ -1150,20 +1087,18 @@ val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, parse_error) result
 val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
 (** Like {!of_reader} but raises {!exception:Parse_error} on failure. *)
 
-val of_string :
-  ?consume:consumption -> 'a typ -> string -> ('a, parse_error) result
+val of_string : ?consume:consumption -> 'a typ -> string -> ('a, Error.t) result
 (** Decodes one value from the start of the string. [consume] defaults to
     [`Prefix], leaving trailing bytes uninterpreted; [`All] returns a
-    {!constructor-Trailing_bytes} error unless the value consumes the whole
-    string. Decoding itself does not copy the input; mutable {!byte_slice}
+    {!Error.constructor-Trailing_bytes} error unless the value consumes the
+    whole string. Decoding itself does not copy the input; mutable {!byte_slice}
     values that escape in the result receive their own backing bytes so they
     cannot modify the source string. *)
 
 val of_string_exn : ?consume:consumption -> 'a typ -> string -> 'a
 (** Like {!of_string} but raises {!exception:Parse_error} on failure. *)
 
-val of_bytes :
-  ?consume:consumption -> 'a typ -> bytes -> ('a, parse_error) result
+val of_bytes : ?consume:consumption -> 'a typ -> bytes -> ('a, Error.t) result
 (** Decodes one value from the start of the byte sequence, with the same
     [consume] contract as {!of_string}. *)
 
@@ -1318,11 +1253,11 @@ module Codec : sig
     'r t ->
     bytes ->
     int ->
-    ('r, parse_error) result
+    ('r, Error.t) result
   (** [decode ?env c buf off] decodes one record value at the given base offset.
       [consume] defaults to [`Prefix], accepting one record followed by more
       bytes. [`All] requires the record to end at [Bytes.length buf] and returns
-      a {!constructor-Trailing_bytes} error otherwise.
+      a {!Error.constructor-Trailing_bytes} error otherwise.
 
       If [?env] is supplied, input params are read from it and output params are
       written back to it on success.
@@ -1388,7 +1323,7 @@ module Codec : sig
       encoding buffer; no mutable alias to that buffer escapes. *)
 
   val validate :
-    ?env:Param.env -> 'r t -> bytes -> int -> (unit, parse_error) result
+    ?env:Param.env -> 'r t -> bytes -> int -> (unit, Error.t) result
   (** [validate ?env c buf off] is {!validate_exn}, answering the record's error
       as a value. *)
 

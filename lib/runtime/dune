@@ -23,6 +23,7 @@
      (system
       "case %{input-file} in *.mli) printf '@@ portable ';; esac; cat %{input-file}"))
     unchecked
+    error
     errors
     arith
     uInt8

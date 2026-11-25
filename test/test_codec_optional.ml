@@ -130,7 +130,7 @@ let test_bytearray_sized_by_optional_or () =
         Alcotest.(check bool)
           "round-trip" true
           (UInt8.equal g vg && UInt8.equal l vl && String.equal d vd)
-    | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+    | Error e -> Alcotest.failf "decode: %a" Error.pp e
   in
   (* gate set: len present (2), data is 2 bytes *)
   rt (UInt8.v 1, UInt8.v 2, "ab") "\x01\x02ab";

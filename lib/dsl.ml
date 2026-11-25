@@ -109,10 +109,10 @@ let rec eval_set_param64 ctx name value =
    or [~constraint_] ([Field]), a codec/typ [~where] ([Where]), a field
    [~action] ([Action]), or a [byte_array_where] per-byte refinement
    ([Per_byte]). *)
-type predicate = Errors.predicate = Where | Field | Action | Per_byte
+type predicate = Error.predicate = Where | Field | Action | Per_byte
 type consumption = [ `Prefix | `All ]
 
-type error_kind = Errors.error_kind =
+type error_kind = Error.kind =
   | Unexpected_eof of { expected : int; got : int }
   | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
@@ -126,7 +126,7 @@ type error_kind = Errors.error_kind =
 (* [at] is the absolute byte offset of the failing field in the input; [field]
    is the root-to-leaf path of field names to it (e.g. ["header"; "vcid"]),
    empty at a top-level or anonymous position. *)
-type parse_error = Errors.parse_error = {
+type parse_error = Error.t = {
   at : int;
   field : string list;
   kind : error_kind;
@@ -134,13 +134,7 @@ type parse_error = Errors.parse_error = {
 
 exception Parse_error = Errors.Parse_error
 
-let parse_error ?(at = 0) ?(field = []) kind = { at; field; kind }
-
-let eof ?(at = 0) ?(field = []) ~expected ~got () =
-  { at; field; kind = Unexpected_eof { expected; got } }
-
-let err ~at kind = parse_error ~at kind
-let raise_error ~at kind = raise (Parse_error (err ~at kind))
+let raise_error ~at kind = raise (Parse_error { at; field = []; kind })
 
 let check_consumption mode ~consumed ~available =
   match mode with
@@ -1575,53 +1569,3 @@ let casetype_decl name params tag cases =
 
 (* Module *)
 type module_ = { doc : string option; decls : decl list }
-
-let pp_error_kind = Errors.pp_error_kind
-let pp_parse_error = Errors.pp_parse_error
-
-let predicate_rank (p : predicate) =
-  match p with Where -> 0 | Field -> 1 | Action -> 2 | Per_byte -> 3
-
-let compare_predicate a b = Int.compare (predicate_rank a) (predicate_rank b)
-
-let kind_rank = function
-  | Unexpected_eof _ -> 0
-  | Trailing_bytes _ -> 1
-  | Invalid_enum _ -> 2
-  | Invalid_tag _ -> 3
-  | Missing_terminator -> 4
-  | Non_zero_padding -> 5
-  | Value_out_of_range _ -> 6
-  | Zero_divisor -> 7
-  | Constraint_failed _ -> 8
-
-let compare_error_kind a b =
-  match (a, b) with
-  | Unexpected_eof a, Unexpected_eof b ->
-      let c = Int.compare a.expected b.expected in
-      if c <> 0 then c else Int.compare a.got b.got
-  | Trailing_bytes a, Trailing_bytes b -> Int.compare a b
-  | Invalid_enum a, Invalid_enum b ->
-      let c = Int.compare a.value b.value in
-      if c <> 0 then c else List.compare Int.compare a.valid b.valid
-  | Invalid_tag a, Invalid_tag b -> Int.compare a b
-  | Value_out_of_range a, Value_out_of_range b -> Int64.compare a.value b.value
-  | Constraint_failed a, Constraint_failed b ->
-      let c = compare_predicate a.which b.which in
-      if c <> 0 then c else Option.compare Int64.compare a.value b.value
-  | Missing_terminator, Missing_terminator
-  | Non_zero_padding, Non_zero_padding
-  | Zero_divisor, Zero_divisor ->
-      0
-  | _ -> Int.compare (kind_rank a) (kind_rank b)
-
-let equal_error_kind a b = compare_error_kind a b = 0
-
-let compare_parse_error a b =
-  let c = compare_error_kind a.kind b.kind in
-  if c <> 0 then c
-  else
-    let c = Int.compare a.at b.at in
-    if c <> 0 then c else List.compare String.compare a.field b.field
-
-let equal_parse_error a b = compare_parse_error a b = 0

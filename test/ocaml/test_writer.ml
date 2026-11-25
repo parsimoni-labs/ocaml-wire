@@ -75,7 +75,7 @@ let test_fixed () =
 let outcome f =
   match f () with
   | s -> "ok " ^ s
-  | exception Parse_error e -> Fmt.str "parse error %a" pp_parse_error e
+  | exception Parse_error e -> Fmt.str "parse error %a" Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
 let byte () = Char.chr (Random.State.int rand 256)

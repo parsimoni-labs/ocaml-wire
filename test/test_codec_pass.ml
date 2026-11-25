@@ -163,7 +163,7 @@ let test_array_size_overflow () =
    interval test. Its slot is still filled when a later constraint or the
    [where] clause reads it, and a failure reports the field and its value. *)
 let test_constraint_intervals () =
-  let describe (e : parse_error) =
+  let describe (e : Error.t) =
     let value =
       match e.kind with Constraint_failed { value; _ } -> value | _ -> None
     in
@@ -244,7 +244,7 @@ let test_failure_value_is_this_frames () =
   let failure c b =
     match Codec.decode c b 0 with
     | Ok _ -> Alcotest.fail "expected a constraint failure"
-    | Error e -> Fmt.str "%a" pp_parse_error e
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   let fresh = failure (codec ()) (frame (-1L)) in
   let c = codec () in
@@ -364,7 +364,7 @@ let test_wide_presence () =
   match Codec.decode c (frame 9 Int64.min_int) 0 with
   | Ok (_, Some d) -> Alcotest.(check int) "2^63: d" 0xaa (UInt8.to_int d)
   | Ok (_, None) -> Alcotest.fail "2^63: d absent"
-  | Error e -> Alcotest.failf "2^63: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "2^63: %a" Error.pp e
 
 (* A fixed codec of plain fields encodes through one frame check and one write
    per field. Bitfield words start from zero whatever the buffer held, a value
@@ -689,7 +689,7 @@ let test_mapped_and_disjunctive_checks () =
           (lo $ fun (_, _, _, l) -> l);
         ]
   in
-  let describe (e : parse_error) =
+  let describe (e : Error.t) =
     let kind =
       match e.kind with
       | Constraint_failed _ -> "constraint"
@@ -846,12 +846,12 @@ let test_layout_pass () =
     let v =
       match Codec.validate_exn ?env c buf 0 with
       | () -> "ok"
-      | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
+      | exception Wire.Parse_error e -> Fmt.str "%a" Error.pp e
     in
     let d =
       match Codec.decode ?env c buf 0 with
       | Ok (_, _, a, _, rest) -> Fmt.str "ok %S %S" a rest
-      | Error e -> Fmt.str "%a" pp_parse_error e
+      | Error e -> Fmt.str "%a" Error.pp e
     in
     v ^ " / " ^ d
   in
@@ -1083,7 +1083,7 @@ let test_v_defers_compilation () =
   let decoded, first = words (fun () -> Codec.decode c buf 0) in
   (match decoded with
   | Ok r -> Alcotest.(check string) "body" "abc" r.Deferred.body
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e);
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e);
   Fmt.kstr
     (fun msg -> Alcotest.(check bool) msg true (built < first))
     "Codec.v allocates less than the first decode, which compiles (v: %.0f \
@@ -1098,7 +1098,7 @@ let test_first_use_races_across_domains () =
   let decode () =
     match Codec.decode c buf 0 with
     | Ok r -> r.Deferred.body
-    | Error e -> Fmt.str "%a" pp_parse_error e
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   let ds = List.init 4 (fun _ -> Domain.spawn decode) in
   List.iter (fun d -> Alcotest.(check string) "body" "abc" (Domain.join d)) ds
@@ -1156,7 +1156,7 @@ let test_fixed_spans_keep_intervals () =
   let outcome c buf =
     match Codec.validate_exn c buf 0 with
     | () -> "ok"
-    | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
+    | exception Wire.Parse_error e -> Fmt.str "%a" Error.pp e
   in
   let comparisons =
     Expr.

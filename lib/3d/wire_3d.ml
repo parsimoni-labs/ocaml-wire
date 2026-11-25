@@ -1215,7 +1215,7 @@ let write_slot buf off (slot : Raw.int_slot) v =
       Bytes.set buf (off + i) (Char.chr byte)
     done
 
-let seed_for seeds (e : Wire.parse_error) =
+let seed_for seeds (e : Wire.Error.t) =
   match List.rev e.field with
   | leaf :: _ ->
       List.find_opt
@@ -1227,12 +1227,12 @@ let seed_for seeds (e : Wire.parse_error) =
    writing one where the scan gave up: both are structural, so neither needs a
    value the declaration singles out. Anything else is repairable only when the
    failing field's declaration names candidate values. *)
-let repair_for ~seeds ~len (e : Wire.parse_error) =
+let repair_for ~seeds ~len (e : Wire.Error.t) =
   match e.kind with
-  | Wire.Unexpected_eof { expected; got } when expected > got ->
+  | Wire.Error.Unexpected_eof { expected; got } when expected > got ->
       `Grow (len + expected - got)
-  | Wire.Missing_terminator when e.at < len -> `Terminate e.at
-  | Wire.Missing_terminator -> `Grow (e.at + 1)
+  | Wire.Error.Missing_terminator when e.at < len -> `Terminate e.at
+  | Wire.Error.Missing_terminator -> `Grow (e.at + 1)
   | _ -> (
       match seed_for seeds e with
       | Some seed -> `Place (e.at, seed)

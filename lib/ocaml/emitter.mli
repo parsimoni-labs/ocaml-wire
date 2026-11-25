@@ -56,7 +56,10 @@ val rt : string
 (** [rt] is the name of the runtime library the generated code links. *)
 
 val errors : string
-(** [errors] is the name of the runtime's module of parse errors. *)
+(** [errors] is the name of the runtime's module that raises parse errors. *)
+
+val error : string
+(** [error] is the name of the runtime's module of the parse error type. *)
 
 val bytes_src : src
 (** [bytes_src] reads [bytes]. *)

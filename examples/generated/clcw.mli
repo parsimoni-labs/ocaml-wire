@@ -20,10 +20,9 @@
     - [spare2], bit 8 of the big-endian 32-bit word at offset 0.
     - [reportvalue], bits 0 to 7 of the big-endian 32-bit word at offset 0.
 
-    A check or a decoder answers the codec's error, a
-    [Wire_runtime.Errors.parse_error], or raises it as
-    [Wire_runtime.Errors.Parse_error]; a write raises [Invalid_argument] where
-    the codec's encoder does. *)
+    A check or a decoder answers the codec's error, a [Wire_runtime.Error.t], or
+    raises it as [Wire_runtime.Errors.Parse_error]; a write raises
+    [Invalid_argument] where the codec's encoder does. *)
 
 val digest : string
 (** [digest] is the digest of the shape of the codec this module was generated
@@ -232,7 +231,7 @@ val is_valid : bytes -> int -> bool
 (** [is_valid buf off] is [true] iff the record at [off] in [buf] fits and
     passes its checks. *)
 
-val validate : bytes -> int -> (unit, Wire_runtime.Errors.parse_error) result
+val validate : bytes -> int -> (unit, Wire_runtime.Error.t) result
 (** [validate buf off] is [Ok ()] if the record at [off] in [buf] fits and
     passes its checks, and the codec's error otherwise. Raises
     [Invalid_argument] if [off] is negative. *)
@@ -241,7 +240,7 @@ val validate_exn : bytes -> int -> unit
 (** [validate_exn buf off] is like {!validate} but raises
     [Wire_runtime.Errors.Parse_error]. *)
 
-val decode : bytes -> int -> (t, Wire_runtime.Errors.parse_error) result
+val decode : bytes -> int -> (t, Wire_runtime.Error.t) result
 (** [decode buf off] is the record at [off] in [buf], or the codec's error.
     Raises [Invalid_argument] if [off] is negative. *)
 

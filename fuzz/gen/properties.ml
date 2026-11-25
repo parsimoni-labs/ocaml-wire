@@ -1,5 +1,9 @@
 open Gen
 
+(* Two errors of the same kind, wherever they are. *)
+let same_kind (a : Wire.Error.t) (b : Wire.Error.t) =
+  Wire.Error.equal { a with at = b.at; field = b.field } b
+
 (* {1 Test driver} *)
 
 (* Wrap each of a gen's three streams in an Alcobar test_case. Positive
@@ -99,15 +103,13 @@ let check_positive_decode label g value bs env =
       if not (g.equal decoded value) then
         Alcobar.failf "%s positive decode mismatch" label
   | Error error ->
-      Alcobar.failf "%s positive decode failed: %a" label Wire.pp_parse_error
-        error);
+      Alcobar.failf "%s positive decode failed: %a" label Wire.Error.pp error);
   match Wire.Codec.decode_exn ?env g.codec bs 0 with
   | decoded ->
       if not (g.equal decoded value) then
         Alcobar.failf "%s positive decode_exn mismatch" label
   | exception Wire.Parse_error e ->
-      Alcobar.failf "%s positive decode_exn failed: %a" label
-        Wire.pp_parse_error e
+      Alcobar.failf "%s positive decode_exn failed: %a" label Wire.Error.pp e
 
 (* The names of the input params a codec reads out of an env, [[]] for one that
    reads none. An [~action] codec writes output params and needs an env without
@@ -210,7 +212,7 @@ let validate_one ?env g bs =
         e.at >= 0
         &&
         match e.kind with
-        | Wire.Unexpected_eof _ | Wire.Missing_terminator -> true
+        | Wire.Error.Unexpected_eof _ | Wire.Error.Missing_terminator -> true
         | _ -> e.at <= len
       in
       if not bounded then
@@ -274,7 +276,7 @@ let check_encode_safety label ?env g value =
       | Error e ->
           Alcobar.failf
             "%s encode safety: encode wrote bytes its own decoder rejects (%a)"
-            label Wire.pp_parse_error e
+            label Wire.Error.pp e
       | exception Invalid_argument _ ->
           Alcobar.failf
             "%s encode safety: encode wrote bytes that crash the decoder" label)
@@ -282,7 +284,7 @@ let check_encode_safety label ?env g value =
 (* One entry point's answer on one buffer: the value it built, the parse error
    it reported, or [Invalid_argument], which no entry point is allowed to raise
    ([check_decode_safety] / [check_validate_safety] own that). *)
-type 'a verdict = Accepted of 'a | Rejected of Wire.parse_error | Crashed
+type 'a verdict = Accepted of 'a | Rejected of Wire.Error.t | Crashed
 
 let decode_at ?env g bs off =
   match Wire.Codec.decode ?env g.codec bs off with
@@ -303,9 +305,9 @@ let validate_at ?env g bs off =
    order; validate walks the compiled field list in declaration order). Which of
    several genuine faults gets reported is not a property worth pinning; that a
    fault the other path found is a fault this one found too, is. *)
-let same_rejection (a : Wire.parse_error) (b : Wire.parse_error) =
-  List.compare String.compare a.Wire.field b.Wire.field <> 0
-  || Wire.equal_error_kind a.Wire.kind b.Wire.kind
+let same_rejection (a : Wire.Error.t) (b : Wire.Error.t) =
+  List.compare String.compare a.Wire.Error.field b.Wire.Error.field <> 0
+  || same_kind a b
 
 (* [Codec.validate_exn] is the gate [codec.mli] tells a caller to run on untrusted
    input before reading fields zero-copy, so it must raise on exactly the bytes
@@ -325,13 +327,13 @@ let check_decode_validate_agree label kind ?env g bs =
         Alcobar.failf
           "%s %s: decode and validate rejected for different reasons (decode: \
            %a, validate: %a)"
-          label kind Wire.pp_parse_error d Wire.pp_parse_error v
+          label kind Wire.Error.pp d Wire.Error.pp v
   | Accepted _, Rejected v ->
       Alcobar.failf "%s %s: decode accepted but validate rejected (%a)" label
-        kind Wire.pp_parse_error v
+        kind Wire.Error.pp v
   | Rejected d, Accepted () ->
       Alcobar.failf "%s %s: validate accepted what decode rejects (%a)" label
-        kind Wire.pp_parse_error d
+        kind Wire.Error.pp d
 
 (* One sample of the hostile-value stream, or [None] for a shape with no
    refinement to violate. Kept as an [option] stream so every gen presents the
@@ -453,7 +455,7 @@ let check_field_get label ?env a value bs =
                     f.name m
               | exception Wire.Parse_error e ->
                   Alcobar.failf "%s field %s: Codec.get rejected a positive: %a"
-                    label f.name Wire.pp_parse_error e
+                    label f.name Wire.Error.pp e
               | got ->
                   if not (f.equal got (f.proj value)) then
                     Alcobar.failf
@@ -497,7 +499,7 @@ let check_field_set label ~strict a target bs =
                     Alcobar.failf
                       "%s field %s: Codec.get rejects the value Codec.set just \
                        wrote: %a"
-                      label f.name Wire.pp_parse_error e
+                      label f.name Wire.Error.pp e
               | got ->
                   if not (f.equal got want) then
                     Alcobar.failf
@@ -781,16 +783,16 @@ let check_shifted label what ~k ~same base0 basek =
         Alcobar.failf "%s: %s at base %d read a different value than at base 0"
           label what k
   | Rejected a, Rejected b ->
-      if not (Wire.equal_error_kind a.Wire.kind b.Wire.kind) then
+      if not (same_kind a b) then
         Alcobar.failf
           "%s: %s rejected for a different reason at base %d (%a at base 0, %a \
            at base %d)"
-          label what k Wire.pp_parse_error a Wire.pp_parse_error b k
-      else if b.Wire.at <> a.Wire.at + k then
+          label what k Wire.Error.pp a Wire.Error.pp b k
+      else if b.Wire.Error.at <> a.Wire.Error.at + k then
         Alcobar.failf
           "%s: %s puts the failure at byte %d with the frame at base %d, where \
            base 0 puts it at byte %d"
-          label what b.Wire.at k a.Wire.at
+          label what b.Wire.Error.at k a.Wire.Error.at
   | Accepted _, Rejected _ ->
       Alcobar.failf "%s: %s accepted at base 0 and rejected at base %d" label
         what k
@@ -902,7 +904,7 @@ let check_frame_fits_declared label ?env g v sz bs =
   | Rejected e ->
       Alcobar.failf
         "%s: the frame does not decode inside its own wire_size_at (%d): %a"
-        label sz Wire.pp_parse_error e
+        label sz Wire.Error.pp e
   | Crashed ->
       Alcobar.failf
         "%s: cutting the buffer to the frame's own wire_size_at (%d) crashed \
@@ -933,7 +935,7 @@ let check_frame_ignores_tail label ?env g v ~sz ~len tail bs =
           Alcobar.failf
             "%s: appending %d bytes stopped a frame of declared size %d from \
              decoding: %a"
-            label n_tail sz Wire.pp_parse_error e
+            label n_tail sz Wire.Error.pp e
       | Crashed ->
           Alcobar.failf "%s: appending %d bytes crashed the decoder" label
             n_tail)
@@ -1013,14 +1015,11 @@ let check_repeated label what ~same first second =
           "%s: %s answered differently once another frame had been read" label
           what
   | Rejected a, Rejected b ->
-      if
-        (not (Wire.equal_error_kind a.Wire.kind b.Wire.kind))
-        || a.Wire.at <> b.Wire.at
-      then
+      if (not (same_kind a b)) || a.Wire.Error.at <> b.Wire.Error.at then
         Alcobar.failf
           "%s: %s reported a different failure once another frame had been \
            read (%a, then %a)"
-          label what Wire.pp_parse_error a Wire.pp_parse_error b
+          label what Wire.Error.pp a Wire.Error.pp b
   | _ ->
       Alcobar.failf "%s: %s changed verdict once another frame had been read"
         label what
@@ -1084,7 +1083,7 @@ module Testing = Wire.Private.Testing
 
 (* One entry point's whole answer. Any other exception is a crash, which the
    property reports as it is. *)
-type 'a answer = Value of 'a | Parse of Wire.parse_error | Invalid of string
+type 'a answer = Value of 'a | Parse of Wire.Error.t | Invalid of string
 
 let answer f =
   match f () with
@@ -1100,17 +1099,17 @@ let same_answer equal a b =
   match (a, b) with
   | Value x, Value y -> equal x y
   | Parse x, Parse y ->
-      Wire.equal_error_kind x.Wire.kind y.Wire.kind
-      && x.Wire.at = y.Wire.at
-      && List.equal String.equal x.Wire.field y.Wire.field
+      same_kind x y
+      && x.Wire.Error.at = y.Wire.Error.at
+      && List.equal String.equal x.Wire.Error.field y.Wire.Error.field
   | Invalid x, Invalid y -> String.equal x y
   | (Value _ | Parse _ | Invalid _), _ -> false
 
 let pp_answer pp_value ppf = function
   | Value v -> pp_value ppf v
   | Parse e ->
-      Fmt.pf ppf "Parse_error (%a, field [%s])" Wire.pp_parse_error e
-        (String.concat "." e.Wire.field)
+      Fmt.pf ppf "Parse_error (%a, field [%s])" Wire.Error.pp e
+        (String.concat "." e.Wire.Error.field)
   | Invalid m -> Fmt.pf ppf "Invalid_argument %S" m
 
 let pp_some ppf _ = Fmt.string ppf "a value"

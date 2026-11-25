@@ -128,7 +128,7 @@ let test_array_record_element () =
         "pts"
         (List.map (fun p -> (UInt8.to_int p.px, UInt16.to_int p.py)) v.pts)
         (List.map (fun p -> (UInt8.to_int p.px, UInt16.to_int p.py)) d.pts)
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
 let test_array_record_projection () =
   let out = render_3d arr_recs_codec in
@@ -261,7 +261,7 @@ let test_repeat_byte_array_element () =
   | Ok d ->
       Alcotest.(check int) "count" 8 (UInt16.to_int d.rn);
       Alcotest.(check (list string)) "chunks" [ "aaaa"; "bbbb" ] d.chunks
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
 (* The schema projects the byte-span element as bare [UINT8] under the budget,
    not a double [:byte-size]. *)
@@ -432,7 +432,7 @@ let test_array_scalar_element_projects () =
   Codec.encode c v buf 0;
   match Codec.decode c buf 0 with
   | Ok d -> Alcotest.(check (list (float 0.0))) "float array" v d
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
 (* An [array] over a [where] / [map] wrapping a byte span projects to a verified
    3D schema: [is_array_element] looks through the transparent wrapper to accept

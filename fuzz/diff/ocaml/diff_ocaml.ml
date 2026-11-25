@@ -173,8 +173,7 @@ let codecs =
 let outcome f =
   match f () with
   | s -> "ok " ^ s
-  | exception Wire.Parse_error e ->
-      Fmt.str "parse error %a" Wire.pp_parse_error e
+  | exception Wire.Parse_error e -> Fmt.str "parse error %a" Wire.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
 let view_name name = function
@@ -472,14 +471,14 @@ let scan_frame buf off len =
   else Some (Bytes.sub buf off len)
 
 type values = {
-  decode : bytes -> int -> (string, Wire.parse_error) result;
-  validate : bytes -> int -> (unit, Wire.parse_error) result;
+  decode : bytes -> int -> (string, Wire.Error.t) result;
+  validate : bytes -> int -> (unit, Wire.Error.t) result;
   is_valid : bytes -> int -> bool;
 }
 
 let pp_result pp_ok =
   Fmt.result ~ok:pp_ok ~error:(fun ppf e ->
-      Fmt.pf ppf "error %a" Wire.pp_parse_error e)
+      Fmt.pf ppf "error %a" Wire.Error.pp e)
 
 (* The value of a frame as the codec decodes it, written back by its
    encoder, or its error. *)
@@ -493,7 +492,7 @@ let codec_value codec frame =
       Wire.Codec.encode codec x out 0;
       Ok (Bytes.sub_string out 0 (Wire.Codec.wire_size_at codec out 0))
 
-let same_result ok a b = Result.equal ~ok ~error:Wire.equal_parse_error a b
+let same_result ok a b = Result.equal ~ok ~error:Wire.Error.equal a b
 
 (* The module's record of a frame against the codec's: the same bytes written
    back, or the same error. The codec cannot encode a record whose region a

@@ -318,8 +318,8 @@ let test_decode_short_buffer () =
   let buf = Bytes.of_string "\x42" in
   match Codec.decode codec buf 0 with
   | Ok _ -> Alcotest.fail "expected EOF error"
-  | Error { kind = Unexpected_eof _; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Error { Error.kind = Unexpected_eof _; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
 
 let test_encode_short_buffer () =
   (* Encode into buffer shorter than wire_size *)
@@ -669,13 +669,13 @@ let test_decode_reports_validate_first_failure () =
   let buf = Bytes.of_string "\x20\x05" in
   let error what = function
     | Ok _ -> Alcotest.failf "%s accepted the record" what
-    | Error e -> Fmt.str "%a" pp_parse_error e
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   let first = error "first decode" (Codec.decode c buf 0) in
   let validated =
     match Codec.validate_exn c buf 0 with
     | () -> Alcotest.fail "validate accepted the record"
-    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+    | exception Parse_error e -> Fmt.str "%a" Error.pp e
   in
   Alcotest.(check string) "first decode" validated first;
   Alcotest.(check string)
@@ -718,12 +718,12 @@ let test_decode_params_reports_validate_first_failure () =
   let buf = Bytes.of_string "\x20\x05\x07" in
   let error what = function
     | Ok _ -> Alcotest.failf "%s accepted the record" what
-    | Error e -> Fmt.str "%a" pp_parse_error e
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   let validated =
     match Codec.validate_exn ~env:(env ()) c buf 0 with
     | () -> Alcotest.fail "validate accepted the record"
-    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+    | exception Parse_error e -> Fmt.str "%a" Error.pp e
   in
   Alcotest.(check string)
     "decode" validated
@@ -735,7 +735,7 @@ let test_decode_params_reports_validate_first_failure () =
   (match Codec.decode ~env:(env ()) c (Bytes.of_string "\x01\x00\x07") 0 with
   | Ok (_, _, c) when UInt8.to_int c = 7 -> ()
   | Ok _ -> Alcotest.fail "wrong value"
-  | Error e -> Alcotest.failf "valid record refused: %a" pp_parse_error e);
+  | Error e -> Alcotest.failf "valid record refused: %a" Error.pp e);
   Alcotest.(check int) "one map decode on a valid record" 1 !calls
 
 (* A literal region size is a byte count for [nested], [nested_at_most] and

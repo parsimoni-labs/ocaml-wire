@@ -129,11 +129,11 @@ val view_scan :
     records a field holds included. Fails with {!Alcobar.failf}. *)
 
 type values = {
-  decode : bytes -> int -> (string, Wire.parse_error) result;
+  decode : bytes -> int -> (string, Wire.Error.t) result;
       (** The generated decoder, the record it returns written back by the
           generated encoder in the bytes the generated size measures, or the
           error. *)
-  validate : bytes -> int -> (unit, Wire.parse_error) result;
+  validate : bytes -> int -> (unit, Wire.Error.t) result;
       (** The generated [validate]. *)
   is_valid : bytes -> int -> bool;  (** The generated [is_valid]. *)
 }

@@ -589,7 +589,7 @@ let encode_fresh ~op ?env t v =
    with Types.Parse_error e ->
      Fmt.invalid_arg
        "Codec.%s %s: the encoded record is rejected by validation (%a)" op
-       t.name Types.pp_parse_error e);
+       t.name Error.pp e);
   buf
 
 let to_bytes ?env t v = encode_fresh ~op:"to_bytes" ?env t v

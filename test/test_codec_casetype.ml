@@ -76,7 +76,7 @@ let test_casetype_no_match_invalid_tag () =
   in
   let c = Codec.v "ClosedCt" Fun.id Codec.[ Field.v "d" typ $ Fun.id ] in
   match Codec.decode c (Bytes.of_string "\x63\x00") 0 with
-  | Error { kind = Invalid_tag n; _ } ->
+  | Error { Error.kind = Invalid_tag n; _ } ->
       Alcotest.(check int) "unmatched tag" 99 n
   | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
   | Error _ -> Alcotest.fail "wrong error for an unmatched casetype tag"
@@ -99,7 +99,7 @@ let test_casetype_no_match_names_field () =
   in
   let c = Codec.v "Tagged" Fun.id Codec.[ Field.v "body" typ $ Fun.id ] in
   match Codec.decode c (Bytes.of_string "\x63\x00\x00") 0 with
-  | Error { kind = Invalid_tag n; field; at } ->
+  | Error { Error.kind = Invalid_tag n; field; at } ->
       Alcotest.(check int) "unmatched tag" 99 n;
       Alcotest.(check int) "at the casetype field" 0 at;
       Alcotest.(check (list string)) "names the field" [ "body" ] field
@@ -136,7 +136,7 @@ let test_casetype_default_recovers_tag () =
       Alcotest.(check int) "decode recovers the tag" 0x42 (UInt8.to_int t);
       Alcotest.(check string) "decode body" "ab" b
   | Ok _ -> Alcotest.fail "expected Unknown"
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
 let test_casetype_field_roundtrip () =
   let buf = Bytes.create 11 in

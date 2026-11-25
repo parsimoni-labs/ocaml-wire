@@ -59,7 +59,7 @@ let test_values () =
       true
       (Result.equal
          ~ok:(fun () () -> true)
-         ~error:equal_parse_error
+         ~error:Error.equal
          (Codec.validate Packet_stack.capture short 0)
          (S_capture.validate short 0))
   done;
@@ -83,15 +83,13 @@ let test_bad_input () =
     match S_capture.decode b off with
     | Ok _ when Result.is_ok want -> ()
     | Error e
-      when Result.equal
-             ~ok:(fun _ _ -> false)
-             ~error:equal_parse_error want (Error e) ->
+      when Result.equal ~ok:(fun _ _ -> false) ~error:Error.equal want (Error e)
+      ->
         ()
     | Ok _ | Error _ ->
         Alcotest.failf "decode disagrees on %S at %d" (Bytes.to_string b) off
     | exception Parse_error e ->
-        Alcotest.failf "decode raised %a on %S" pp_parse_error e
-          (Bytes.to_string b)
+        Alcotest.failf "decode raised %a on %S" Error.pp e (Bytes.to_string b)
     | exception Invalid_argument m ->
         Alcotest.failf "decode raised Invalid_argument %s on %S" m
           (Bytes.to_string b)

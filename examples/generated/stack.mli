@@ -633,7 +633,7 @@ val size : t -> int
 val min_size : int
 (** [min_size] is the fewest bytes a record takes, [14]. *)
 
-val decode : bytes -> int -> (t, Wire_runtime.Errors.parse_error) result
+val decode : bytes -> int -> (t, Wire_runtime.Error.t) result
 (** [decode buf off] is the record at [off] in [buf], checked to the end of
     [buf] as {!val-check} checks it, or the codec's error. Raises
     [Invalid_argument] if [off] is negative. *)
@@ -646,7 +646,7 @@ val is_valid : bytes -> int -> bool
 (** [is_valid buf off] is [true] iff the record at [off] in [buf] passes its
     checks. It never raises. *)
 
-val validate : bytes -> int -> (unit, Wire_runtime.Errors.parse_error) result
+val validate : bytes -> int -> (unit, Wire_runtime.Error.t) result
 (** [validate buf off] is [Ok ()] if the record at [off] in [buf] passes its
     checks and the codec's error otherwise. Raises [Invalid_argument] if [off]
     is negative. *)

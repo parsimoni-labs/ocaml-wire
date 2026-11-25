@@ -23,7 +23,7 @@ let test_repeat_zeroterm_element () =
   Codec.encode zt_rep_codec v buf 0;
   match Codec.decode zt_rep_codec buf 0 with
   | Ok d -> Alcotest.(check (list string)) "names" v.names d.names
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
 let test_repeat_zeroterm_projection () =
   let out = render_3d zt_rep_codec in
@@ -205,7 +205,7 @@ let test_array_byte_array_element () =
   Codec.encode arr_chunks_codec v buf 0;
   match Codec.decode arr_chunks_codec buf 0 with
   | Ok d -> Alcotest.(check (list string)) "addrs" v.addrs d.addrs
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
 let test_array_byte_array_projection () =
   let out = render_3d arr_chunks_codec in
@@ -364,13 +364,13 @@ let test_validate_overrun_field_offset () =
    what shows a real per-field guard ran, at the field that overran. *)
 let check_located_eof name ~at ~expected ~got = function
   | Ok () -> Alcotest.failf "%s: accepted a buffer its own decoder rejects" name
-  | Error (e : parse_error) -> (
+  | Error (e : Error.t) -> (
       Alcotest.(check int) (name ^ ": offset of the failing field") at e.at;
       match e.kind with
       | Unexpected_eof { expected = ex; got = g } ->
           Alcotest.(check int) (name ^ ": bytes the field needed") expected ex;
           Alcotest.(check int) (name ^ ": bytes the buffer had there") got g
-      | k -> Alcotest.failf "%s: expected an eof, got %a" name pp_error_kind k)
+      | k -> Alcotest.failf "%s: expected an eof, got %a" name Error.pp_kind k)
 
 (* Run a validate-style call and shape its outcome for [check_located_eof]. A
    raw [Invalid_argument] is the crash under test, so it fails here rather than
@@ -626,13 +626,13 @@ let test_validate_repeat_partial_element () =
     | () -> ()
     | exception Wire.Parse_error e ->
         Alcotest.failf "%s: validate rejected a whole budget: %a" name
-          Wire.pp_parse_error e);
+          Wire.Error.pp e);
     match Codec.decode codec whole 0 with
     | Ok xs ->
         Alcotest.(check int) (name ^ ": elements decoded") 5 (List.length xs)
     | Error e ->
         Alcotest.failf "%s: decode rejected a whole budget: %a" name
-          Wire.pp_parse_error e
+          Wire.Error.pp e
   in
   accepts "repeat" repeat_budget_codec;
   accepts "repeat_seq" repeat_seq_budget_codec
@@ -788,7 +788,7 @@ let test_error_order () =
   let answer f =
     match f () with
     | () -> "ok"
-    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+    | exception Parse_error e -> Fmt.str "%a" Error.pp e
   in
   let answers c buf =
     [

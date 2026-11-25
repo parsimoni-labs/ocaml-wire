@@ -11,7 +11,7 @@ val parse_error :
   string ->
   ?field:string list ->
   at:int ->
-  Wire_runtime.Errors.error_kind ->
+  Wire_runtime.Error.kind ->
   (unit -> 'a) ->
   unit
 (** [parse_error what ?field ~at kind f] checks that [f ()] raises a parse error

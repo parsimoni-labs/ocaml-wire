@@ -1085,7 +1085,7 @@ let rec chain_depth r =
 let chain_words depth =
   let c = chain_codec depth and buf = chain_buf depth in
   match Codec.decode c buf 0 with
-  | Error e -> Alcotest.failf "depth %d: %a" depth pp_parse_error e
+  | Error e -> Alcotest.failf "depth %d: %a" depth Error.pp e
   | Ok r when chain_depth r <> depth ->
       Alcotest.failf "depth %d decoded %d levels" depth (chain_depth r)
   | Ok _ -> words_per_call ~iters:200 (fun () -> Codec.decode c buf 0)

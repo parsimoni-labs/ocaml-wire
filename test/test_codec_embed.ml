@@ -209,7 +209,7 @@ let test_codec_embed_tail () =
   let answer f =
     match f () with
     | v -> "ok " ^ v
-    | exception Parse_error e -> Fmt.str "error %a" pp_parse_error e
+    | exception Parse_error e -> Fmt.str "error %a" Error.pp e
   in
   let show (a, r) = Fmt.str "%d %S" (UInt8.to_int a) r in
   let answers n =

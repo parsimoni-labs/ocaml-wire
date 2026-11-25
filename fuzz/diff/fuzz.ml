@@ -28,7 +28,7 @@ let rejection f =
 
 let pp_verdict ppf = function
   | None -> Fmt.string ppf "accepts"
-  | Some e -> Fmt.pf ppf "rejects (%a)" Wire.pp_parse_error e
+  | Some e -> Fmt.pf ppf "rejects (%a)" Wire.Error.pp e
 
 (* The EverParse validator accepts iff the bytes parse (enough input, valid
    structure) and every refinement holds. [Codec.decode_exn] is exactly that:
@@ -112,7 +112,7 @@ let diff_values label fields c_values b =
 type case = {
   label : string;
   packed : packed;
-  general : bytes -> Wire.parse_error option;
+  general : bytes -> Wire.Error.t option;
       (** The OCaml codec's verdict with its fast paths off. *)
   c_check : bytes -> bool;
   c_values : bytes -> (string * int64) list;

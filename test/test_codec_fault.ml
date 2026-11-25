@@ -7,7 +7,7 @@
 
 open Wire
 
-let summary (e : parse_error) =
+let summary (e : Error.t) =
   let where = Fmt.str "%s@%d" (String.concat "." e.field) e.at in
   match e.kind with
   | Unexpected_eof _ -> "eof"
@@ -15,7 +15,7 @@ let summary (e : parse_error) =
   | Constraint_failed { which = Where; _ } -> where ^ " where"
   | Constraint_failed { which = Action | Per_byte; _ } -> where ^ " other"
   | Invalid_enum _ -> where ^ " enum"
-  | kind -> Fmt.str "%s %a" where pp_error_kind kind
+  | kind -> Fmt.str "%s %a" where Error.pp_kind kind
 
 let result = function Ok _ -> "ok" | Error e -> summary e
 

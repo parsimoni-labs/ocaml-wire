@@ -27,7 +27,7 @@ val nested_cases : string -> int -> Alcobar.test_case list
 val validate_agrees_cases : string -> int -> Alcobar.test_case list
 (** [validate_agrees_cases label depth] requires {!Wire.Codec.validate_exn} to
     raise exactly when {!Wire.Codec.decode} returns [Error], with the same
-    [error_kind], over an arbitrary nested codec per sample. *)
+    [Wire.Error.kind], over an arbitrary nested codec per sample. *)
 
 val direct_cases : string -> 'a t -> Alcobar.test_case list
 (** [direct_cases label g] round-trips [g] through {!Wire.of_string} and

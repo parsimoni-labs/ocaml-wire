@@ -15,6 +15,7 @@ module V = View_module
    does. Each record a field holds has its own, in its module. *)
 
 let errors = Emitter.errors
+let error = Emitter.error
 let rt = Emitter.rt
 
 (* Positions and sizes are [int]s, as the views hold them. *)
@@ -525,7 +526,7 @@ let helpers ~uses =
          Fmt.str
            "let[@inline] eof_if c at expected got field =@\n\
             if c then fail at field (%s.Unexpected_eof { expected; got })\n\n"
-           errors
+           error
        else "");
       (if field_unless then
          Fmt.str
@@ -533,7 +534,7 @@ let helpers ~uses =
             if not c then@\n\
             fail at field (%s.Constraint_failed { which = %s.Field; value = \
             Some (Int64.of_int v) })\n\n"
-           errors errors
+           error error
        else "");
     ]
 
@@ -553,11 +554,11 @@ let check_kind (f : field) (c : check) =
       Fmt.str
         "%s.Constraint_failed { which = %s.Field; value = Some (Int64.of_int \
          %s) }"
-        errors errors f.id
+        error error f.id
   | Enum valid ->
-      Fmt.str "%s.Invalid_enum { value = %s; valid = [%s] }" errors f.id
+      Fmt.str "%s.Invalid_enum { value = %s; valid = [%s] }" error f.id
         (String.concat "; " (List.map int_lit valid))
-  | Tag -> Fmt.str "%s.Invalid_tag %s" errors f.id
+  | Tag -> Fmt.str "%s.Invalid_tag %s" error f.id
 
 let fail_check cond ~at ~field (f : field) (c : check) =
   match c.kind with
@@ -771,7 +772,7 @@ and pp_error ?short ppf e ~p ~path node =
       Fmt.pf ppf
         "fail_unless %s p0 %s (%s.Constraint_failed { which = %s.Where; value \
          = None });@\n"
-        (text e.er cond) path errors errors;
+        (text e.er cond) path error error;
       p
   | Span (T.Ref (T.I, var))
     when List.exists (fun (s : sub) -> s.var = var) e.er.subs ->
@@ -989,7 +990,7 @@ let mli_record ppf ~target t r =
   pp_val ~target ppf "size" "t -> int"
     "[size r] is the number of bytes {!val-encode} writes for [r]."
 
-let parse_error = rt ^ ".Errors.parse_error"
+let parse_error = rt ^ ".Error.t"
 
 let mli_root ppf ~target t (r : V.record) =
   mli_record ppf ~target t r;

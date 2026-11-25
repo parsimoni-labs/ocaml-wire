@@ -32,8 +32,7 @@ val [@zero_alloc strict] mul : int -> int -> int
 
 val [@zero_alloc] checked_add : int -> int -> int
 (** [checked_add a b] is [a + b]. Raises {!Errors.Parse_error} with
-    {!Errors.constructor-Value_out_of_range} at offset 0 when it does not fit.
-*)
+    {!Error.constructor-Value_out_of_range} at offset 0 when it does not fit. *)
 
 val [@zero_alloc] checked_sub : int -> int -> int
 (** [checked_sub a b] is [a - b], as {!checked_add}. *)

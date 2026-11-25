@@ -716,13 +716,13 @@ let[@inline never] fail at field kind =
   raise (Wire_runtime.Errors.Parse_error { at; field; kind })
 
 let[@inline] eof_if c at expected got field =
-  if c then fail at field (Wire_runtime.Errors.Unexpected_eof { expected; got })
+  if c then fail at field (Wire_runtime.Error.Unexpected_eof { expected; got })
 
 let[@inline] field_unless c at field v =
   if not c then
     fail at field
-      (Wire_runtime.Errors.Constraint_failed
-         { which = Wire_runtime.Errors.Field; value = Some (Int64.of_int v) })
+      (Wire_runtime.Error.Constraint_failed
+         { which = Wire_runtime.Error.Field; value = Some (Int64.of_int v) })
 
 let[@inline] set_bits'u8 (b : _ Wire_runtime.Buf.t) at ~mask ~shift x msg =
   if x land lnot mask <> 0 then invalid_arg msg;

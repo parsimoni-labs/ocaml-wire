@@ -12,7 +12,7 @@ let err_parse fmt = Fmt.kstr (fun message -> Error message) fmt
 
 let string_error = function
   | Ok value -> Ok value
-  | Error error -> err_parse "%a" pp_parse_error error
+  | Error error -> err_parse "%a" Error.pp error
 
 (* Render a one-field struct carrying [p] to 3D for substring assertions. *)
 let render_param_3d p =
@@ -245,8 +245,8 @@ let test_where_clause_fail () =
   let env = Codec.env c |> Param.bind max_val (UInt16.v 10) in
   match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
-  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
 
 let test_bind_by_name () =
   (* [bind_by_name] binds an input param by name, without the typed handle, and
@@ -271,8 +271,8 @@ let test_bind_by_name () =
   let env = Codec.env c |> Param.bind_by_name "max_val" 10 in
   (match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
-  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e);
+  | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e);
   (* an unreferenced name is a no-op, not an error *)
   let env =
     Codec.env c
@@ -361,8 +361,8 @@ let test_codec_param_where_fail () =
   let buf = Bytes.of_string "\x05" in
   let env = Codec.env c |> Param.bind limit (UInt8.v 3) in
   match Codec.decode ~env c buf 0 with
-  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
 (* -- 3D rendering -- *)
@@ -584,7 +584,7 @@ let test_param_size_in_casetype () =
     "decoded casetype" (Ok "AB")
     (match Codec.decode ~env outer buf 0 with
     | Ok (`Body value) -> Ok value
-    | Error error -> err_parse "%a" pp_parse_error error)
+    | Error error -> err_parse "%a" Error.pp error)
 
 let test_param_through_typ_wrappers () =
   (* Fixed-size typ wrappers use the scalar fast path. That path must carry the

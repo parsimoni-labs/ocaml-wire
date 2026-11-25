@@ -99,7 +99,7 @@ exception Unwalked
    context. See {!section:parse-errors} for the exception and helpers. *)
 
 (** Which predicate a {!Constraint_failed} came from. *)
-type predicate = Errors.predicate = Where | Field | Action | Per_byte
+type predicate = Error.predicate = Where | Field | Action | Per_byte
 
 type consumption = [ `Prefix | `All ]
 (** How a bytes-backed decoder treats input after one value. [`Prefix] accepts a
@@ -112,7 +112,7 @@ type consumption = [ `Prefix | `All ]
     read at. For {!constructor-Constraint_failed}, [value] is the offending
     field's value for a single-field self-constraint and [None] for a
     cross-field or where predicate. *)
-type error_kind = Errors.error_kind =
+type error_kind = Error.kind =
   | Unexpected_eof of { expected : int; got : int }
   | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
@@ -123,7 +123,7 @@ type error_kind = Errors.error_kind =
   | Zero_divisor
   | Constraint_failed of { which : predicate; value : int64 option }
 
-type parse_error = Errors.parse_error = {
+type parse_error = Error.t = {
   at : int;
   field : string list;
   kind : error_kind;
@@ -131,22 +131,6 @@ type parse_error = Errors.parse_error = {
 (** [at] is the absolute byte offset of the failing field. Alongside it the
     parse error records the path of field names leading to that field (root to
     leaf, empty at a top-level or anonymous position) and the failure kind. *)
-
-val parse_error : ?at:int -> ?field:string list -> error_kind -> parse_error
-(** [parse_error kind] builds a decode error carrying [kind]. The byte offset
-    defaults to 0 and the field path to [[]] (a top-level or whole-buffer
-    failure), so a caller synthesizing an error outside a codec run, such as a
-    length pre-check or a mapping decoder, need only give the kind. *)
-
-val eof :
-  ?at:int ->
-  ?field:string list ->
-  expected:int ->
-  got:int ->
-  unit ->
-  parse_error
-(** [eof ~expected ~got ()] is [parse_error (Unexpected_eof { expected; got })]:
-    the input ended with [got] bytes where [expected] were needed. *)
 
 val check_consumption : consumption -> consumed:int -> available:int -> unit
 (** Enforce a bytes-backed decoder's consumption mode. Raises {!Parse_error}
@@ -1095,21 +1079,6 @@ val raise_zero_divisor : at:int -> 'a
 val raise_constraint : at:int -> which:predicate -> ?value:int64 -> unit -> 'a
 (** Raise {!Parse_error} for a violated predicate [which], optionally carrying
     the offending field's [value]. *)
-
-val pp_parse_error : Format.formatter -> parse_error -> unit
-(** Pretty-print a parse error. *)
-
-val pp_error_kind : Format.formatter -> error_kind -> unit
-(** Pretty-print a parse error kind, without location. *)
-
-val equal_parse_error : parse_error -> parse_error -> bool
-(** Structural equality on parse errors. *)
-
-val equal_error_kind : error_kind -> error_kind -> bool
-(** Structural equality on parse error kinds, ignoring location. *)
-
-val compare_parse_error : parse_error -> parse_error -> int
-(** Total order on parse errors. *)
 
 val is_greedy : 'a typ -> bool
 (** Whether a type reads "the rest of the buffer" (a greedy byte span, through

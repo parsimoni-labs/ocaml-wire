@@ -393,9 +393,8 @@ let test_int64_field_constraint_accepts_signed_magnitude_domain () =
 let test_int64_field_constraint_rejects_negative_zero () =
   match Codec.decode signed_magnitude_seek_codec (seek_buf Int64.min_int) 0 with
   | Ok _ -> Alcotest.fail "expected signed-magnitude negative zero to fail"
-  | Error { kind = Constraint_failed _; _ } -> ()
-  | Error e ->
-      Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+  | Error { Error.kind = Constraint_failed _; _ } -> ()
+  | Error e -> Alcotest.failf "expected Constraint_failed, got %a" Error.pp e
 
 (* The bsdiff seek: a sign-magnitude uint64 decoded through a map, whose
    magnitude must fit a native int. Exercises an int64 mask ([land64]) over a
@@ -420,8 +419,8 @@ let test_int64_mask_constraint_over_map () =
   let reject v =
     match Codec.decode mask_seek_codec (seek_buf v) 0 with
     | Ok _ -> Alcotest.failf "expected 0x%Lx rejected" v
-    | Error { kind = Constraint_failed _; _ } -> ()
-    | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+    | Error { Error.kind = Constraint_failed _; _ } -> ()
+    | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
   in
   (* magnitude fits: small values and sign-bit-only (negative zero magnitude) *)
   List.iter accept [ 0L; 5L; Int64.min_int ];
@@ -446,9 +445,8 @@ let test_uint64_int_ref_constraint_enforced () =
     (UInt64.to_int64 (decode_ok (Codec.decode codec (buf 3L) 0)));
   match Codec.decode codec (buf 20L) 0 with
   | Ok _ -> Alcotest.fail "20 exceeds the bound and must be rejected"
-  | Error { kind = Constraint_failed _; _ } -> ()
-  | Error e ->
-      Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+  | Error { Error.kind = Constraint_failed _; _ } -> ()
+  | Error e -> Alcotest.failf "expected Constraint_failed, got %a" Error.pp e
 
 (* -- struct_of_codec for variable-size codecs -- *)
 
@@ -534,7 +532,7 @@ let test_size_names_mapped_field () =
   | Ok (k, s) ->
       Alcotest.(check int) "mapped value" 3 k;
       Alcotest.(check string) "sized by the wire value" "abcdefg" s
-  | Error e -> Alcotest.failf "lossy: %a" pp_parse_error e);
+  | Error e -> Alcotest.failf "lossy: %a" Error.pp e);
   (match Codec.decode lossy (Bytes.of_string "\x07abcd") 0 with
   | Ok _ -> Alcotest.fail "lossy: a short record decoded"
   | Error _ -> ());
@@ -543,13 +541,13 @@ let test_size_names_mapped_field () =
   | Ok (k, s) ->
       Alcotest.(check int) "looked up" 2 k;
       Alcotest.(check string) "sized by the index" "a" s
-  | Error e -> Alcotest.failf "lookup: %a" pp_parse_error e);
+  | Error e -> Alcotest.failf "lookup: %a" Error.pp e);
   match Codec.decode refusing (Bytes.of_string "\x05abcde") 0 with
   | Ok _ -> Alcotest.fail "lookup: a refused index decoded"
   | Error e ->
       Alcotest.(check string)
         "the refusal names the field" "len@0: invalid tag: 5"
-        (Fmt.str "%a" pp_parse_error e)
+        (Fmt.str "%a" Error.pp e)
 
 let suite =
   ( "codec_dependent",

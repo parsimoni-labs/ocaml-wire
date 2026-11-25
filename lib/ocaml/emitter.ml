@@ -40,6 +40,7 @@ let i32 src = if src.unboxed then "Int32_u" else "Int32"
 let i64 src = if src.unboxed then "Int64_u" else "Int64"
 let rt = "Wire_runtime"
 let errors = rt ^ ".Errors"
+let error = rt ^ ".Error"
 
 let bytes_src =
   {

@@ -15,7 +15,7 @@ open Record_module
 type target = [ `OCaml | `OxCaml ]
 
 let rt = Emitter.rt
-let parse_error = rt ^ ".Errors.parse_error"
+let parse_error = rt ^ ".Error.t"
 let parse_exn = "[" ^ rt ^ ".Errors.Parse_error]"
 
 (* The buffer a function takes: its type, the runtime module that names it,

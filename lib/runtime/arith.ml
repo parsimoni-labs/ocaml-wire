@@ -30,7 +30,7 @@ let[@inline never] overflow ~positive =
   in
   raise
     (Errors.Parse_error
-       { at = 0; field = []; kind = Value_out_of_range { value } })
+       { Error.at = 0; field = []; kind = Error.Value_out_of_range { value } })
 
 let[@inline] checked_add a b =
   let sum = a + b in

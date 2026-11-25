@@ -1022,7 +1022,7 @@ let test_e2e_nested_wide () =
     let expected =
       match Codec.decode codec frame 0 with
       | Ok (_, (w, _)) -> Fmt.str "%Lx" (UInt64.to_int64 w)
-      | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+      | Error e -> Alcotest.failf "decode: %a" Error.pp e
     in
     let dir = Filename.temp_dir "wire_e2e_wide" "" in
     let schema = Everparse.project ~mode:`Ffi codec in

@@ -16,7 +16,7 @@ let contains s sub =
 let outcome f =
   match f () with
   | s -> "ok " ^ s
-  | exception Parse_error e -> Fmt.str "parse error %a" pp_parse_error e
+  | exception Parse_error e -> Fmt.str "parse error %a" Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
 (* The module of [c] and its interface, for the OCaml target unless [target]
@@ -951,7 +951,7 @@ let test_bigstring () =
 let test_short_faults () =
   let error = function
     | Ok _ -> "ok"
-    | Error (e : parse_error) -> Fmt.str "%a" pp_parse_error e
+    | Error (e : Error.t) -> Fmt.str "%a" Error.pp e
   in
   List.iter
     (fun (s, expected) ->

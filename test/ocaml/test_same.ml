@@ -62,7 +62,7 @@ let test_swap () =
 let result validate buf off =
   match validate buf off with
   | Ok () -> "ok"
-  | Error e -> Fmt.str "%a" pp_parse_error e
+  | Error e -> Fmt.str "%a" Error.pp e
   | exception Invalid_argument _ -> "invalid"
 
 (* The same answers from [validate], from the check and from each field read

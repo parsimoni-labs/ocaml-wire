@@ -1397,7 +1397,7 @@ let build_record_encoder name writers size_of_value ~check =
           Fmt.invalid_arg
             "Codec.encode %s: the encoded record is rejected by its own \
              constraints (%a)"
-            name Types.pp_parse_error e));
+            name Error.pp e));
     !write_off
 
 (* The decoders of a sealed record, and its walk. *)

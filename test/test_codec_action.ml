@@ -41,7 +41,7 @@ let test_action_fires_on_get () =
   (* Odd value: action rejects *)
   match get_v (Bytes.of_string "\x43") 0 with
   | _ -> Alcotest.fail "expected action to reject odd value"
-  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
+  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
 
 let test_action_validate_does_not_writeback () =
   (* validate runs actions in scratch storage but does not expose their output
@@ -167,7 +167,7 @@ let test_get_action_abort_field () =
   let get_v = Staged.unstage (Codec.get codec cf_v) in
   match get_v (Bytes.of_string "\x42") 0 with
   | _ -> Alcotest.fail "expected abort"
-  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
+  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
 
 let test_get_noaction_ignores_env () =
   (* Passing ~env to get on a field without action is harmless *)
@@ -229,7 +229,7 @@ let test_get_action_with_inputparam () =
   (* 0x40 = 64 > 50: action rejects *)
   match get_v buf_bad 0 with
   | _ -> Alcotest.fail "expected rejection from input param check"
-  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
+  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
 
 let test_get_action_inputparam_noenv () =
   (* An action comparing against an input param is a verdict on the bytes, so
@@ -260,7 +260,7 @@ let test_get_action_inputparam_noenv () =
     (UInt8.to_int (get_v (Bytes.of_string "\x04") 0));
   match get_v (Bytes.of_string "\x05") 0 with
   | _ -> Alcotest.fail "expected rejection above the bound"
-  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
+  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
 
 (* -- Param forwarding into embedded sub-codecs -- *)
 
@@ -539,7 +539,7 @@ let test_validate_constraint_only () =
   Codec.validate_exn codec good 0;
   match Codec.validate_exn codec bad 0 with
   | () -> Alcotest.fail "expected constraint failure"
-  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
+  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
 
 let test_validate_where_only () =
   (* Codec with where clause but no field constraints *)
@@ -556,7 +556,7 @@ let test_validate_where_only () =
   Codec.validate_exn codec good 0;
   match Codec.validate_exn codec bad 0 with
   | () -> Alcotest.fail "expected where failure"
-  | exception Parse_error { kind = Constraint_failed _; _ } -> ()
+  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
 
 (* -- a field that sizes a later one and sets an output -- *)
 
@@ -670,10 +670,10 @@ let check_sized ~exact name c =
               Alcotest.failf "%s: decode returned %s" where (sized_show v)
           | Ok (), Error e when exact ->
               Alcotest.failf "%s: validate accepts, decode fails with %a" where
-                pp_parse_error e
+                Error.pp e
           | Error e, Ok v when exact ->
               Alcotest.failf "%s: decode returned %s, validate fails with %a"
-                where (sized_show v) pp_parse_error e
+                where (sized_show v) Error.pp e
           | _ -> ())
         (entries input))
     sized_inputs
@@ -833,7 +833,7 @@ let test_samefield_twocodecs_decode () =
   (* codec1 decode should construct record with x from offset 0 *)
   match Codec.decode codec1 buf 0 with
   | Ok v -> Alcotest.(check int) "decoded x" 0x1234 (UInt16.to_int v)
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  | Error e -> Alcotest.failf "%a" Error.pp e
 
 let test_samefield_twocodecs_encode () =
   (* Encode via the first codec after sealing both.

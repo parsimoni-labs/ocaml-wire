@@ -58,7 +58,7 @@ let outcome f =
   match f () with
   | () -> "ok"
   | exception Wire_runtime.Errors.Parse_error e ->
-      Fmt.str "parse error %a" Wire_runtime.Errors.pp_parse_error e
+      Fmt.str "parse error %a" Wire_runtime.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
 let test_write () =

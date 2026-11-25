@@ -150,7 +150,7 @@ let test_enum_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x02" in
   (match Codec.decode carrier_enum_codec buf 0 with
   | Ok v -> Alcotest.(check int) "decode listed code" 2 (UInt32.to_int v)
-  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  | Error e -> Alcotest.failf "%a" Error.pp e);
   Codec.validate_exn carrier_enum_codec buf 0;
   let get = Staged.unstage (Codec.get carrier_enum_codec carrier_enum_field) in
   Alcotest.(check int) "get listed code" 2 (UInt32.to_int (get buf 0));
@@ -179,7 +179,7 @@ let test_variants_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x01" in
   (match Codec.decode carrier_variants_codec buf 0 with
   | Ok v -> Alcotest.(check bool) "decode variant" true (v = `Zero)
-  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  | Error e -> Alcotest.failf "%a" Error.pp e);
   Codec.validate_exn carrier_variants_codec buf 0;
   let get =
     Staged.unstage (Codec.get carrier_variants_codec carrier_variants_field)
@@ -203,7 +203,7 @@ let test_lookup_and_bit_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x02" in
   (match Codec.decode carrier_lookup_codec buf 0 with
   | Ok v -> Alcotest.(check string) "lookup decode" "c" v
-  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  | Error e -> Alcotest.failf "%a" Error.pp e);
   Codec.validate_exn carrier_lookup_codec buf 0;
   let get =
     Staged.unstage (Codec.get carrier_lookup_codec carrier_lookup_field)
@@ -216,7 +216,7 @@ let test_lookup_and_bit_over_carrier_base () =
     "\x00\x00\x00\x07";
   (match Codec.decode carrier_bit_codec buf 0 with
   | Ok v -> Alcotest.(check bool) "bit decode" true v
-  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  | Error e -> Alcotest.failf "%a" Error.pp e);
   Codec.encode carrier_bit_codec false buf 0;
   Alcotest.(check string) "bit encode" "\x00\x00\x00\x00" (Bytes.to_string buf)
 
@@ -291,11 +291,11 @@ let validate_result codec s =
   | exception Parse_error e -> Error e
 
 let expect_per_byte label ~at = function
-  | Error { kind = Constraint_failed { which = Per_byte; _ }; at = off; _ } ->
+  | Error
+      { Error.kind = Constraint_failed { which = Per_byte; _ }; at = off; _ } ->
       Alcotest.(check int) (label ^ ": offset") at off
   | Error e ->
-      Alcotest.failf "%s: expected a per-byte refusal, got %a" label
-        pp_parse_error e
+      Alcotest.failf "%s: expected a per-byte refusal, got %a" label Error.pp e
   | Ok () -> Alcotest.failf "%s: accepted a byte violating the refinement" label
 
 (* The refinement belongs to the span itself, so the compiled reader has to
@@ -319,26 +319,24 @@ let test_decode_rejects_refined_byte () =
   (match get (Bytes.of_string "a\xffb") 0 with
   | s -> Alcotest.failf "get returned %S past the refinement" s
   | exception
-      Parse_error { kind = Constraint_failed { which = Per_byte; _ }; _ } ->
+      Parse_error { Error.kind = Constraint_failed { which = Per_byte; _ }; _ }
+    ->
       ());
   (* The direct parser has always rejected this; it must keep doing so. *)
   match of_string per_byte_typ "a\xffb" with
-  | Error { kind = Constraint_failed { which = Per_byte; _ }; at; _ } ->
+  | Error { Error.kind = Constraint_failed { which = Per_byte; _ }; at; _ } ->
       Alcotest.(check int) "of_string offset" 1 at
-  | Error e -> Alcotest.failf "of_string: wrong error %a" pp_parse_error e
+  | Error e -> Alcotest.failf "of_string: wrong error %a" Error.pp e
   | Ok _ -> Alcotest.fail "of_string accepted a byte violating the refinement"
 
 let test_decode_accepts_conforming_refined_byte () =
   Alcotest.(check (result string string))
     "of_string" (Ok "abc")
-    (Result.map_error
-       (Fmt.str "%a" pp_parse_error)
-       (of_string per_byte_typ "abc"));
+    (Result.map_error (Fmt.str "%a" Error.pp) (of_string per_byte_typ "abc"));
   Alcotest.(check bool) "decode" true (decode_accepts per_byte_codec "abc");
   Alcotest.(check (result unit string))
     "validate" (Ok ())
-    (Result.map_error
-       (Fmt.str "%a" pp_parse_error)
+    (Result.map_error (Fmt.str "%a" Error.pp)
        (validate_result per_byte_codec "abc"));
   Alcotest.(check string)
     "get" "abc"

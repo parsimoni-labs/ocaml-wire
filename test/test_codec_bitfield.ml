@@ -39,7 +39,7 @@ let test_codec_bitfield_wire_size () =
 let test_codec_bitfield_roundtrip () =
   let original = { a = 5; b = 20; c = 0x1234; d = 0xAB } in
   match encode_record bf32_codec original with
-  | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "encode: %a" Error.pp e
   | Ok encoded -> (
       match decode_record bf32_codec encoded with
       | Ok decoded ->
@@ -47,7 +47,7 @@ let test_codec_bitfield_roundtrip () =
           Alcotest.(check int) "b" original.b decoded.b;
           Alcotest.(check int) "c" original.c decoded.c;
           Alcotest.(check int) "d" original.d decoded.d
-      | Error e -> Alcotest.failf "%a" pp_parse_error e)
+      | Error e -> Alcotest.failf "%a" Error.pp e)
 
 let test_codec_bitfield_byte_layout () =
   (* a=5 (3b), b=20 (5b), c=0x1234 (16b), d=0xAB (8b)
@@ -55,7 +55,7 @@ let test_codec_bitfield_byte_layout () =
      = 0xB4 0x12 0x34 0xAB *)
   let v = { a = 5; b = 20; c = 0x1234; d = 0xAB } in
   match encode_record bf32_codec v with
-  | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "encode: %a" Error.pp e
   | Ok encoded ->
       Alcotest.(check int) "length" 4 (String.length encoded);
       Alcotest.(check int) "byte 0" 0xB4 (Char.code encoded.[0]);
@@ -72,13 +72,13 @@ let test_codec_bitfield_decode () =
       Alcotest.(check int) "b" 20 v.b;
       Alcotest.(check int) "c" 0x1234 v.c;
       Alcotest.(check int) "d" 0xAB v.d
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  | Error e -> Alcotest.failf "%a" Error.pp e
 
 let test_codec_bitfield_multi_group () =
   (* Two U16be groups: (3+2+11=16) + (14+2=16) = 32 bits = 4 bytes *)
   let v = { ver = 5; flags = 2; id = 0x7FF; count = 0x3FFF; len = 3 } in
   match encode_record bf16_codec v with
-  | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "encode: %a" Error.pp e
   | Ok encoded -> (
       Alcotest.(check int) "length" 4 (String.length encoded);
       (* First group: 101_10_11111111111 = 0xB7FF *)
@@ -95,7 +95,7 @@ let test_codec_bitfield_multi_group () =
           Alcotest.(check int) "id" v.id decoded.id;
           Alcotest.(check int) "count" v.count decoded.count;
           Alcotest.(check int) "len" v.len decoded.len
-      | Error e -> Alcotest.failf "%a" pp_parse_error e)
+      | Error e -> Alcotest.failf "%a" Error.pp e)
 
 let test_codec_bitfield_overflow_u8 () =
   let v = { a = 0x8; b = 0; c = 0; d = 0 } in
@@ -126,7 +126,7 @@ let test_codec_bitfield_max_valid () =
   (* All fields at their maximum valid values *)
   let v = { a = 7; b = 31; c = 0xFFFF; d = 0xFF } in
   match encode_record bf32_codec v with
-  | Error e -> Alcotest.failf "encode max valid: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "encode max valid: %a" Error.pp e
   | Ok encoded -> (
       match decode_record bf32_codec encoded with
       | Ok decoded ->
@@ -134,7 +134,7 @@ let test_codec_bitfield_max_valid () =
           Alcotest.(check int) "b" 31 decoded.b;
           Alcotest.(check int) "c" 0xFFFF decoded.c;
           Alcotest.(check int) "d" 0xFF decoded.d
-      | Error e -> Alcotest.failf "%a" pp_parse_error e)
+      | Error e -> Alcotest.failf "%a" Error.pp e)
 
 let test_codec_bitfield_overflow_1bit () =
   (* Single-bit field: only 0 and 1 are valid *)

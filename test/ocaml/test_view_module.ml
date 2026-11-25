@@ -40,7 +40,7 @@ let test_views () =
   let p =
     match Codec.decode Packet_stack.capture frame 0 with
     | Ok p -> p
-    | Error e -> Alcotest.failf "the frame: %a" pp_parse_error e
+    | Error e -> Alcotest.failf "the frame: %a" Error.pp e
   in
   let ip = Option.get p.ipv4 and tcp = Option.get (Option.get p.ipv4).tcp in
   match Buf.v frame with
@@ -90,7 +90,7 @@ let test_views () =
       C.Stack_tcp.set_reserved b t 5;
       C.Captured_ipv4.set_ttl b i (UInt8.v 9);
       match Codec.decode Packet_stack.capture frame 0 with
-      | Error e -> Alcotest.failf "after the writes: %a" pp_parse_error e
+      | Error e -> Alcotest.failf "after the writes: %a" Error.pp e
       | Ok p' ->
           let ip' = Option.get p'.ipv4 in
           let tcp' = Option.get ip'.tcp in
@@ -187,7 +187,7 @@ let test_views_moved_field () =
       Bytes.set_int32_be buf 0 0x0010_0000l;
       match S_sized.tail b v with
       | n -> Alcotest.failf "a tail past the buffer read %d" (UInt8.to_int n)
-      | exception Parse_error { kind = Unexpected_eof _; _ } -> ())
+      | exception Parse_error { Error.kind = Unexpected_eof _; _ } -> ())
 
 let suite =
   ( "view_module",

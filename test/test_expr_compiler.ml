@@ -79,7 +79,9 @@ let test_arithmetic_overflow () =
   let check name e =
     match eval_int e with
     | n -> Alcotest.failf "%s: overflow produced %d" name n
-    | exception Types.Parse_error { kind = Types.Value_out_of_range _; _ } -> ()
+    | exception
+        Types.Parse_error { Wire.Error.kind = Types.Value_out_of_range _; _ } ->
+        ()
   in
   (* These are not merely just past the native-int boundary: unchecked
      arithmetic wraps each mathematical result to zero or one, exactly the
@@ -288,7 +290,9 @@ let test_wide_fields () =
   let out_of_range name e =
     match eval_int e with
     | n -> Alcotest.failf "%s: produced %d" name n
-    | exception Types.Parse_error { kind = Types.Value_out_of_range _; _ } -> ()
+    | exception
+        Types.Parse_error { Wire.Error.kind = Types.Value_out_of_range _; _ } ->
+        ()
   in
   let w = Types.ref "wide" and neg = Types.ref "neg" in
   Alcotest.(check bool) "wide <= 5" false (eval_bool (Types.Le (w, int 5)));

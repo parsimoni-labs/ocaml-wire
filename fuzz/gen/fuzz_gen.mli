@@ -122,7 +122,7 @@ val nested_cases : string -> int -> Alcobar.test_case list
 val validate_agrees_cases : string -> int -> Alcobar.test_case list
 (** [validate_agrees_cases label depth] asserts {!Wire.Codec.validate_exn}
     raises exactly when {!Wire.Codec.decode} returns [Error], with the same
-    [error_kind], over an arbitrary nested codec per sample (cf.
+    [Wire.Error.kind], over an arbitrary nested codec per sample (cf.
     {!nested_cases}). The gate a caller runs on untrusted input and the decoder
     it is standing in for must not disagree about which bytes are valid, and a
     check that reaches one path but not the other shows up here rather than in

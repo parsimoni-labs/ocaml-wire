@@ -163,8 +163,7 @@ let check_api_slice_aliases codec bf_payload buf base =
     (Bytes.get_uint8 (Slice.bytes payload) first);
   match Wire.Codec.decode codec buf base with
   | Error e ->
-      Alcobar.failf "Codec.decode for slice alias failed: %a"
-        Wire.pp_parse_error e
+      Alcobar.failf "Codec.decode for slice alias failed: %a" Wire.Error.pp e
   | Ok decoded ->
       Bytes.set_uint8 buf first changed;
       check_int "buffer aliases decoded slice" changed
@@ -203,8 +202,7 @@ let check_api_decode_after_set codec buf base next_a next_hi next_lo
       check_int "Codec.decode after set lo" next_lo decoded.lo;
       check_string "Codec.decode after set slice" next_payload_s
         (string_of_slice decoded.payload)
-  | Error e ->
-      Alcobar.failf "Codec.decode after set failed: %a" Wire.pp_parse_error e
+  | Error e -> Alcobar.failf "Codec.decode after set failed: %a" Wire.Error.pp e
 
 let check_api_accessors a hi lo payload_s next_a next_hi next_lo next_payload_s
     =
@@ -246,8 +244,7 @@ let check_custom_seq a b c d =
       if not (u8_array_equal decoded values) then
         Alcobar.failf "array_seq custom seq mismatch"
   | Error e ->
-      Alcobar.failf "array_seq custom seq decode failed: %a" Wire.pp_parse_error
-        e);
+      Alcobar.failf "array_seq custom seq decode failed: %a" Wire.Error.pp e);
   let f_len = Wire.Field.v "Len" Wire.uint8 in
   let f_items =
     Wire.Field.repeat_seq "Items" ~seq:custom_array_seq
@@ -269,8 +266,7 @@ let check_custom_seq a b c d =
       if not (u8_array_equal decoded values) then
         Alcobar.failf "repeat_seq custom seq mismatch"
   | Error e ->
-      Alcobar.failf "repeat_seq custom seq decode failed: %a"
-        Wire.pp_parse_error e
+      Alcobar.failf "repeat_seq custom seq decode failed: %a" Wire.Error.pp e
 
 let raw_len_field = Wire.Private.Types.field "Len" Wire.uint8
 let raw_data_field = Wire.Private.Types.field "Data" Wire.all_bytes
@@ -298,14 +294,12 @@ let check_struct_validator len data_s =
         (size_of bytes 0));
   (try Wire.Codec.validate_struct validator bytes 0 with
   | Wire.Parse_error e ->
-      Alcobar.failf "validate_struct rejected positive: %a" Wire.pp_parse_error
-        e
+      Alcobar.failf "validate_struct rejected positive: %a" Wire.Error.pp e
   | Invalid_argument e -> Alcobar.failf "validate_struct crashed: %s" e);
   match Wire.of_bytes (Wire.Private.Types.struct_typ raw_struct) bytes with
   | Ok () -> ()
   | Error e ->
-      Alcobar.failf "Raw.struct_typ direct decode failed: %a"
-        Wire.pp_parse_error e
+      Alcobar.failf "Raw.struct_typ direct decode failed: %a" Wire.Error.pp e
 
 (* [Field.action] reports the action attached via [Field.v]'s [?action] (none on
    a plain field, [Some] on an annotated one), and [Action.pp] renders the
@@ -378,7 +372,7 @@ let check_metadata_helpers () =
   let buf = bytes_of_octets [ 7; 1 ] in
   (match Wire.Codec.decode ~env codec buf 0 with
   | Ok _ -> check_int "Param.get output" 7 (UInt8.to_int (Param.get env p_out))
-  | Error e -> Alcobar.failf "param/action decode failed: %a" pp_parse_error e);
+  | Error e -> Alcobar.failf "param/action decode failed: %a" Error.pp e);
   check_string "Codec schema name" "ApiParam"
     (Wire.Everparse.project ~mode:`Ffi codec).Wire.Everparse.name;
   let renamed = Wire.Codec.rename "ApiParamRenamed" codec in

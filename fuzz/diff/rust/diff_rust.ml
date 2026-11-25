@@ -56,15 +56,19 @@ let outcome ?(named = true) f =
   in
   match f () with
   | s -> "ok " ^ s
-  | exception Wire.Parse_error { kind = Unexpected_eof _; _ } -> "short"
-  | exception Wire.Parse_error { kind = Constraint_failed _; at; field = p } ->
+  | exception Wire.Parse_error { Wire.Error.kind = Unexpected_eof _; _ } ->
+      "short"
+  | exception
+      Wire.Parse_error { Wire.Error.kind = Constraint_failed _; at; field = p }
+    ->
       Fmt.str "constraint %S at %d" (field p) at
   | exception
-      Wire.Parse_error { kind = Invalid_enum { value; _ }; at; field = p } ->
+      Wire.Parse_error
+        { Wire.Error.kind = Invalid_enum { value; _ }; at; field = p } ->
       Fmt.str "enum %S at %d value %d" (field p) at value
-  | exception Wire.Parse_error { kind = Value_out_of_range _; _ } -> "overflow"
-  | exception Wire.Parse_error e ->
-      Fmt.str "parse error %a" Wire.pp_parse_error e
+  | exception Wire.Parse_error { Wire.Error.kind = Value_out_of_range _; _ } ->
+      "overflow"
+  | exception Wire.Parse_error e -> Fmt.str "parse error %a" Wire.Error.pp e
   (* A getter's bounds-checked load or copy past the buffer, or encode's
      frame check. *)
   | exception Invalid_argument m

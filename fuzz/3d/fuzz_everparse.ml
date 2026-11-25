@@ -446,13 +446,13 @@ let reencodes g codec env v sz =
   let buf = Bytes.create sz in
   match Wire.Codec.encode ?env codec v buf 0 with
   | exception Wire.Parse_error e ->
-      Fmt.kstr (fun s -> Some s) "re-encoding raised %a" Wire.pp_parse_error e
+      Fmt.kstr (fun s -> Some s) "re-encoding raised %a" Wire.Error.pp e
   | () -> (
       match Wire.Codec.decode ?env codec buf 0 with
       | Error e ->
           Fmt.kstr
             (fun s -> Some s)
-            "re-encoded bytes no longer decode: %a" Wire.pp_parse_error e
+            "re-encoded bytes no longer decode: %a" Wire.Error.pp e
       | Ok v' ->
           if Fuzz_gen.equal g v v' then None
           else Some "re-encoding does not preserve the value")
@@ -489,19 +489,20 @@ let rejection_is_attributed codec env b =
   match Wire.Codec.decode ?env codec b 0 with
   | Ok _ -> None
   | Error e -> (
-      if e.Wire.at < 0 || e.Wire.at > len then
+      if e.Wire.Error.at < 0 || e.Wire.Error.at > len then
         Fmt.kstr
           (fun s -> Some s)
-          "reports offset %d outside a %d byte buffer, for %a at [%s]" e.Wire.at
-          len Wire.pp_error_kind e.Wire.kind
-          (String.concat "/" e.Wire.field)
+          "reports offset %d outside a %d byte buffer, for %a at [%s]"
+          e.Wire.Error.at len Wire.Error.pp_kind e.Wire.Error.kind
+          (String.concat "/" e.Wire.Error.field)
       else
-        match e.Wire.kind with
-        | (Wire.Invalid_tag _ | Wire.Invalid_enum _ | Wire.Value_out_of_range _)
-          when List.compare_length_with e.Wire.field 0 = 0 ->
+        match e.Wire.Error.kind with
+        | Wire.Error.Invalid_tag _ | Wire.Error.Invalid_enum _
+        | Wire.Error.Value_out_of_range _
+          when List.compare_length_with e.Wire.Error.field 0 = 0 ->
             Fmt.kstr
               (fun s -> Some s)
-              "blames no field for %a" Wire.pp_error_kind e.Wire.kind
+              "blames no field for %a" Wire.Error.pp_kind e.Wire.Error.kind
         | _ -> None)
 
 let corpus_property_case (label, Fuzz_gen.Pack g) =

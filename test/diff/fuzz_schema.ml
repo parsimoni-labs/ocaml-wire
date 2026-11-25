@@ -18,7 +18,7 @@ let decode_record codec s =
   if String.length s < ws then
     Error
       {
-        at = 0;
+        Error.at = 0;
         field = [];
         kind = Unexpected_eof { expected = ws; got = String.length s };
       }

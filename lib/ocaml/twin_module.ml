@@ -268,7 +268,7 @@ let mli ~codec ~(plan : plan) ~(views : V.t option) ~folds =
          val min_size : int@\n\
          (** [min_size] is the fewest bytes a record takes. *)@\n\
          @\n\
-         val validate : bytes -> int -> (unit, Wire.parse_error) result@\n\
+         val validate : bytes -> int -> (unit, Wire.Error.t) result@\n\
          (** [validate buf off] is [Wire.Codec.validate C.codec buf off]. *)@\n\
          @\n";
       Interface.scan_members ppf ~target:`OCaml ~plan ~folds;

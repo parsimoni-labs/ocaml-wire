@@ -363,7 +363,7 @@ let show_stack (p : Packet_stack.t) =
 let stack_answer show f =
   match f () with
   | v -> "ok " ^ show v
-  | exception Parse_error e -> Fmt.str "error %a" pp_parse_error e
+  | exception Parse_error e -> Fmt.str "error %a" Error.pp e
 
 let stack_slot = Param.input "stack_slot" uint8
 
@@ -584,7 +584,7 @@ let test_walk_trailer () =
   let general = Private.Testing.general c in
   let show = function
     | Ok (l, s, t) -> Fmt.str "ok %d %S %S" (UInt8.to_int l) s t
-    | Error e -> Fmt.str "error %a" pp_parse_error e
+    | Error e -> Fmt.str "error %a" Error.pp e
   in
   List.iter
     (fun s ->
@@ -642,7 +642,7 @@ let test_walk_shared_gates () =
           | Some (f, a, b) ->
               Fmt.str "%d %s %s" (UInt8.to_int f) (opt a) (opt b))
           (opt y)
-    | Error e -> Fmt.str "error %a" pp_parse_error e
+    | Error e -> Fmt.str "error %a" Error.pp e
   in
   List.iter
     (fun k ->
@@ -686,8 +686,12 @@ let test_region_bounds_nested () =
   let short = Bytes.copy (List.nth stack_seeds 4) in
   Bytes.set_uint16_be short 16 30;
   let expected =
-    Fmt.str "error %a" pp_parse_error
-      (eof ~at:34 ~field:[ "packet"; "ipv4"; "tcp" ] ~expected:20 ~got:10 ())
+    Fmt.str "error %a" Error.pp
+      {
+        Error.at = 34;
+        field = [ "packet"; "ipv4"; "tcp" ];
+        kind = Unexpected_eof { expected = 20; got = 10 };
+      }
   in
   Alcotest.(check string)
     "short TCP region"

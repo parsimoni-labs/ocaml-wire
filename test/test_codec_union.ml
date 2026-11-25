@@ -117,14 +117,14 @@ let closed_codec =
 let test_unknown_tag () =
   let buf = Bytes.of_string "\x63\x00\x00" in
   (match Codec.decode closed_codec buf 0 with
-  | Error { kind = Invalid_tag n; field; at } ->
+  | Error { Error.kind = Invalid_tag n; field; at } ->
       Alcotest.(check int) "tag" 99 n;
       Alcotest.(check int) "at the tag field" 0 at;
       Alcotest.(check (list string)) "field" [ "V" ] field
-  | Error e -> Alcotest.failf "expected Invalid_tag, got %a" pp_parse_error e
+  | Error e -> Alcotest.failf "expected Invalid_tag, got %a" Error.pp e
   | Ok _ -> Alcotest.fail "decoded an unclaimed tag");
   match Codec.validate_exn closed_codec buf 0 with
-  | exception Parse_error { kind = Invalid_tag 99; _ } -> ()
+  | exception Parse_error { Error.kind = Invalid_tag 99; _ } -> ()
   | () -> Alcotest.fail "validated an unclaimed tag"
 
 let test_truncated () =

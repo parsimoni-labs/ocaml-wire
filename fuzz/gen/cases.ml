@@ -45,7 +45,7 @@ let check_rejection_names label kind ?env a g bs =
               "%s %s: rejection names undeclared field %S (declared: %s)" label
               kind name
               (String.concat ", " a.anames))
-        e.Wire.field
+        e.Wire.Error.field
 
 let check_safety_stream ~validate label a g kind ?env ~interloper ~noise bs =
   check_decode_safety label kind ?env g bs;
@@ -550,14 +550,14 @@ let span_fault_case label (Span_fault (name, x)) =
   let check what pad data byte = function
     | Ok _ when byte < 128 -> ()
     | Ok _ -> Alcobar.failf "%s: %s accepted the byte %d" label what byte
-    | Error (e : Wire.parse_error) when byte < 128 ->
+    | Error (e : Wire.Error.t) when byte < 128 ->
         Alcobar.failf "%s: %s refused the byte %d: %a" label what byte
-          Wire.pp_parse_error e
+          Wire.Error.pp e
     | Error e ->
         let at = pad + 1 + String.length data in
         if e.at <> at || e.field <> [ "X" ] then
           Alcobar.failf "%s: %s reported %a, but X is at %d" label what
-            Wire.pp_parse_error e at
+            Wire.Error.pp e at
   in
   Alcobar.test_case (label ^ " offset")
     Alcobar.[ range 4; bytes; uint8 ]

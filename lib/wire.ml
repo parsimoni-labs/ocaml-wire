@@ -1,6 +1,7 @@
 (* Wire: Dependent Data Descriptions for EverParse 3D *)
 
 module Staged = Staged
+module Error = Wire_runtime.Error
 module UInt32 = UInt32
 module UInt63 = UInt63
 module Action = Action
