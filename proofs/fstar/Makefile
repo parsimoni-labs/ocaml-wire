@@ -29,7 +29,7 @@ FSTAR_FLAGS = $(FLAGS) $(CACHED) --include .
 MODEL = Plan.Expr.fst Plan.Sum.fst Plan.Scan.fst Plan.Proof.fst
 MODULES = $(MODEL) Plan.Word.fst Plan.Bytes.fst Plan.Frames.fst Spec.Ipv4.fst Plan.Tree.fst \
   Plan.Range.fst Plan.Decide.fst Plan.Loop.fst Plan.Join.fst \
-  Plan.Values.fst
+  Plan.Values.fst Plan.Index.fst
 
 # defects/Defect.<name>.Buggy.fst fails on one line (F* may report a
 # conjunction there as several errors), defects/Defect.<name>.Fixed.fst
@@ -45,7 +45,8 @@ MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
   short-known ahead-short tree-retest tree-case-first \
   range-top-bits join-known sign-shift \
   word-past-check word-before-window held-leak \
-  region-known-high region-end-unpinned region-start-off
+  region-known-high region-end-unpinned region-start-off \
+  index-ahead-untested index-ahead-past index-known-short
 
 .PHONY: verify defects plans extract check-extract clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 

@@ -568,19 +568,20 @@ let word_ranges ~found p all =
     all
 
 (* How each walk holds values, by run: [int] in the scanner, [int64] in the
-   step functions, [int64_u] on OxCaml. *)
+   walks of the visitor's fold [fold_step], [int64_u] on OxCaml, those walks
+   included. *)
 let walk_values ~found runs =
   List.iteri
     (fun i run ->
       List.iter
         (function
           | P.Walk w ->
-              let step =
-                String.length w.name >= 4
-                && String.sub w.name (String.length w.name - 4) 4 = "step"
-              in
+              let step = String.starts_with ~prefix:"fold_step" w.name in
               let expected =
-                match i with 2 -> `Int64_u | 1 when step -> `Int64 | _ -> `Int
+                match i with
+                | 2 | 3 -> `Int64_u
+                | 1 when step -> `Int64
+                | _ -> `Int
               in
               let values = if !fabricate then `Int else w.values in
               walks := !walks + 1;
@@ -661,21 +662,34 @@ let frame_loop_walks ~found run ~name ~need ~short =
       Fmt.kstr found "frame loop %s walks short frames by no fold" name
   | _ -> ()
 
+(* Each field a frame loop loads ahead is one the walk reads at that offset
+   and width, inside the loop's [need] bytes. *)
+let ahead_in_need ~found d ~name ~need ahead =
+  if
+    not
+      (D.ahead_justified (z need) d
+         (List.map (fun (v, k, n) -> (z (var v), (z k, z n))) ahead))
+  then
+    Fmt.kstr found "frame loop %s reads %s ahead, not in its %d bytes" name
+      (String.concat ", "
+         (List.map (fun (v, k, n) -> Fmt.str "%s (%d at %d)" v n k) ahead))
+      need
+
+(* A frame loop's [need] bytes are within the [fixed] ones its leading
+   fields need. *)
+let need_fixed ~found ~fixed ~name need =
+  if Prims.op_Greater (z need) fixed then
+    Fmt.kstr found
+      "frame loop %s knows %d bytes, past the %s its leading fields need" name
+      need (Prims.to_string fixed)
+
 (* The fields a frame loop loads ahead, four frames an iteration, inside its
    [need] bytes. *)
 let frame_loop_ahead ~found d ~name ~need ~frames ahead =
   if ahead <> [] then begin
     if frames <> 4 then
       Fmt.kstr found "frame loop %s reads ahead one frame an iteration" name;
-    if
-      not
-        (D.ahead_justified (z need) d
-           (List.map (fun (v, k, n) -> (z (var v), (z k, z n))) ahead))
-    then
-      Fmt.kstr found "frame loop %s reads %s ahead, not in its %d bytes" name
-        (String.concat ", "
-           (List.map (fun (v, k, n) -> Fmt.str "%s (%d at %d)" v n k) ahead))
-        need
+    ahead_in_need ~found d ~name ~need ahead
   end
 
 (* A frame loop as Plan.Loop.frame_walks models it: the frames shorter than
@@ -687,10 +701,7 @@ let frame_loop ~found ~fixed d run ~name ~need ~frames ~short ~ahead =
   loops.(0) <- loops.(0) + 1;
   if frames = 4 then loops.(1) <- loops.(1) + 1;
   loops.(2) <- loops.(2) + List.length ahead;
-  if Prims.op_Greater (z need) fixed then
-    Fmt.kstr found
-      "frame loop %s knows %d bytes, past the %s its leading fields need" name
-      need (Prims.to_string fixed);
+  need_fixed ~found ~fixed ~name need;
   if frames <> 1 && frames <> 4 then
     Fmt.kstr found "frame loop %s walks %d frames an iteration" name frames;
   if need = 0 <> Option.is_none short then
@@ -698,6 +709,58 @@ let frame_loop ~found ~fixed d run ~name ~need ~frames ~short ~ahead =
       (if need = 0 then "walks" else "does not walk");
   frame_loop_walks ~found run ~name ~need ~short;
   frame_loop_ahead ~found d ~name ~need ~frames ahead
+
+(* The [_index] loop [name] of a visitor's fold, as Plan.Index models it.
+   With no leading bytes it is the plain loop, which walks each frame
+   through the fold's [_within] (the walk [within], knowing no byte), one
+   frame an iteration or four (Plan.Index.unrolled_frames), and reads
+   nothing ahead. With [need] leading bytes, within the [fixed] ones the
+   leading fields need, it is pipelined, two frames an iteration
+   (Plan.Index.index_loop): a frame whose test passed is walked knowing
+   [need] bytes, any other through [_within], and each field it loads a frame ahead, those of the
+   leading prefixes among them, is one the walk reads at that offset and
+   width, inside the [need] bytes (Plan.Decide.ahead_justified, the premise
+   of Plan.Index.index_loop_correct). The control moves every field loaded
+   ahead past those bytes. *)
+let index_loop ~found ~fixed d run ~name ~within ~need ~frames ~short ~ahead =
+  let ahead =
+    if !fabricate then List.map (fun (v, k, n) -> (v, k + need, n)) ahead
+    else ahead
+  in
+  loops.(0) <- loops.(0) + 1;
+  loops.(2) <- loops.(2) + List.length ahead;
+  if Option.is_some short then
+    Fmt.kstr found "frame loop %s walks short frames apart" name;
+  if
+    not
+      (List.exists
+         (function
+           | P.Walk { name; known = 0; _ } -> name = within | _ -> false)
+         run)
+  then Fmt.kstr found "frame loop %s has no walk %s knowing no byte" name within;
+  let walks =
+    List.filter_map
+      (function P.Walk w when w.name = name -> Some w.known | _ -> None)
+      run
+  in
+  if need = 0 then begin
+    if frames <> 1 && frames <> 4 then
+      Fmt.kstr found "frame loop %s walks %d frames an iteration" name frames;
+    if ahead <> [] then
+      Fmt.kstr found "frame loop %s reads ahead and knows no byte" name;
+    if walks <> [] then
+      Fmt.kstr found "frame loop %s walks a frame of its own" name
+  end
+  else begin
+    need_fixed ~found ~fixed ~name need;
+    if frames <> 2 then
+      Fmt.kstr found "frame loop %s pipelines %d frames an iteration" name
+        frames;
+    if walks = [] || List.exists (fun k -> k <> need) walks then
+      Fmt.kstr found "frame loop %s walks no frame knowing just its %d bytes"
+        name need;
+    ahead_in_need ~found d ~name ~need ahead
+  end
 
 (* The frame loops, and the walks' known bytes against the frame loops'. *)
 let frame_loops ~found ~fixed d runs =
@@ -710,6 +773,11 @@ let frame_loops ~found ~fixed d runs =
       in
       List.iter
         (function
+          | P.Frame_loop { name; need; frames; short; ahead }
+            when Filename.check_suffix name "_index" ->
+              let within = Filename.chop_suffix name "_index" in
+              index_loop ~found ~fixed d run ~name ~within ~need ~frames ~short
+                ~ahead
           | P.Frame_loop { name; need; frames; short; ahead } ->
               frame_loop ~found ~fixed d run ~name ~need ~frames ~short ~ahead
           | P.Walk w ->
@@ -732,9 +800,9 @@ let count_checks ~all prefixes gates =
        (function P.Walk _ | P.Frame_loop _ -> true | _ -> false)
        all)
 
-(* The plan of [c] and the decisions of the scanner, of its step form and of
-   its OxCaml form, each with the decisions of its own walks, against the
-   model. *)
+(* The plan of [c] and the decisions of the scanner, of its step form, of
+   its OxCaml form and of that form's step form, each with the decisions of
+   its own walks, against the model. *)
 let check : type a. string -> a Wire.Codec.t -> P.t -> unit =
  fun name c p ->
   let wf, d, d' = well_formed name p in
@@ -746,6 +814,10 @@ let check : type a. string -> a Wire.Codec.t -> P.t -> unit =
         ~visitors:[ ("fold_step", "step.ml") ]
         c;
       P.decisions ~target:`OxCaml c;
+      P.decisions ~target:`OxCaml
+        ~folds:Wire_ocaml.[ fold "fold"; fold "fold_step" ]
+        ~visitors:[ ("fold_step", "step.ml") ]
+        c;
     ]
   in
   let all = List.concat runs in
@@ -896,6 +968,11 @@ let () =
             ~visitors:[ ("fold_step", "step.ml") ]
             c );
         ("oxcaml", P.decisions ~target:`OxCaml c);
+        ( "oxcaml step",
+          P.decisions ~target:`OxCaml
+            ~folds:Wire_ocaml.[ fold "fold"; fold "fold_step" ]
+            ~visitors:[ ("fold_step", "step.ml") ]
+            c );
       ];
     exit 0
   end;

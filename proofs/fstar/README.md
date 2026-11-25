@@ -20,8 +20,9 @@ make -C proofs/fstar check-extract # plans/extracted is the model
 `Wire_ocaml.Plan` makes of the sampled codecs of the differential fuzzer,
 its structured scan cases, the `Defect.PrefixWrap` codec, the packet stack
 of `examples/net` and the `huge`, `deep` and `nested` schemas of
-`test/ocaml`, and the decisions of the OCaml scanner, of its step form and
-of the OxCaml scanner, and checks three things of each.
+`test/ocaml`, and the decisions of the OCaml scanner and of its step form,
+and of the OxCaml scanner and of its step form, and checks three things of
+each.
 
 - `wf` holds of the plan: every variable bound once and read after it is
   bound, the premise `scanner_correct` takes of the planner. F* evaluates
@@ -64,7 +65,14 @@ of the OxCaml scanner, and checks three things of each.
   the others by a walk that knows them all; each field it loads ahead
   (`ahead`), only four frames an iteration, is one of the model's
   `lead_fields`, at the offset and of the width the walk reads it at,
-  inside the bytes the loop knows (`Plan.Decide.ahead_justified`).
+  inside the bytes the loop knows (`Plan.Decide.ahead_justified`). The
+  `_index` loop of a visitor's fold is the one `Plan.Index` models: with no leading
+  bytes, the plain loop, one frame an iteration or four, every frame
+  through `_within` (the walk named after the fold, knowing no byte) and nothing
+  loaded ahead; with some, the pipelined loop, two frames an iteration, a
+  walk of its own that knows just those bytes, `_within` for the frames
+  whose test fails, and each field it loads one frame ahead, those of the
+  leading prefixes included, justified as above.
 - Every dispatch's tree (`Dispatch.choice`), read over the atoms of the
   conditions it reports it decided (`conditions`), runs the first case whose
   condition the tests on its path decide holds, after those that decide every
@@ -161,6 +169,25 @@ built-in integer `*`, so an older one no longer checks them.
   loaded in the loop over short frames, and each one loaded lies in the
   bytes the loop knows (`ahead_in`). `frame_walks_frames`: both branches
   walk the frames the counted loop did.
+- `Plan.Index.index_loop_correct`: the `_index` loop of a visitor's fold over an
+  index of frames, pipelined one frame deep and two frames an iteration
+  (#558), in a buffer no longer than `Sys.max_string_length`: each test
+  reads an index below `n`; each frame's walk, knowing the leading bytes
+  where the frame's test `base >= 0 && stop >= need && stop <= length - base`
+  passed and through `_within` otherwise, answers what `_within`,
+  the plain loop's walk, answers, which is what the codec accepts in the
+  frame where the frame lies in the buffer and a rejection elsewhere, and
+  never faults (`index_walk_correct`); each field loaded ahead, the leading
+  prefixes' among them, is of a frame whose test passed and lies inside the
+  bytes that test ensures (`ahead_in`). `index_loop_frames`: the loop walks
+  the frames of the plain loop, each once, in order, and tests each once,
+  in order; `unrolled_frames`: so does the plain loop of
+  four frames an iteration on OxCaml. `index_loop_ordered`: a frame's fields
+  are loaded only after its test passed, and before its walk.
+  `known_no_overflow`: the OCaml test computes `length - base` only for a
+  `base` that is not negative, where it does not overflow; `known_u_is`:
+  the OxCaml test, the sign of one `logor` of `int64_u` differences, is the
+  OCaml one.
 - `Plan.Join.join_correct`: the code after a dispatch written once, in a
   join every case jumps to with the position it ended at (`Joined`), walks
   from the state before the cases, its position a fresh variable `e` and
@@ -218,9 +245,13 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 | `nonnegative`, `refine`, `range` | `Planner.nonnegative_in`, `Planner.refined`, `Planner.range` / `corners` |
 | `Plan.Sum` | `Planner.sum_*` |
 | `ev` | `Wire_runtime.Arith` (checked); plain code where `fits` |
+| `Plan.Index`: `index_loop`, `next`, `known`, `known_u`, `within`, `unrolled` | `Scan_module.pp_index_frames`, `pp_index_next`, its OCaml and OxCaml tests, `_within`, `pp_fold_step_index_plain` |
 
 ## What is assumed
 
+- The visitor an `_index` loop calls writes neither the index nor the
+  buffer: the pipelined loop loads the next frame's offset, length and
+  fields before the walk of the frame before it calls the consumer.
 - OCaml on a 64-bit host, from its manual: an `int` is a 63-bit two's
   complement pattern and `land`, `lor`, `lsl` are bitwise on it; an
   `int64` is a 64-bit pattern, `Int64.shift_right_logical` shifts it as
@@ -270,7 +301,9 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
 - A region whose contents load no byte, whose bound f0bd4b6b leaves to the
   check after it: the model reads every field of a prefix and has no notion
   of a field the walk does not bind, so its region always checks its size.
-  No plan `make plans` takes has one; a decision for one would be refused.
+  The `check` of a scanner's views (48d34cc5) binds no output, so its
+  regions of `scan_exact`, `scan_at_most` and `scan_region_in_case` load no
+  byte, and `make plans` refuses their bounds.
 - `off > Bytes.length buf`, which bd97743d leaves to the first check: the
   model assumes the top window lies in the buffer (above), which holds once
   that check passes with a length that is not negative.
@@ -365,6 +398,16 @@ field at 1 is loaded ahead of a frame of one byte at 0. Run against an
 emitter mutated to load each field eleven bytes past its offset, `make
 plans` reports the read-ahead of the packet stack and of two scan cases.
 
+The mutants `index-ahead-untested`, `index-ahead-past` and
+`index-known-short` change the pipelined loop of `Plan.Index`: the next
+frame's fields loaded before its test, whatever its answer; `ahead_in`
+accepting a field that starts in the bytes the test ensures but ends past
+them; and the test without `stop >= need`. Each makes `Plan.Index` fail,
+and its witness runs the mutant: the byte at 0 loaded from a frame of no
+byte, whose test then fails; two bytes at 0 loaded from a frame of one byte
+in a buffer of one; a frame of one byte walked knowing the two its leading
+fields need, its field at 1 loaded ahead past the buffer.
+
 The mutants `tree-retest` and `tree-case-first` weaken the check of a
 dispatch's tree: a path may test an atom again, and a leaf may run a case
 without the path deciding the conditions before it fail. The first makes
@@ -397,6 +440,7 @@ native int (`p + n` wraps), and the next node checks bytes (a span before a
 where clause or the end of the plan is never bounded). Each makes
 `exec_spec` fail, so each premise is needed. They are not past defects.
 
-`make verify` takes a little over a minute of CPU on one core; `make
-defects` about ten, most of it the mutants, whose failing proofs run
-until Z3 gives up (`-j` runs them side by side).
+`make verify` takes a minute and a half of CPU on one core; `make
+defects` about fourteen, most of it the mutants, whose failing proofs run
+until Z3 gives up (`-j` runs them side by side); `make plans` a few
+seconds once `plans.exe` is built.
