@@ -1893,46 +1893,49 @@ and dispatch_case w ~copy ~copies (cond, (present : output), _, body) p finish =
   in
   if copy then cut w ~label:(case_label present) go else go w
 
-let start ?cuts ?(scope = []) ?first ?name ~m ~ppf ~ranges ~base ~limit ~known
-    nodes k =
-  Option.iter
-    (fun name -> m.decide (Walk { name; values = values m.num; known }))
-    name;
+(* The state of a walk of a record at [base], in a window that ends at
+   [limit] and is known to hold [known] bytes. *)
+let initial ?cuts ?(scope = []) ~m ~ppf ~ranges ~base ~limit ~known () =
   let n = ref 0 in
   let fresh s =
     incr n;
     Fmt.str "%s%d" s !n
   in
-  let w =
-    {
-      m;
-      ppf;
-      fresh;
-      ranges = Smap.add limit (0, max_int) ranges;
-      facts = no_facts;
-      views = [];
-      words = [];
-      raws = [];
-      deferred = ref [];
-      bounded = [];
-      sums = [];
-      ints = Sset.singleton limit;
-      base;
-      disp = 0;
-      limit;
-      known;
-      tail = true;
-      copies = 1;
-      cuts;
-      fn = { chars = 0; decisions = 0 };
-      depth = 0;
-      scope;
-      settled = [];
-      pinned = false;
-      section = "";
-      held = [];
-    }
-  in
+  {
+    m;
+    ppf;
+    fresh;
+    ranges = Smap.add limit (0, max_int) ranges;
+    facts = no_facts;
+    views = [];
+    words = [];
+    raws = [];
+    deferred = ref [];
+    bounded = [];
+    sums = [];
+    ints = Sset.singleton limit;
+    base;
+    disp = 0;
+    limit;
+    known;
+    tail = true;
+    copies = 1;
+    cuts;
+    fn = { chars = 0; decisions = 0 };
+    depth = 0;
+    scope;
+    settled = [];
+    pinned = false;
+    section = "";
+    held = [];
+  }
+
+let start ?cuts ?scope ?first ?name ~m ~ppf ~ranges ~base ~limit ~known nodes k
+    =
+  Option.iter
+    (fun name -> m.decide (Walk { name; values = values m.num; known }))
+    name;
+  let w = initial ?cuts ?scope ~m ~ppf ~ranges ~base ~limit ~known () in
   let p = { var = None; at = 0 } in
   match first with
   | Some label -> cut w ~label (fun w -> walk w nodes p k)
@@ -1946,3 +1949,10 @@ let live ?(cold = false) (plan : plan) ~outputs =
     @ List.filter_map
         (fun f -> if cold && f.checks <> [] then Some f.id else None)
         (fields_of plan.nodes))
+
+(* An expression read outside a walk, over variables the caller binds. *)
+let outside m ranges =
+  initial ~m ~ppf:Format.str_formatter ~ranges ~base:"" ~limit:"" ~known:0 ()
+
+let expr_text m ~ranges e = expr (outside m ranges) e
+let wide_text m ~ranges e = wide (outside m ranges) e

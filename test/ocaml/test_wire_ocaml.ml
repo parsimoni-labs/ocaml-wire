@@ -1304,13 +1304,42 @@ let nested_budget target n =
   | `OCaml -> ((47 * n) + 72, (340 * n) + 250)
   | `OxCaml -> ((132 * n) + 72, (1380 * n) + 250)
 
+(* The scanner's text before its views, and its views, which start with the
+   type of a view. A level of [gated] or [nested] costs the views a module
+   of some 55 lines and 370 words, on either target: its types, [ok], [get],
+   an accessor per field, each of which tests the presence again and places
+   the field after the optional one, and the function that finds where the
+   record ends. *)
+let scan_and_views src =
+  let marker = "type 'b view = int" in
+  let n = String.length marker in
+  let rec find i =
+    if i + n > String.length src then Alcotest.failf "no views in the scanner"
+    else if String.sub src i n = marker then i
+    else find (i + 1)
+  in
+  let i = find 0 in
+  (String.sub src 0 i, String.sub src i (String.length src - i))
+
+let views_budget n = ((60 * n) + 40, (400 * n) + 300)
+
 let test_size () =
   List.iter
     (fun (name, codec, fields) ->
       List.iter
         (fun target ->
           let size n =
-            lines (Wire_ocaml.scanner ~target ?fields ~codec:"g" (codec n))
+            let scan, views =
+              scan_and_views
+                (Wire_ocaml.scanner ~target ?fields ~codec:"g" (codec n))
+            in
+            let max_lines, max_words = views_budget n in
+            if lines views > max_lines || words views > max_words then
+              Alcotest.failf
+                "%s: the views of %d optional fields: %d lines and %d words, \
+                 over %d and %d"
+                name n (lines views) (words views) max_lines max_words;
+            lines scan
           in
           let s8 = size 8 and s16 = size 16 and s32 = size 32 in
           if s32 - s16 > (2 * (s16 - s8)) + 2 then
@@ -1330,7 +1359,10 @@ let test_size () =
     (fun (target, name) ->
       List.iter
         (fun n ->
-          let src = Wire_ocaml.scanner ~target ~codec:"g" (Schemas.nested n) in
+          let src, _ =
+            scan_and_views
+              (Wire_ocaml.scanner ~target ~codec:"g" (Schemas.nested n))
+          in
           let max_lines, max_words = nested_budget target n in
           if lines src > max_lines || words src > max_words then
             Alcotest.failf

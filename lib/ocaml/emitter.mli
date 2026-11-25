@@ -274,3 +274,19 @@ val live : ?cold:bool -> plan -> outputs:Sset.elt list -> Sset.t
 (** [live ?cold plan ~outputs] is the variables a walk binds: those it reads,
     those it hands out and, for a cold walk, each checked field, whose value its
     error carries. *)
+
+val expr_text : mode -> ranges:(int * int) Smap.t -> 'a T.expr -> string
+(** [expr_text m ~ranges e] is the text of [e] over the plan's variables, each
+    an OCaml variable of the same name, with integers held as [m] holds them and
+    an expression that [ranges] lets leave the native int computed as a walk
+    computes it. *)
+
+val wide_text : mode -> ranges:(int * int) Smap.t -> int T.expr -> string
+(** [wide_text m ~ranges e] is the text of [e] as an [int64] holding its value
+    as an unsigned integer, as a walk computes an expression that can leave the
+    native int. *)
+
+val bit_predicate : (string * int) list -> bool T.expr -> bool T.expr
+(** [bit_predicate words e] is [e] with each test of bits of one of [words], a
+    variable and its mask, made one test of a mask of that word:
+    [w land 1 = 0 && w land 6 = 0] is [w land 7 = 0]. *)

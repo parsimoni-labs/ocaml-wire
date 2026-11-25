@@ -188,3 +188,209 @@ val decode : bytes -> int -> int -> t
 
 val pp : Format.formatter -> t -> unit
 (** [pp ppf v] prints an unspecified representation of [v] on [ppf]. *)
+
+(** {1:views Views} *)
+
+(** The views of the records of [StackTCP]. *)
+module Stack_tcp : sig
+  type 'b view = private int
+  (** The type for the records of [StackTCP] that passed a check in the buffer
+      named ['b]. *)
+
+  type 'b check = private int
+  (** The type for the answers of a check of a record of [StackTCP] in the
+      buffer named ['b]. *)
+
+  val ok : 'b check -> bool
+  (** [ok c] is [true] iff the check [c] passed. *)
+
+  val get : 'b check -> 'b view
+  (** [get c] is the record of the check [c]. Raises [Invalid_argument] if
+      [ok c] is [false]: test {!ok} first, a refused record is input, not
+      misuse. *)
+
+  val src_port : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [src_port b v] is the field [src_port] of the record [v]. *)
+
+  val dst_port : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [dst_port b v] is the field [dst_port] of the record [v]. *)
+
+  val seq : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [seq b v] is the field [seq] of the record [v]. *)
+
+  val ack : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [ack b v] is the field [ack] of the record [v]. *)
+
+  val data_offset : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [data_offset b v] is the field [data_offset] of the record [v]. *)
+
+  val reserved : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [reserved b v] is the field [reserved] of the record [v]. *)
+
+  val flags : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [flags b v] is the field [flags] of the record [v]. *)
+
+  val window : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [window b v] is the field [window] of the record [v]. *)
+
+  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [checksum b v] is the field [checksum] of the record [v]. *)
+
+  val urgent : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [urgent b v] is the field [urgent] of the record [v]. *)
+end
+
+(** The views of the records of [StackUDP]. *)
+module Stack_udp : sig
+  type 'b view = private int
+  (** The type for the records of [StackUDP] that passed a check in the buffer
+      named ['b]. *)
+
+  type 'b check = private int
+  (** The type for the answers of a check of a record of [StackUDP] in the
+      buffer named ['b]. *)
+
+  val ok : 'b check -> bool
+  (** [ok c] is [true] iff the check [c] passed. *)
+
+  val get : 'b check -> 'b view
+  (** [get c] is the record of the check [c]. Raises [Invalid_argument] if
+      [ok c] is [false]: test {!ok} first, a refused record is input, not
+      misuse. *)
+
+  val src_port : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [src_port b v] is the field [src_port] of the record [v]. *)
+
+  val dst_port : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [dst_port b v] is the field [dst_port] of the record [v]. *)
+
+  val length : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [length b v] is the field [length] of the record [v]. *)
+
+  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [checksum b v] is the field [checksum] of the record [v]. *)
+end
+
+(** The views of the records of [StackIPv4]. *)
+module Stack_ipv4 : sig
+  type 'b view = private int
+  (** The type for the records of [StackIPv4] that passed a check in the buffer
+      named ['b]. *)
+
+  type 'b check = private int
+  (** The type for the answers of a check of a record of [StackIPv4] in the
+      buffer named ['b]. *)
+
+  val ok : 'b check -> bool
+  (** [ok c] is [true] iff the check [c] passed. *)
+
+  val get : 'b check -> 'b view
+  (** [get c] is the record of the check [c]. Raises [Invalid_argument] if
+      [ok c] is [false]: test {!ok} first, a refused record is input, not
+      misuse. *)
+
+  val version : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [version b v] is the field [version] of the record [v]. *)
+
+  val ihl : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [ihl b v] is the field [ihl] of the record [v]. *)
+
+  val dscp : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [dscp b v] is the field [dscp] of the record [v]. *)
+
+  val ecn : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [ecn b v] is the field [ecn] of the record [v]. *)
+
+  val total_length : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [total_length b v] is the field [total_length] of the record [v]. *)
+
+  val identification : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [identification b v] is the field [identification] of the record [v]. *)
+
+  val flags : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [flags b v] is the field [flags] of the record [v]. *)
+
+  val fragment_offset : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [fragment_offset b v] is the field [fragment_offset] of the record [v]. *)
+
+  val ttl : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [ttl b v] is the field [ttl] of the record [v]. *)
+
+  val protocol : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [protocol b v] is the field [protocol] of the record [v]. *)
+
+  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [checksum b v] is the field [checksum] of the record [v]. *)
+
+  val src : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [src b v] is the field [src] of the record [v]. *)
+
+  val dst : 'b Wire_runtime.Buf.t -> 'b view -> int
+  (** [dst b v] is the field [dst] of the record [v]. *)
+
+  val tcp :
+    'b Wire_runtime.Buf.t ->
+    'b Wire_runtime.Buf.length ->
+    'b view ->
+    'b Stack_tcp.check
+  (** [tcp b len v] is the record [tcp] of [v], [len] the length of [b], as a
+      check of {!module-Stack_tcp} that passes iff the record is present and its
+      fixed bytes lie in [b]. The check of [v] made the record's checks and none
+      runs again: if bytes of [b] were written since, a read may return a value
+      they break, never a byte outside [b]. *)
+
+  val udp :
+    'b Wire_runtime.Buf.t ->
+    'b Wire_runtime.Buf.length ->
+    'b view ->
+    'b Stack_udp.check
+  (** [udp b len v] is the record [udp] of [v], [len] the length of [b], as a
+      check of {!module-Stack_udp} that passes iff the record is present and its
+      fixed bytes lie in [b]. The check of [v] made the record's checks and none
+      runs again: if bytes of [b] were written since, a read may return a value
+      they break, never a byte outside [b]. *)
+
+  val opaque_present : 'b Wire_runtime.Buf.t -> 'b view -> bool
+  (** [opaque_present b v] is [true] iff the optional field it names is present
+      in the record [v]. If bytes of [b] written since the check move it out of
+      [b], raises [Wire_runtime.Errors.Parse_error]. *)
+end
+
+type 'b view = private int
+(** The type for the records of [EthernetStack] that passed a check in the
+    buffer named ['b]. *)
+
+type 'b check = private int
+(** The type for the answers of a check of a record of [EthernetStack] in the
+    buffer named ['b]. *)
+
+val check :
+  'b Wire_runtime.Buf.t ->
+  'b Wire_runtime.Buf.length ->
+  off:int ->
+  len:int ->
+  'b check
+(** [check b length ~off ~len] is the answer of the checks {!val-fold} makes on
+    the record at [off] in the [len] bytes there, in [b] of length [length]. It
+    never raises: bad bounds or a bad record give an answer {!ok} refuses. *)
+
+val ok : 'b check -> bool
+(** [ok c] is [true] iff the check [c] passed. *)
+
+val get : 'b check -> 'b view
+(** [get c] is the record of the check [c]. Raises [Invalid_argument] if [ok c]
+    is [false]: test {!ok} first, a refused record is input, not misuse. *)
+
+val ether_type : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [ether_type b v] is the field [ether_type] of the record [v]. *)
+
+val ipv4 :
+  'b Wire_runtime.Buf.t ->
+  'b Wire_runtime.Buf.length ->
+  'b view ->
+  'b Stack_ipv4.check
+(** [ipv4 b len v] is the record [ipv4] of [v], [len] the length of [b], as a
+    check of {!module-Stack_ipv4} that passes iff the record is present and its
+    fixed bytes lie in [b]. The check of [v] made the record's checks and none
+    runs again: if bytes of [b] were written since, a read may return a value
+    they break, never a byte outside [b]. *)

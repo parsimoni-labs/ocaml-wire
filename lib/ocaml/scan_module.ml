@@ -889,6 +889,40 @@ let pp_box s =
     s.selected;
   Fmt.pf s.ppf "}@\n"
 
+(* [check b length ~off ~len], the walk of [fold] with no output, which
+   answers [off] for a record it accepts and [-1] otherwise. *)
+let pp_check s =
+  let unboxed = s.m.num = Unboxed in
+  let s =
+    {
+      s with
+      selected = [];
+      m = scan_mode ~decide:s.m.decide s.plan ~num:s.m.num [];
+    }
+  in
+  with_cuts s "check" (fun s cuts ->
+      let body = Buffer.create 4096 in
+      let ppf = Format.formatter_of_buffer body in
+      pp_entry ?cuts
+        ~length:(if unboxed then "(U.of_int length)" else "length")
+        ~unboxed_length:true ~name:"check"
+        ~scope:(scope s [ ("off", None) ])
+        { s with ppf } ~reject:"(-1)"
+        ~accept:(fun w -> pf w "off@\n");
+      Format.pp_print_flush ppf ();
+      let body = Buffer.contents body in
+      let b = if mentions "buf" body then "b" else "_b" in
+      Fmt.pf s.ppf
+        "let[@inline always] check (%s : 'b Wire_runtime.Buf.t%s) (length : 'b \
+         Wire_runtime.Buf.length) ~off ~len : 'b check =@\n"
+        b
+        (if unboxed then " @ local" else "");
+      if b = "b" then
+        Fmt.pf s.ppf "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n";
+      Fmt.pf s.ppf
+        "let length = (length : _ Wire_runtime.Buf.length :> int) in@\n%s@\n"
+        body)
+
 let selected (plan : plan) = function
   | None -> plan.outputs
   | Some wanted ->
@@ -956,10 +990,24 @@ let scanner ?decide ?(target = `OCaml) ?fields ?step ~codec c =
         taken = Hashtbl.create 16;
       }
     in
+    let views = View_module.of_codec c in
+    List.iter
+      (fun m -> Hashtbl.replace s.taken (View_module.member_name m) ())
+      views.root.members;
+    List.iter (fun n -> Hashtbl.replace s.taken n ()) [ "check"; "ok"; "get" ];
     pp_body ?step s;
+    Fmt.pf ppf "type 'b view = int@\ntype 'b check = int@\n@\n";
+    pp_check s;
     Format.pp_print_flush ppf ();
-    let body = without_dead_bindings (Buffer.contents b) in
-    let uses = uses body in
+    let scan = without_dead_bindings (Buffer.contents b) in
+    let view, view_mask32 =
+      View_module.ml
+        ~target:(if target = `OxCaml then `OxCaml else `OCaml)
+        views
+    in
+    let body = scan ^ without_dead_bindings view in
+    (* An accessor named after a helper does not define it. *)
+    let uses name = uses scan name || (name = "mask32" && view_mask32) in
     Fmt.str "%a%a%s"
       (fun ppf () ->
         pp_header ppf ~codec ~name:plan.record ~digest:(Gen.digest c) ~uses)

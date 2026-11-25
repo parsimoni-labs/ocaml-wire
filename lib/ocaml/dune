@@ -9,5 +9,6 @@
   emitter
   record_module
   scan_module
+  view_module
   interface)
  (libraries wire fmt))

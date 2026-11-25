@@ -40,6 +40,48 @@ let scanner ?target ?fields ?step ~codec c =
 
 let scanner_mli = Interface.scanner
 
+type view = { module_name : string option; members : view_member list }
+
+and view_member =
+  | Int of { name : string; output : string }
+  | Bool of { name : string; output : string }
+  | Record of { name : string; presence : string option; view : view }
+
+(* The outputs of a record reached by the path [prefix] are named after it. *)
+let scanner_views c =
+  let t =
+    try View_module.of_codec c
+    with Unsupported why -> refuse ~codec:(Gen.to_struct c).name why
+  in
+  let global prefix name = if prefix = "" then name else prefix ^ "_" ^ name in
+  let rec view prefix (r : View_module.record) =
+    {
+      module_name = r.module_name;
+      members =
+        List.map
+          (function
+            | View_module.Scalar { name; _ } ->
+                Int { name; output = global prefix name }
+            | Present { name; _ } -> Bool { name; output = global prefix name }
+            | Sub { name; sub; presence } ->
+                Record
+                  {
+                    name;
+                    presence =
+                      Option.map
+                        (fun (o : output) -> global prefix o.name)
+                        presence;
+                    view =
+                      view (global prefix name)
+                        (List.find
+                           (fun (r : View_module.record) -> r.id = sub.codec_id)
+                           t.records);
+                  })
+          r.members;
+    }
+  in
+  view "" t.root
+
 (* {1 The plan, for other backends} *)
 
 module Plan = struct

@@ -801,3 +801,289 @@ let pp ppf (v : t) =
   field "ipv4_opaque_present" Format.pp_print_bool v.ipv4_opaque_present;
   Format.pp_print_string ppf " }";
   Format.pp_close_box ppf ()
+
+type 'b view = int
+type 'b check = int
+
+let[@inline always] check_opaque ~off = off
+
+let[@inline always] check_tcp ~buf ~base ~off ~f6_ipv4_ihl ~f9_ipv4_total_length
+    =
+  let n11 = f9_ipv4_total_length - (f6_ipv4_ihl lsl 2) in
+  let b13 = base + (f6_ipv4_ihl lsl 2) in
+  if (n11 : int) < 20 then -1
+  else
+    let bw14 = Wire_runtime.Unchecked.u16be buf (b13 + 26) in
+    let f23_ipv4_tcp_data_offset = bw14 lsr 12 in
+    if not ((f23_ipv4_tcp_data_offset : int) >= 5) then -1
+    else if (f23_ipv4_tcp_data_offset lsl 2 : int) > n11 then -1
+    else off
+
+let[@inline always] check_udp ~buf ~base ~off ~f6_ipv4_ihl ~f9_ipv4_total_length
+    =
+  let n17 = f9_ipv4_total_length - (f6_ipv4_ihl lsl 2) in
+  let b19 = base + (f6_ipv4_ihl lsl 2) in
+  if (n17 : int) < 8 then -1
+  else
+    let f32_ipv4_udp_length = Wire_runtime.Unchecked.u16be buf (b19 + 18) in
+    if not ((f32_ipv4_udp_length : int) >= 8) then -1
+    else if (f32_ipv4_udp_length : int) > n17 then -1
+    else off
+
+let[@inline always] check_tcp_cases ~buf ~base ~off ~bw3 ~f6_ipv4_ihl
+    ~f9_ipv4_total_length ~f14_ipv4_protocol =
+  let[@local] c2_j8 () = check_opaque ~off in
+  if (bw3 land 16383 : int) = 0 then
+    if (f14_ipv4_protocol : int) = 6 then
+      check_tcp ~buf ~base ~off ~f6_ipv4_ihl ~f9_ipv4_total_length
+    else if (f14_ipv4_protocol : int) = 17 then
+      check_udp ~buf ~base ~off ~f6_ipv4_ihl ~f9_ipv4_total_length
+    else c2_j8 ()
+  else c2_j8 ()
+
+let[@inline always] check_ipv4 ~buf ~base ~stop ~off =
+  if (stop : int) < 34 then -1
+  else
+    let w14 = Wire_runtime.Unchecked.i64be buf (base + 14) in
+    let bw2 = Int64.to_int (Int64.shift_right_logical w14 56) in
+    let bw3 = Int64.to_int w14 land 0xffff in
+    let f6_ipv4_ihl = bw2 land 0xf in
+    if (bw2 : int) < 69 || (bw2 : int) > 79 then -1
+    else
+      let f9_ipv4_total_length =
+        Int64.to_int (Int64.shift_right_logical w14 32) land 0xffff
+      in
+      if not ((f9_ipv4_total_length : int) >= f6_ipv4_ihl lsl 2) then -1
+      else
+        let f14_ipv4_protocol = Wire_runtime.Unchecked.u8 buf (base + 23) in
+        if (f9_ipv4_total_length : int) > stop - 14 then -1
+        else
+          check_tcp_cases ~buf ~base ~off ~bw3 ~f6_ipv4_ihl
+            ~f9_ipv4_total_length ~f14_ipv4_protocol
+
+let[@inline always] check_record ~buf ~base ~stop ~off =
+  if (stop : int) < 14 then -1
+  else
+    let f3_ether_type = Wire_runtime.Unchecked.u16be buf (base + 12) in
+    if (f3_ether_type : int) = 2048 then check_ipv4 ~buf ~base ~stop ~off
+    else off
+
+let[@inline always] check (b : 'b Wire_runtime.Buf.t)
+    (length : 'b Wire_runtime.Buf.length) ~off ~len : 'b check =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  let length = (length : _ Wire_runtime.Buf.length :> int) in
+  if off < 0 || len > length - off then -1
+  else
+    let base = off in
+    let stop = len in
+    check_record ~buf ~base ~stop ~off
+
+module Stack_tcp = struct
+  type 'b view = int
+  type 'b check = int
+
+  let failed = Invalid_argument "Stack_tcp.get: the check failed"
+  let[@inline always] ok (c : 'b check) = c >= 0
+
+  let[@inline always] get (c : 'b check) : 'b view =
+    if c >= 0 then c else raise failed
+
+  let[@inline always] src_port (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf v
+
+  let[@inline always] dst_port (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 2)
+
+  let[@inline always] seq (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    let w4 = Wire_runtime.Unchecked.i64be buf (v + 4) in
+    Int64.to_int (Int64.shift_right_logical w4 32)
+
+  let[@inline always] ack (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    let w8 = Wire_runtime.Unchecked.i64be buf (v + 8) in
+    Int64.to_int (Int64.shift_right_logical w8 32)
+
+  let[@inline always] data_offset (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
+      int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 12) lsr 12
+
+  let[@inline always] reserved (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    (Wire_runtime.Unchecked.u16be buf (v + 12) lsr 9) land 0x7
+
+  let[@inline always] flags (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 12) land 0x1ff
+
+  let[@inline always] window (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 14)
+
+  let[@inline always] checksum (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 16)
+
+  let[@inline always] urgent (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 18)
+end
+
+module Stack_udp = struct
+  type 'b view = int
+  type 'b check = int
+
+  let failed = Invalid_argument "Stack_udp.get: the check failed"
+  let[@inline always] ok (c : 'b check) = c >= 0
+
+  let[@inline always] get (c : 'b check) : 'b view =
+    if c >= 0 then c else raise failed
+
+  let[@inline always] src_port (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf v
+
+  let[@inline always] dst_port (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 2)
+
+  let[@inline always] length (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 4)
+
+  let[@inline always] checksum (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 6)
+end
+
+module Stack_ipv4 = struct
+  type 'b view = int
+  type 'b check = int
+
+  let failed = Invalid_argument "Stack_ipv4.get: the check failed"
+  let[@inline always] ok (c : 'b check) = c >= 0
+
+  let[@inline always] get (c : 'b check) : 'b view =
+    if c >= 0 then c else raise failed
+
+  let[@inline always] version (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u8 buf v lsr 4
+
+  let[@inline always] ihl (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u8 buf v land 0xf
+
+  let[@inline always] dscp (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u8 buf (v + 1) lsr 2
+
+  let[@inline always] ecn (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u8 buf (v + 1) land 0x3
+
+  let[@inline always] total_length (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
+      int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 2)
+
+  let[@inline always] identification (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
+      int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 4)
+
+  let[@inline always] flags (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 6) lsr 13
+
+  let[@inline always] fragment_offset (b : 'b Wire_runtime.Buf.t) (v : 'b view)
+      : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 6) land 0x1fff
+
+  let[@inline always] ttl (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u8 buf (v + 8)
+
+  let[@inline always] protocol (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u8 buf (v + 9)
+
+  let[@inline always] checksum (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Wire_runtime.Unchecked.u16be buf (v + 10)
+
+  let[@inline always] src (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    let w12 = Wire_runtime.Unchecked.i64be buf (v + 12) in
+    Int64.to_int (Int64.shift_right_logical w12 32)
+
+  let[@inline always] dst (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    Int32.to_int (Wire_runtime.Unchecked.i32be buf (v + 16)) land mask32
+
+  let[@inline always] tcp (b : 'b Wire_runtime.Buf.t)
+      (len : 'b Wire_runtime.Buf.length) (v : 'b view) : 'b Stack_tcp.check =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    let len = (len : _ Wire_runtime.Buf.length :> int) in
+    let w0 = Wire_runtime.Unchecked.i64be buf v in
+    let bw1 = Int64.to_int (Int64.shift_right_logical w0 56) in
+    let f2_ihl = bw1 land 0xf in
+    let bw2 = Int64.to_int w0 land 0xffff in
+    let f10_protocol = Wire_runtime.Unchecked.u8 buf (v + 9) in
+    if not ((bw2 land 16383 : int) = 0 && (f10_protocol : int) = 6) then -1
+    else
+      let s3 = (f2_ihl lsl 2) - 20 in
+      if s3 < 0 || s3 > len - (v + 20) - 20 then -1
+      else
+        let p4 = v + 20 + s3 in
+        p4
+
+  let[@inline always] udp (b : 'b Wire_runtime.Buf.t)
+      (len : 'b Wire_runtime.Buf.length) (v : 'b view) : 'b Stack_udp.check =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    let len = (len : _ Wire_runtime.Buf.length :> int) in
+    let w0 = Wire_runtime.Unchecked.i64be buf v in
+    let bw1 = Int64.to_int (Int64.shift_right_logical w0 56) in
+    let f2_ihl = bw1 land 0xf in
+    let bw2 = Int64.to_int w0 land 0xffff in
+    let f10_protocol = Wire_runtime.Unchecked.u8 buf (v + 9) in
+    if not ((bw2 land 16383 : int) = 0 && (f10_protocol : int) = 17) then -1
+    else
+      let s3 = (f2_ihl lsl 2) - 20 in
+      if s3 < 0 || s3 > len - (v + 20) - 8 then -1
+      else
+        let p4 = v + 20 + s3 in
+        p4
+
+  let[@inline always] opaque_present (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
+      bool =
+    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+    let bw1 = Wire_runtime.Unchecked.u16be buf (v + 6) in
+    let f10_protocol = Wire_runtime.Unchecked.u8 buf (v + 9) in
+    not
+      (((bw1 land 16383 : int) = 0 && (f10_protocol : int) = 6)
+      || ((bw1 land 16383 : int) = 0 && (f10_protocol : int) = 17))
+end
+
+let failed = Invalid_argument "EthernetStack.get: the check failed"
+let[@inline always] ok (c : 'b check) = c >= 0
+
+let[@inline always] get (c : 'b check) : 'b view =
+  if c >= 0 then c else raise failed
+
+let[@inline always] ether_type (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  Wire_runtime.Unchecked.u16be buf (v + 12)
+
+let[@inline always] ipv4 (b : 'b Wire_runtime.Buf.t)
+    (len : 'b Wire_runtime.Buf.length) (v : 'b view) : 'b Stack_ipv4.check =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  let len = (len : _ Wire_runtime.Buf.length :> int) in
+  let f3_ether_type = Wire_runtime.Unchecked.u16be buf (v + 12) in
+  if not ((f3_ether_type : int) = 2048) then -1
+  else if v + 14 > len - 20 then -1
+  else v + 14

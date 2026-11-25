@@ -240,6 +240,43 @@ val scanner_mli :
     [scanner ?target ?fields ?step ~codec c], as {!mli} is that of {!ml}. Raises
     [Invalid_argument] as {!scanner} does. *)
 
+(** {2 Views}
+
+    A scanner also writes the views of its codec: [check b length ~off ~len]
+    runs the checks of [fold] on the record at [off] in the [len] bytes there,
+    in the buffer [b] of length [length] named by [Wire_runtime.Buf.v], and
+    answers a ['b check]; [ok] tests it and [get] makes it a ['b view], an [int]
+    that only the accessors of [b] take. Each named integer field of the record
+    is an accessor named after it, [name b v], returning its [int] (0 when it is
+    absent), each optional field that holds no record a presence
+    [name_present b v], and each field that holds a record an accessor
+    [name b len v] returning a check of that record's module, which passes iff
+    the record is present and its fixed bytes lie in [b]. Each codec a field
+    holds has one module, named after it ([CapturedIPv4] is [Captured_ipv4]),
+    with the same accessors. A field at a constant offset inside the bytes the
+    check guarantees is one load; any other is placed again from the bytes that
+    place it, with a bound check, and a presence or a tag is tested again, so an
+    accessor reads no byte outside [b] even when bytes are written after the
+    check. A field named as a value the module exports is refused as ambiguous.
+*)
+
+type view = { module_name : string option; members : view_member list }
+(** The views of a record: its module, [None] for the codec's own, and its
+    accessors in declaration order. *)
+
+(** An accessor and the output of {!scanner_fields} it reads. *)
+and view_member =
+  | Int of { name : string; output : string }  (** An integer field. *)
+  | Bool of { name : string; output : string }
+      (** The presence of an optional field that holds no record. *)
+  | Record of { name : string; presence : string option; view : view }
+      (** A field that holds a record, with the output of its presence when it
+          is optional. *)
+
+val scanner_views : 'r Wire.Codec.t -> view
+(** [scanner_views c] is the views {!scanner} writes for [c]. Raises
+    [Invalid_argument] as {!scanner} does. *)
+
 (** {1 The plan}
 
     The checked plan both generators print, for backends of other languages:

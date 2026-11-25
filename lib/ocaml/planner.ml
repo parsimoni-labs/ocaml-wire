@@ -311,11 +311,26 @@ let rec is_leaf : type a. a T.typ -> bool = function
   | T.Map { inner; _ } -> is_leaf inner
   | t -> Option.is_some (leaf t)
 
+(* One past the longest [bytes]: no offset or size reaches it. *)
+let beyond = Sys.max_string_length + 1
+
+(* A record held by a field, kept as a span of its size where a plan keeps
+   records apart: [var] stands for that size. *)
+type sub = {
+  var : string;
+  path : string list option;
+  codec_id : int;
+  codec_name : string;
+  fixed_size : int option;
+  codec : T.struct_;
+}
+
 type st = {
   maps : maps;
   mutable count : int;
   mutable outs : output list;
   mutable ranges : (int * int) Smap.t;
+  mutable subs : sub list option;
 }
 
 let fresh st prefix name =
@@ -463,7 +478,24 @@ and composite : type a.
     node list =
  fun st path ~name env t ->
   match t with
-  | T.Codec { codec_struct; _ } -> record st path codec_struct
+  | T.Codec { codec_struct; codec_id; codec_name; codec_fixed_size; _ } -> (
+      match st.subs with
+      | None -> record st path codec_struct
+      | Some subs ->
+          let var = fresh st "s" (Option.fold ~none:"anon" ~some:label name) in
+          st.ranges <- Smap.add var (0, beyond) st.ranges;
+          st.subs <-
+            Some
+              ({
+                 var;
+                 path;
+                 codec_id;
+                 codec_name;
+                 fixed_size = codec_fixed_size;
+                 codec = codec_struct;
+               }
+              :: subs);
+          [ Span (T.Ref (T.I, var)) ])
   | T.Single_elem { size; elem; at_most } ->
       let size = bind env size in
       [ Region (size, at_most, element st path ~name env elem) ]
@@ -508,8 +540,6 @@ and element : type a.
    one past the longest [bytes]. Their sums never wrap, and a bound check
    against [beyond] always fails. *)
 
-let beyond = Sys.max_string_length + 1
-
 let extent a b =
   if a < 0 || b < 0 then invalid_arg "Planner.extent: a negative extent"
   else if a >= beyond || b >= beyond || a > beyond - b then beyond
@@ -546,17 +576,21 @@ let rec plan_wide ranges nodes =
       | Region (e, _, body) -> wide_expr ranges e || plan_wide ranges body)
     nodes
 
-let plan_of ?(maps = no_maps) (s : T.struct_) =
-  let st = { maps; count = 0; outs = []; ranges = Smap.empty } in
+let plan_with ?(maps = no_maps) ~subs (s : T.struct_) =
+  let st = { maps; count = 0; outs = []; ranges = Smap.empty; subs } in
   let nodes = fuse (record st (Some []) s) in
   let outputs = List.rev st.outs in
-  {
-    record = s.name;
-    nodes;
-    outputs;
-    ranges = st.ranges;
-    wide = plan_wide st.ranges nodes;
-  }
+  ( {
+      record = s.name;
+      nodes;
+      outputs;
+      ranges = st.ranges;
+      wide = plan_wide st.ranges nodes;
+    },
+    List.rev (Option.value ~default:[] st.subs) )
+
+let plan_of ?maps s = fst (plan_with ?maps ~subs:None s)
+let plan_apart s = plan_with ~subs:(Some []) s
 
 let rec fields_of nodes =
   List.concat_map

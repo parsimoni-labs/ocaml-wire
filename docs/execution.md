@@ -122,9 +122,9 @@ spans whose size an expression gives, optional fields (gates), sized windows
 (regions) and where clauses, in the order the codec checks them, over
 variables unique in the plan. One walk over the plan writes every function
 that checks a record: `is_valid`, the decoders and the function that finds
-the codec's error for a fixed record, and `fold`, `fold_frames` and `decode`
-(and with `~step`, `fold_step`, `fold_frames_step` and `fold_index_step`) for a codec of any
-shape in scope. OCaml without flambda never inlines a function passed as an
+the codec's error for a fixed record, and `fold`, `fold_frames`, `decode`
+and `check` (and with `~step`, `fold_step`, `fold_frames_step` and
+`fold_index_step`) for a codec of any shape in scope. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
 their consumer by name, with no closure call. They allocate nothing per
@@ -161,6 +161,41 @@ a trace whose kind of packet changes from frame to frame, a mispredicted
 branch of one frame then leaves the next frame's choices waiting for no load
 of the index or of the frame.
 
+A scanner also writes the views of its codec, beside the folds. `check b
+length ~off ~len` is the walk of `fold` with no output: it answers `off` for
+a record it accepts and a negative `int` otherwise, so it accepts exactly
+what `fold` accepts, and `Codec.View.check` on the frame's bytes; `ok` tests
+the answer and `get` makes it a `'b view`, an `int` only the accessors of the
+buffer named `'b` take. Each named integer field is an accessor named after
+it, each optional field that holds no record a presence `<name>_present`,
+and each field that holds a record an accessor that answers a check of that
+record's module, one module per codec, named after it (`CapturedIPv4` is
+`Captured_ipv4`, written once for the IPv4 and IPv6 fields that hold
+`StackTCP`). Each record is planned on its own (`Planner.plan_apart`), each
+record a field holds kept as a span of a variable for its size, so an
+accessor walks its record's own nodes only. A field at a constant offset
+inside the bytes a view of its record is known to hold, the leading prefix of
+its plan, is one load from the view. Anything else is placed again: the
+accessor reads the fields that place it, tests the conditions of the
+optional fields around it, and checks each span not to be negative and each
+read to lie in the buffer, but makes none of the record's own checks, which
+the check that gave the view made. Bytes written after the check are input
+the accessors read again: a sub-record they move is refused, an optional
+field they turn off is absent (0), and a field they move out of the buffer
+raises `Parse_error`, as `Codec.View.read` does; no read leaves the buffer.
+The conditions read their bitfields through the bitfield's word, so that
+tests of bits of one word are one masked test, as in the check; fields that
+share a 64-bit word at a constant offset are read from one load of it, and
+an unsigned 32-bit field is the top half of the word that starts on it when
+that word is known to be there. A span followed by a read tests its size
+against the room the read needs, so one test covers both. On OxCaml the
+values the tests read are `int64_u`, as in the check, and the value an
+accessor returns is read as an `int`. A record placed after a record of
+variable size is placed by that record's `end_at`, the walk of its spans to
+its end. The views of a run of optional fields, or of optional fields nested
+inside each other, cost about 55 lines and 370 words of code per field, on
+either target: a module per level, each accessor walking only its record.
+
 The invariants above hold for the generated code as follows.
 
 - **Unchecked reads stay in the frame.** A prefix is read only after one
@@ -195,6 +230,11 @@ The invariants above hold for the generated code as follows.
   length, so that the loop reads both without a bound check. It loads a
   frame's fields ahead only once that test, and a length of at least the
   bytes those fields end in, has passed.
+  An accessor of a view reads with no check only the leading prefix of its
+  record, which the check, or the accessor that placed the record, tested
+  to lie in the buffer; a field it places again is read after a test of
+  its position against the buffer's length, and positions stay at or after
+  the view, since a span that may be negative is tested.
 - **Arithmetic agrees with the codec.** An addition, subtraction or product
   whose operands' ranges keep it inside the native int is written as plain
   arithmetic; any other is checked, and an overflow rejects the record, or

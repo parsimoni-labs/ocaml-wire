@@ -1026,10 +1026,16 @@ let scanner ?(target = `OCaml) ?fields ?step ~codec c =
         | exception Unsupported why -> refuse ~codec why)
     | exception Unsupported why -> refuse ~codec why
   in
+  let views =
+    match View_module.of_codec c with
+    | v -> v
+    | exception Unsupported why -> refuse ~codec why
+  in
   let s = { target; scodec = codec; splan; selected; step } in
   let b = Buffer.create 4096 in
   let ppf = Format.formatter_of_buffer b in
   pp_scanner ppf s;
+  View_module.mli ppf ~target views;
   Format.pp_print_flush ppf ();
   Buffer.contents b
 
