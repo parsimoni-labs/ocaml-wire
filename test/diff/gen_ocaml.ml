@@ -34,7 +34,7 @@ let rec carrier : type a. a T.typ -> string option = function
    name escaped where the module defines it. *)
 let accessor c =
   let members =
-    match Wire_ocaml.scanner_views c with
+    match Wire_ocaml.views c with
     | v -> v.members
     | exception Invalid_argument _ -> []
   in
@@ -268,8 +268,8 @@ let pp_case ppf (label, c, (src, intf)) =
     \  }@\n\
      @\n"
     label intf src
-    (Wire_ocaml.mli ~target ~buffer:`Bigstring ~codec:"codec" c)
-    (Wire_ocaml.ml ~target ~buffer:`Bigstring ~codec:"codec" c)
+    (Wire_ocaml.to_mli (Wire_ocaml.v ~target ~buffer:`Bigstring c))
+    (Wire_ocaml.to_ml (Wire_ocaml.v ~target ~buffer:`Bigstring c))
     (Wire_ocaml.bridge_mli ~codec:"codec" ~core:"M" c)
     (Wire_ocaml.bridge ~codec:"codec" ~core:"M" c)
     pp_ops_views fields
@@ -450,11 +450,11 @@ let pp_view_backend ppf ~m ~codec c =
     (if
        List.for_all
          (function Wire_ocaml.Bytes _ -> true | _ -> false)
-         (Wire_ocaml.scanner_views c).members
+         (Wire_ocaml.views c).members
      then "_"
      else "v")
     m
-    (view_outputs ~m ~path:m (Wire_ocaml.scanner_views c))
+    (view_outputs ~m ~path:m (Wire_ocaml.views c))
 
 (* Whether the module holds a fixed record's members, which the record
    glue reads; without them its values go through the walk. *)
@@ -470,8 +470,12 @@ let has_record src =
 (* The backend of the values of the module [m], when its codec's record holds
    more than named scalars at constant offsets. *)
 let pp_values_backend ppf ~m ~codec c =
-  if not (has_record (Wire_ocaml.scanner ~codec:"c" c)) then begin
-    let fields = Wire_ocaml.scanner_fields c in
+  if
+    not
+      (has_record
+         Wire_ocaml.(to_ml (v ~target:`OCaml ~folds:[ fold "fold" ] c)))
+  then begin
+    let fields = Wire_ocaml.outputs c in
     let wrap, codec = codec in
     Fmt.pf ppf
       "%s Diff_ocaml.values_scan ~name:%S ~codec:%s ~fields:[%a] ~full:%a { \
@@ -489,8 +493,13 @@ let pp_values_backend ppf ~m ~codec c =
 (* The backends over [c]: each module [(name, target, selected)], generated
    inside the function under its interface, after the [Step] it calls, and
    the views of the one with every output. *)
-let pp_scanners ppf ~label ~codec c modules =
-  let fields = Wire_ocaml.scanner_fields c in
+let pp_scanners ppf ~codec c modules =
+  (* Its folds: [fold], and [fold_step], which calls [Step] by name. *)
+  let scanner target o =
+    Wire_ocaml.(
+      v ~target ~folds:[ fold ?outputs:o "fold"; fold ?outputs:o "fold_step" ] c)
+  and visitors = [ ("fold_step", "step.ml") ] in
+  let fields = Wire_ocaml.outputs c in
   let selected_fields = function
     | None -> fields
     | Some ns -> List.filter (fun (n, _) -> List.mem n ns) fields
@@ -505,10 +514,8 @@ let pp_scanners ppf ~label ~codec c modules =
          %s@\n\
          end in@\n"
         pp_step (selected_fields selected) m
-        (Wire_ocaml.scanner_mli ~target:t ?fields:selected ~step:"Step"
-           ~codec:label c)
-        (Wire_ocaml.scanner ~target:t ?fields:selected ~step:"Step" ~codec:label
-           c))
+        (Wire_ocaml.to_mli ~visitors (scanner t selected))
+        (Wire_ocaml.to_ml ~visitors (scanner t selected)))
     modules;
   Fmt.pf ppf "[@\n";
   List.iter
@@ -525,8 +532,7 @@ let pp_scanners ppf ~label ~codec c modules =
   Fmt.pf ppf "]@\n"
 
 let every_other c =
-  List.filteri (fun i _ -> i mod 2 = 0) (Wire_ocaml.scanner_fields c)
-  |> List.map fst
+  List.filteri (fun i _ -> i mod 2 = 0) (Wire_ocaml.outputs c) |> List.map fst
 
 (* {1 Shards}
 
@@ -551,7 +557,7 @@ let scan_cases () =
       let src =
         Fmt.str "let %s () : Diff_ocaml.scan_ops list =@\n%a@\n" name
           (fun ppf () ->
-            pp_scanners ppf ~label:c.label
+            pp_scanners ppf
               ~codec:
                 ( Fmt.str
                     "(match List.nth Diff_codecs.scan_cases %d with \
@@ -569,7 +575,7 @@ let sampled_scanners () =
     List.partition_map
       (fun (label, (Fuzz_gen.Pack g as p)) ->
         let c = Fuzz_gen.codec g in
-        match Wire_ocaml.scanner_fields c with
+        match Wire_ocaml.outputs c with
         | _ -> Left (label, p)
         | exception Invalid_argument msg -> Right (label, msg))
       Diff_ocaml.scan_codecs
@@ -586,7 +592,7 @@ let sampled_scanners () =
              %a@\n"
             name
             (fun ppf () ->
-              pp_scanners ppf ~label:"codec"
+              pp_scanners ppf
                 ~codec:("(", "(Fuzz_gen.codec g)")
                 c
                 [
@@ -605,9 +611,9 @@ let cases () =
     List.partition_map
       (fun (label, Fuzz_gen.Pack g) ->
         let c = Fuzz_gen.codec g in
-        match Wire_ocaml.ml ~target ~codec:"codec" c with
+        match Wire_ocaml.to_ml (Wire_ocaml.v ~target c) with
         | src when has_record src ->
-            let intf = Wire_ocaml.mli ~target ~codec:"codec" c in
+            let intf = Wire_ocaml.to_mli (Wire_ocaml.v ~target c) in
             Left (label, Fuzz_gen.Pack g, (src, intf))
         | _ when Diff_ocaml.specialisable c ->
             Right

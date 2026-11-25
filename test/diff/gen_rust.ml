@@ -236,7 +236,7 @@ let pp_dispatch ppf n =
    every output, every other output and, for a structured case, none, which
    still makes every check. *)
 let scan_variants ~validate c =
-  let all = List.map fst (Wire_ocaml.scanner_fields c) in
+  let all = List.map fst (Wire_ocaml.outputs c) in
   let selected = List.filteri (fun i _ -> i mod 2 = 0) all in
   [ ("full", None, all); ("selected", Some selected, selected) ]
   @ if validate then [ ("validate", Some [], []) ] else []
@@ -280,7 +280,7 @@ let sampled =
   List.filter_map
     (fun (label, Fuzz_gen.Pack g) ->
       let c = Fuzz_gen.codec g in
-      match Wire_ocaml.scanner_fields c with
+      match Wire_ocaml.outputs c with
       | exception Invalid_argument _ -> None
       | _ -> (
           match scanners ~validate:false ~label c with

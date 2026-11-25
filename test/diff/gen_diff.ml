@@ -302,7 +302,7 @@ let standalone codec =
 let sampled_shapes () =
   List.filter
     (fun (_, Fuzz_gen.Pack g) ->
-      match Wire_ocaml.scanner_fields (Fuzz_gen.codec g) with
+      match Wire_ocaml.outputs (Fuzz_gen.codec g) with
       | _ -> true
       | exception Invalid_argument _ -> false)
     Diff_ocaml.scan_codecs
