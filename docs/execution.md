@@ -146,6 +146,21 @@ it with one branch. On OCaml the loop over frames too short for it is a
 function of its own, called once per batch, so that its variables take no
 register from the main loop.
 
+`fold_index_step` cannot compute where a frame starts: each start is a load
+from the index, and only the frame's length says which of its bytes may be
+read. Its loop is pipelined one frame deep instead, two frames an iteration.
+Before it walks a frame, it loads the next frame's offset and length, tests
+that the next frame lies in the buffer and holds the bytes the frame loop
+above knows, and if so loads the fields in those bytes that choose an
+optional field: those the frame loop reads ahead, and the fields of the
+leading prefixes too, the Ethernet type and the IPv4 protocol of a packet
+stack, of which OCaml reads only the fields of one byte ahead. A frame
+so tested is walked as the frame loop walks one, knowing those bytes, with
+those fields as variables; any other goes through the walk of one frame. On
+a trace whose kind of packet changes from frame to frame, a mispredicted
+branch of one frame then leaves the next frame's choices waiting for no load
+of the index or of the frame.
+
 The invariants above hold for the generated code as follows.
 
 - **Unchecked reads stay in the frame.** A prefix is read only after one
@@ -177,7 +192,9 @@ The invariants above hold for the generated code as follows.
   entry tests `off < 0` and that bound only. `fold_index_step` makes the
   same test for each frame of its index, against the buffer's length read
   once before its loop, and checks once that its two arrays have the same
-  length, so that the loop reads both without a bound check.
+  length, so that the loop reads both without a bound check. It loads a
+  frame's fields ahead only once that test, and a length of at least the
+  bytes those fields end in, has passed.
 - **Arithmetic agrees with the codec.** An addition, subtraction or product
   whose operands' ranges keep it inside the native int is written as plain
   arithmetic; any other is checked, and an overflow rejects the record, or

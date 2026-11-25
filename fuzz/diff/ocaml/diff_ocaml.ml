@@ -686,11 +686,31 @@ let check_scan ?oracle ?strides ?(expand = true) (Reference r as ref_) backends
         scan_index ref_ backends b (index_frames n))
       (if expand then r.inputs raw else [ raw ])
 
+(* The fold over an index walks frames of every length and shape in a row,
+   a frame with bad bounds every fifth, so that each frame of the index is
+   read where the one before it took another branch. *)
+let scan_corpus_index ref_ backends corpus =
+  let all = Bytes.concat Bytes.empty corpus in
+  let _, frames =
+    List.fold_left
+      (fun (off, acc) b ->
+        let n = Bytes.length b in
+        let acc = (off, n) :: acc in
+        let acc =
+          if List.length acc mod 5 = 4 then (off, Bytes.length all + 1) :: acc
+          else acc
+        in
+        (off + n, acc))
+      (0, []) corpus
+  in
+  scan_index ref_ backends all (List.rev frames)
+
 let scan_corpus ?oracle (Diff_codecs.Scan c as case) backends =
   let ref_ = of_scan_case case in
   let check = check_scan ?oracle ~expand:false ref_ backends in
   let corpus = c.corpus () in
   List.iter check corpus;
+  scan_corpus_index ref_ backends corpus;
   (* The batch fold recovers after a rejected frame and keeps the order of
      the accumulator. Runs of three, six and nine frames, then a partial one,
      leave every remainder for a fold that walks four frames an iteration. *)

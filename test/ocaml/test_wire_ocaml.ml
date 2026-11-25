@@ -1637,17 +1637,25 @@ let test_decisions () =
   has ocaml "the IPv4 header cut into a function of its own" (function
     | Cut { name = "fold_ipv4"; window = "stop"; known = 0 } -> true
     | _ -> false);
-  let index frames = function
+  let index ahead = function
     | Frame_loop
-        { name = "fold_index_step"; need = 0; frames = f; short = None; _ } ->
-        f = frames
+        {
+          name = "fold_index_step";
+          need = 34;
+          frames = 2;
+          short = None;
+          ahead = a;
+        } ->
+        a = ahead
     | _ -> false
   in
-  has (decisions ~step:"Step" c) "the index loop, a frame an iteration"
-    (index 1);
+  has (decisions ~step:"Step" c)
+    "the index loop, pipelined, the next frame's dispatch bytes read ahead"
+    (index [ ("f14_ipv4_protocol", 23, 1) ]);
   has
     (decisions ~target:`OxCaml ~step:"Step" c)
-    "the index loop, four frames an iteration on OxCaml" (index 4);
+    "the index loop on OxCaml, the Ethernet type read ahead too"
+    (index [ ("f3_ether_type", 12, 2); ("f14_ipv4_protocol", 23, 1) ]);
   (* The TCP header starts at [ihl * 4 - 20] bytes from 34: its base is the
      term and the constant is in each load. *)
   Alcotest.(check bool)

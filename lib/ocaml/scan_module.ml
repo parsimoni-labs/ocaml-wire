@@ -280,8 +280,9 @@ let loaded (f : field) =
    the bytes loaded, with its value at a frame start. A frame's walk then
    dispatches on a value loaded before the previous frames' branches, so a
    mispredicted branch of one frame does not delay the next frame's choice by
-   a load. *)
-let read_aheads s ~need =
+   a load. With [leading], the fields of the leading prefixes too, for a
+   loop whose frames start at offsets it loads. *)
+let read_aheads ?(leading = false) s ~need =
   let tested = tested s.plan.nodes in
   List.filter_map
     (fun ((f : field), k) ->
@@ -290,7 +291,7 @@ let read_aheads s ~need =
           (fun ahead -> ((f.id, k, loaded f), ahead))
           (read_ahead s.m ~size:need ~k f)
       else None)
-    (gated_fields ~gated:false 0 s.plan.nodes)
+    (gated_fields ~gated:leading 0 s.plan.nodes)
 
 (* The loop of [fold_frames] over frames walked with [known] bytes of each
    known to be there. A walk that knows all its bounds may not read [stop].
@@ -557,9 +558,146 @@ let length_of s =
   if s.m.num = Unboxed then "U.of_int (Bytes.length buf)"
   else "Bytes.length buf"
 
-(* [fold_index_step], which folds [within] over the frames of an index. *)
-let pp_fold_index_step s ~within =
-  let buf = s.m.src.buf in
+(* The loop of [fold_index_step] that {!pp_fold_index_ahead} writes to
+   [out]: its target, the bytes [need] its frames are known to hold, the fields [used]
+   it reads ahead and their values at a frame start, the walk [body] of a
+   frame that holds [need] bytes and [within], the walk of any other. *)
+type index_loop = {
+  out : Format.formatter;
+  unboxed : bool;
+  need : int;
+  used : (string * (string -> string)) list;
+  body : string;
+  within : string;
+}
+
+(* On OCaml the variables the loop carries are [ref]s, which the compiler
+   makes mutable variables, and a position is an [int]. *)
+let index_read l v = if l.unboxed then v else "!" ^ v
+let index_assign l = if l.unboxed then "<-" else ":="
+
+let index_mutable l v e =
+  if l.unboxed then Fmt.str "let mutable %s = %s in" v e
+  else Fmt.str "let %s = ref %s in" v e
+
+let index_zero l = if l.unboxed then "#0L" else "0L"
+
+(* The frame at index [i] as the variables suffixed [x]: its start, its
+   length, [known] when it lies in the buffer and holds [need] bytes, and
+   then the fields read ahead, else zero. On OxCaml the bounds are tested as
+   the sign of one [logor] of [int64_u]s, which hold the differences of two
+   [int]s without wrapping. *)
+let pp_index_next l x i =
+  let ppf = l.out and zero = index_zero l in
+  if l.unboxed then
+    Fmt.pf ppf
+      "let base%s = U.of_int (Array.unsafe_get offs %s) in@\n\
+       let stop%s = U.of_int (Array.unsafe_get lens %s) in@\n\
+       let known%s = U.compare (U.logor (U.logor base%s (U.sub (U.sub length \
+       base%s) stop%s)) (U.sub stop%s #%dL)) #0L >= 0 in@\n"
+      x i x i x x x x x l.need
+  else
+    Fmt.pf ppf
+      "let base%s = Array.unsafe_get offs %s in@\n\
+       let stop%s = Array.unsafe_get lens %s in@\n\
+       let known%s = base%s >= 0 && stop%s >= %d && stop%s <= length - base%s \
+       in@\n"
+      x i x i x x x l.need x x;
+  let one (v, value) =
+    Fmt.pf ppf "let %s%s = if known%s then %s else %s in@\n" v x x
+      (value ("base" ^ x))
+      zero
+  in
+  match l.used with
+  | _ :: _ :: _ when l.unboxed ->
+      let list f = String.concat ", " (List.map f l.used) in
+      Fmt.pf ppf "let #(%s) = if known%s then #(%s) else #(%s) in@\n"
+        (list (fun (v, _) -> v ^ x))
+        x
+        (list (fun (_, value) -> value ("base" ^ x)))
+        (list (fun _ -> zero))
+  | used -> List.iter one used
+
+(* The walk of the frame suffixed [x], whose variables [carried] reads from
+   the loop's references. *)
+let pp_index_walk ?(carried = false) l x =
+  let ppf = l.out and read = index_read l in
+  let v name = if carried then read (name ^ x) else name ^ x in
+  let int name =
+    if l.unboxed then Fmt.str "(U.to_int %s)" (v name) else v name
+  in
+  Fmt.pf ppf "acc %s (if %s then (@\nlet base = %s in@\n" (index_assign l)
+    (v "known") (v "base");
+  if mentions "stop" l.body then Fmt.pf ppf "let stop = %s in@\n" (v "stop");
+  List.iter (fun (n, _) -> Fmt.pf ppf "let %s = %s in@\n" n (v n)) l.used;
+  Fmt.pf ppf "let current = %s in@\n%s) else %s buf ~length %s %s ~init:%s)"
+    (read "acc") l.body l.within (int "base") (int "stop") (read "acc")
+
+(* The frames of the index, two an iteration, so the loop polls and tests
+   its bound once per two frames, the next frame read before the current
+   one is walked. *)
+let pp_index_frames l =
+  let ppf = l.out and read = index_read l in
+  let vars = "base" :: "stop" :: "known" :: List.map fst l.used in
+  pp_index_next l "_0" "0";
+  List.iter
+    (fun v -> Fmt.pf ppf "%s@\n" (index_mutable l (v ^ "_c") (v ^ "_0")))
+    vars;
+  Fmt.pf ppf "%s@\nwhile %s < n - 1 do@\n" (index_mutable l "i" "1") (read "i");
+  pp_index_next l "_1" (read "i");
+  pp_index_walk ~carried:true l "_c";
+  Fmt.pf ppf ";@\n";
+  pp_index_next l "_2" (Fmt.str "(%s + 1)" (read "i"));
+  pp_index_walk l "_1";
+  Fmt.pf ppf ";@\n";
+  List.iter (fun v -> Fmt.pf ppf "%s_c %s %s_2;@\n" v (index_assign l) v) vars;
+  Fmt.pf ppf "i %s %s + 2@\ndone;@\nif %s < n then begin@\n" (index_assign l)
+    (read "i") (read "i");
+  pp_index_next l "_1" (read "i");
+  pp_index_walk ~carried:true l "_c";
+  Fmt.pf ppf ";@\n";
+  pp_index_walk l "_1";
+  Fmt.pf ppf "@\nend@\nelse@\n";
+  pp_index_walk ~carried:true l "_c"
+
+(* [fold_index_step] for a codec whose frames need [need] bytes before
+   their first variable offset. The loop is pipelined one frame deep:
+   before it walks a frame, it loads the next frame's offset and length, tests
+   that the frame lies in the buffer and holds [need] bytes, and if so loads
+   its [ahead] fields. The walk of a frame then dispatches on values loaded
+   before the previous frame's branches, so a branch of one frame that
+   mispredicts does not delay the next frame's choice by the loads of its
+   offset and fields. A frame that holds [need] bytes is walked knowing them,
+   any other through [within]. *)
+let pp_fold_index_ahead s ~within ~m ~need ~ahead =
+  with_cuts s "fold_index_step" (fun s cuts ->
+      let names, _ = frames_scope ~step:m s ~unboxed:false in
+      let body =
+        frames_body ?cuts ~step:m ~ahead s ~name:"fold_index_step" ~names
+          ~unboxed:false ~invalid:(m ^ ".invalid") ~valid:(m ^ ".valid")
+          ~known:need
+      in
+      let used = List.filter (fun (v, _) -> mentions v body) ahead in
+      let l =
+        { out = s.ppf; unboxed = s.m.num = Unboxed; need; used; body; within }
+      in
+      Fmt.pf s.ppf
+        "let[@inline always] fold_index_step %s ~(offs : int array) ~(lens : \
+         int array) ~init =@\n\
+         let n = Array.length offs in@\n\
+         if Array.length lens <> n then@\n\
+         invalid_arg \"fold_index_step: offs and lens differ in length\";@\n\
+         let length = %s in@\n\
+         %s@\n\
+         if n > 0 then begin@\n"
+        s.m.src.buf (length_of s)
+        (index_mutable l "acc" "init");
+      pp_index_frames l;
+      Fmt.pf s.ppf "@\nend;@\n%s@\n@\n" (index_read l "acc"))
+
+(* The plain [fold_index_step], which folds [within] over the frames of an
+   index. *)
+let pp_fold_index_step_plain s ~within ~buf =
   Hashtbl.replace s.taken "fold_index_step" ();
   (* As in [fold_frames], OxCaml walks [unroll] frames an iteration, so the
      loop polls and tests its bound once per [unroll] frames. Both arrays have
@@ -608,6 +746,26 @@ let pp_fold_index_step s ~within =
        @\n"
       (frame ~acc:"!acc" "i")
 
+(* [fold_index_step]: pipelined when its frames need leading bytes, a plain
+   loop otherwise. *)
+let pp_fold_index_step s ~within ~m =
+  let buf = s.m.src.buf in
+  let need = fixed_need s.plan.nodes in
+  if Sset.is_empty s.m.slots && need > 0 then begin
+    let ahead = read_aheads ~leading:true s ~need in
+    s.m.decide
+      (Decision.Frame_loop
+         {
+           name = "fold_index_step";
+           need;
+           frames = 2;
+           short = None;
+           ahead = List.map fst ahead;
+         });
+    pp_fold_index_ahead s ~within ~m ~need ~ahead:(List.map snd ahead)
+  end
+  else pp_fold_index_step_plain s ~within ~buf
+
 (* [fold_step], which calls the module [m]'s functions by name, and
    [fold_index_step], which folds it over the frames of an index. Both go
    through [step_within], whose [length] is that of [buf], so that the loop
@@ -641,7 +799,7 @@ let pp_fold_step s m =
      %s buf ~length:(%s) off len ~init@\n\
      @\n"
     buf within (length_of s);
-  pp_fold_index_step s ~within
+  pp_fold_index_step s ~within ~m
 
 let pp_result_type s name hash =
   Fmt.pf s.ppf "type %s = %s{ ok : bool;@\n" name hash;
