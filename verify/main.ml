@@ -213,7 +213,7 @@ let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
     if step then
       ( "fold_step",
         "fold_step buf off len ~init:0",
-        "frames_step_record",
+        "step_frames_record",
         "~current",
         "fold_step_frames",
         "fold_step_frames buf off len ~stride ~init:0" )
@@ -417,8 +417,8 @@ let reference_expr (e : Check.entry) =
   let plain =
     match e.name with
     | "fold_step" -> "fold buf off len ~invalid ~valid"
-    | "frames_step_record" ->
-        replace ~sub:"frames_step_record" ~by:"frames_record" e.expr
+    | "step_frames_record" ->
+        replace ~sub:"step_frames_record" ~by:"frames_record" e.expr
         ^ " ~invalid ~valid"
     | _ -> e.expr
   in

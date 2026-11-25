@@ -393,7 +393,7 @@
     ./main.exe
     --classify-checks
     --only
-    frames_step_record
+    step_frames_record
     --expect
     safety,semantics
     .
