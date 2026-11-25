@@ -394,50 +394,119 @@ let pp_record ppf fields =
     fields;
   Fmt.pf ppf "}@\n@\n"
 
-(* [check] makes the codec's checks on a record in an array, in its order:
-   each field's in field order, then the [where] clauses, each written under
-   what the checks before it established. *)
-let pp_check ppf ~plan ~fields ~where =
-  Fmt.pf ppf
-    "#[inline(always)]@\n\
-     fn check(b: &[u8; SIZE], off: usize) -> Result<(), Error> {@\n";
+(* A check of the record: one of a field's, or a [where] clause. *)
+type step = On of field * P.check | Where of bool T.expr
+
+(* Where [f] ends in the record. *)
+let field_end f = f.off + width_bytes f.store
+
+(* The checks of a record that fits, in the codec's order: each field's in
+   field order, then the [where] clauses. *)
+let fit_steps ~fields ~where =
+  List.concat_map (fun f -> List.map (fun c -> On (f, c)) f.checks) fields
+  @ List.map (fun w -> Where w) where
+
+(* The checks of a record that does not fit, in the order 3D makes them: a
+   [where] clause comes after the last field it reads, as the refinement of
+   that field the projection makes it, or before every field when it reads
+   none. *)
+let short_steps ~fields ~where =
+  let reads w f = List.mem f.var (T.collect_refs w) in
+  let after f w =
+    match List.rev (List.filter (reads w) fields) with
+    | last :: _ -> last.var = f.var
+    | [] -> false
+  in
+  let first = List.filter (fun w -> not (List.exists (reads w) fields)) where in
+  List.map (fun w -> Where w) first
+  @ List.concat_map
+      (fun f ->
+        List.map (fun c -> On (f, c)) f.checks
+        @ List.map (fun w -> Where w) (List.filter (after f) where))
+      fields
+
+(* Where the bytes a step reads end: those of its field, or of the last field
+   a [where] clause reads. *)
+let step_end ~fields = function
+  | On (f, _) -> field_end f
+  | Where w ->
+      List.fold_left
+        (fun acc f ->
+          if List.mem f.var (T.collect_refs w) then max acc (field_end f)
+          else acc)
+        0 fields
+
+(* The reads of the fields' values, then [steps], each written under what the
+   checks before it established, returning [fail ~at e] when it fails with
+   the error [e], its bytes ending at [at]. *)
+let pp_steps ppf ~plan ~fields ~fail steps =
   List.iter
     (fun f ->
       match f.store with
       | Bytes _ -> ()
       | _ -> Fmt.pf ppf "    let %s = %s as i64;@\n" f.var (read "b" f))
     fields;
-  let scope =
-    List.fold_left
-      (fun scope f ->
-        List.fold_left
-          (fun scope (c : P.check) ->
-            let cond = expr scope c.cond in
-            (match c.kind with
-            | Enum _ ->
-                Fmt.pf ppf
-                  "    if !(%s) { return Err(Error::InvalidEnum { field: %s, \
-                   at: off + %d, value: %s }); }@\n"
-                  cond f.lit f.off f.var
-            | Constraint | Tag ->
-                Fmt.pf ppf
-                  "    if !(%s) { return Err(Error::Constraint { field: %s, \
-                   at: off + %d }); }@\n"
-                  cond f.lit f.off);
-            P.Scope.refine scope [ c.cond ])
-          scope f.checks)
-      (P.Scope.v plan) fields
-  in
   ignore
     (List.fold_left
-       (fun scope w ->
-         Fmt.pf ppf
-           "    if !(%s) { return Err(Error::Constraint { field: \"\", at: off \
-            }); }@\n"
-           (expr scope w);
-         P.Scope.refine scope [ w ])
-       scope where);
+       (fun scope step ->
+         let at = step_end ~fields step in
+         let cond, err =
+           match step with
+           | On (f, c) ->
+               let err =
+                 match c.kind with
+                 | Enum _ ->
+                     Fmt.str
+                       "Error::InvalidEnum { field: %s, at: off + %d, value: \
+                        %s }"
+                       f.lit f.off f.var
+                 | Constraint | Tag ->
+                     Fmt.str "Error::Constraint { field: %s, at: off + %d }"
+                       f.lit f.off
+               in
+               (c.cond, err)
+           | Where w -> (w, "Error::Constraint { field: \"\", at: off }")
+         in
+         Fmt.pf ppf "    if !(%s) { return %s; }@\n" (expr scope cond)
+           (fail ~at err);
+         P.Scope.refine scope [ cond ])
+       (P.Scope.v plan) steps)
+
+(* [check] makes the codec's checks on a record in an array, in its order. *)
+let pp_check ppf ~plan ~fields ~where =
+  Fmt.pf ppf
+    "#[inline(always)]@\n\
+     fn check(b: &[u8; SIZE], off: usize) -> Result<(), Error> {@\n";
+  pp_steps ppf ~plan ~fields
+    ~fail:(fun ~at:_ e -> Fmt.str "Err(%s)" e)
+    (fit_steps ~fields ~where);
   Fmt.pf ppf "    Ok(())@\n}@\n@\n"
+
+(* [short] is the error of a record that does not fit at [off]: its checks run
+   on the bytes there are, padded with zeros, and the first that fails is the
+   error when its bytes are there, else the end of input. *)
+let pp_short ppf ~plan ~fields ~where =
+  Fmt.pf ppf
+    "#[cold]@\n\
+     #[inline(never)]@\n\
+     fn short(buf: &[u8], off: usize) -> Error {@\n\
+    \    let too_short = Error::TooShort { expected: off.saturating_add(SIZE), \
+     got: buf.len() };@\n";
+  let steps = short_steps ~fields ~where in
+  if steps <> [] then begin
+    Fmt.pf ppf
+      "    let rest = match buf.get(off..) { Some(r) => r, None => return \
+       too_short };@\n\
+      \    let avail = rest.len().min(SIZE);@\n\
+      \    let mut padded = [0u8; SIZE];@\n\
+      \    padded[..avail].copy_from_slice(&rest[..avail]);@\n\
+      \    let b = &padded;@\n";
+    pp_steps ppf ~plan ~fields
+      ~fail:(fun ~at e ->
+        Fmt.str "if %d > avail { too_short } else { %s }" at e)
+      steps
+  end;
+  Fmt.pf ppf "    too_short@\n}@\n@\n"
 
 let pp_record_of ppf ~b fields =
   Fmt.pf ppf "Record {@\n";
@@ -449,13 +518,13 @@ let pp_entry ppf ~fields =
     "/// Checks the record at `off` as the codec's `validate` does.@\n\
      #[inline]@\n\
      pub fn validate(buf: &[u8], off: usize) -> Result<(), Error> {@\n\
-    \    check(frame(buf, off)?, off)@\n\
+    \    check(frame(buf, off).map_err(|_| short(buf, off))?, off)@\n\
      }@\n\
      @\n\
      /// Checks and reads the record at `off`, as the codec's `decode` does.@\n\
      #[inline]@\n\
      pub fn decode(buf: &[u8], off: usize) -> Result<Record, Error> {@\n\
-    \    let b = frame(buf, off)?;@\n\
+    \    let b = frame(buf, off).map_err(|_| short(buf, off))?;@\n\
     \    check(b, off)?;@\n\
     \    Ok(%a)@\n\
      }@\n\
@@ -689,7 +758,7 @@ let pp_valid ppf ~fields =
     \    /// Checks the record at `off` in `buf`.@\n\
     \    #[inline]@\n\
     \    pub fn at(buf: &'a [u8], off: usize) -> Result<Self, Error> {@\n\
-    \        let b = frame(buf, off)?;@\n\
+    \        let b = frame(buf, off).map_err(|_| short(buf, off))?;@\n\
     \        check(b, off)?;@\n\
     \        Ok(Valid(b))@\n\
     \    }@\n\
@@ -1224,6 +1293,7 @@ let pp ~codec ppf c =
       Fmt.pf ppf "%s@\n" prelude;
       pp_record ppf fields;
       pp_check ppf ~plan ~fields ~where;
+      pp_short ppf ~plan ~fields ~where;
       pp_entry ppf ~fields;
       pp_write ppf ~fields;
       List.iter (pp_accessors ppf) fields;
