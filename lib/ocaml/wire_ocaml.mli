@@ -164,7 +164,7 @@ val v :
   'r Wire.Codec.t ->
   t
 (** [v ?name ?target ?buffer ?simd ?folds ?maps c] is the module of [c], named
-    [name] (default: the codec's name, lower-cased and split at its words:
+    [name] (default: the codec's name, split at its words and lower-cased:
     [CapturedIPv4] is [captured_ipv4]), for [target] (default: the compiler the
     generator runs on), on [buffer] (default [`Bytes]), with [folds] (default:
     one fold [fold] of every output, without a visitor, when the module has

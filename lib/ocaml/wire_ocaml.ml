@@ -223,7 +223,7 @@ let v ?name ?(target = building) ?(buffer = `Bytes) ?(simd = false) ?folds ?maps
     match name with
     | Some n -> n
     | None ->
-        String.uncapitalize_ascii
+        String.lowercase_ascii
           (View_module.module_of_codec (Gen.to_struct codec).name)
   in
   let t = T { name; target; buffer; simd; folds; maps; codec } in
