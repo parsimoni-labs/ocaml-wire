@@ -695,6 +695,25 @@ let last_test code =
       String.concat "\n" (List.rev (c :: before))
   | _ -> code
 
+(* An unsigned big-endian 32-bit field at [at] is the top half of the 64-bit
+   word that starts on it, or else the bottom half of the one that ends on
+   it, when that word is known to be there: one load, a shift or a mask,
+   where a 32-bit load is sign-extended and then masked. The word is the one
+   a test of the accessor may have loaded at that offset, of the same type
+   on either target. *)
+let result_words w m (f : field) ~at ~size ~lo p =
+  let word a =
+    if not (List.mem a w.wide_words) then
+      emit w "let w%d = %s in\n" a (load m ~o:"v" ~k:a ~bytes:8 ~endian:T.Big);
+    [ a ]
+  in
+  match f.store with
+  | Int { width = 32; signed = false; endian = T.Big } when p.var = "v" ->
+      if at + 8 <= size && lo <= at then word at
+      else if at + 4 <= size && lo <= at - 4 then word (at - 4)
+      else []
+  | _ -> []
+
 let accessor ppf ~target ~t ~ends (r : record) member =
   let m = mode target in
   let run ~absent ~bad ~target:tg ~finish =
@@ -715,18 +734,7 @@ let accessor ppf ~target ~t ~ends (r : record) member =
                there: a shift, and no mask. *)
             let at = p.at + f.offset in
             let m = result_mode target in
-            (* The word is the one a test may have loaded at that offset, of
-               the same type on either target. *)
-            let words =
-              match f.store with
-              | Int { width = 32; signed = false; endian = T.Big }
-                when p.var = "v" && at + 8 <= size && lo <= at ->
-                  if not (List.mem at w.wide_words) then
-                    emit w "let w%d = %s in\n" at
-                      (load m ~o:"v" ~k:at ~bytes:8 ~endian:T.Big);
-                  [ at ]
-              | _ -> []
-            in
+            let words = result_words w m f ~at ~size ~lo p in
             emit w "%s" (value m ~size ~lo ~o:p.var ~words ~k:p.at f))
       |> pp_function ppf ~target ~with_len:false ~name ~ret:" : int"
   | Present { name; presence } ->

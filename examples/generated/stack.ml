@@ -1023,7 +1023,8 @@ module Stack_ipv4 = struct
 
   let[@inline always] dst (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    Int32.to_int (Wire_runtime.Unchecked.i32be buf (v + 16)) land mask32
+    let w12 = Wire_runtime.Unchecked.i64be buf (v + 12) in
+    Int64.to_int w12 land mask32
 
   let[@inline always] tcp (b : 'b Wire_runtime.Buf.t)
       (len : 'b Wire_runtime.Buf.length) (v : 'b view) : 'b Stack_tcp.check =
