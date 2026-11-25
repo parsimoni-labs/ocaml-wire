@@ -938,3 +938,22 @@ let mli ppf ~target t =
   List.iter (pp_member_val ~target ~t ppf t.root) t.root.members
 
 let of_codec c = v (Gen.to_struct c)
+
+(* {1 The plan} *)
+
+let pp_member ppf = function
+  | Scalar { name; field } -> Fmt.pf ppf "%s (at %d)" name field.offset
+  | Present { name; _ } -> Fmt.pf ppf "%s (presence)" name
+  | Sub { name; sub; presence } ->
+      Fmt.pf ppf "%s : %s%s" name sub.codec_name
+        (if Option.is_some presence then " (optional)" else "")
+
+let pp_record ppf r =
+  Fmt.pf ppf "@[<v 2>%s (%s):@,%a@]"
+    (Option.value ~default:"root" r.module_name)
+    r.codec_name
+    Fmt.(list ~sep:cut pp_member)
+    r.members
+
+let pp ppf t =
+  Fmt.pf ppf "@[<v>%a@]" Fmt.(list ~sep:cut pp_record) (t.records @ [ t.root ])

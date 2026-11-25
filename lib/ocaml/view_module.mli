@@ -29,6 +29,10 @@ type t = { root : record; records : record list }
 (** The views of a codec: its root, and every record it holds, each once, those
     a record holds before it. *)
 
+val pp : t Fmt.t
+(** [pp] prints the plan of the views: each record, the records it holds first,
+    with the accessor of each of its members. *)
+
 val module_of_codec : string -> string
 (** [module_of_codec name] is the module of the records of the codec [name]:
     [CapturedIPv4] is [Captured_ipv4]. *)
