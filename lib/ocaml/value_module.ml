@@ -262,7 +262,14 @@ let pp_bindings ppf (r : V.record) =
           | _ -> Fmt.pf ppf "let %s = 0 in@\n" f.id))
     (fields_of r.plan.nodes)
 
-type enc = { t : V.t; r : V.record; write : bool; fresh : unit -> string }
+type enc = {
+  t : V.t;
+  r : V.record;
+  fresh : unit -> string;
+  defs : Buffer.t;
+      (** The functions an optional field of the record is cut into. *)
+  name : string;
+}
 
 let refuse_if cond what = Fmt.str "refuse_if (%s) %S" cond what
 
@@ -298,7 +305,8 @@ let pp_word ppf ~p (o, base) bits =
         (Emitter.endian_suffix e) p o v
 
 let pp_prefix ppf e env ~p fields n =
-  if e.write then begin
+  begin
+    Fmt.pf ppf "if write then begin@\n";
     let words = Hashtbl.create 4 in
     List.iter
       (fun (f : field) ->
@@ -336,7 +344,8 @@ let pp_prefix ppf e env ~p fields n =
                 Fmt.pf ppf "Bytes.fill buf (%s + %d) %d '\\000';@\n" p f.offset
                   k))
       fields;
-    Hashtbl.iter (fun k bits -> pp_word ppf ~p k (List.rev bits)) words
+    Hashtbl.iter (fun k bits -> pp_word ppf ~p k (List.rev bits)) words;
+    Fmt.pf ppf "end;@\n"
   end;
   Fmt.str "(%s + %d)" p n
 
@@ -360,9 +369,28 @@ let pp_span ppf e env ~p node size =
         (refuse_if
            (Fmt.str "%s <> %s" (bytes_length slice x) n)
            "a field of bytes does not have its size");
-      if e.write then Fmt.pf ppf "%s@\n" (blit slice x ~at:p ~n)
-  | None -> if e.write then Fmt.pf ppf "Bytes.fill buf %s %s '\\000';@\n" p n);
+      Fmt.pf ppf "if write then %s@\n" (blit slice x ~at:p ~n)
+  | None -> Fmt.pf ppf "if write then Bytes.fill buf %s %s '\\000';@\n" p n);
   Fmt.str "(%s + %s)" p n
+
+(* An optional field of the record's own is a function of its own, which
+   binds the values it reads again, so each function of the encoder stays
+   small. Its name has a prime, which no accessor's has. *)
+let cut e ~p gate =
+  let f = Fmt.str "%s'%s" e.name (e.fresh ()) in
+  let b = Buffer.create 256 in
+  let bppf = Format.formatter_of_buffer b in
+  pp_bindings bppf e.r;
+  Fmt.pf bppf "%s@\n" gate;
+  Format.pp_print_flush bppf ();
+  let body = Scan_module.without_dead_bindings (Buffer.contents b) in
+  let param x = if Record_module.uses body x then x else "_" ^ x in
+  Fmt.pf
+    (Format.formatter_of_buffer e.defs)
+    "let %s ~%s (r : t) %s %s =@\n%s@\n@\n%!" f
+    (if Record_module.uses body "write" then "write" else "write:_")
+    (param "buf") p body;
+  Fmt.str "(%s ~write r buf %s)" f p
 
 let rec pp_nodes ppf e env ~p nodes =
   List.fold_left
@@ -387,8 +415,7 @@ and pp_node ppf e env ~p node =
       match
         Option.bind s.path (function [ l ] -> env_value env l | _ -> None)
       with
-      | Some x when e.write -> Fmt.str "(%s.encode_at %s buf %s)" m x p
-      | Some x -> Fmt.str "(%s + %s.size %s)" p m x
+      | Some x -> Fmt.str "(%s.encode_at ~write %s buf %s)" m x p
       | None -> invalid_arg "Value_module: a record of no field")
   | Span size -> pp_span ppf e env ~p node size
   | Gate (cond, presence, _, body) -> pp_gate e env ~p cond presence body
@@ -401,8 +428,8 @@ and pp_node ppf e env ~p node =
         (refuse_if
            (Fmt.str "%s %s %s + %s" q (if at_most then ">" else "<>") p n)
            "a field does not fill its region");
-      if e.write then
-        Fmt.pf ppf "Bytes.fill buf %s (%s + %s - %s) '\\000';@\n" q p n q;
+      Fmt.pf ppf "if write then Bytes.fill buf %s (%s + %s - %s) '\\000';@\n" q
+        p n q;
       Fmt.str "(%s + %s)" p n
 
 (* An optional field: its value must be present exactly where its condition
@@ -420,16 +447,19 @@ and pp_gate e env ~p cond presence body =
       let x = Option.get (env_value env l) in
       let inner = e.fresh () in
       let code, q = walk ((l, inner) :: env) in
-      Fmt.str
-        "(match %s with@\n| Some %s ->@\n%s;@\n%s%s@\n| None ->@\n%s;@\n%s)" x
-        (if Record_module.uses code inner then inner else "_")
-        (refuse_if
-           ("not " ^ text e.r cond)
-           (l ^ " is absent where its condition holds"))
-        code q
-        (refuse_if (text e.r cond)
-           (l ^ " is present where its condition fails"))
-        p
+      let gate =
+        Fmt.str
+          "(match %s with@\n| Some %s ->@\n%s;@\n%s%s@\n| None ->@\n%s;@\n%s)" x
+          (if Record_module.uses code inner then inner else "_")
+          (refuse_if
+             ("not " ^ text e.r cond)
+             (l ^ " is absent where its condition holds"))
+          code q
+          (refuse_if (text e.r cond)
+             (l ^ " is present where its condition fails"))
+          p
+      in
+      if x = "r." ^ l then cut e ~p gate else gate
   | _ ->
       let code, q = walk env in
       Fmt.str "(if %s then (%s%s) else %s)" (text e.r cond) code q p
@@ -443,23 +473,25 @@ let counter () =
 let env_of (r : V.record) =
   List.map (fun (l, _) -> (l, "r." ^ l)) (named r.struct_)
 
+(* [encode_at ~write r buf p] walks [r] from [p] and answers where it ends,
+   writing it with [write]: [size r] is the same walk with no write, so the
+   two cannot disagree on where a field goes. *)
 let pp_encode ppf t (r : V.record) =
-  let walk ~write =
-    let b = Buffer.create 1024 in
-    let ppf = Format.formatter_of_buffer b in
-    pp_bindings ppf r;
-    let e = { t; r; write; fresh = counter () } in
-    let q = pp_nodes ppf e (env_of r) ~p:"p" r.plan.nodes in
-    Fmt.pf ppf "%s@\n" q;
-    Format.pp_print_flush ppf ();
-    Scan_module.without_dead_bindings (Buffer.contents b)
-  in
-  let r_param body =
-    if Record_module.uses body "r" then "(r : t)" else "(_ : t)"
-  in
-  let enc = walk ~write:true and size = walk ~write:false in
-  Fmt.pf ppf "let encode_at %s buf p =@\n%s@\n@\n" (r_param enc) enc;
-  Fmt.pf ppf "let size %s =@\nlet p = 0 in@\n%s@\n@\n" (r_param size) size
+  let b = Buffer.create 1024 in
+  let bppf = Format.formatter_of_buffer b in
+  pp_bindings bppf r;
+  let defs = Buffer.create 256 in
+  let e = { t; r; fresh = counter (); defs; name = "encode_at" } in
+  let q = pp_nodes bppf e (env_of r) ~p:"p" r.plan.nodes in
+  Fmt.pf bppf "%s@\n" q;
+  Format.pp_print_flush bppf ();
+  let body = Scan_module.without_dead_bindings (Buffer.contents b) in
+  let param x = if Record_module.uses body x then x else "_" ^ x in
+  Fmt.pf ppf "%slet encode_at ~%s %s %s p =@\n%s@\n@\n" (Buffer.contents defs)
+    (if Record_module.uses body "write" then "write" else "write:_")
+    (if Record_module.uses body "r" then "(r : t)" else "(_ : t)")
+    (param "buf") body;
+  Fmt.pf ppf "let size r = encode_at ~write:false r Bytes.empty 0@\n@\n"
 
 (* {2 The codec's error}
 
@@ -563,7 +595,12 @@ let read (f : field) ~at =
       Fmt.str "((%s) lsr %d) land %s" word shift (mask width)
   | Bytes _ -> "0"
 
-type err = { er : V.record; et : V.t; efresh : unit -> string }
+type err = {
+  er : V.record;
+  et : V.t;
+  efresh : unit -> string;
+  edefs : Buffer.t;  (** The functions its optional fields are cut into. *)
+}
 
 let name_in e label =
   match field_of e.er.struct_ label with Some (n, _) -> n | None -> ""
@@ -691,6 +728,31 @@ let pp_error_field ?short ppf e ~p ~path (f : field) =
           Fmt.pf ppf "%s;@\n" (fail_check (text e.er c.cond) ~at ~field f c))
         f.checks
 
+(* An optional field is a function of its own, which takes the position it
+   starts at and the values of the fields before it its walk reads, so each
+   function of the walk stays small. Its name has a prime, which no
+   accessor's has. *)
+let cut_error e ~p code =
+  let code = Scan_module.without_dead_bindings code in
+  let f = Fmt.str "error_at'%s" (e.efresh ()) in
+  let binds id = Record_module.uses code ("let " ^ id) in
+  let free =
+    List.filter_map
+      (fun (fd : field) ->
+        if Record_module.uses code fd.id && not (binds fd.id) then Some fd.id
+        else None)
+      (fields_of e.er.plan.nodes)
+  in
+  let param x = if Record_module.uses code x then x else "_" ^ x in
+  Fmt.pf
+    (Format.formatter_of_buffer e.edefs)
+    "let[@inline never] %s %s %s %s %s %s%s =@\n%s@\n@\n%!" f (param "buf")
+    (param "length") (param "p0") (param "path") p
+    (String.concat "" (List.map (fun id -> " " ^ id) free))
+    code;
+  Fmt.str "(%s buf length p0 path %s%s)" f p
+    (String.concat "" (List.map (fun id -> " " ^ id) free))
+
 let rec pp_errors ?short ppf e ~p ~path nodes =
   List.fold_left
     (fun p node ->
@@ -731,8 +793,9 @@ and pp_error ?short ppf e ~p ~path node =
       let bppf = Format.formatter_of_buffer b in
       let q = pp_errors bppf e ~p ~path body in
       Format.pp_print_flush bppf ();
-      Fmt.str "(if %s then (%s%s) else %s)" (text e.er cond) (Buffer.contents b)
-        q p
+      cut_error e ~p
+        (Fmt.str "(if %s then (%s%s) else %s)" (text e.er cond)
+           (Buffer.contents b) q p)
   | Region (size, at_most, body) ->
       pp_error_region ppf e ~p ~path size at_most body
 
@@ -786,7 +849,7 @@ let min_size (r : V.record) =
 let pp_error_at ppf t (r : V.record) =
   let b = Buffer.create 1024 in
   let bppf = Format.formatter_of_buffer b in
-  let e = { er = r; et = t; efresh = counter () } in
+  let e = { er = r; et = t; efresh = counter (); edefs = Buffer.create 256 } in
   let q = pp_errors bppf e ~p:"p0" ~path:"path" r.plan.nodes in
   Format.pp_print_flush bppf ();
   let pass =
@@ -801,6 +864,7 @@ let pp_error_at ppf t (r : V.record) =
     (if Record_module.uses pass "all" then "all" else "all:_")
     (param "buf") (param "length") (param "p0") (param "path") pass;
   let body = Scan_module.without_dead_bindings (Buffer.contents b ^ q) in
+  Fmt.pf ppf "%s" (Buffer.contents e.edefs);
   Fmt.pf ppf
     "let[@inline never] error_at %s length p0 path =@\n\
      check_pass ~all:%b buf length p0 path;@\n\
@@ -866,7 +930,7 @@ let ml_root ppf t (r : V.record) =
      @\n\
      let encode (r : t) buf off =@\n\
      if off < 0 then %s.negative_offset off;@\n\
-     let stop = encode_at r buf off in@\n\
+     let stop = encode_at ~write:true r buf off in@\n\
      match Wire_runtime.Buf.v buf with@\n\
      | Wire_runtime.Buf.Any b ->@\n\
      if not (ok (check b (Wire_runtime.Buf.length b) ~off ~len:(stop - off))) \

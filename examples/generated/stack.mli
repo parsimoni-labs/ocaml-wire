@@ -192,6 +192,11 @@ module Stack_tcp : sig
   val urgent : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [urgent b v] is the field [urgent] of the record [v]. *)
 
+  val options : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
+  (** [options b v] is the field [options] of the record [v], a slice of [b],
+      with no byte copied. If bytes of [b] written since the check move it out
+      of [b], raises [Wire_runtime.Errors.Parse_error]. *)
+
   val set_src_port :
     'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
   (** [set_src_port b v x] writes [x] in place as the field {!val-src_port}
@@ -251,6 +256,29 @@ module Stack_tcp : sig
   (** [set_urgent b v x] writes [x] in place as the field {!val-urgent} reads in
       the record [v]. It checks none of the record's constraints: check the
       record again after a batch of writes. *)
+
+  type t = {
+    src_port : Wire_runtime.UInt16.t;
+    dst_port : Wire_runtime.UInt16.t;
+    seq : Wire_runtime.UInt32.t;
+    ack : Wire_runtime.UInt32.t;
+    data_offset : int;
+    reserved : int;
+    flags : int;
+    window : Wire_runtime.UInt16.t;
+    checksum : Wire_runtime.UInt16.t;
+    urgent : Wire_runtime.UInt16.t;
+    options : Bytesrw.Bytes.Slice.t;
+  }
+  (** The type for the records of [StackTCP]: an optional field is an option, a
+      field of bytes a slice of the buffer it was decoded from or a string, a
+      record a field holds its module's. *)
+
+  val pp : Format.formatter -> t -> unit
+  (** [pp ppf r] prints an unspecified representation of [r] on [ppf]. *)
+
+  val size : t -> int
+  (** [size r] is the number of bytes {!val-encode} writes for [r]. *)
 end
 
 (** The views of the records of [StackUDP]. *)
@@ -283,6 +311,11 @@ module Stack_udp : sig
   val checksum : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [checksum b v] is the field [checksum] of the record [v]. *)
 
+  val payload : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
+  (** [payload b v] is the field [payload] of the record [v], a slice of [b],
+      with no byte copied. If bytes of [b] written since the check move it out
+      of [b], raises [Wire_runtime.Errors.Parse_error]. *)
+
   val set_src_port :
     'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
   (** [set_src_port b v x] writes [x] in place as the field {!val-src_port}
@@ -306,6 +339,23 @@ module Stack_udp : sig
   (** [set_checksum b v x] writes [x] in place as the field {!val-checksum}
       reads in the record [v]. It checks none of the record's constraints: check
       the record again after a batch of writes. *)
+
+  type t = {
+    src_port : Wire_runtime.UInt16.t;
+    dst_port : Wire_runtime.UInt16.t;
+    length : Wire_runtime.UInt16.t;
+    checksum : Wire_runtime.UInt16.t;
+    payload : Bytesrw.Bytes.Slice.t;
+  }
+  (** The type for the records of [StackUDP]: an optional field is an option, a
+      field of bytes a slice of the buffer it was decoded from or a string, a
+      record a field holds its module's. *)
+
+  val pp : Format.formatter -> t -> unit
+  (** [pp ppf r] prints an unspecified representation of [r] on [ppf]. *)
+
+  val size : t -> int
+  (** [size r] is the number of bytes {!val-encode} writes for [r]. *)
 end
 
 (** The views of the records of [StackIPv4]. *)
@@ -365,6 +415,11 @@ module Stack_ipv4 : sig
   val dst : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t
   (** [dst b v] is the field [dst] of the record [v]. *)
 
+  val options : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
+  (** [options b v] is the field [options] of the record [v], a slice of [b],
+      with no byte copied. If bytes of [b] written since the check move it out
+      of [b], raises [Wire_runtime.Errors.Parse_error]. *)
+
   val tcp :
     'b Wire_runtime.Buf.t ->
     'b Wire_runtime.Buf.length ->
@@ -390,6 +445,11 @@ module Stack_ipv4 : sig
   val opaque_present : 'b Wire_runtime.Buf.t -> 'b view -> bool
   (** [opaque_present b v] is [true] iff the optional field it names is present
       in the record [v]. If bytes of [b] written since the check move it out of
+      [b], raises [Wire_runtime.Errors.Parse_error]. *)
+
+  val opaque : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
+  (** [opaque b v] is the field [opaque] of the record [v], a slice of [b], with
+      no byte copied. If bytes of [b] written since the check move it out of
       [b], raises [Wire_runtime.Errors.Parse_error]. *)
 
   val set_version : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
@@ -468,6 +528,35 @@ module Stack_ipv4 : sig
   (** [set_dst b v x] writes [x] in place as the field {!val-dst} reads in the
       record [v]. It checks none of the record's constraints: check the record
       again after a batch of writes. *)
+
+  type t = {
+    version : int;
+    ihl : int;
+    dscp : int;
+    ecn : int;
+    total_length : Wire_runtime.UInt16.t;
+    identification : Wire_runtime.UInt16.t;
+    flags : int;
+    fragment_offset : int;
+    ttl : Wire_runtime.UInt8.t;
+    protocol : Wire_runtime.UInt8.t;
+    checksum : Wire_runtime.UInt16.t;
+    src : Wire_runtime.UInt32.t;
+    dst : Wire_runtime.UInt32.t;
+    options : Bytesrw.Bytes.Slice.t;
+    tcp : Stack_tcp.t option;
+    udp : Stack_udp.t option;
+    opaque : Bytesrw.Bytes.Slice.t option;
+  }
+  (** The type for the records of [StackIPv4]: an optional field is an option, a
+      field of bytes a slice of the buffer it was decoded from or a string, a
+      record a field holds its module's. *)
+
+  val pp : Format.formatter -> t -> unit
+  (** [pp ppf r] prints an unspecified representation of [r] on [ppf]. *)
+
+  val size : t -> int
+  (** [size r] is the number of bytes {!val-encode} writes for [r]. *)
 end
 
 type 'b view = private int
@@ -495,6 +584,16 @@ val get : 'b check -> 'b view
 (** [get c] is the record of the check [c]. Raises [Invalid_argument] if [ok c]
     is [false]: test {!ok} first, a refused record is input, not misuse. *)
 
+val dst : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
+(** [dst b v] is the field [dst] of the record [v], a slice of [b], with no byte
+    copied. If bytes of [b] written since the check move it out of [b], raises
+    [Wire_runtime.Errors.Parse_error]. *)
+
+val src : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
+(** [src b v] is the field [src] of the record [v], a slice of [b], with no byte
+    copied. If bytes of [b] written since the check move it out of [b], raises
+    [Wire_runtime.Errors.Parse_error]. *)
+
 val ether_type : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
 (** [ether_type b v] is the field [ether_type] of the record [v]. *)
 
@@ -514,3 +613,50 @@ val set_ether_type :
 (** [set_ether_type b v x] writes [x] in place as the field {!val-ether_type}
     reads in the record [v]. It checks none of the record's constraints: check
     the record again after a batch of writes. *)
+
+type t = {
+  dst : Bytesrw.Bytes.Slice.t;
+  src : Bytesrw.Bytes.Slice.t;
+  ether_type : Wire_runtime.UInt16.t;
+  ipv4 : Stack_ipv4.t option;
+}
+(** The type for the records of [EthernetStack]: an optional field is an option,
+    a field of bytes a slice of the buffer it was decoded from or a string, a
+    record a field holds its module's. *)
+
+val pp : Format.formatter -> t -> unit
+(** [pp ppf r] prints an unspecified representation of [r] on [ppf]. *)
+
+val size : t -> int
+(** [size r] is the number of bytes {!val-encode} writes for [r]. *)
+
+val min_size : int
+(** [min_size] is the fewest bytes a record takes, [14]. *)
+
+val decode : bytes -> int -> (t, Wire_runtime.Errors.parse_error) result
+(** [decode buf off] is the record at [off] in [buf], checked to the end of
+    [buf] as {!val-check} checks it, or the codec's error. Raises
+    [Invalid_argument] if [off] is negative. *)
+
+val decode_exn : bytes -> int -> t
+(** [decode_exn buf off] is like {!val-decode} but raises
+    [Wire_runtime.Errors.Parse_error]. *)
+
+val is_valid : bytes -> int -> bool
+(** [is_valid buf off] is [true] iff the record at [off] in [buf] passes its
+    checks. It never raises. *)
+
+val validate : bytes -> int -> (unit, Wire_runtime.Errors.parse_error) result
+(** [validate buf off] is [Ok ()] if the record at [off] in [buf] passes its
+    checks and the codec's error otherwise. Raises [Invalid_argument] if [off]
+    is negative. *)
+
+val validate_exn : bytes -> int -> unit
+(** [validate_exn buf off] is like {!val-validate} but raises
+    [Wire_runtime.Errors.Parse_error]. *)
+
+val encode : t -> bytes -> int -> unit
+(** [encode r buf off] writes [r] at [off] in [buf]. Raises [Invalid_argument]
+    if [r] does not fit, or if its values break a size, a presence or a check of
+    the record, as the codec's encoder does; the bytes it wrote are then scrap.
+*)

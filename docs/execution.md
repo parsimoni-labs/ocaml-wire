@@ -213,10 +213,13 @@ word, with no check of the record's constraints, as `Codec.set` makes none.
 A codec the walk covers whose record is not one of named scalars at
 constant offsets has its values written beside the views (`Value_module`):
 each record its module holds has a record type and a printer, `of_view`,
-which reads each field through its accessor, `encode_at` and `size`, which
-walk the plan from the values and refuse a record whose values break a size,
-a presence or a check, and the codec's own adds `decode`, `validate` and
-`encode`. `decode` is the check, then `of_view`; where the check fails,
+which reads each field through its accessor, and `encode_at ~write`, which
+walks the plan from the values, writing them with `write`, and refuses a
+record whose values break a size, a presence or a check; `size` is the same
+walk with no write. The codec's own adds `decode`, `validate` and `encode`.
+Each optional field of a record is a function of its own in `encode_at` and
+in the walk that finds the error, named with a prime that no accessor's
+name has, so each function stays small. `decode` is the check, then `of_view`; where the check fails,
 `error_at` walks the plan as the codec walks the record and answers the
 codec's error, field path and offset included: the checks of the fields at
 constant offsets of the record decoded (through optional fields and records
