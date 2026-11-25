@@ -294,8 +294,10 @@ let rec view_outputs ~m ~path (view : Wire_ocaml.view) =
     (String.concat "; " (List.map (view_member ~m ~path) view.members))
 
 and view_member ~m ~path = function
-  | Wire_ocaml.Int { name; output } ->
-      Fmt.str "[ (%S, %s.%s bb v) ]" output path name
+  | Wire_ocaml.Int { name; output; carrier } ->
+      Fmt.str "[ (%S, %s (%s.%s bb v)) ]" output
+        (match carrier with Some m -> m ^ ".to_int" | None -> "Fun.id")
+        path name
   | Bool { name; output } ->
       Fmt.str "[ (%S, Bool.to_int (%s.%s bb v)) ]" output path name
   | Record { name; presence; view } ->

@@ -55,9 +55,9 @@ let test_fixed () =
             [
               G_checked.version b v;
               G_checked.ihl b v;
-              G_checked.length b v;
-              G_checked.ttl b v;
-              G_checked.proto b v;
+              UInt16.to_int (G_checked.length b v);
+              UInt8.to_int (G_checked.ttl b v);
+              UInt8.to_int (G_checked.proto b v);
             ]
           and view =
             [

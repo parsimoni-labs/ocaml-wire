@@ -60,6 +60,11 @@ let root_names =
 
 let sub_names = [ "ok"; "get"; "end_at" ]
 
+(* The helpers the module binds at its top level, which an accessor of that
+   name would shadow for the code after it. *)
+let helper_names =
+  [ "cast"; "codec_name"; "no_error"; "mask32"; "uint32_eq"; "sint32_eq" ]
+
 (* The modules the walks define on OxCaml, and those of a fixed record's
    members. *)
 let reserved_modules =
@@ -163,7 +168,8 @@ let escape reserved = function
 let record_of ~reserved ~id ~codec_name ~module_name ~fixed_size s =
   let plan, subs = plan_apart s in
   let reserved =
-    if module_name = None then reserved @ root_names else sub_names
+    helper_names
+    @ if module_name = None then reserved @ root_names else sub_names
   in
   let members = List.map (escape reserved) (members_of subs plan.nodes) in
   {
@@ -741,6 +747,28 @@ let result_words w m (f : field) ~at ~size ~lo p =
       else []
   | _ -> []
 
+(* The type of a field's value, as the codec decodes it, and the proof that
+   its values are [int]s: [Wire_runtime.UInt16.t] for a 16-bit integer, [int]
+   for a bitfield. A 32-bit integer is an [int] where the module loads, which
+   it refuses where ints have 32 bits or fewer; the header binds the proof. *)
+let carrier (f : field) =
+  match f.store with
+  | Int { width = (8 | 16) as w; signed; _ } ->
+      let m = Fmt.str "Wire_runtime.%sInt%d" (if signed then "S" else "U") w in
+      Some (m, m ^ ".int_eq")
+  | Int { width = 32; signed; _ } ->
+      Some
+        ( (if signed then "Wire_runtime.SInt32" else "Wire_runtime.UInt32"),
+          if signed then "sint32_eq" else "uint32_eq" )
+  | Int _ | Bits _ | Bytes _ -> None
+
+let carrier_type f =
+  match carrier f with Some (m, _) -> m ^ ".t" | None -> "int"
+
+(* [x] in the carrier of [f]: the same [int], typed. *)
+let typed f x =
+  match carrier f with Some (_, eq) -> Fmt.str "(cast %s %s)" eq x | None -> x
+
 let accessor ppf ~target ~t ~ends (r : record) member =
   let m = mode target in
   let run ~absent ~bad ~target:tg ~finish =
@@ -750,8 +778,9 @@ let accessor ppf ~target ~t ~ends (r : record) member =
   in
   match member with
   | Scalar { name; field = f } ->
-      run ~absent:"0" ~bad:bad_raise ~target:(Field f.id) ~finish:(fun w _ p ->
-          if Sset.mem f.id w.bound then emit w "%s" (to_int w f.id)
+      run ~absent:(typed f "0") ~bad:bad_raise ~target:(Field f.id)
+        ~finish:(fun w _ p ->
+          if Sset.mem f.id w.bound then emit w "%s" (typed f (to_int w f.id))
           else
             let size, lo =
               room w ~bad:bad_raise p (f.offset + width_bytes f.store)
@@ -762,8 +791,9 @@ let accessor ppf ~target ~t ~ends (r : record) member =
             let at = p.at + f.offset in
             let m = result_mode target in
             let words = result_words w m f ~at ~size ~lo p in
-            emit w "%s" (value m ~size ~lo ~o:p.var ~words ~k:p.at f))
-      |> pp_function ppf ~target ~with_len:false ~name ~ret:" : int"
+            emit w "%s" (typed f (value m ~size ~lo ~o:p.var ~words ~k:p.at f)))
+      |> pp_function ppf ~target ~with_len:false ~name
+           ~ret:(" : " ^ carrier_type f)
   | Present { name; presence } ->
       run ~absent:"false" ~bad:bad_raise ~target:(Gate presence.id)
         ~finish:(fun w _ _ -> emit w "true")
@@ -908,7 +938,7 @@ let pp_member_val ~target ~t ppf (r : record) = function
   | Scalar { name; field = f } ->
       let gated = chain (Field f.id) r.plan.nodes <> [] in
       pp_val ~target ppf name
-        (String.concat " -> " [ named target; "'b view"; "int" ])
+        (String.concat " -> " [ named target; "'b view"; carrier_type f ])
         (Fmt.str "[%s b v] is the field [%s] of the record [v]%s.%s" name name
            (if gated then ", [0] when it is absent" else "")
            (if direct r f then "" else moved))

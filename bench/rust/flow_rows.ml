@@ -161,42 +161,50 @@ let check_ipv4 b len ip =
     let t = S.Captured_ipv4.tcp b len ip in
     if S.Stack_tcp.ok t then
       let t = S.Stack_tcp.get t in
-      (S.Stack_tcp.src_port b t lsl 16) lor S.Stack_tcp.dst_port b t
+      (UInt16.to_int (S.Stack_tcp.src_port b t) lsl 16)
+      lor UInt16.to_int (S.Stack_tcp.dst_port b t)
     else
       let u = S.Captured_ipv4.udp b len ip in
       if S.Stack_udp_header.ok u then
         let u = S.Stack_udp_header.get u in
-        (S.Stack_udp_header.src_port b u lsl 16)
-        lor S.Stack_udp_header.dst_port b u
+        (UInt16.to_int (S.Stack_udp_header.src_port b u) lsl 16)
+        lor UInt16.to_int (S.Stack_udp_header.dst_port b u)
       else 0
   in
-  Flow_table.add4 ~src:(S.Captured_ipv4.src b ip)
-    ~dst:(S.Captured_ipv4.dst b ip)
-    ~proto:(S.Captured_ipv4.protocol b ip)
+  Flow_table.add4
+    ~src:(UInt32.to_int (S.Captured_ipv4.src b ip))
+    ~dst:(UInt32.to_int (S.Captured_ipv4.dst b ip))
+    ~proto:(UInt8.to_int (S.Captured_ipv4.protocol b ip))
     ~ports
-    ~bytes:(S.Captured_ipv4.total_length b ip)
+    ~bytes:(UInt16.to_int (S.Captured_ipv4.total_length b ip))
 
 let check_ipv6 b len ip =
   let ports =
     let t = S.Stack_ipv6.tcp b len ip in
     if S.Stack_tcp.ok t then
       let t = S.Stack_tcp.get t in
-      (S.Stack_tcp.src_port b t lsl 16) lor S.Stack_tcp.dst_port b t
+      (UInt16.to_int (S.Stack_tcp.src_port b t) lsl 16)
+      lor UInt16.to_int (S.Stack_tcp.dst_port b t)
     else
       let u = S.Stack_ipv6.udp b len ip in
       if S.Stack_udp_header.ok u then
         let u = S.Stack_udp_header.get u in
-        (S.Stack_udp_header.src_port b u lsl 16)
-        lor S.Stack_udp_header.dst_port b u
+        (UInt16.to_int (S.Stack_udp_header.src_port b u) lsl 16)
+        lor UInt16.to_int (S.Stack_udp_header.dst_port b u)
       else 0
   in
-  Flow_table.add6 ~s0:(S.Stack_ipv6.src0 b ip) ~s1:(S.Stack_ipv6.src1 b ip)
-    ~s2:(S.Stack_ipv6.src2 b ip) ~s3:(S.Stack_ipv6.src3 b ip)
-    ~d0:(S.Stack_ipv6.dst0 b ip) ~d1:(S.Stack_ipv6.dst1 b ip)
-    ~d2:(S.Stack_ipv6.dst2 b ip) ~d3:(S.Stack_ipv6.dst3 b ip)
-    ~proto:(S.Stack_ipv6.next_header b ip)
+  Flow_table.add6
+    ~s0:(UInt32.to_int (S.Stack_ipv6.src0 b ip))
+    ~s1:(UInt32.to_int (S.Stack_ipv6.src1 b ip))
+    ~s2:(UInt32.to_int (S.Stack_ipv6.src2 b ip))
+    ~s3:(UInt32.to_int (S.Stack_ipv6.src3 b ip))
+    ~d0:(UInt32.to_int (S.Stack_ipv6.dst0 b ip))
+    ~d1:(UInt32.to_int (S.Stack_ipv6.dst1 b ip))
+    ~d2:(UInt32.to_int (S.Stack_ipv6.dst2 b ip))
+    ~d3:(UInt32.to_int (S.Stack_ipv6.dst3 b ip))
+    ~proto:(UInt8.to_int (S.Stack_ipv6.next_header b ip))
     ~ports
-    ~bytes:(40 + S.Stack_ipv6.payload_length b ip)
+    ~bytes:(40 + UInt16.to_int (S.Stack_ipv6.payload_length b ip))
 
 let check_frame b len o caplen =
   let c = S.check b len ~off:o ~len:caplen in

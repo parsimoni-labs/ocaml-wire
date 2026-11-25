@@ -162,16 +162,16 @@ module Stack_tcp : sig
       [ok c] is [false]: test {!ok} first, a refused record is input, not
       misuse. *)
 
-  val src_port : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val src_port : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [src_port b v] is the field [src_port] of the record [v]. *)
 
-  val dst_port : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val dst_port : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [dst_port b v] is the field [dst_port] of the record [v]. *)
 
-  val seq : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val seq : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t
   (** [seq b v] is the field [seq] of the record [v]. *)
 
-  val ack : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val ack : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t
   (** [ack b v] is the field [ack] of the record [v]. *)
 
   val data_offset : 'b Wire_runtime.Buf.t -> 'b view -> int
@@ -183,13 +183,13 @@ module Stack_tcp : sig
   val flags : 'b Wire_runtime.Buf.t -> 'b view -> int
   (** [flags b v] is the field [flags] of the record [v]. *)
 
-  val window : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val window : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [window b v] is the field [window] of the record [v]. *)
 
-  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [checksum b v] is the field [checksum] of the record [v]. *)
 
-  val urgent : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val urgent : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [urgent b v] is the field [urgent] of the record [v]. *)
 end
 
@@ -211,16 +211,16 @@ module Stack_udp : sig
       [ok c] is [false]: test {!ok} first, a refused record is input, not
       misuse. *)
 
-  val src_port : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val src_port : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [src_port b v] is the field [src_port] of the record [v]. *)
 
-  val dst_port : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val dst_port : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [dst_port b v] is the field [dst_port] of the record [v]. *)
 
-  val length : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val length : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [length b v] is the field [length] of the record [v]. *)
 
-  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [checksum b v] is the field [checksum] of the record [v]. *)
 end
 
@@ -254,10 +254,10 @@ module Stack_ipv4 : sig
   val ecn : 'b Wire_runtime.Buf.t -> 'b view -> int
   (** [ecn b v] is the field [ecn] of the record [v]. *)
 
-  val total_length : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val total_length : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [total_length b v] is the field [total_length] of the record [v]. *)
 
-  val identification : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val identification : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [identification b v] is the field [identification] of the record [v]. *)
 
   val flags : 'b Wire_runtime.Buf.t -> 'b view -> int
@@ -266,19 +266,19 @@ module Stack_ipv4 : sig
   val fragment_offset : 'b Wire_runtime.Buf.t -> 'b view -> int
   (** [fragment_offset b v] is the field [fragment_offset] of the record [v]. *)
 
-  val ttl : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val ttl : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt8.t
   (** [ttl b v] is the field [ttl] of the record [v]. *)
 
-  val protocol : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val protocol : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt8.t
   (** [protocol b v] is the field [protocol] of the record [v]. *)
 
-  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val checksum : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
   (** [checksum b v] is the field [checksum] of the record [v]. *)
 
-  val src : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val src : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t
   (** [src b v] is the field [src] of the record [v]. *)
 
-  val dst : 'b Wire_runtime.Buf.t -> 'b view -> int
+  val dst : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt32.t
   (** [dst b v] is the field [dst] of the record [v]. *)
 
   val tcp :
@@ -334,7 +334,7 @@ val get : 'b check -> 'b view
 (** [get c] is the record of the check [c]. Raises [Invalid_argument] if [ok c]
     is [false]: test {!ok} first, a refused record is input, not misuse. *)
 
-val ether_type : 'b Wire_runtime.Buf.t -> 'b view -> int
+val ether_type : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
 (** [ether_type b v] is the field [ether_type] of the record [v]. *)
 
 val ipv4 :

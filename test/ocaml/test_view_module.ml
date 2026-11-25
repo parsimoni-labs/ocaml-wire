@@ -30,7 +30,9 @@ let ports b len ip =
   let t = C.Captured_ipv4.tcp b len ip in
   if C.Stack_tcp.ok t then
     let t = C.Stack_tcp.get t in
-    Some (C.Stack_tcp.src_port b t, C.Stack_tcp.dst_port b t)
+    Some
+      ( UInt16.to_int (C.Stack_tcp.src_port b t),
+        UInt16.to_int (C.Stack_tcp.dst_port b t) )
   else None
 
 let test_views () =
@@ -50,19 +52,21 @@ let test_views () =
       Alcotest.(check int)
         "ether_type"
         (UInt16.to_int p.ether_type)
-        (C.ether_type b v);
+        (UInt16.to_int (C.ether_type b v));
       Alcotest.(check bool) "no ipv6" false (C.Stack_ipv6.ok (C.ipv6 b len v));
       let k = C.ipv4 b len v in
       Alcotest.(check bool) "ipv4" true (C.Captured_ipv4.ok k);
       let i = C.Captured_ipv4.get k in
       Alcotest.(check int)
-        "src" (UInt32.to_int ip.src) (C.Captured_ipv4.src b i);
+        "src" (UInt32.to_int ip.src)
+        (UInt32.to_int (C.Captured_ipv4.src b i));
       Alcotest.(check int)
-        "dst" (UInt32.to_int ip.dst) (C.Captured_ipv4.dst b i);
+        "dst" (UInt32.to_int ip.dst)
+        (UInt32.to_int (C.Captured_ipv4.dst b i));
       Alcotest.(check int)
         "total_length"
         (UInt16.to_int ip.total_length)
-        (C.Captured_ipv4.total_length b i);
+        (UInt16.to_int (C.Captured_ipv4.total_length b i));
       Alcotest.(check (option (pair int int)))
         "ports"
         (Some (UInt16.to_int tcp.src_port, UInt16.to_int tcp.dst_port))
@@ -121,7 +125,8 @@ let test_views_rewritten () =
           Alcotest.(check bool) (name ^ ": udp") true (C.Stack_udp_header.ok u);
           Alcotest.(check int)
             (name ^ ": udp src_port") 1234
-            (C.Stack_udp_header.src_port b (C.Stack_udp_header.get u)));
+            (UInt16.to_int
+               (C.Stack_udp_header.src_port b (C.Stack_udp_header.get u))));
     };
   after "ipv6"
     (fun f ->
@@ -154,13 +159,15 @@ let test_views_moved_field () =
       Alcotest.(check bool) "accepted" true (S_sized.ok c);
       let v = S_sized.get c in
       Alcotest.(check bool) "body" true (S_sized.body_present b v);
-      Alcotest.(check int) "tail" 7 (S_sized.tail b v);
+      Alcotest.(check int) "tail" 7 (UInt8.to_int (S_sized.tail b v));
       Bytes.set_int32_be buf 0 0x0001_0000l;
       Alcotest.(check bool) "no body" false (S_sized.body_present b v);
-      Alcotest.(check int) "tail without the body" 0 (S_sized.tail b v);
+      Alcotest.(check int)
+        "tail without the body" 0
+        (UInt8.to_int (S_sized.tail b v));
       Bytes.set_int32_be buf 0 0x0010_0000l;
       match S_sized.tail b v with
-      | n -> Alcotest.failf "a tail past the buffer read %d" n
+      | n -> Alcotest.failf "a tail past the buffer read %d" (UInt8.to_int n)
       | exception Parse_error { kind = Unexpected_eof _; _ } -> ())
 
 let suite =

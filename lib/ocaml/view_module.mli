@@ -37,6 +37,10 @@ val module_of_codec : string -> string
 (** [module_of_codec name] is the module of the records of the codec [name]:
     [CapturedIPv4] is [Captured_ipv4]. *)
 
+val carrier : Planner.field -> (string * string) option
+(** [carrier f] is the module of the type of [f]'s value and the proof that its
+    values are [int]s, or [None] when that type is [int]. *)
+
 val root_names : string list
 (** [root_names] is the values the module of every codec defines at its top
     level. *)

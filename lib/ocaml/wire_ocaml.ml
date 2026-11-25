@@ -63,7 +63,7 @@ let scanner_mli ?target ?fields ?step ~codec c =
 type view = { module_name : string option; members : view_member list }
 
 and view_member =
-  | Int of { name : string; output : string }
+  | Int of { name : string; output : string; carrier : string option }
   | Bool of { name : string; output : string }
   | Record of { name : string; presence : string option; view : view }
 
@@ -80,7 +80,12 @@ let scanner_views c =
           (function
             | View_module.Scalar { name; field } ->
                 let o = Option.get field.output in
-                Int { name; output = global prefix o.name }
+                Int
+                  {
+                    name;
+                    output = global prefix o.name;
+                    carrier = Option.map fst (View_module.carrier field);
+                  }
             | Present { name; presence } ->
                 Bool { name; output = global prefix presence.name }
             | Sub { name; sub; presence } ->

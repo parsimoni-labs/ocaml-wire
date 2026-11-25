@@ -297,9 +297,10 @@ val scanner_bridge_mli :
     in the buffer [b] of length [length] named by [Wire_runtime.Buf.v], and
     answers a ['b check]; [ok] tests it and [get] makes it a ['b view], an [int]
     that only the accessors of [b] take. Each named integer field of the record
-    is an accessor named after it, [name b v], returning its [int] (0 when it is
-    absent), each optional field that holds no record a presence
-    [name_present b v], and each field that holds a record an accessor
+    is an accessor named after it, [name b v], returning its value as the codec
+    decodes it, a [Wire_runtime.UInt16.t] for a 16-bit integer and an [int] for
+    a bitfield (0 when it is absent), each optional field that holds no record a
+    presence [name_present b v], and each field that holds a record an accessor
     [name b len v] returning a check of that record's module, which passes iff
     the record is present and its fixed bytes lie in [b]. Each codec a field
     holds has one module, named after it ([CapturedIPv4] is [Captured_ipv4]),
@@ -317,7 +318,9 @@ type view = { module_name : string option; members : view_member list }
 
 (** An accessor and the output of {!scanner_fields} it reads. *)
 and view_member =
-  | Int of { name : string; output : string }  (** An integer field. *)
+  | Int of { name : string; output : string; carrier : string option }
+      (** An integer field, and the module of its accessor's type when that is
+          not [int]: ["Wire_runtime.UInt16"] for a 16-bit integer. *)
   | Bool of { name : string; output : string }
       (** The presence of an optional field that holds no record. *)
   | Record of { name : string; presence : string option; view : view }

@@ -200,10 +200,10 @@ let body ?decide t =
   (record ^ walk, views, views_mask32)
 
 let ml ?decide t =
-  let code, views, views_mask32 = body ?decide t in
+  let code, views, _ = body ?decide t in
   let all = code ^ views in
-  (* An accessor named after a helper does not define it. *)
-  let uses name = uses code name || (name = "mask32" && views_mask32) in
+  (* No accessor takes a helper's name. *)
+  let uses name = uses all name in
   text (fun ppf ->
       pp_header ppf ~codec:t.codec ~name:t.name ~digest:t.digest ~uses;
       (* On OxCaml a 32-bit or 64-bit value is held unboxed. *)
@@ -214,6 +214,18 @@ let ml ?decide t =
         [ "Int32_u"; "Int64_u" ];
       Fmt.pf ppf "@\n";
       pp_wide ppf ~codec:t.codec ~wide:(wide t) ~uses;
+      (* A 32-bit integer is an [int] where the module loads. *)
+      List.iter
+        (fun (name, m) ->
+          if uses name then
+            Fmt.pf ppf
+              "let %s : (Wire_runtime.%s.t, int) Type.eq =@\n\
+              \  match Wire_runtime.%s.int_eq with@\n\
+              \  | Some eq -> eq@\n\
+              \  | None -> invalid_arg \"%s: no 32-bit int\"@\n\
+               @\n"
+              name m m t.name)
+        [ ("uint32_eq", "UInt32"); ("sint32_eq", "SInt32") ];
       Fmt.pf ppf "%s" all)
 
 (* {1 The interface} *)
