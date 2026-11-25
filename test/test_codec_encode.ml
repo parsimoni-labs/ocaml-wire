@@ -1073,6 +1073,79 @@ let test_fixed_encode_allocates_nothing () =
       if words >= float n then
         Alcotest.failf "%d encodes allocated %.0f words" n words
 
+(* A region sized by an earlier field of the record: encoding the decoded value
+   writes back the bytes, and [size_of_value] is what decode consumed. The size
+   comes from the record, not from a parameter, so neither needs an [env]. *)
+let region_roundtrip label codec input =
+  let v = decode_ok (Codec.decode codec (Bytes.of_string input) 0) in
+  Alcotest.(check int)
+    (label ^ ": size_of_value")
+    (String.length input)
+    (Codec.size_of_value codec v);
+  let out = Bytes.make (String.length input) '\xff' in
+  Codec.encode codec v out 0;
+  Alcotest.(check string) (label ^ ": encode") input (Bytes.to_string out)
+
+let region_pair =
+  Codec.v "RegionPair"
+    (fun a b -> (a, b))
+    Codec.[ Field.v "a" uint8 $ fst; Field.v "b" uint8 $ snd ]
+
+let f_rn = Field.v "n" uint8
+
+let region_codec name field =
+  Codec.v name
+    (fun n r t -> (n, r, t))
+    Codec.
+      [
+        (f_rn $ fun (n, _, _) -> n);
+        (field $ fun (_, r, _) -> r);
+        (Field.v "t" uint8 $ fun (_, _, t) -> t);
+      ]
+
+let region name typ = region_codec name (Field.v "r" typ)
+
+let test_field_sized_region () =
+  let pair = codec region_pair in
+  region_roundtrip "nested"
+    (region "Nested" (nested ~size:(Field.ref f_rn) pair))
+    "\002\x0a\x0b\x0c";
+  region_roundtrip "nested over an expression"
+    (region "NestedExpr" (nested ~size:Expr.(Field.ref f_rn - int 1) pair))
+    "\003\x0a\x0b\x0c";
+  region_roundtrip "nested scalar"
+    (region "NestedScalar" (nested ~size:(Field.ref f_rn) uint16be))
+    "\002\x12\x34\x0c";
+  region_roundtrip "nested_at_most"
+    (region "AtMost" (nested_at_most ~size:(Field.ref f_rn) pair))
+    "\004\x0a\x0b\x00\x00\x0c";
+  let gated =
+    region_codec "Gated"
+      (Field.optional "o"
+         ~present:Expr.(Field.ref f_rn <> int 0)
+         (nested_at_most ~size:(Field.ref f_rn) pair))
+  in
+  region_roundtrip "optional, present" gated "\004\x0a\x0b\x00\x00\x0c";
+  region_roundtrip "optional, absent" gated "\000\x0c";
+  let outer =
+    Codec.v "Outer"
+      (fun x i -> (x, i))
+      Codec.
+        [
+          Field.v "x" uint8 $ fst;
+          Field.v "i"
+            (codec (region "Inner" (nested ~size:(Field.ref f_rn) pair)))
+          $ snd;
+        ]
+  in
+  region_roundtrip "inside a sub-codec" outer "\x07\002\x0a\x0b\x0c";
+  region_roundtrip "zeroterm_at_most"
+    (region "Zeroterm" (zeroterm_at_most ~size:(Field.ref f_rn)))
+    "\003ab\000\x0c";
+  region_roundtrip "uint"
+    (region "UintVar" (uint_var ~endian:Big (Field.ref f_rn)))
+    "\003\x01\x02\x03\x0c"
+
 let suite =
   ( "codec_encode",
     [
@@ -1150,4 +1223,6 @@ let suite =
       Alcotest.test_case "uint: 1-byte like uint8" `Quick test_uint_1byte;
       Alcotest.test_case "uint: 5-byte LE roundtrip" `Quick test_uint_5byte_le;
       Alcotest.test_case "uint_var: dynamic size" `Quick test_uint_var_dynamic;
+      Alcotest.test_case "field-sized region: roundtrip" `Quick
+        test_field_sized_region;
     ] )
