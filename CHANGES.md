@@ -2,36 +2,6 @@
 
 ### Breaking
 
-- The module `Wire_ocaml.scanner` writes has no output record: `type t` with
-  `ok`, its `decode` and `pp`, and on OxCaml `type unboxed`,
-  `decode_unboxed` and `box`, are removed. Read the outputs with `fold buf
-  off len ~invalid:(fun () -> None) ~valid:(fun ~f1 ~f2 -> Some (f1, f2))`,
-  or check the record with `check` and read each field with its accessor.
-  `decode` is now the codec's value (@samoht)
-
-- A view's accessor returns the field's value as the codec decodes it, a
-  `Wire_runtime.UInt16.t` for a 16-bit integer, a `UInt32.t` for a 32-bit
-  one, an `int` for a bitfield, where it returned an `int`: convert with
-  `UInt16.to_int` and the like. `Wire_ocaml.view_member`'s `Int` carries
-  the carrier's module, and a field of bytes is a new `Bytes` member
-  (@samoht)
-
-- An accessor named as a value the generated module defines (`size`,
-  `check`, `decode`, ...) takes a trailing `_`, `size_`, where the
-  generator refused it, and an output named `ok` is no longer refused: call
-  `size_` (@samoht)
-
-- A fixed record's `write`, `write_int`, `write_at` and `write_int_at` take
-  each field under its label, `write buf off ~version ~ihl ...`: add the
-  labels, in any order (@samoht)
-
-- `Wire_ocaml.ml` writes the module of a codec of any shape the walk
-  covers, where it refused one of variable size, and `Wire_ocaml.scanner`
-  writes a fixed record's members too: code that relied on `ml` refusing a
-  shape checks `Wire.Codec.wire_size_opt` itself. A module whose codec holds
-  a byte slice links `bytesrw`: add it to the `libraries` that compile the
-  module (@samoht)
-
 - `Wire.Codec.validate` returns a `result`, as `decode` does. Call
   `validate_exn` to keep raising (#492, @samoht)
 
@@ -130,25 +100,16 @@
   optional codecs and sized regions. `make prove` checks it for the codecs
   `proofs/fstar-gen` lists (@samoht)
 
-- One module per codec, whatever its shape: `Wire_ocaml.ml` and
-  `Wire_ocaml.scanner` write the same module, with the folds, `check` and an
-  accessor per field for every codec the walk covers, and a fixed record's
-  members where the codec is one. A codec of any other shape gets a record
-  type per record it holds, `decode`, `validate`, `encode` and `size`,
-  answering the codec's error, field path and offset included; an integer
-  or a bitfield at a constant offset gets `set_<field>`, written in place on
-  a view (@samoht)
-
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an
   earlier integer field (#414, #450, @samoht)
 
 - `Wire.Codec.View`: check a record once, without raising, then read its
-  fields with no further bounds check, as the `View` of a generated module
-  does, with the same names (`check`, `ok`, `get`). The buffer and the codec
-  are named by types, so a view is read only in the buffer it was checked in
-  and only by the fields of its codec. Reading the Ethernet, IPv4 and TCP
-  headers of a packet this way takes about 530 instructions and allocates
-  nothing (#435, #496, #525, @samoht)
+  fields with no further bounds check, as a generated module does, with the
+  same names (`check`, `ok`, `get`). The buffer and the codec are named by
+  types, so a view is read only in the buffer it was checked in and only by
+  the fields of its codec. Reading the Ethernet, IPv4 and TCP headers of a
+  packet this way takes about 530 instructions and allocates nothing (#435,
+  #496, #525, @samoht)
 
 - `Wire.Codec.View.enter`: reach a sub-record of a checked view, such as the
   IPv4 packet of an Ethernet frame, without checking it again. Make the
@@ -168,11 +129,17 @@
   record of at most 7 bytes as one `int`, then take each field from it (#496,
   @samoht)
 
-- `wire.ocaml` (`Wire_ocaml.ml`): generate a plain OCaml module from a
-  fixed-size codec, with `decode`, `validate`, `encode`, `write`, `pp` and a
-  getter per field. It needs only the new `wire.runtime` and builds on OCaml,
-  js_of_ocaml, wasm_of_ocaml and OxCaml (#436, #459, #488, #492, #501, #503,
-  #504, @samoht)
+- `wire.ocaml` (`Wire_ocaml.ml`, `Wire_ocaml.scanner`): generate one OCaml
+  module per codec, of any shape the walk covers, that links only the new
+  `wire.runtime` and builds on OCaml, js_of_ocaml, wasm_of_ocaml and OxCaml
+  (#436, #459, #488, #492, #501, #503, #504, #562, @samoht)
+
+- A generated module decodes, validates and encodes its codec with the
+  codec's errors; a fixed record adds `pp`, a getter per field and `write buf
+  off ~field ...`, with each field under its label (#436, #492, #562, @samoht)
+
+- `Wire_ocaml.ml ~buffer:`Bigstring` generates the module on a bigarray of
+  bytes instead of `bytes`: generate one module per buffer kind (#562, @samoht)
 
 - `Wire_ocaml.Plan.decisions`: the decisions a scanner takes beyond its
   plan, as data: which bounds it tests and which it leaves to a later
@@ -186,9 +153,13 @@
   packets of a capture, with the accumulator kept in a register. On OxCaml
   the accumulator may be an unboxed tuple (#539, @samoht)
 
-- A generated module has a `View`: check a record once, then read its fields
-  with no bounds check and no allocation. A bitfield or byte array is checked
-  when it is built, as a `Value.<field>` (#442, #492, #493, @samoht)
+- A generated module checks a record once (`check`, `ok`, `get`), then reads
+  a field with its accessor or writes one with `set_<field>`, with no bounds
+  check and no allocation (#442, #492, #493, #562, @samoht)
+
+- A generated module of constant size checks its record at an offset,
+  `check b length off`, as `Wire.Codec.View.check` does; any other shape
+  checks a window, `check b length ~off ~len` (#562, @samoht)
 
 - `Wire_ocaml.mli`, `scanner_mli` and `bridge_mli`: generate a documented
   interface for each generated module. `examples/generated` has two modules
