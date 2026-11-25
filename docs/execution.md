@@ -128,7 +128,10 @@ shape in scope. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
 their consumer by name, with no closure call. They allocate nothing per
-frame where the compiler inlines the consumer and the runtime's loads.
+frame where the compiler inlines the consumer and the runtime's loads. OCaml
+without flambda inlines the consumer's `valid` only when its body defines no
+function, a partial application or a primitive used as a value included;
+otherwise each call boxes the `int64` values it is passed.
 
 Their loop over frames is unrolled four times, then walks the remaining
 frames one by one. OCaml polls for signals and other domains once per loop

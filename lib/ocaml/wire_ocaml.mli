@@ -215,11 +215,14 @@ val scanner :
     differ in length. OCaml without flambda never inlines a function passed as
     an argument, so only these call the consumer with no closure call. They pass
     each integer to [valid] as an [int64], on both targets. Nothing is boxed and
-    no frame allocates where the compiler inlines [valid]. On OCaml the
-    runtime's loads must be inlined too, which dune's dev profile prevents by
-    compiling [wire.runtime] with [-opaque]. Where ints have 32 bits or fewer,
-    an [int64] is a heap value and they run slower than [fold]. The module must
-    be in scope where the generated code is compiled.
+    no frame allocates where the compiler inlines [valid]. OCaml without flambda
+    inlines [valid] only when its body defines no function, a partial
+    application or a primitive used as a value included (docs/execution.md,
+    Generated code). On OCaml the runtime's loads must be inlined too, which
+    dune's dev profile prevents by compiling [wire.runtime] with [-opaque].
+    Where ints have 32 bits or fewer, an [int64] is a heap value and they run
+    slower than [fold]. The module must be in scope where the generated code is
+    compiled.
 
     On OxCaml the outputs are [int64_u] inside, and [fold_unboxed],
     [fold_frames_unboxed] (whose accumulator has layout [bits64]) and
