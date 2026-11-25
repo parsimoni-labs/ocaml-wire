@@ -126,8 +126,8 @@
 - `wire.ocaml` (`Wire_ocaml.ml`): generate a plain OCaml module from a
   fixed-size codec, with `decode`, `validate`, `encode`, `write`, `pp` and a
   getter per field. It needs only the new `wire.runtime` and builds on OCaml,
-  js_of_ocaml, wasm_of_ocaml and OxCaml (#436, #459, #492, #501, #503, #504,
-  @samoht)
+  js_of_ocaml, wasm_of_ocaml and OxCaml (#436, #459, #488, #492, #501, #503,
+  #504, @samoht)
 
 - `Wire_ocaml.Plan.decisions`: the decisions a scanner takes beyond its
   plan, as data: which bounds it tests and which it leaves to a later
@@ -161,11 +161,11 @@
   `fold_frames` walks four frames per loop iteration. `fold_step`
   and `fold_frames_step` pass integer outputs to the consumer as `int64`,
   which OCaml keeps in registers. `Wire_ocaml.Plan` gives its plan to other
-  backends (#447, #473, #501, #504, #509, #510, #517, #520, @samoht)
+  backends (#447, #473, #498, #501, #504, #509, #510, #517, #520, @samoht)
 
 - On OxCaml, generated code takes buffers allocated on the stack, is
   `portable`, allocates nothing (`[@zero_alloc]` is checked) and keeps 32-bit
-  and 64-bit values unboxed (#492, #493, #501, #504, @samoht)
+  and 64-bit values unboxed (#492, #493, #498, #501, #504, @samoht)
 
 - `Wire_ocaml.ml ~simd:true`, on OxCaml for arm64 or amd64: read and write
   four records of four one-byte fields at a time, with NEON or SSE (#493,
