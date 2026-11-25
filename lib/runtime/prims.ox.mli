@@ -70,3 +70,10 @@ module Bigstring : sig
   external safe_get32 : t -> int -> int32 @@ portable = "%caml_bigstring_get32"
   (** [safe_get32] is {!val-get32}, raising [Invalid_argument] out of bounds. *)
 end
+
+(** The identity on [int], which a carrier that is an [int] includes as its
+    [unsafe_of_int]: a primitive, so the compiler keeps no binding for it. *)
+module Identity : sig
+  external unsafe_of_int : int -> int @@ portable = "%identity"
+  (** [unsafe_of_int n] is [n]. *)
+end

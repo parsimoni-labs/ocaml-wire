@@ -25,3 +25,7 @@ module Bigstring = struct
   external safe_get16 : t -> int -> int = "%caml_bigstring_get16"
   external safe_get32 : t -> int -> int32 = "%caml_bigstring_get32"
 end
+
+module Identity = struct
+  external unsafe_of_int : int -> int = "%identity"
+end

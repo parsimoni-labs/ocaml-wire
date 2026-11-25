@@ -826,7 +826,10 @@ let result_words w m (f : field) ~at ~size ~lo p =
 (* The type of a field's value, as the codec decodes it, and the proof that
    its values are [int]s: [Wire_runtime.UInt16.t] for a 16-bit integer, [int]
    for a bitfield. A 32-bit integer is an [int] where the module loads, which
-   it refuses where ints have 32 bits or fewer; the header binds the proof. *)
+   it refuses where ints have 32 bits or fewer; the header binds the proof.
+   A narrower integer is typed by its carrier's [unsafe_of_int], a primitive,
+   which OCaml without flambda compiles to nothing where a call to [cast]
+   would leave a binding that tags the value. *)
 let carrier (f : field) =
   match f.store with
   | Int { width = (8 | 16) as w; signed; _ } ->
@@ -843,7 +846,10 @@ let carrier_type f =
 
 (* [x] in the carrier of [f]: the same [int], typed. *)
 let typed f x =
-  match carrier f with Some (_, eq) -> Fmt.str "(cast %s %s)" eq x | None -> x
+  match (carrier f, f.store) with
+  | Some (_, eq), Int { width = 32; _ } -> Fmt.str "(cast %s %s)" eq x
+  | Some (m, _), _ -> Fmt.str "(%s.unsafe_of_int %s)" m x
+  | None, _ -> x
 
 (* The accessor of a field of bytes: a slice of the buffer, or a copy. A
    slice keeps the buffer, and a copy reads it with the stdlib's [Bytes], so
