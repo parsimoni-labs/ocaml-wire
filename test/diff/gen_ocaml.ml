@@ -237,25 +237,19 @@ let pp_ops_views ppf fields =
     Fmt.(list ~sep:(any "; ") pp_access)
     reads
 
-(* The module generated from [c] under its interface, its bridge, which
-   checks it against the codec, and the module of [c] on a bigarray. *)
+(* The module generated from [c] under its interface, and the module of [c]
+   on a bigarray. *)
 let pp_case ppf (label, c, (src, intf)) =
   let fields = fields c in
   Fmt.pf ppf
     "let %s : Fuzz_gen.packed -> Diff_ocaml.t = function@\n\
-    \  | Fuzz_gen.Pack g ->@\n\
-    \  let codec = Fuzz_gen.codec g in@\n\
+    \  | Fuzz_gen.Pack _ ->@\n\
     \  let module M : sig@\n\
      %s@\n\
     \  end = struct@\n\
      %s@\n\
     \  end in@\n\
     \  let module MB : sig@\n\
-     %s@\n\
-    \  end = struct@\n\
-     %s@\n\
-    \  end in@\n\
-    \  let module B : sig@\n\
      %s@\n\
     \  end = struct@\n\
      %s@\n\
@@ -270,8 +264,6 @@ let pp_case ppf (label, c, (src, intf)) =
     label intf src
     (Wire_ocaml.to_mli (Wire_ocaml.v ~target ~buffer:`Bigstring c))
     (Wire_ocaml.to_ml (Wire_ocaml.v ~target ~buffer:`Bigstring c))
-    (Wire_ocaml.bridge_mli ~codec:"codec" ~core:"M" c)
-    (Wire_ocaml.bridge ~codec:"codec" ~core:"M" c)
     pp_ops_views fields
     (pp_ops ~m:"MB" ~buf:"Diff_ocaml.big b" ~brand:"Wire_runtime.Buf.Bigstring"
        ~back:(fun ppf w ->
@@ -517,6 +509,37 @@ let pp_scanners ppf ~codec c modules =
         (Wire_ocaml.to_mli ~visitors (scanner t selected))
         (Wire_ocaml.to_ml ~visitors (scanner t selected)))
     modules;
+  (* The interpreted twin of the module of every output, under the same
+     visitor, whose backends are those of the generated module: swapping one
+     for the other gives the same answers. *)
+  let twin =
+    match
+      ( Wire_ocaml.to_mli ~twin:true ~visitors (scanner target None),
+        Wire_ocaml.to_ml ~twin:true ~visitors (scanner target None) )
+    with
+    | twin -> Some twin
+    | exception Invalid_argument _ -> None
+  in
+  Option.iter
+    (fun (intf, src) ->
+      Fmt.pf ppf
+        "let module Step = %a in@\n\
+         let module Twin : sig@\n\
+         %s@\n\
+         end = struct@\n\
+         %s@\n\
+         end in@\n\
+         let twin (type r) (codec : r Wire.Codec.t) : Diff_ocaml.scan_ops list \
+         =@\n\
+         let module M = Twin.Make (struct type nonrec r = r let codec = codec \
+         end) in@\n\
+         [@\n"
+        pp_step fields intf src;
+      pp_backend ppf ~m:"M" ~unboxed:false fields;
+      pp_step_backend ppf ~m:"M" fields;
+      pp_view_backend ppf ~m:"M" ~codec:("(", "codec") c;
+      Fmt.pf ppf "]@\nin@\n")
+    twin;
   Fmt.pf ppf "[@\n";
   List.iter
     (fun (m, t, selected) ->
@@ -529,7 +552,9 @@ let pp_scanners ppf ~codec c modules =
         pp_values_backend ppf ~m ~codec c
       end)
     modules;
-  Fmt.pf ppf "]@\n"
+  Fmt.pf ppf "]@\n";
+  if Option.is_some twin then
+    Fmt.pf ppf "@@ %s twin %s)@\n" (fst codec) (snd codec)
 
 let every_other c =
   List.filteri (fun i _ -> i mod 2 = 0) (Wire_ocaml.outputs c) |> List.map fst

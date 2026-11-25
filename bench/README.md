@@ -84,7 +84,7 @@ relay does to produce it:
 | Row | Implementation | API |
 |---|---|---|
 | `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.read_word` per header, then `Codec.of_word` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
-| `wire.ocaml` | generated OCaml, `Wire_ocaml.ml` of `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field; for CLCW `view_lockout_word` once, then `<field>_of_word` per field. Writing: `write_at`, or `write_int_at` where a field's value is computed, per header |
+| `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field; for CLCW `view_lockout_word` once, then `<field>_of_word` per field. Writing: `write_at`, or `write_int_at` where a field's value is computed, per header |
 | `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
 | `ccsds_primary_header` 0.15 (routing) | hand-written | `PrimaryHeader::from_slice`, then `control.apid()` and `length.length_field()`. Writing: the setters of its three words, then their bytes |
@@ -356,7 +356,7 @@ Every row does the work `SlicedPacket::from_ethernet` does on each packet:
 
 The stack rows use `examples/net/packet_stack.ml`: one codec owns Ethernet
 and protocol dispatch, fragment handling, options, and the nested payload
-bounds. `Wire_ocaml.scanner` and `Wire_rust.scanner` write those rules out
+bounds. The folds of `Wire_ocaml` and `Wire_rust.scanner` write those rules out
 from one plan as a fused scanner; the harness only folds returned scalar
 fields into the checksum. Its
 `off`/`len` arguments bound each frame even inside a larger corpus buffer.
@@ -1022,18 +1022,17 @@ The NEON lanes rows, on OxCaml, count 10.4 / 1.0 (clcw) and 7.1 / 1.2
 
 ### One loop, interpreted or generated (`make bench-flow-swap`)
 
-Code written against `Wire.S` runs on the interpreted codec,
-`Wire.Codec.Make`, or on the `Global` module `Wire_ocaml` generates from the
-same codec. `bench/rust/flow_swap.ml` is one flow counter written so: its
-header modules are those of `swap.ml`, and its one line
-`module H = Swap.Generated` picks them; the dune rules build the interpreted
-rows from the same file with that line replaced by
-`module H = Swap.Interpreted`, and the parse-only rows by making `Flow_sum`
-the sink. Each side is one line per header, `module Ipv4 =
-G_ipv4_wire.Global` or `module Ipv4 = G_ipv4_wire.Interpreted`: the bridge
-`Wire_ocaml.bridge ~record` writes next to each generated module gives both,
-with the same named handles (`ihl`, `src_addr`, ...) reading the types the
-codec declares.
+Code written against a generated module's views runs on its interpreted
+twin, the functor Wire_ocaml writes beside it over the codec value.
+`bench/rust/flow_swap.ml` is one flow counter written so: its header modules
+are those of `swap.ml`, and its one line `module H = Swap.Generated` picks
+them; the dune rules build the interpreted rows from the same file with that
+line replaced by `module H = Swap.Interpreted`, and the parse-only rows by
+making `Flow_sum` the sink. Each side is one line per header,
+`module Ipv4 = G_ipv4` or
+`module Ipv4 = G_ipv4_codec.Make (struct type r = Headers.ipv4 let codec = Headers.ipv4 end)`,
+with the same accessors (`ihl`, `src_addr`, ...) reading the types the codec
+declares.
 
 Per frame the loop checks Ethernet, IPv4 (its options skipped by IHL) and
 TCP or UDP with the checks of the classifier above, and hands the IPv4

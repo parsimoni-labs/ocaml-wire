@@ -50,3 +50,10 @@ val mli : t -> string
 
 val views : t -> View_module.t option
 (** [views t] is the views of [t], if its walk covers its codec. *)
+
+val twin_ml : t -> string
+(** [twin_ml t] is the source of the interpreted twin of [ml t]: a functor over
+    the codec value that reads it as [t] reads its bytes. *)
+
+val twin_mli : t -> string
+(** [twin_mli t] is the interface of [twin_ml t]. *)

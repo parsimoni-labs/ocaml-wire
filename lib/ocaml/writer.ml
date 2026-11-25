@@ -274,10 +274,9 @@ let body ?decide t =
                 ~target:t.target ~make ~plan ~size),
           match accessor with
           | None -> ""
-          | Some accessor ->
-              text (fun ppf ->
-                  pp_after_views ppf ~target:t.target ~make ~accessor ~plan
-                    ~size) ))
+          | Some _ ->
+              text (fun ppf -> pp_after_views ppf ~target:t.target ~plan ~size)
+        ))
   in
   let walk, views, views_mask32 =
     match t.walk with
@@ -384,3 +383,20 @@ let mli t =
         t.walk)
 
 let views t = Option.map (fun w -> w.views) t.walk
+
+(* {1 The interpreted twin} *)
+
+let twin_ml t =
+  let views, folds =
+    match t.walk with Some w -> (Some w.views, w.folds) | None -> (None, [])
+  in
+  Twin_module.ml ~codec:t.name ~digest:t.digest ~views ~folds
+
+let twin_mli t =
+  let plan, views, folds =
+    match (t.walk, t.record) with
+    | Some w, _ -> (w.plan, Some w.views, w.folds)
+    | None, Some (plan, _) -> (plan, None, [])
+    | None, None -> assert false
+  in
+  Twin_module.mli ~codec:t.name ~plan ~views ~folds

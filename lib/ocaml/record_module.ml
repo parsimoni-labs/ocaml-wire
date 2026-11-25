@@ -1315,153 +1315,6 @@ let pp_decode_result ~src ppf =
      @\n"
     src.buf errors
 
-(* [Field.<field>] names a field as a value, of the type its getter returns, so
-   code written against [Wire.S] reads it the same way from the interpreted
-   codec: [Field.get f] is [Get.<field>] and [Field.view f] [view_<field>]. A
-   field under a map, whose type is the caller's, has none, nor has an
-   anonymous one. *)
-let field_fields fields =
-  List.filter
-    (fun f ->
-      Option.is_none f.map && not (String.starts_with ~prefix:"_" f.label))
-    fields
-
-let pp_field_module ?accessor ~src ppf ~target fields =
-  let fields = field_fields fields in
-  let view_t = if Option.is_some accessor then "view" else "View.t" in
-  let b =
-    match target with
-    | `OxCaml -> Fmt.str "'b %s.t @@ local" src.brand
-    | `OCaml -> Fmt.str "'b %s.t" src.brand
-  in
-  (* A handle is the field's functions, built once: [f.get buf off] of a known
-     handle is a call to a known function, which the compiler inlines where it
-     is written, on OCaml's Closure as on flambda2. *)
-  Fmt.pf ppf
-    "module Field = struct@\n\
-    \  type 'a t = {@\n\
-    \    get : bytes -> int -> 'a;@\n\
-    \    view : 'b. %s -> 'b %s -> 'a;@\n\
-    \  }@\n\
-     @\n"
-    b view_t;
-  (* On OxCaml [Get.<field>] takes its buffer [local], a mode a handle's
-     [get] does not state, so it is eta-expanded there. *)
-  List.iter
-    (fun f ->
-      let get, view =
-        if has_carrier f then
-          let t = schema_type f in
-          ( Fmt.str "(fun buf off -> (Get.%s buf off :> %s))" f.label t,
-            Fmt.str "(fun b v -> (view_%s b v :> %s))" f.label t )
-        else
-          match target with
-          | `OxCaml ->
-              ( Fmt.str "(fun buf off -> Get.%s buf off)" f.label,
-                "view_" ^ f.label )
-          | `OCaml -> ("Get." ^ f.label, "view_" ^ f.label)
-      in
-      let view = match accessor with None -> view | Some acc -> acc f in
-      Fmt.pf ppf "  let %s : %s t = { get = %s; view = %s }@\n@\n" f.label
-        (schema_type f) get view)
-    fields;
-  Fmt.pf ppf "end@\n@\n"
-
-(* On OxCaml, [Global]'s handles: the module's own, for a buffer on the heap. *)
-let pp_global_handles ppf fields =
-  List.iter
-    (fun f ->
-      Fmt.pf ppf
-        "    let %s : %s t =@\n\
-        \      { get = Field.%s.get; view = (fun b v -> Field.%s.view b v) }@\n\
-         @\n"
-        f.label (schema_type f) f.label f.label)
-    fields
-
-(* [Global] is the module as a [Wire.S], for code that switches between it and
-   [Wire.Codec.Make] by one line. On OCaml it is the module's own functions; on
-   OxCaml, whose functions take their buffers [local], which an interpreted
-   codec cannot, it states them for buffers on the heap. *)
-(* [Global.View] over the module's own check, for a module whose views are
-   its codec's: a fixed record's check has [Wire.Codec.View.check]'s form. *)
-let pp_global_view_of_check ppf =
-  Fmt.pf ppf
-    "  module View = struct@\n\
-    \    type 'b t = 'b view@\n\
-    \    type nonrec 'b check = 'b check@\n\
-     @\n\
-    \    let[@inline] check b len off = check b len off@\n\
-    \    let ok = ok@\n\
-    \    let get = get@\n\
-     @\n\
-    \    let[@inline] at b len off =@\n\
-    \      let c = check b len off in@\n\
-    \      if ok c then get c else fail (b : _ Wire_runtime.Buf.t :> bytes) off@\n\
-    \  end@\n\
-     @\n"
-
-(* [Global]'s values: the module's own on OCaml, eta-expanded on OxCaml,
-   where the module's take their buffers [local]. *)
-let pp_global_values ppf ~target =
-  List.iter
-    (fun (name, args) ->
-      match target with
-      | `OCaml -> Fmt.pf ppf "  let %s = %s@\n" name name
-      | `OxCaml -> Fmt.pf ppf "  let %s %s = %s %s@\n" name args name args)
-    [
-      ("decode", "buf off");
-      ("decode_exn", "buf off");
-      ("encode", "t buf off");
-      ("validate", "buf off");
-      ("validate_exn", "buf off");
-      ("is_valid", "buf off");
-    ];
-  Fmt.pf ppf "@\n"
-
-let pp_global_view ~views ppf ~target =
-  match (views, target) with
-  | true, _ -> pp_global_view_of_check ppf
-  | false, `OCaml -> Fmt.pf ppf "  module View = View@\n"
-  | false, `OxCaml ->
-      Fmt.pf ppf
-        "  module View = struct@\n\
-        \    type 'b t = 'b View.t@\n\
-        \    type 'b check = 'b View.check@\n\
-         @\n\
-        \    let at b len off = View.at b len off@\n\
-        \    let check b len off = View.check b len off@\n\
-        \    let ok = View.ok@\n\
-        \    let get = View.get@\n\
-        \  end@\n\
-         @\n"
-
-let pp_global_field ~views ~src ppf ~target fields =
-  match target with
-  | `OCaml -> Fmt.pf ppf "  module Field = Field@\n"
-  | `OxCaml ->
-      Fmt.pf ppf
-        "  module Field = struct@\n\
-        \    type 'a t = {@\n\
-        \      get : bytes -> int -> 'a;@\n\
-        \      view : 'b. 'b %s.t -> 'b %s -> 'a;@\n\
-        \    }@\n\
-         @\n"
-        src.brand
-        (if views then "view" else "View.t");
-      pp_global_handles ppf fields;
-      Fmt.pf ppf "  end@\n"
-
-let pp_global ?(views = false) ~src ppf ~target fields =
-  Fmt.pf ppf
-    "module Global = struct@\n\
-    \  type nonrec t = t@\n\
-     @\n\
-    \  let min_size = min_size@\n";
-  pp_global_values ppf ~target;
-  pp_global_view ~views ppf ~target;
-  pp_global_field ~views ~src ppf ~target (field_fields fields);
-  Fmt.pf ppf "end@\n@\n"
-
 (* The bits of a 4-byte record a field occupies in a NEON lane, which holds the
    record's bytes in buffer order read as a little-endian word: [(shift,
    width)] when the field sits in one byte, unsigned, with no check, enum or
@@ -1747,22 +1600,15 @@ let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ppf ~target ~make ~plan
     pp_view ~src ppf ~target ~plan ~size
   end;
   if simd then pp_x4 ~src ppf ~plan ~size;
-  (* The field handles and [Global] read [bytes] on the heap. *)
-  let handles = bytes && not views in
-  if handles then pp_field_module ~src ppf ~target fields;
-  if record then pp_encode ~src ppf fields;
-  if handles && record then pp_global ~src ppf ~target fields
+  if record then pp_encode ~src ppf fields
 
 (* The members that read through the module's views, written after them: the
-   reads with no accessor of their own, the field handles and [Global]. *)
-let pp_after_views ppf ~target ~make ~accessor ~plan ~size =
-  let fields = all_fields plan in
+   reads with no accessor of their own. *)
+let pp_after_views ppf ~target ~plan ~size =
   let src =
     match target with `OxCaml -> local_bytes_src | `OCaml -> bytes_src
   in
-  pp_view ~src ~views:true ppf ~target ~plan ~size;
-  pp_field_module ~accessor ~src ppf ~target fields;
-  if Option.is_none make then pp_global ~views:true ~src ppf ~target fields
+  pp_view ~src ~views:true ppf ~target ~plan ~size
 
 let refuse ~codec reason =
   Fmt.invalid_arg "Wire_ocaml: cannot specialise %s: %s" codec reason
@@ -1871,31 +1717,3 @@ let record_plan ~maps c =
   | _ -> fail_unsupported "its size is not fixed"
 
 let ident = label
-
-let pp_bridge ?(maps = []) ~codec ~core ppf c =
-  let fields =
-    match record_plan ~maps c with
-    | plan, _ -> all_fields plan
-    | exception Unsupported reason -> refuse ~codec reason
-  in
-  Fmt.pf ppf
-    "(* Generated by Wire_ocaml from %s. Do not edit. Checks, when it loads, \
-     that %s still has the shape %s was generated from. *)@\n\
-     @\n\
-     let () = Wire.Private.Gen.check %s %s.digest@\n"
-    codec codec core codec core;
-  List.iter
-    (fun f ->
-      Option.iter
-        (fun path ->
-          Fmt.pf ppf "let () = Wire.Private.Gen.check_map %s %S %s@\n" codec
-            f.name path)
-        f.map)
-    fields
-
-let bridge ?maps ~codec ~core c = Fmt.str "%a" (pp_bridge ?maps ~codec ~core) c
-
-let handles ?(maps = []) ~codec c =
-  match record_plan ~maps c with
-  | plan, _ -> field_fields (all_fields plan)
-  | exception Unsupported reason -> refuse ~codec reason

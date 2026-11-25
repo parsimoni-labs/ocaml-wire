@@ -1,20 +1,15 @@
-(* A generated record module, through its [Global] view, and the interpreted
-   codec are both a [Wire.S], on random buffers, on OCaml as on OxCaml. *)
+(* A generated module and its interpreted twin, the functor Wire_ocaml writes
+   beside it over the codec value, answer alike on random buffers, on OCaml
+   as on OxCaml: code written against one runs on the other by changing one
+   line. *)
 
 open Wire
-
-let outcome f =
-  match f () with
-  | s -> "ok " ^ s
-  | exception Parse_error e -> Fmt.str "parse error %a" pp_parse_error e
-  | exception Invalid_argument m -> "invalid " ^ m
 
 let rand = Random.State.make [| 11 |]
 let byte () = Char.chr (Random.State.int rand 256)
 
-(* A buffer around a record, often shaped by [fix] so the record passes its
-   constraints, and an offset that is mostly in range. *)
-let input ~size ~fix =
+(* A buffer around a record and an offset that is mostly in range. *)
+let input ~size =
   let len = Random.State.int rand (size + 6) in
   let buf = Bytes.init len (fun _ -> byte ()) in
   let off =
@@ -23,166 +18,169 @@ let input ~size ~fix =
     | 1 -> len - size + 1 + Random.State.int rand 2
     | _ -> if len >= size then Random.State.int rand (len - size + 1) else 0
   in
-  if Random.State.bool rand && off >= 0 && off + size <= len then fix buf off;
   (buf, off)
 
-(* The bridge's [Global] and [Interpreted] are both a [Wire.S] with the same
-   named handles: code written against them runs on either by changing one
-   line. *)
-module _ : Wire.S = G_ipv4_record_wire.Global
-module _ : Wire.S = G_ipv4_record_wire.Interpreted
-module _ : Wire.S = G_mixed_record_wire.Global
-module _ : Wire.S = G_mixed_record_wire.Interpreted
+module Ipv4_twin = G_ipv4_record_codec.Make (struct
+  type r = Schemas.ipv4
 
-(* The swap: [H] is the only line that changes. *)
-module Frag (H : sig
-  module View : sig
-    type 'b t
-    type 'b check
+  let codec = Schemas.ipv4
+end)
 
-    val check : 'b Buf.t -> 'b Buf.length -> int -> 'b check
-    val ok : 'b check -> bool
-    val get : 'b check -> 'b t
-  end
+module Mixed_twin = G_mixed_record_codec.Make (struct
+  type r = Schemas.mixed
 
-  module Field : sig
-    type 'a t = private {
-      get : bytes -> int -> 'a;
-      view : 'b. 'b Buf.t -> 'b View.t -> 'a;
-    }
+  let codec = Schemas.mixed
+end)
 
-    val frag : UInt16.t t
-  end
-end) =
-struct
+(* The views the swap reads: [H] is the only line that changes. *)
+module type FRAG = sig
+  type 'b view
+  type 'b check
+
+  val check : 'b Buf.t -> 'b Buf.length -> int -> 'b check
+  val ok : 'b check -> bool
+  val get : 'b check -> 'b view
+  val frag : 'b Buf.t -> 'b view -> UInt16.t
+end
+
+module Frag (H : FRAG) = struct
   let read buf off =
     let (Buf.Any b) = Buf.v buf in
-    let c = H.View.check b (Buf.length b) off in
-    if H.View.ok c then
-      Some (UInt16.to_int (H.Field.frag.view b (H.View.get c)))
-    else None
+    let c = H.check b (Buf.length b) off in
+    if H.ok c then Some (UInt16.to_int (H.frag b (H.get c))) else None
 end
-
-(* The same checks through two implementations of [Wire.S]: on random buffers
-   and offsets, each answers what the other does, a record decoded by one
-   encodes to the bytes the other's encodes to, and each field reads alike, by
-   [Field.get] and through a view. *)
-module Same (A : Wire.S) (B : Wire.S with type r = A.r) = struct
-  (* A field of the codec, and how to show its value. *)
-  type pair = Pair : ('v, A.r) Codec.field * ('v -> string) -> pair
-
-  let bytes_of encode decode buf off =
-    let r = decode buf off in
-    let out = Bytes.make A.min_size '\000' in
-    encode r out 0;
-    Bytes.to_string out
-
-  let view_a fa show buf off =
-    let (Buf.Any b) = Buf.v buf in
-    let c = A.View.check b (Buf.length b) off in
-    if A.View.ok c then Some (show (fa.A.Field.view b (A.View.get c))) else None
-
-  let view_b fb show buf off =
-    let (Buf.Any b) = Buf.v buf in
-    let c = B.View.check b (Buf.length b) off in
-    if B.View.ok c then Some (show (fb.B.Field.view b (B.View.get c))) else None
-
-  let run pairs =
-    Alcotest.(check int) "min_size" A.min_size B.min_size;
-    for _ = 1 to 3000 do
-      let buf, off = input ~size:A.min_size ~fix:(fun _ _ -> ()) in
-      let same name a b = Alcotest.(check string) name (a ()) (b ()) in
-      same "is_valid"
-        (fun () -> string_of_bool (A.is_valid buf off))
-        (fun () -> string_of_bool (B.is_valid buf off));
-      let result = function
-        | Ok _ -> "ok"
-        | Error e -> Fmt.str "%a" pp_parse_error e
-      in
-      same "validate_exn"
-        (fun () ->
-          outcome (fun () ->
-              A.validate_exn buf off;
-              ""))
-        (fun () ->
-          outcome (fun () ->
-              B.validate_exn buf off;
-              ""));
-      same "validate"
-        (fun () -> outcome (fun () -> result (A.validate buf off)))
-        (fun () -> outcome (fun () -> result (B.validate buf off)));
-      same "decode"
-        (fun () -> outcome (fun () -> result (A.decode buf off)))
-        (fun () -> outcome (fun () -> result (B.decode buf off)));
-      same "decode then encode"
-        (fun () -> outcome (fun () -> bytes_of A.encode A.decode_exn buf off))
-        (fun () -> outcome (fun () -> bytes_of B.encode B.decode_exn buf off));
-      List.iter
-        (fun (Pair (f, show)) ->
-          let fa = A.field f and fb = B.field f in
-          same "Field.get"
-            (fun () -> outcome (fun () -> show (fa.A.Field.get buf off)))
-            (fun () -> outcome (fun () -> show (fb.B.Field.get buf off)));
-          Alcotest.(check (option string))
-            "Field.view" (view_a fa show buf off) (view_b fb show buf off))
-        pairs
-    done
-end
-
-let u16 v = string_of_int (UInt16.to_int v)
-let u32 v = string_of_int (UInt32.to_int v)
-let i16 v = string_of_int (SInt16.to_int v)
-let i32 v = string_of_int (SInt32.to_int v)
-
-let test_same () =
-  let module T =
-    Same (G_ipv4_record_wire.Global) (G_ipv4_record_wire.Interpreted)
-  in
-  T.run
-    [
-      T.Pair (Schemas.ipv4_frag, u16);
-      T.Pair (Schemas.ipv4_proto, fun v -> string_of_int (UInt8.to_int v));
-      T.Pair (Schemas.ipv4_src, i32);
-      T.Pair (Schemas.ipv4_dst, u32);
-    ];
-  let module T =
-    Same (G_mixed_record_wire.Global) (G_mixed_record_wire.Interpreted)
-  in
-  T.run
-    [
-      T.Pair (Schemas.mixed_b, i16);
-      T.Pair (Schemas.mixed_e, u32);
-      T.Pair (Schemas.mixed_f, i32);
-      T.Pair (Schemas.mixed_h, string_of_int);
-    ]
 
 let test_swap () =
-  let module G = Frag (G_ipv4_record_wire.Global) in
-  let module I = Frag (G_ipv4_record_wire.Interpreted) in
+  let module G = Frag (G_ipv4_record) in
+  let module I = Frag (Ipv4_twin) in
   for _ = 1 to 3000 do
-    let buf, off = input ~size:20 ~fix:(fun _ _ -> ()) in
-    Alcotest.(check (option int)) "Field.frag" (G.read buf off) (I.read buf off)
+    let buf, off = input ~size:20 in
+    Alcotest.(check (option int)) "frag" (G.read buf off) (I.read buf off)
   done
 
-(* A field of the same name, type and record type that is not the codec's
-   has no handle, on either side. *)
-let test_foreign () =
-  let lookalike =
-    Codec.(Field.v "frag" uint16be $ fun (_, _, _, x, _, _, _, _, _, _) -> x)
-  in
-  let refused name f =
-    match f lookalike with
-    | _ -> Alcotest.failf "%s: a lookalike field has a handle" name
-    | exception Invalid_argument _ -> ()
-  in
-  refused "Global" G_ipv4_record_wire.Global.field;
-  refused "Interpreted" G_ipv4_record_wire.Interpreted.field
+(* A negative offset is misuse, which both refuse with [Invalid_argument]. *)
+let result validate buf off =
+  match validate buf off with
+  | Ok () -> "ok"
+  | Error e -> Fmt.str "%a" pp_parse_error e
+  | exception Invalid_argument _ -> "invalid"
+
+(* The same answers from [validate], from the check and from each field read
+   through a view, the generated module's against its twin's. *)
+let same ~size ~validate ~validate' ~views ~views' =
+  for _ = 1 to 3000 do
+    let buf, off = input ~size in
+    Alcotest.(check string)
+      "validate" (result validate buf off) (result validate' buf off);
+    Alcotest.(check (option (list string)))
+      "views" (views buf off) (views' buf off)
+  done
+
+(* The fields a view reads, shown. *)
+module type FIELDS = sig
+  type 'b view
+  type 'b check
+
+  val check : 'b Buf.t -> 'b Buf.length -> int -> 'b check
+  val ok : 'b check -> bool
+  val get : 'b check -> 'b view
+  val fields : 'b Buf.t -> 'b view -> string list
+end
+
+module Views (H : FIELDS) = struct
+  let read buf off =
+    let (Buf.Any b) = Buf.v buf in
+    let c = H.check b (Buf.length b) off in
+    if H.ok c then Some (H.fields b (H.get c)) else None
+end
+
+module Ipv4_fields (H : sig
+  include FRAG
+
+  val proto : 'b Buf.t -> 'b view -> UInt8.t
+  val src : 'b Buf.t -> 'b view -> SInt32.t
+  val dst : 'b Buf.t -> 'b view -> UInt32.t
+end) =
+Views (struct
+  include H
+
+  let fields b v =
+    [
+      Fmt.str "%a" UInt16.pp (H.frag b v);
+      Fmt.str "%a" UInt8.pp (H.proto b v);
+      Fmt.str "%a" SInt32.pp (H.src b v);
+      Fmt.str "%a" UInt32.pp (H.dst b v);
+    ]
+end)
+
+module Mixed_fields (H : sig
+  type 'b view
+  type 'b check
+
+  val check : 'b Buf.t -> 'b Buf.length -> int -> 'b check
+  val ok : 'b check -> bool
+  val get : 'b check -> 'b view
+  val b : 'b Buf.t -> 'b view -> SInt16.t
+  val e : 'b Buf.t -> 'b view -> UInt32.t
+  val f : 'b Buf.t -> 'b view -> SInt32.t
+  val h : 'b Buf.t -> 'b view -> int
+end) =
+Views (struct
+  include H
+
+  let fields buf v =
+    [
+      Fmt.str "%a" SInt16.pp (H.b buf v);
+      Fmt.str "%a" UInt32.pp (H.e buf v);
+      Fmt.str "%a" SInt32.pp (H.f buf v);
+      string_of_int (H.h buf v);
+    ]
+end)
+
+let test_ipv4 () =
+  let module G = Ipv4_fields (G_ipv4_record) in
+  let module I = Ipv4_fields (Ipv4_twin) in
+  Alcotest.(check int) "min_size" G_ipv4_record.min_size Ipv4_twin.min_size;
+  same ~size:20 ~validate:G_ipv4_record.validate ~validate':Ipv4_twin.validate
+    ~views:G.read ~views':I.read
+
+let test_mixed () =
+  let module G = Mixed_fields (G_mixed_record) in
+  let module I = Mixed_fields (Mixed_twin) in
+  same ~size:G_mixed_record.min_size ~validate:G_mixed_record.validate
+    ~validate':Mixed_twin.validate ~views:G.read ~views':I.read
+
+(* A write through a view writes the bytes the twin's writes. *)
+module Set (H : sig
+  include FRAG
+
+  val set_frag : 'b Buf.t -> 'b view -> UInt16.t -> unit
+end) =
+struct
+  let set buf off x =
+    let (Buf.Any b) = Buf.v buf in
+    let c = H.check b (Buf.length b) off in
+    if H.ok c then H.set_frag b (H.get c) x
+end
+
+let test_set () =
+  let module G = Set (G_ipv4_record) in
+  let module I = Set (Ipv4_twin) in
+  for _ = 1 to 1000 do
+    let buf, off = input ~size:20 in
+    let buf' = Bytes.copy buf in
+    let x = UInt16.v (Random.State.int rand 0x10000) in
+    G.set buf off x;
+    I.set buf' off x;
+    Alcotest.(check string)
+      "set_frag" (Bytes.to_string buf) (Bytes.to_string buf')
+  done
 
 let suite =
   ( "same",
     [
-      Alcotest.test_case "generated and interpreted, one signature" `Quick
-        test_same;
-      Alcotest.test_case "one line swaps the named handles" `Quick test_swap;
-      Alcotest.test_case "no handle for a lookalike field" `Quick test_foreign;
+      Alcotest.test_case "one line swaps the module" `Quick test_swap;
+      Alcotest.test_case "IPv4: generated and twin" `Quick test_ipv4;
+      Alcotest.test_case "mixed: generated and twin" `Quick test_mixed;
+      Alcotest.test_case "a write through a view" `Quick test_set;
     ] )

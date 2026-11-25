@@ -70,6 +70,10 @@ type cursor = {
     each field is checked and read once, in order, and a sub-codec hands back
     its value and its end together. Internal use. *)
 
+type _ codec_ref = ..
+(** The codec a sub-codec field holds, which the codec module extends. Internal
+    use. *)
+
 type 'r walk = {
   wvalue : cursor -> 'r;
       (** The record at the cursor's {!field-wpos}, within its {!field-wend}:
@@ -404,6 +408,7 @@ and _ typ =
           (** Whether a decoded value can retain a mutable byte slice. *)
       codec_struct : struct_;
           (** Structural form of the codec, used by the 3D projection. *)
+      codec_ref : 'r codec_ref;  (** The codec itself. *)
     }
       -> 'r typ  (** Embedded sub-codec. *)
   | Optional : { present : bool expr; inner : 'a typ } -> 'a option typ

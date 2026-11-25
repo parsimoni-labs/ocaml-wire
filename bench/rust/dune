@@ -16,7 +16,7 @@
  (libraries headers net wire wire.ocaml wire.rust))
 
 ; The harness around the generated modules: the visitors their folds call by
-; name, the readers over those folds and the bridges of the header modules.
+; name and the readers over those folds.
 
 (rule
  (targets
@@ -26,17 +26,7 @@
   selected_read.ml
   flow_step.ml
   flow_parse.ml
-  flow_read.ml
-  g_eth_wire.ml
-  g_eth_wire.mli
-  g_ipv4_wire.ml
-  g_ipv4_wire.mli
-  g_ipv6_wire.ml
-  g_ipv6_wire.mli
-  g_tcp_wire.ml
-  g_tcp_wire.mli
-  g_udp_wire.ml
-  g_udp_wire.mli)
+  flow_read.ml)
  (action
   (run ./gen.exe --harness %{targets})))
 
@@ -69,27 +59,27 @@
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_eth.ml g_eth.mli)
+ (targets g_eth.ml g_eth.mli g_eth_codec.ml g_eth_codec.mli)
  (action
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_ipv4.ml g_ipv4.mli)
+ (targets g_ipv4.ml g_ipv4.mli g_ipv4_codec.ml g_ipv4_codec.mli)
  (action
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_ipv6.ml g_ipv6.mli)
+ (targets g_ipv6.ml g_ipv6.mli g_ipv6_codec.ml g_ipv6_codec.mli)
  (action
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_tcp.ml g_tcp.mli)
+ (targets g_tcp.ml g_tcp.mli g_tcp_codec.ml g_tcp_codec.mli)
  (action
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_udp.ml g_udp.mli)
+ (targets g_udp.ml g_udp.mli g_udp_codec.ml g_udp_codec.mli)
  (action
   (run ./gen.exe %{targets})))
 
@@ -138,8 +128,8 @@
 (rule
  (copy flow_rows.mli flow_rows_keys.mli))
 
-;; flow_swap.ml over the interpreted header modules, by replacing the one
-;; line that picks them, and both over the sink Flow_sum, as for flow_rows.ml.
+;; flow_swap.ml over the interpreted twins of the header modules, by replacing
+;; the one line that picks them, and both over the sink Flow_sum, as for flow_rows.ml.
 
 (rule
  (with-stdout-to
@@ -213,11 +203,11 @@
   g_ipv6
   g_tcp
   g_udp
-  g_eth_wire
-  g_ipv4_wire
-  g_ipv6_wire
-  g_tcp_wire
-  g_udp_wire)
+  g_eth_codec
+  g_ipv4_codec
+  g_ipv6_codec
+  g_tcp_codec
+  g_udp_codec)
  (libraries
   bench_lib
   bytesrw

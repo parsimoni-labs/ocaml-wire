@@ -361,6 +361,7 @@ let boxed : type a. walk -> path:string -> a Types.typ -> a Types.typ =
       codec_field_readers = Codec.field_readers_ctx c;
       codec_returns_slice = false;
       codec_struct;
+      codec_ref = Codec.embed_ref c;
     }
 
 let box_optional : type a.

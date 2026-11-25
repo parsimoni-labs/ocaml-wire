@@ -1,10 +1,6 @@
 (* Wire: Dependent Data Descriptions for EverParse 3D *)
 
 module Staged = Staged
-
-module type S = Codec.S
-module type Scan = Wire_runtime.Scan.S
-
 module UInt32 = UInt32
 module UInt63 = UInt63
 module Action = Action
@@ -124,6 +120,7 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_returns_slice = struct_returns_slice codec_struct in
   let codec_size_of_value = Codec.size_of_value_ctx c in
   let codec_min_size = Codec.min_wire_size c in
+  let codec_ref = Codec.embed_ref c in
   match Codec.wire_size_info_ctx c with
   | `Fixed n ->
       Codec
@@ -143,6 +140,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_field_readers;
           codec_returns_slice;
           codec_struct;
+          codec_ref;
         }
   | `Variable size_of ->
       Codec
@@ -162,6 +160,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_field_readers;
           codec_returns_slice;
           codec_struct;
+          codec_ref;
         }
 
 type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =

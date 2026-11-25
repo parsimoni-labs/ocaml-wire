@@ -12,60 +12,58 @@
  (targets
   g_ipv4.ml
   g_ipv4.mli
-  g_ipv4_wire.ml
-  g_ipv4_wire.mli
+  g_ipv4_codec.ml
+  g_ipv4_codec.mli
   g_ipv4_record.ml
   g_ipv4_record.mli
-  g_ipv4_record_wire.ml
-  g_ipv4_record_wire.mli
+  g_ipv4_record_codec.ml
+  g_ipv4_record_codec.mli
   g_mixed_record.ml
   g_mixed_record.mli
-  g_mixed_record_wire.ml
-  g_mixed_record_wire.mli
+  g_mixed_record_codec.ml
+  g_mixed_record_codec.mli
   g_checked.ml
   g_checked.mli
-  g_checked_wire.ml
-  g_checked_wire.mli
+  g_checked_codec.ml
+  g_checked_codec.mli
   g_mixed.ml
   g_mixed.mli
-  g_mixed_wire.ml
-  g_mixed_wire.mli
+  g_mixed_codec.ml
+  g_mixed_codec.mli
   g_small.ml
   g_small.mli
-  g_small_wire.ml
-  g_small_wire.mli
+  g_small_codec.ml
+  g_small_codec.mli
   g_eth.ml
   g_eth.mli
-  g_eth_wire.ml
-  g_eth_wire.mli
+  g_eth_codec.ml
+  g_eth_codec.mli
   g_wide.ml
   g_wide.mli
-  g_wide_wire.ml
-  g_wide_wire.mli
+  g_wide_codec.ml
+  g_wide_codec.mli
   g_mapped.ml
   g_mapped.mli
-  g_mapped_wire.ml
-  g_mapped_wire.mli
   g_signed.ml
   g_signed.mli
-  g_signed_wire.ml
-  g_signed_wire.mli
+  g_signed_codec.ml
+  g_signed_codec.mli
   g_packed.ml
   g_packed.mli
-  g_packed_wire.ml
-  g_packed_wire.mli
+  g_packed_codec.ml
+  g_packed_codec.mli
   g_refined.ml
   g_refined.mli
-  g_refined_wire.ml
-  g_refined_wire.mli
+  g_refined_codec.ml
+  g_refined_codec.mli
   g_overflow.ml
   g_overflow.mli
-  g_overflow_wire.ml
-  g_overflow_wire.mli
+  g_overflow_codec.ml
+  g_overflow_codec.mli
   g_lanes.ml
   g_lanes.mli
-  g_lanes_wire.ml
-  g_lanes_wire.mli
+  g_lanes_codec.ml
+  g_lanes_codec.mli
   g_ipv4_big.ml
   g_ipv4_big.mli
   g_checked_big.ml
@@ -123,10 +121,14 @@
  (targets
   s_capture_step.ml
   s_capture_step.mli
-  s_capture_step_wire.ml
-  s_capture_step_wire.mli)
+  s_capture_step_codec.ml
+  s_capture_step_codec.mli)
  (action
-  (run ./gen_scan.exe)))
+  (run
+   %{dep:gen_scan.exe}
+   %{targets}
+   --visitor
+   fold_step=%{dep:scan_step.ml})))
 
 (test
  (name test)
@@ -139,35 +141,34 @@
   test_same
   test_scan
   s_capture_step
-  s_capture_step_wire
+  s_capture_step_codec
   g_ipv4
-  g_ipv4_wire
+  g_ipv4_codec
   g_ipv4_record
-  g_ipv4_record_wire
+  g_ipv4_record_codec
   g_mixed_record
-  g_mixed_record_wire
+  g_mixed_record_codec
   g_checked
-  g_checked_wire
+  g_checked_codec
   g_mixed
-  g_mixed_wire
+  g_mixed_codec
   g_small
-  g_small_wire
+  g_small_codec
   g_eth
-  g_eth_wire
+  g_eth_codec
   g_wide
-  g_wide_wire
+  g_wide_codec
   g_mapped
-  g_mapped_wire
   g_signed
-  g_signed_wire
+  g_signed_codec
   g_packed
-  g_packed_wire
+  g_packed_codec
   g_refined
-  g_refined_wire
+  g_refined_codec
   g_overflow
-  g_overflow_wire
+  g_overflow_codec
   g_lanes
-  g_lanes_wire
+  g_lanes_codec
   g_ipv4_big
   g_checked_big
   g_mixed_big

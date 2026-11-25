@@ -29,27 +29,24 @@ let () =
   let target = if flag "--oxcaml" then `OxCaml else `OCaml in
   let simd = flag "--simd" in
   let base name = Filename.remove_extension name in
-  (* Each module, and the bridge that checks it against its codec. [make] is
-     the constructor [Schemas.<codec>_make] and its type [Schemas.<codec>], the
-     type of the codec's records. *)
+  (* Each module, and its interpreted twin. [make] is the constructor
+     [Schemas.<codec>_make] and its type [Schemas.<codec>], the type of the
+     codec's records. *)
   let g name ?(make = true) ?maps codec c =
     let make =
       if make then Some ("Schemas." ^ codec ^ "_make", "Schemas." ^ codec)
       else None
     in
-    let codec = "Schemas." ^ codec
-    and core = String.capitalize_ascii (base name) in
+    let codec = "Schemas." ^ codec in
     write name (Wire_ocaml.ml ~target ~simd ?make ?maps ~codec c);
     write (name ^ "i") (Wire_ocaml.mli ~target ~simd ?make ?maps ~codec c);
-    (* A module with its own record type has a [Global], which its bridge
-       swaps with [Interpreted]. *)
-    let record = if Option.is_none make then Some codec else None in
-    write
-      (base name ^ "_wire.ml")
-      (Wire_ocaml.bridge ?maps ?record ~codec ~core c);
-    write
-      (base name ^ "_wire.mli")
-      (Wire_ocaml.bridge_mli ?maps ?record ~codec ~core c)
+    (* Its interpreted twin, but for a map, which only a constructor the
+       caller names reads. *)
+    if Option.is_none maps then begin
+      let m = Wire_ocaml.v ~target ~simd c in
+      write (base name ^ "_codec.ml") (Wire_ocaml.to_ml ~twin:true m);
+      write (base name ^ "_codec.mli") (Wire_ocaml.to_mli ~twin:true m)
+    end
   in
   (* The same module on a bigarray, under the same constructor. *)
   let big name codec c =

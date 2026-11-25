@@ -315,6 +315,10 @@ let embed_check_end (t : 'r t) input_end buf off =
 
 let embed_walk (t : 'r t) = (compiled t).walk
 
+type _ Types.codec_ref += Codec_ref : 'r t -> 'r Types.codec_ref
+
+let embed_ref t = Codec_ref t
+
 let wire_size_info_ctx (t : _ t) =
   match (compiled t).wire_size with
   | Fixed n -> `Fixed n
@@ -1695,14 +1699,6 @@ module Testing = struct
         : string list)
 end
 
-module type S = sig
-  include Wire_runtime.Record.S
-
-  type r
-
-  val field : ('a, r) field -> 'a Field.t
-end
-
 type _ field_kind =
   | Int : int field_kind
   | UInt8 : UInt8.t field_kind
@@ -1712,6 +1708,7 @@ type _ field_kind =
   | SInt16 : SInt16.t field_kind
   | SInt32 : SInt32.t field_kind
   | String : string field_kind
+  | Slice : Bytesrw.Bytes.Slice.t field_kind
 
 let rec typ_eq : type a b. a Types.typ -> b field_kind -> (a, b) Type.eq option
     =
@@ -1725,58 +1722,11 @@ let rec typ_eq : type a b. a Types.typ -> b field_kind -> (a, b) Type.eq option
   | Types.Int16 _, SInt16 -> Some Type.Equal
   | Types.Int32 _, SInt32 -> Some Type.Equal
   | Types.Byte_array _, String -> Some Type.Equal
+  | Types.Byte_slice _, Slice -> Some Type.Equal
+  | Types.Single_elem { elem; _ }, k -> typ_eq elem k
   | Types.Where { inner; _ }, k -> typ_eq inner k
   | Types.Enum { base; _ }, k -> typ_eq base k
   | _ -> None
-
-module Make (C : sig
-  type r
-
-  val codec : r t
-end) =
-struct
-  type t = C.r
-  type r = C.r
-
-  let min_size = min_wire_size C.codec
-  let decode buf off = decode C.codec buf off
-  let decode_exn buf off = decode_exn C.codec buf off
-  let encode r buf off = encode C.codec r buf off
-  let validate buf off = validate C.codec buf off
-  let validate_exn buf off = validate_exn C.codec buf off
-
-  (* A negative offset holds no record, as the generated [is_valid] says,
-     where [validate] raises [Invalid_argument]. *)
-  let is_valid buf off = accepts C.codec buf off
-
-  module Checked = View
-
-  let v = Checked.named C.codec
-
-  module View = struct
-    type 'b t = int
-    type 'b check = int
-
-    let check b len off = Checked.check v b len off
-    let ok = Checked.ok
-    let get = Checked.get
-
-    let at b _ off =
-      validate_exn (b : _ Wire_runtime.Buf.t :> bytes) off;
-      off
-  end
-
-  module Field = struct
-    type 'a t = {
-      get : bytes -> int -> 'a;
-      view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
-    }
-  end
-
-  let field f =
-    let read = Staged.unstage (get C.codec f) and r = Checked.field v f in
-    { Field.get = read; view = (fun b p -> Checked.read r b p) }
-end
 
 module Gen = struct
   include Gen_core
@@ -1790,85 +1740,218 @@ module Gen = struct
     | SInt16 : SInt16.t kind
     | SInt32 : SInt32.t kind
     | String : string kind
-
-  let field_name (f : _ field) = f.name
-  let field_eq (f : (_, _) field) k = typ_eq f.typ k
-
-  let field (type a r) (c : r t) name (kind : a field_kind) : (a, r) field =
-    let typ =
-      List.find_map
-        (fun (Types.Field f) ->
-          if f.field_name = Some name then Some (Types.Pack_typ f.field_typ)
-          else None)
-        (to_struct c).fields
-    in
-    match (typ, List.assoc_opt name (compiled c).field_access) with
-    | Some (Types.Pack_typ typ), Some (id, _) -> (
-        match typ_eq typ kind with
-        | Some Type.Equal ->
-            {
-              id;
-              name;
-              typ;
-              constraint_ = None;
-              action = None;
-              doc = None;
-              get =
-                (fun _ ->
-                  Fmt.invalid_arg "%s.%s: a field found by name has no getter"
-                    c.name name);
-            }
-        | None -> Fmt.invalid_arg "%s: field %s has another type" c.name name)
-    | _ -> Fmt.invalid_arg "%s: no field %s" c.name name
+    | Slice : Bytesrw.Bytes.Slice.t kind
 
   module Outputs = Scan_outputs
 
-  type scanner = bytes -> Outputs.t option
+  (* {2 The interpreted twin} *)
 
-  let scanner c =
+  type record = Record : 'r View.named -> record
+
+  let root c = Record (View.named c)
+
+  (* The field [i] of the record [v], as a field the views read. *)
+  let nth (type r) (v : r View.named) i =
+    match List.nth_opt (to_struct v.codec).fields i with
+    | Some (Types.Field { field_name = Some name; field_typ; _ }) ->
+        (name, Types.Pack_typ field_typ)
+    | Some _ | None -> Fmt.invalid_arg "%s: no named field at %d" v.codec.name i
+
+  let record_field (type a r) (c : r t) name (typ : a Types.typ) : (a, r) field
+      =
+    match List.assoc_opt name (compiled c).field_access with
+    | Some (id, _) ->
+        {
+          id;
+          name;
+          typ;
+          constraint_ = None;
+          action = None;
+          doc = None;
+          get =
+            (fun _ ->
+              Fmt.invalid_arg "%s.%s: a field found by place has no getter"
+                c.name name);
+        }
+    | None -> Fmt.invalid_arg "%s: no field %s" c.name name
+
+  let zero : type a. a kind -> a = function
+    | Int -> 0
+    | UInt8 -> UInt8.zero
+    | UInt16 -> UInt16.zero
+    | UInt32 -> UInt32.zero
+    | SInt8 -> SInt8.zero
+    | SInt16 -> SInt16.zero
+    | SInt32 -> SInt32.zero
+    | String -> ""
+    | Slice -> Bytesrw.Bytes.Slice.eod
+
+  let other_type c name =
+    Fmt.invalid_arg "%s: field %s has another type" c.name name
+
+  type 'a reader = { read : 'b. 'b Wire_runtime.Buf.t -> int -> 'a }
+
+  (* An integer output as a value of the kind [k]. *)
+  let of_output : type a. a kind -> int64 -> a =
+   fun k x ->
+    let i = Int64.to_int x in
+    let cast : type t. (t, int) Type.eq -> t = fun Type.Equal -> i in
+    match k with
+    | Int -> i
+    | UInt8 -> cast UInt8.int_eq
+    | UInt16 -> cast UInt16.int_eq
+    | SInt8 -> cast SInt8.int_eq
+    | SInt16 -> cast SInt16.int_eq
+    | UInt32 -> UInt32.of_int i
+    | SInt32 -> SInt32.of_int i
+    | String | Slice -> invalid_arg "Gen: bytes are no output"
+
+  (* A field the views read with no reader of their own, such as an optional
+     field behind a gate the record's bytes decide, is read with the record's
+     outputs, which name it by its label. *)
+  let output (v : _ View.named) name f =
+    let s = to_struct v.codec and label = Names.ocaml_label name in
+    {
+      read =
+        (fun b r ->
+          f (Scan_outputs.read s (b : _ Wire_runtime.Buf.t :> bytes) r) label);
+    }
+
+  let view_field v name typ =
+    match View.field v (record_field v.codec name typ) with
+    | f -> Some f
+    | exception Invalid_argument _ -> None
+
+  let field_at (type a) (Record v) i (k : a kind) : a reader =
+    let name, Types.Pack_typ typ = nth v i in
+    let by_output () =
+      output v name (fun o l -> of_output k (Scan_outputs.int o l))
+    in
+    let optional f =
+      { read = (fun b r -> Option.value ~default:(zero k) (View.read f b r)) }
+    in
+    match typ with
+    | Types.Optional { inner; _ } -> (
+        match typ_eq inner k with
+        | Some Type.Equal ->
+            Option.fold ~none:(by_output ()) ~some:optional
+              (view_field v name typ)
+        | None -> other_type v.codec name)
+    | Types.Optional_or { inner; _ } -> (
+        match typ_eq inner k with
+        | Some Type.Equal -> (
+            match view_field v name typ with
+            | Some f -> { read = (fun b r -> View.read f b r) }
+            | None -> by_output ())
+        | None -> other_type v.codec name)
+    | _ -> (
+        match typ_eq typ k with
+        | Some Type.Equal -> (
+            match view_field v name typ with
+            | Some f -> { read = (fun b r -> View.read f b r) }
+            | None -> by_output ())
+        | None -> other_type v.codec name)
+
+  let present_at (Record v) i =
+    let name, Types.Pack_typ typ = nth v i in
+    match typ with
+    | Types.Optional _ -> (
+        match view_field v name typ with
+        | Some f -> { read = (fun b r -> Option.is_some (View.read f b r)) }
+        | None ->
+            output v name (fun o l -> Scan_outputs.bool o (l ^ "_present")))
+    | _ -> Fmt.invalid_arg "%s: field %s is not optional" v.codec.name name
+
+  type 'a writer = { write : 'b. 'b Wire_runtime.Buf.t -> int -> 'a -> unit }
+
+  let set_at (type a) (Record v) i (k : a kind) : a writer =
+    let name, Types.Pack_typ typ = nth v i in
+    match typ_eq typ k with
+    | Some Type.Equal ->
+        let write =
+          Staged.unstage (set v.codec (record_field v.codec name typ))
+        in
+        { write = (fun b r x -> write (b : _ Wire_runtime.Buf.t :> bytes) r x) }
+    | None -> other_type v.codec name
+
+  (* The record a field of type [typ] holds, and the field as a sub-record. *)
+  let held : type a r.
+      r View.named ->
+      (a, r) field ->
+      a Types.typ ->
+      (record * (unit, unit) View.sub) option =
+   fun v f -> function
+    | Types.Codec { codec_ref = Codec_ref c; _ } ->
+        let w = View.named c in
+        Some (Record w, View.sub v w f)
+    | Types.Single_elem { elem = Types.Codec { codec_ref = Codec_ref c; _ }; _ }
+      ->
+        let w = View.named c in
+        Some (Record w, View.sub v w f)
+    | Types.Optional_or
+        { inner = Types.Codec { codec_ref = Codec_ref c; _ }; _ } ->
+        let w = View.named c in
+        Some (Record w, View.sub v w f)
+    | Types.Optional { inner = Types.Codec { codec_ref = Codec_ref c; _ }; _ }
+      ->
+        let w = View.named c in
+        Some (Record w, View.sub_option v w f)
+    | Types.Optional
+        {
+          inner =
+            Types.Single_elem
+              { elem = Types.Codec { codec_ref = Codec_ref c; _ }; _ };
+          _;
+        } ->
+        let w = View.named c in
+        Some (Record w, View.sub_option v w f)
+    | _ -> None
+
+  let held_at (Record v) i =
+    let name, Types.Pack_typ typ = nth v i in
+    match held v (record_field v.codec name typ) typ with
+    | Some h -> h
+    | None -> Fmt.invalid_arg "%s: field %s holds no record" v.codec.name name
+
+  let sub_at r i = fst (held_at r i)
+  let enter_at r i = snd (held_at r i)
+  let enter (s : (unit, unit) View.sub) b len r : int = View.enter s b len r
+  let check_at (Record v) b length off : int = View.check v b length off
+
+  let check_window (Record v) (b : _ Wire_runtime.Buf.t) length ~off ~len : int
+      =
+    let length = (length : _ Wire_runtime.Buf.length :> int) in
+    if off < 0 || len < 0 || off > length - len then -1
+    else if
+      accepts v.codec (Bytes.sub (b : _ Wire_runtime.Buf.t :> bytes) off len) 0
+    then off
+    else -1
+
+  let scan c =
     let s = to_struct c in
     ignore (Scan_outputs.names s : (string * bool) list);
-    fun frame ->
-      match validate c frame 0 with
-      | Ok () -> Some (Scan_outputs.read s frame 0)
-      | Error _ -> None
-
-  module Scan (K : sig
-    type t
-
-    val scanner : scanner
-    val invalid : t -> t
-    val valid : t -> Outputs.t -> t
-  end) =
-  struct
-    type step = K.t
-
-    let fold_step buf off len ~init =
-      if off < 0 || len < 0 || len > Bytes.length buf - off then K.invalid init
+    fun buf off len ->
+      if off < 0 || len < 0 || len > Bytes.length buf - off then None
       else
-        match K.scanner (Bytes.sub buf off len) with
-        | Some o -> K.valid init o
-        | None -> K.invalid init
+        let frame = Bytes.sub buf off len in
+        match validate c frame 0 with
+        | Ok () -> Some (Scan_outputs.read s frame 0)
+        | Error _ -> None
 
-    let fold_step_frames buf off len ~stride ~init =
-      if
-        stride <= 0 || off < 0 || len < 0
-        || off > Bytes.length buf
-        || len > Bytes.length buf - off
-      then invalid_arg "fold_step_frames: invalid frame bounds or stride";
-      let rec go acc i =
-        if i = len / stride then acc
-        else go (fold_step buf (off + (i * stride)) stride ~init:acc) (i + 1)
-      in
-      go init 0
+  let frames ~name buf off len ~stride ~init f =
+    if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then
+      invalid_arg (name ^ ": invalid frame bounds or stride");
+    let rec go acc i =
+      if i = len / stride then acc
+      else go (f acc (off + (i * stride)) stride) (i + 1)
+    in
+    go init 0
 
-    let fold_step_index buf ~offs ~lens ~init =
-      if Array.length offs <> Array.length lens then
-        invalid_arg "fold_step_index: offs and lens differ in length";
-      let rec go acc i =
-        if i = Array.length offs then acc
-        else go (fold_step buf offs.(i) lens.(i) ~init:acc) (i + 1)
-      in
-      go init 0
-  end
+  let index ~name ~offs ~lens ~init f =
+    if Array.length offs <> Array.length lens then
+      invalid_arg (name ^ ": offs and lens differ in length");
+    let rec go acc i =
+      if i = Array.length offs then acc else go (f acc offs.(i) lens.(i)) (i + 1)
+    in
+    go init 0
 end

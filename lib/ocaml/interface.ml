@@ -557,108 +557,6 @@ let pp_view ?(views = false) ppf r b =
       | _ -> ())
     r.fields
 
-let field_type ?(views = false) b =
-  Fmt.str
-    "type 'a t = private {@\n\
-     get : bytes -> int -> 'a;@\n\
-     view : 'b. 'b %s.t%s -> 'b %s -> 'a;@\n\
-     }@\n"
-    b.brand (local_mode b.local)
-    (if views then "view" else "View.t")
-
-let pp_handles ?(views = false) ppf r =
-  List.iter
-    (fun f ->
-      pp_val r.target ppf f.label
-        (schema_type f ^ " t")
-        (if views then
-           Fmt.str "[%s] reads with {!Get.%s} and the accessor of its field."
-             f.label f.label
-         else
-           Fmt.str "[%s] reads with {!Get.%s} and {!view_%s}." f.label f.label
-             f.label))
-    (field_fields r.fields)
-
-let pp_field ?(views = false) ppf r b =
-  pp_section ppf "handles" "Field handles";
-  pp_doc ppf
-    "Fields as values, as [Wire_runtime.Record.S] names them: [f.get buf off] \
-     reads the field [f] of the record at [off] in [buf], and [f.view b r] \
-     that of the record [r] viewed in [b].";
-  Fmt.pf ppf "module Field : sig@\n%s" (field_type ~views b);
-  pp_doc ppf "The type for fields holding an ['a].";
-  Fmt.pf ppf "@\n";
-  pp_handles ~views ppf r;
-  Fmt.pf ppf "end@\n@\n"
-
-let pp_global_view ?(views = false) ppf r b =
-  let target = r.target in
-  pp_doc ppf "Views, on buffers on the heap.";
-  Fmt.pf ppf
-    "module View : sig@\n\
-     type 'b t = 'b %s@\n\
-     (** The type for records that passed their checks in the buffer ['b]. *)@\n\
-     @\n\
-     type %s'b check = 'b %s@\n\
-     (** The type for the answers of {!val-check}. *)@\n\
-     @\n"
-    (if views then "view" else "View.t")
-    (if views then "nonrec " else "")
-    (if views then "check" else "View.check");
-  pp_val target ppf "at"
-    (arrows [ named b; length b; "int"; "'b t" ])
-    "[at b len off] is the record at [off] in [b].";
-  pp_val target ppf "check"
-    (arrows [ named b; length b; "int"; "'b check" ])
-    "[check b len off] checks the record at [off] in [b], without raising.";
-  pp_val target ppf "ok"
-    (arrows [ "'b check"; "bool" ])
-    "[ok c] is [true] iff the check [c] passed.";
-  pp_val target ppf "get"
-    (arrows [ "'b check"; "'b t" ])
-    "[get c] is the record the check [c] passed.";
-  Fmt.pf ppf "end@\n@\n"
-
-(* [Global] takes its buffers on the heap, as [Wire_runtime.Record.S] does,
-   on either target. *)
-let pp_global ?(views = false) ppf r =
-  let target = r.target in
-  let b = bytes_buf `OCaml in
-  pp_doc ppf
-    "The module as a [Wire_runtime.Record.S], which [Wire.Codec.Make] also \
-     gives: code written against it switches between the two by one line.";
-  Fmt.pf ppf "module Global : sig@\ntype nonrec t = t@\n";
-  pp_doc ppf "The type for records.";
-  Fmt.pf ppf "@\n";
-  pp_val target ppf "min_size" "int" "[min_size] is the size of a record.";
-  pp_val target ppf "decode"
-    (arrows [ buf b; "int"; Fmt.str "(t, %s) result" parse_error ])
-    "[decode buf off] is the record at [off] in [buf], or the codec's error.";
-  pp_val target ppf "decode_exn"
-    (arrows [ buf b; "int"; "t" ])
-    (Fmt.str "[decode_exn buf off] is like {!decode} but raises %s." parse_exn);
-  pp_val target ppf "encode"
-    (arrows [ "t"; buf b; "int"; "unit" ])
-    "[encode r buf off] writes the record [r] at [off] in [buf].";
-  pp_val target ppf "validate"
-    (arrows [ buf b; "int"; Fmt.str "(unit, %s) result" parse_error ])
-    "[validate buf off] checks the record at [off] in [buf].";
-  pp_val target ppf "validate_exn"
-    (arrows [ buf b; "int"; "unit" ])
-    (Fmt.str "[validate_exn buf off] is like {!validate} but raises %s."
-       parse_exn);
-  pp_val target ppf "is_valid"
-    (arrows [ buf b; "int"; "bool" ])
-    "[is_valid buf off] is [true] iff {!validate} accepts the record at [off] \
-     in [buf].";
-  pp_global_view ~views ppf r b;
-  pp_doc ppf "Field handles, on buffers on the heap.";
-  Fmt.pf ppf "module Field : sig@\n%s" (field_type ~views b);
-  pp_doc ppf "The type for fields holding an ['a].";
-  Fmt.pf ppf "@\n";
-  pp_handles ~views ppf r;
-  Fmt.pf ppf "end@\nend@\n@\n"
-
 let pp_x4_writes ppf r lanes =
   let target = r.target in
   let b = bytes_buf r.target in
@@ -804,23 +702,17 @@ let pp_record ?(views = false) ?(buffer = `Bytes) ppf r =
   if record then pp_record_type ppf r;
   match buffer with
   | `Bigstring -> pp_buffer ppf r (bigstring_buf r.target)
-  | `Bytes ->
+  | `Bytes -> (
       pp_buffer ~views ppf r (bytes_buf r.target);
-      (if r.simd then
-         match lanes r.plan ~size:r.size with
-         | Some l -> pp_x4 ppf r l
-         | None -> ());
-      if not views then begin
-        pp_field ppf r (bytes_buf r.target);
-        if record then pp_global ppf r
-      end
+      if r.simd then
+        match lanes r.plan ~size:r.size with
+        | Some l -> pp_x4 ppf r l
+        | None -> ())
 
 (* What reads through the module's views, after them. *)
 let pp_after_views ppf r =
   pp_section ppf "words" "Words of a view";
-  pp_view ~views:true ppf r (bytes_buf r.target);
-  pp_field ~views:true ppf r (bytes_buf r.target);
-  if Option.is_none r.make then pp_global ~views:true ppf r
+  pp_view ~views:true ppf r (bytes_buf r.target)
 
 let record ~target ~simd ~make ~maps ~codec ~plan ~size =
   let fields = all_fields plan in
@@ -1014,28 +906,6 @@ let scan_members ppf ~target ~(plan : plan) ~(folds : Scan_module.fold list) =
   List.iter
     (fun (f : Scan_module.fold) ->
       match f.visitor with
-      | Some m ->
-          if f.name = "fold_step" then
-            Fmt.pf ppf
-              "type step = %s.t@\n\
-               (** The type for the accumulator of [%s]. *)@\n\
-               @\n"
-              m m;
-          pp_visitor_fold ppf ~target ~plan b f.name m f.selected
+      | Some m -> pp_visitor_fold ppf ~target ~plan b f.name m f.selected
       | None -> pp_closure_fold ppf ~target ~plan b f.name f.selected)
     folds
-
-(* {2 The bridge} *)
-
-let bridge ~maps ~swap ~codec ~core =
-  Fmt.str
-    "(* Generated by Wire_ocaml from the codec %s. Do not edit: generate it \
-     again when the codec changes. *)\n\n\
-     (** The check that [%s] still has the shape [%s] was generated from%s.\n\n\
-    \    Linking this module makes that check when the module loads%s, and \
-     raises [Invalid_argument] where it fails.%s *)\n"
-    codec codec core
-    (if swap then ", and the modules that swap with it" else "")
-    (if maps then ", and that each map is still the very map of its field"
-     else "")
-    (if swap then "" else " It defines nothing.")

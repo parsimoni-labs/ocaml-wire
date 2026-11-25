@@ -70,9 +70,3 @@ val scan_members :
   folds:Scan_module.fold list ->
   unit
 (** [scan_members ppf ~target ~plan ~folds] states each of [folds]. *)
-
-val bridge : maps:bool -> swap:bool -> codec:string -> core:string -> string
-(** [bridge ~maps ~swap ~codec ~core] is the preamble of the interface of the
-    bridge that checks [core] against the codec at [codec], and with [maps] the
-    maps of its fields; with [swap] the bridge also defines the modules that
-    swap with [core]. *)

@@ -10,9 +10,7 @@
    folds [classify] and [parse] of g_flow, which hand the flow classifier's
    fields of [Packet_stack.capture] to [Flow_table], and on OxCaml fold them
    into [Flow_sum]; flow_read.ml, the entries [classify] and [parse] over
-   them; and g_eth_wire.ml and so on, with their interfaces, the bridges of
-   the modules of the fixed header codecs of [Headers], whose [Global] and
-   [Interpreted] the swap rows read. The batch readers take the corpus
+   them. The batch readers take the corpus
    stride, which the harness passes as a literal so it stays a constant after
    inlining.
 
@@ -27,7 +25,9 @@
    with every output and with those the checksum reads; g_flow, that of
    [Packet_stack.capture] with the flow classifier's; g_capture, that of
    [Packet_stack.capture] with every output, whose views the check/view row
-   reads; and g_eth, g_ipv4, g_ipv6, g_tcp and g_udp, those of [Headers]. *)
+   reads; and g_eth, g_ipv4, g_ipv6, g_tcp and g_udp, those of [Headers],
+   and their interpreted twins, g_eth_codec and so on, which the swap rows
+   read. *)
 
 let write file s =
   let oc = open_out_bin file in
@@ -309,12 +309,6 @@ let harness file =
   let selected = List.filter (fun (n, _) -> List.mem n checksum_fields) all in
   let entry name body = "let " ^ name ^ " buf offs lens =\n" ^ body ^ "\n\n" in
   let parse_visitor, parse = parse_step target in
-  let bridge name c =
-    let codec = "Headers." ^ name and core = "G_" ^ name in
-    if Filename.check_suffix file ".mli" then
-      Wire_ocaml.bridge_mli ~record:codec ~codec ~core c
-    else Wire_ocaml.bridge ~record:codec ~codec ~core c
-  in
   let text =
     match Filename.remove_extension (Filename.basename file) with
     | "stack_step" -> step ~fields:all
@@ -327,11 +321,6 @@ let harness file =
         entry "classify"
           "ignore (G_flow.classify_index buf ~offs ~lens ~init:0 : int)"
         ^ entry "parse" (parse "G_flow.parse_index buf ~offs ~lens")
-    | "g_eth_wire" -> bridge "eth" Headers.eth
-    | "g_ipv4_wire" -> bridge "ipv4" Headers.ipv4
-    | "g_ipv6_wire" -> bridge "ipv6" Headers.ipv6
-    | "g_tcp_wire" -> bridge "tcp" Headers.tcp
-    | "g_udp_wire" -> bridge "udp" Headers.udp
     | _ -> failwith ("no harness file " ^ file)
   in
   write file text

@@ -179,26 +179,47 @@ val v :
 val name : t -> string
 (** [name t] is the name of [t]'s module: its file is [name t ^ ".ml"]. *)
 
-val to_ml : ?visitors:(string * string) list -> t -> string
-(** [to_ml ?visitors t] is the source of [t]'s module. Each of [visitors] is a
-    fold's name and the source file of its visitor, whose module ([flow_step.ml]
-    is [Flow_step]) the fold calls by name; a fold that none names takes its
-    consumer as arguments. Raises [Invalid_argument] for a fold [t] does not
-    declare. *)
+val to_ml : ?twin:bool -> ?visitors:(string * string) list -> t -> string
+(** [to_ml ?twin ?visitors t] is the source of [t]'s module. Each of [visitors]
+    is a fold's name and the source file of its visitor, whose module
+    ([flow_step.ml] is [Flow_step]) the fold calls by name; a fold that none
+    names takes its consumer as arguments.
 
-val to_mli : ?visitors:(string * string) list -> t -> string
-(** [to_mli ?visitors t] is the interface of [to_ml ?visitors t]. *)
+    With [~twin:true], it is the source of the module's interpreted twin
+    instead, the unit [<name>_codec] beside the module: a functor [Make] over a
+    module [C] with a type [r] and [codec : r Wire.Codec.t], which reads
+    [C.codec] as [t]'s module reads its bytes, through [Wire.Codec.View] and
+    [Wire.Codec.validate], with the views, accessors and setters, [min_size],
+    [validate] and the folds of [t]'s module, under the interface [t]'s module
+    has for the [`OCaml] target. Each field is found by its place in the codec's
+    field list and checked against the type the module reads, and [Make] raises
+    [Invalid_argument] unless the codec has the shape [t] was generated from.
+    The twin links [wire]; code written against those members runs on either by
+    changing one line:
+    {v
+    module P = Captured_stack
+    module P = Captured_stack_codec.Make (struct
+      type r = Packet_stack.captured
+      let codec = Packet_stack.capture
+    end)
+    v}
+    Raises [Invalid_argument] for a fold [t] does not declare, and with
+    [~twin:true] for a record the twin cannot reach through one field. *)
+
+val to_mli : ?twin:bool -> ?visitors:(string * string) list -> t -> string
+(** [to_mli ?twin ?visitors t] is the interface of [to_ml ?twin ?visitors t]. *)
 
 val main : t list -> unit
 (** [main ts] is a generator's command line,
     [gen.exe [--visitor FOLD=FILE]... FILE...]. It writes each [FILE]:
     [<name>.ml] and [<name>.mli], the module of [ts] named [<name>] and its
-    interface; anything after the extension is ignored, so [stack.ml.raw] is the
-    module [stack] too. [--visitor FOLD=FILE] gives each written module's fold
-    [FOLD] the visitor of the source file [FILE]: naming the visitor in the rule
-    makes dune rebuild the module when it changes. It exits with status 2 and a
-    message on a file that names no module of [ts] and on a visitor of a fold no
-    written module declares. *)
+    interface, and [<name>_codec.ml] and [<name>_codec.mli], its interpreted
+    twin ({!to_ml}); anything after the extension is ignored, so [stack.ml.raw]
+    is the module [stack] too. [--visitor FOLD=FILE] gives each written module's
+    fold [FOLD] the visitor of the source file [FILE]: naming the visitor in the
+    rule makes dune rebuild the module when it changes. It exits with status 2
+    and a message on a file that names no module of [ts] and on a visitor of a
+    fold no written module declares. *)
 
 val outputs : 'r Wire.Codec.t -> (string * bool) list
 (** [outputs c] is the outputs a fold of [c] hands out, in declaration order:
@@ -284,36 +305,6 @@ val mli :
     states the [[@zero_alloc]] checks and the portability of the implementation.
     Raises [Invalid_argument] as {!ml} does. *)
 
-val bridge :
-  ?maps:map list ->
-  ?record:string ->
-  codec:string ->
-  core:string ->
-  'r Wire.Codec.t ->
-  string
-(** [bridge ?maps ?record ~codec ~core c] is the source of a module that checks,
-    when it loads, that the codec [c] at the path [codec] still has the shape
-    the module at the path [core] was generated from by {!ml}, and that each map
-    [maps] names is still the very map of its field. It links [wire]; link it
-    next to [core] wherever [wire] is linked anyway.
-
-    [record], the path of the type of [c]'s records, for a module {!ml}
-    generated without [make], adds two modules that are each a [Wire.S] with the
-    same handles, [Field.<field>] for each field with no map, each reading the
-    type the codec declares: [Global], the [Global] of [core] with [field], and
-    [Interpreted], [Wire.Codec.Make] over [c]. Code written against one runs on
-    the other by changing one line. *)
-
-val bridge_mli :
-  ?maps:map list ->
-  ?record:string ->
-  codec:string ->
-  core:string ->
-  'r Wire.Codec.t ->
-  string
-(** [bridge_mli ?maps ?record ~codec ~core c] is the interface of
-    [bridge ?maps ?record ~codec ~core c]. *)
-
 (** {1 Scanning}
 
     [scanner] writes the code that walks a codec of any shape in its scope and
@@ -392,34 +383,6 @@ val scanner_mli :
 (** [scanner_mli ?target ?fields ?step ~codec c] is the interface of
     [scanner ?target ?fields ?step ~codec c], as {!mli} is that of {!ml}. Raises
     [Invalid_argument] as {!scanner} does. *)
-
-val scanner_bridge :
-  ?target:target ->
-  ?fields:string list ->
-  codec:string ->
-  core:string ->
-  'r Wire.Codec.t ->
-  string
-(** [scanner_bridge ?target ?fields ~codec ~core c] is the source of a module
-    that checks, when it loads, that the codec [c] at the path [codec] still has
-    the shape the scanner at the path [core] was generated from by {!scanner},
-    with [target] and [fields] as they were given. It defines [Global], [core]
-    as a [Wire.Scan]; [STEP], the type of the step module of such a scanner; and
-    [Interpreted_scan (K)], a [Wire.Scan] that checks each frame with
-    [Wire.Codec] and calls [K] with the outputs [core] hands out. Code written
-    against [Wire.Scan] runs on [Global], for [core] generated with [K] as its
-    step module, or on [Interpreted_scan (K)] by changing one line. It links
-    [wire]. Raises [Invalid_argument] as {!scanner} does. *)
-
-val scanner_bridge_mli :
-  ?target:target ->
-  ?fields:string list ->
-  codec:string ->
-  core:string ->
-  'r Wire.Codec.t ->
-  string
-(** [scanner_bridge_mli ?target ?fields ~codec ~core c] is the interface of
-    [scanner_bridge ?target ?fields ~codec ~core c]. *)
 
 (** {2 Views}
 

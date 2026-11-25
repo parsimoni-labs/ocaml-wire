@@ -1,14 +1,25 @@
-(* The scanner generated from [Packet_stack.capture] and its bridge's
-   interpreted twin are both a [Wire.Scan] folding [Scan_step], on a corpus of
-   frames. *)
+(* The module generated from [Packet_stack.capture] and its interpreted twin
+   fold [Scan_step] alike, on a corpus of frames. *)
 
-(* The swap: one line picks the scanner, the code under it is the same. *)
-module Interpreted = S_capture_step_wire.Interpreted_scan (Scan_step)
-module Generated = S_capture_step_wire.Global
-module _ : Wire.Scan with type step = Scan_step.t = Generated
-module _ : Wire.Scan with type step = Scan_step.t = Interpreted
+(* The swap: one line picks the module, the code under it is the same. *)
+module Generated = S_capture_step
 
-module Flows (S : Wire.Scan with type step = Scan_step.t) = struct
+module Interpreted = S_capture_step_codec.Make (struct
+  type r = Packet_stack.capture
+
+  let codec = Packet_stack.capture
+end)
+
+module Flows (S : sig
+  val fold_step : bytes -> int -> int -> init:Scan_step.t -> Scan_step.t
+
+  val fold_step_frames :
+    bytes -> int -> int -> stride:int -> init:Scan_step.t -> Scan_step.t
+
+  val fold_step_index :
+    bytes -> offs:int array -> lens:int array -> init:Scan_step.t -> Scan_step.t
+end) =
+struct
   let index buf ~offs ~lens = S.fold_step_index buf ~offs ~lens ~init:[]
 
   let frames buf ~stride =

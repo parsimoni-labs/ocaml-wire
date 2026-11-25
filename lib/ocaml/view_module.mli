@@ -81,3 +81,8 @@ val mli :
 
 val member_name : member -> string
 (** [member_name m] is the name of the accessor of [m]. *)
+
+val settable : record -> (string * field) list
+(** [settable r] is the fields of [r] a setter [set_<name>] writes, each with
+    its accessor's name: an integer or a bitfield at a constant offset inside
+    the bytes a view of [r] holds. *)

@@ -122,26 +122,44 @@ spans whose size an expression gives, optional fields (gates), sized windows
 (regions) and where clauses, in the order the codec checks them, over
 variables unique in the plan. One walk over the plan writes every function
 that checks a record: `is_valid`, the decoders and the function that finds
-the codec's error for a fixed record, and `fold`, `fold_frames` and
-`check` (and with `~step`, `fold_step`, `fold_frames_step` and
-`fold_index_step`) for a codec of any shape in scope. One writer
+the codec's error for a fixed record, `check`, and each fold the module
+declares (`Wire_ocaml.fold`), for a codec of any shape in scope. One writer
 (`Writer`) puts them in one module per codec, whatever its shape: the walks,
 the check and the views of every codec the walk covers, and the members of a
-fixed record of named scalars (its record, decoder, writes, `Get`, `Field`,
-`Global`) where the codec is one. The views read the fields: a fixed record
-has no second check (`Valid`, `View`) nor second reads (`read_<field>`,
-`view_<field>`) beside them. A module reads one buffer, chosen when it is
-generated: `~buffer:`Bigstring` writes a fixed record's members on a
-bigarray, with no walk, where `Valid` and `View` remain its views.
-`Wire_ocaml.ml` and `Wire_ocaml.scanner` write the same module, with the
-folds their arguments select. OCaml without flambda never inlines a function passed as an
-argument, nor a function whose body defines a closure, so `fold_frames`
-rejects a frame with no closure of its own, and the step functions call
-their consumer by name, with no closure call. They allocate nothing per
-frame where the compiler inlines the consumer and the runtime's loads. OCaml
-without flambda inlines the consumer's `valid` only when its body defines no
-function, a partial application or a primitive used as a value included;
-otherwise each call boxes the `int64` values it is passed.
+fixed record of named scalars (its record, decoder, writes, `Get`) where the
+codec is one. The views read the fields: a fixed record has no second check
+(`Valid`, `View`) nor second reads (`read_<field>`, `view_<field>`) beside
+them. A module reads one buffer, chosen when it is generated:
+`~buffer:`Bigstring` writes a fixed record's members on a bigarray, with no
+walk, where `Valid` and `View` remain its views. `Wire_ocaml.v` declares the
+module, `Wire_ocaml.main` writes it, one dune rule per module.
+
+A fold `n` without a visitor takes its consumer as arguments (`n`,
+`n_frames`, and on OxCaml `n_unboxed` and `n_frames_unboxed`). A fold with a
+visitor calls it by name (`n`, `n_frames`, `n_index`): the visitor is a
+source file the generation rule names (`--visitor n=%{dep:flow_step.ml}`),
+whose module the generator derives from the file, so dune rebuilds the module
+when the visitor changes and no module path is typed by hand. OCaml without
+flambda never inlines a function passed as an argument, nor a function whose
+body defines a closure, so `n_frames` rejects a frame with no closure of its
+own, and the folds with a visitor call it with no closure call. They allocate
+nothing per frame where the compiler inlines the visitor and the runtime's
+loads, which the release profile does across units. OCaml without flambda
+inlines the visitor's `valid` only when its body defines no function, a
+partial application or a primitive used as a value included; otherwise each
+call boxes the `int64` values it is passed. A visitor in its own unit states
+its accumulator's type on `invalid`: OxCaml defaults an unannotated
+parameter's layout to a value when the unit is compiled.
+
+The interpreted twin of a module, the unit `<name>_codec` beside it, is a
+functor over the codec value: `Make (C)` reads `C.codec` as the module reads
+its bytes, each field through `Codec.View` by its place in the codec's field
+list, checked against the type the module reads, after a check of the
+codec's digest. It has the module's views, accessors and setters, `min_size`,
+`validate` and folds, under the interface the module has for the OCaml
+target, and links `wire`; the generated module links `wire.runtime` only.
+A field `Codec.View` has no reader for, an optional field behind a gate its
+record's bytes decide, is read from the record's outputs.
 
 Their loop over frames is unrolled four times, then walks the remaining
 frames one by one. OCaml polls for signals and other domains once per loop
@@ -156,7 +174,7 @@ it with one branch. On OCaml the loop over frames too short for it is a
 function of its own, called once per batch, so that its variables take no
 register from the main loop.
 
-`fold_index_step` cannot compute where a frame starts: each start is a load
+A fold's `n_index` cannot compute where a frame starts: each start is a load
 from the index, and only the frame's length says which of its bytes may be
 read. Its loop is pipelined one frame deep instead, two frames an iteration.
 Before it walks a frame, it loads the next frame's offset and length, tests
@@ -267,7 +285,7 @@ The invariants above hold for the generated code as follows.
   so no entry tests `off > Bytes.length buf`. Where the walk starts with the
   bound check of a prefix, that check rejects a negative `len`, so the entry
   tests `off < 0` and that bound only; the frame loops test `len < 0` too,
-  and raise `Invalid_argument` instead of rejecting. `fold_index_step` makes the
+  and raise `Invalid_argument` instead of rejecting. A fold's `n_index` makes the
   same test for each frame of its index, against the buffer's length read
   once before its loop, and checks once that its two arrays have the same
   length, so that the loop reads both without a bound check. It loads a

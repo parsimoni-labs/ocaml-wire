@@ -1,18 +1,36 @@
-(* The header modules of the swap rows, each a [Wire.S] with the same named
-   handles: the interpreted codecs of [Headers] through [Wire.Codec.Make], or
-   the [Global] modules Wire_ocaml generates from the same codecs, both from
-   the bridges Wire_ocaml writes next to the generated modules. *)
+(* The header modules of the swap rows: the modules Wire_ocaml generates from
+   the codecs of [Headers], or their interpreted twins over the same codecs,
+   which have the same views. *)
 
 module Interpreted = struct
-  module Eth = G_eth_wire.Interpreted
-  module Ipv4 = G_ipv4_wire.Interpreted
-  module Tcp = G_tcp_wire.Interpreted
-  module Udp = G_udp_wire.Interpreted
+  module Eth = G_eth_codec.Make (struct
+    type r = Headers.eth
+
+    let codec = Headers.eth
+  end)
+
+  module Ipv4 = G_ipv4_codec.Make (struct
+    type r = Headers.ipv4
+
+    let codec = Headers.ipv4
+  end)
+
+  module Tcp = G_tcp_codec.Make (struct
+    type r = Headers.tcp
+
+    let codec = Headers.tcp
+  end)
+
+  module Udp = G_udp_codec.Make (struct
+    type r = Headers.udp
+
+    let codec = Headers.udp
+  end)
 end
 
 module Generated = struct
-  module Eth = G_eth_wire.Global
-  module Ipv4 = G_ipv4_wire.Global
-  module Tcp = G_tcp_wire.Global
-  module Udp = G_udp_wire.Global
+  module Eth = G_eth
+  module Ipv4 = G_ipv4
+  module Tcp = G_tcp
+  module Udp = G_udp
 end

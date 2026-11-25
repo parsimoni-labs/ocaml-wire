@@ -1,11 +1,12 @@
 # The scanner, proved against 3d.exe
 
-For each codec opted in, F* proves that the `fold` `Wire_ocaml.scanner`
-writes, and its step functions `fold_step` and `step_within`, answer what
-the parser EverParse writes for the codec's 3D projection answers, on the
-same bytes. The F* is not a model: it is the code the emitter writes,
-printed by the walk that prints the OCaml, its operations and loads
-written as calls into the primitives `WireGen.OCaml`.
+For each codec opted in, F* proves that the `fold` of the module
+`Wire_ocaml` writes, and the fold `fold_step` with a visitor and its
+`fold_step_within`, answer what the parser EverParse writes for the
+codec's 3D projection answers, on the same bytes. The F* is not a model:
+it is the code the emitter writes, printed by the walk that prints the
+OCaml, its operations and loads written as calls into the primitives
+`WireGen.OCaml`.
 
 ```
 make prove     # needs EverParse in ~/.local/everparse (or EVERPARSE)
@@ -48,8 +49,8 @@ Hence, for the code F* checks:
 
 ### The step functions
 
-The step functions hold each value as an `int64` and call the module given
-to `Wire_ocaml.scanner ~step` by name. `<M>.StepProof.fold_step_is_3d`,
+The step functions hold each value as an `int64` and call the visitor of
+the fold `fold_step` by name. `<M>.StepProof.fold_step_is_3d`,
 for every `buf`, `off`, `len` and `init`, and every module `S` they may
 call (`<M>.Visitor` declares its `t`, `invalid` and `valid` and defines
 none):
@@ -64,16 +65,16 @@ fold_step buf off len init ==
 `visit init` is `S.valid init` on the same outputs, each `int` as the
 `int64` that holds it (`P.int64_of_int`, a bitfield `P.bits64` of its
 word's pattern), so the step walk accepts what `fold` and 3d.exe's parser
-accept and hands out the same values. `step_within_is_3d` states the same
-of `step_within buf length off len init`, which `fold_index_step` calls
+accept and hands out the same values. `fold_step_within_is_3d` states the same
+of `fold_step_within buf length off len init`, which `fold_step_index` calls
 once per frame, for the `length` its callers pass: the type of
-`step_within` requires it to be `P.length buf`. The four consequences
+`fold_step_within` requires it to be `P.length buf`. The four consequences
 above hold of the step walk too, its `int64` operations included: an
 `int64` comparison is signed, as OCaml's on `int64` is.
 
 ### The OxCaml scanner
 
-The scanner `Wire_ocaml.scanner ~target:`OxCaml` writes holds values and
+The module `Wire_ocaml.to_ml` writes for `` ~target:`OxCaml `` holds values and
 positions as `int64_u`. Its `fold` and its step functions are rendered by
 the same walk as `M.OxScan` and `M.OxStep`, each `int64_u` as its 64-bit
 pattern, an F* `int64`, and each OxCaml primitive as the primitive of
@@ -88,14 +89,14 @@ and loads nothing outside the buffer (its loads at an `int64_u` position
 require the bytes there); its `int64_u` arithmetic is modulo 2^64, so
 where it would wrap the answer would differ from the parser's, which the
 proof excludes. The sign of one `logor` that tests `off` and `len` in its
-`step_within` rejects exactly the windows that leave the buffer.
+`fold_step_within` rejects exactly the windows that leave the buffer.
 
 ### The walks of the frame loops
 
-The loops of `fold_frames_step` and `fold_index_step` walk a frame that
+The loops of `fold_step_frames` and `fold_step_index` walk a frame that
 holds the bytes they test (`need`, the leading prefixes) with a walk of
-their own, which the OCaml cuts out as `frames_step_record` and
-`index_step_record`: it knows those bytes, so it checks none of their
+their own, which the OCaml cuts out as `step_frames_record` and
+`step_index_record`: it knows those bytes, so it checks none of their
 bounds, and on the index loop it reads the fields the loop loaded ahead
 (the IPv4 protocol, a tag) from variables instead of the buffer. `M.Frames`
 and `M.Index`, and `M.OxFrames` and `M.OxIndex` on OxCaml, render each as
@@ -107,7 +108,7 @@ those, and each field loaded ahead is its load at `base`.
 `M.OxIndexProof`), for every such frame:
 
 ```
-frames_step_record buf base stop current ==
+step_frames_record buf base stop current ==
   Flat.answer (fun () -> S.invalid current) (visit current)
     (Flat.spec (Seq.slice buf base (base + stop)))
 ```
@@ -124,7 +125,7 @@ batch too short for the loop, the index's offsets and lengths, the test
 `Plan.Loop` prove of the plan model of `fold_frames`' control that it
 visits the frames `len / stride` counts, in order, each in the buffer,
 and that a field it loads ahead lies in its frame; the model of
-`fold_index_step`'s pipelined loop is being written apart. What the
+`fold_step_index`'s pipelined loop is being written apart. What the
 frames' theorems above leave to the loop is exactly their premises: that
 the frame lies in the buffer and holds `need` bytes when walked with this
 walk, and that a field passed in was loaded at the frame's start. The
@@ -143,12 +144,12 @@ answers in order, is not stated here.
 | `M.Flat.fsti`, `M.Flat.fst` | `flat`, the record read field by field as the 3D projection lays it out (a nested codec, an optional one as the casetype on its condition, a region as a window of its own), and `flat_is_3d`: `flat` is `answer` of 3d.exe's parser. It depends on the schema alone |
 | `M.Proof.fsti`, `M.Proof.fst` | one lemma per value of the walk that reads bytes, stating it in bytes of the buffer (`be buf (o + k) n`, `P.bits` of a word) for every position `o` it reads at, as the emitter chose it, which Z3 applies where the value occurs; then `fold == flat`, and `fold_is_3d` |
 | `M.Visitor.fsti` | the module the step functions call by name: an abstract `t`, `invalid` and `valid` (an `int64` per output, a `bool` per presence), none defined, so the proof holds of every module |
-| `M.Step.fst` | `step_within` and `fold_step`, as the emitter writes them with `~step`, values held as `int64`, with in place each function the OCaml walk is cut into |
-| `M.StepProof.fsti`, `M.StepProof.fst` | `visit`; the lemmas of `M.Proof` for the step walk's values (`P.bits64` of a word); then `step_within == flat` on the buffer's length, `step_within_is_3d` and `fold_step_is_3d`, through the same `M.Flat` |
+| `M.Step.fst` | `fold_step_within` and `fold_step`, as the emitter writes them for the visitor `S`, values held as `int64`, with in place each function the OCaml walk is cut into |
+| `M.StepProof.fsti`, `M.StepProof.fst` | `visit`; the lemmas of `M.Proof` for the step walk's values (`P.bits64` of a word); then `fold_step_within == flat` on the buffer's length, `fold_step_within_is_3d` and `fold_step_is_3d`, through the same `M.Flat` |
 | `M.OxScan.fst`, `M.OxProof.fsti`, `M.OxProof.fst` | the same as `M.Scan` and `M.Proof`, of the OxCaml scanner's `fold` |
 | `M.OxStep.fst`, `M.OxStepProof.fsti`, `M.OxStepProof.fst` | the same as `M.Step` and `M.StepProof`, of the OxCaml scanner's step functions, which call the same `M.Visitor` |
-| `M.Frames.fst`, `M.FramesProof.fsti`, `M.FramesProof.fst` | `frames_step_record`, the walk of a frame of the loop of `fold_frames_step`, typed with what the loop ensures, and `frame_is_3d` |
-| `M.Index.fst`, `M.IndexProof.fsti`, `M.IndexProof.fst` | the same of `index_step_record`, of the loop of `fold_index_step`, with the fields it reads ahead; only for a codec whose frames need bytes, as only then has the loop a walk of its own |
+| `M.Frames.fst`, `M.FramesProof.fsti`, `M.FramesProof.fst` | `step_frames_record`, the walk of a frame of the loop of `fold_step_frames`, typed with what the loop ensures, and `frame_is_3d` |
+| `M.Index.fst`, `M.IndexProof.fsti`, `M.IndexProof.fst` | the same of `step_index_record`, of the loop of `fold_step_index`, with the fields it reads ahead; only for a codec whose frames need bytes, as only then has the loop a walk of its own |
 | `M.OxFrames...`, `M.OxIndex...` | the same of the OxCaml scanner |
 
 The library in `lib/` is written once: `WireGen.OCaml` (the primitives,
@@ -211,7 +212,7 @@ promote` writes it again.
   there, a 16-bit or 32-bit little-endian one included.
   `WireGen.VectorsOx` checks it on its operands, as computed on OxCaml.
 - The token table: `M.Scan.fst` and the OCaml `fold`, `M.Step.fst` and the
-  OCaml `step_within` and `fold_step`, and the same two of the OxCaml
+  OCaml `fold_step_within` and `fold_step`, and the same two of the OxCaml
   scanner, are one tree up to it, which `test/fstar` checks (below), so
   of the printer only the table is trusted.
 
@@ -223,11 +224,12 @@ promote` writes it again.
 ## The OCaml and the F* are one tree
 
 `test/fstar` (part of `dune runtest`, no F* needed) reads the `fold` of
-`Wire_ocaml.scanner ~step:"S"` and the functions it calls, and
-`M.Scan.fst`, then its `fold_step` and the functions it calls, and
-`M.Step.fst`, then `frames_step_record` and `index_step_record` and
-`M.Frames.fst` and `M.Index.fst`, then the same of `Wire_ocaml.scanner
-~target:`OxCaml ~step:"S"` and the `M.Ox*.fst`, with
+the module `Wire_ocaml.to_ml` writes with the folds `fold` and
+`fold_step`, whose visitor is a module `S`: its `fold` and the functions
+it calls, and `M.Scan.fst`, then its `fold_step` and the functions it
+calls, and `M.Step.fst`, then `step_frames_record` and
+`step_index_record` and `M.Frames.fst` and `M.Index.fst`, then the same
+of the module for `` ~target:`OxCaml `` and the `M.Ox*.fst`, with
 the OCaml parser: the bodies of the F* functions keep to the F* that is
 also OCaml (`let x = e in`, a local function `let f () = e in`,
 `if then else`, application, `&&`, `||`, `not`). It requires the same
@@ -262,8 +264,8 @@ body once the OCaml is read through this table, in
 
 A labelled argument becomes positional only where the labels are those
 the callee declares, in order: a cut's parameters, or the outputs for
-`valid` (`Wire_ocaml.scanner_fields`), after the accumulator for
-`S.valid`. A function the emitter cuts out
+`valid` (`Wire_ocaml.outputs`), after the accumulator for `S.valid`. A
+function the emitter cuts out
 of the walk, so that merlint accepts the OCaml, is `[@inline always]`
 and applied to its parameters, which the call names alike: the F* writes
 its body in place, and the test reads it there, after checking that it
@@ -304,7 +306,7 @@ index's offsets and lengths, its `known` test and the loads ahead it
 guards stay outside F*, and no theorem states a loop's result as the fold
 of its frames' answers (above). Outside the rendering stay too the walks
 of a frame of `fold_frames` and `fold_frames_unboxed`,
-which call closures (the same walk as `fold_frames_step`'s, its consumer a
+which call closures (the same walk as `fold_step_frames`'s, its consumer a
 parameter), the OxCaml `fold_unboxed` and `decode_unboxed`, the views,
 the record module, and the Rust Wire_rust writes, which has a walk of its
 own and stays under `make fuzz-rust`.
@@ -331,7 +333,7 @@ requires its Step and Flat to verify and its StepProof to fail.
 `TinyOxMutant` is Tiny's OxCaml `fold` with `a` read as the low byte of
 the 16-bit load one byte on, the byte after `a`: `prove.sh refused ...
 OxScan` requires its OxScan and Flat to verify and its OxProof to fail.
-`RegionIndexMutant` is Region's OxCaml `index_step_record` given its tag
+`RegionIndexMutant` is Region's OxCaml `step_index_record` given its tag
 as read ahead one byte on, a 16-bit load ending one byte past the two
 bytes the loop knows: `prove.sh refused ... OxIndex walk` requires the
 walk itself not to verify, as the load's type refuses it.

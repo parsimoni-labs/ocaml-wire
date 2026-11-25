@@ -988,7 +988,6 @@ let pp_body ~folds ?size s =
           end
       | Some m ->
           let s = if unboxed then s else { s with m = mode Boxed } in
-          if f.name = "fold_step" then Fmt.pf s.ppf "type step = %s.t@\n@\n" m;
           pp_fold_step s m;
           pp_frames ~step:m s ~unboxed:false)
     folds;

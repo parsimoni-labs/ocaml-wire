@@ -878,10 +878,10 @@ let pp_keys ppf (keys, sum) = Fmt.pf ppf "%d keys, %d" keys sum
    both. *)
 let swap_rows =
   [
-    ( "swap=interpreted, Wire.Codec.Make",
+    ( "swap=interpreted, twin",
       Flow_swap_interpreted.run,
       Flow_swap_interpreted_parse.run );
-    ("swap=generated, Global" ^ target, Flow_swap.run, Flow_swap_parse.run);
+    ("swap=generated" ^ target, Flow_swap.run, Flow_swap_parse.run);
   ]
 
 let pp_mix pp ppf (r, mix) = Fmt.pf ppf "%a; %a" pp r Flow_mix.pp mix

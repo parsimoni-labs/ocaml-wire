@@ -15,5 +15,5 @@
   view_module
   fstar_module
   interface
-  swap)
+  twin_module)
  (libraries wire fmt))

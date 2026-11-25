@@ -66,6 +66,8 @@ type cursor = {
 
 (* A record's walk in its three modes over one plan: its value, only its
    checks, or its value naming the errors under each field it moves over. *)
+type _ codec_ref = ..
+
 type 'r walk = {
   wvalue : cursor -> 'r;
   wskip : cursor -> unit;
@@ -382,6 +384,7 @@ and _ typ =
       codec_struct : struct_;
           (** Structural representation of the codec. Mirrors [codec_decode] /
               [codec_encode] but in a form 3D projection can walk. *)
+      codec_ref : 'r codec_ref;  (** The codec itself. *)
     }
       -> 'r typ
   | Optional : { present : bool expr; inner : 'a typ } -> 'a option typ
