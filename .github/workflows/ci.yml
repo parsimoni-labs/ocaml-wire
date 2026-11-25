@@ -489,6 +489,15 @@ jobs:
   # removes every entry the run did not use, so the cache saved is only
   # what this tree needs. WIRE_FSTAR_CACHE names the directory the cache
   # step saves, instead of the default in _build.
+  #
+  # The job then checks the model of the planner in proofs/fstar with the
+  # same F*: its theorems (verify), the checker plans.exe runs against the
+  # extraction of the model (check-extract), every decision the emitter
+  # reports for the sampled codecs against the model (plans) and every past
+  # defect and mutant refused (defects). plans.exe links the fuzzers'
+  # codecs, hence --with-test. From a cold F* cache, on one loaded host:
+  # verify 100 s of CPU, check-extract 1 s, plans 6 s once plans.exe is
+  # built (23 s), defects 9 to 14 min of CPU, 6 to 7 min with -j4.
   prove:
     runs-on: ubuntu-latest
     steps:
@@ -498,7 +507,7 @@ jobs:
         with:
           ocaml-compiler: '5.3'
 
-      - run: opam install . --deps-only
+      - run: opam install . --deps-only --with-test
 
       - name: Install EverParse
         run: |
@@ -518,6 +527,15 @@ jobs:
 
       - name: Prove the scanners against 3d.exe
         run: WIRE_FSTAR_CACHE=$HOME/.cache/wire-fstar opam exec -- make prove
+
+      - name: Check the planner model
+        run: opam exec -- make -C proofs/fstar verify check-extract
+
+      - name: Refuse the past defects and the mutants of the model
+        run: opam exec -- make -C proofs/fstar -j4 defects
+
+      - name: Check the emitter's decisions against the model
+        run: opam exec -- make -C proofs/fstar plans
 
   # verify/ executes the generated scanners and record modules symbolically
   # and has Z3, the one EverParse ships, prove their reads in bounds and
