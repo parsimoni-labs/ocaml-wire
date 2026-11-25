@@ -1,5 +1,5 @@
 (* The F* a scanner's [fold] is proved in ([<M>.Scan.fst] of
-   [Wire_ocaml.fstar]) and the OCaml that runs ([Wire_ocaml.scanner]) are one
+   [Wire_ocaml.fstar]) and the OCaml that runs ([Wire_ocaml.to_ml]) are one
    tree up to the token table below. Both texts are read by the OCaml parser,
    since the bodies of the F* functions keep to the F* that is also OCaml,
    into [tree], the OCaml side through the table, with in place each
@@ -713,12 +713,9 @@ let corpus =
         Codec ("sample " ^ label, Fuzz_gen.codec g))
       Diff_codecs.included
 
-(* The texts of a codec the F* flavour accepts: the OCaml scanner, with
-   the step functions of a module [S], and the F* of its [fold] and of its
-   step functions. *)
-(* The texts of a codec the F* flavour accepts: the OCaml scanner, with
-   the step functions of a module [S], and the F* of its [fold] and of its
-   step functions; then the same of the OxCaml scanner. *)
+(* The texts of a codec the F* flavour accepts: the OCaml of its
+   folds [fold] and [fold_step], whose visitor is a module [S], and the F*
+   of each; then the same of the OxCaml scanner. *)
 type walks = {
   ocaml : string;
   scan : string;
@@ -735,8 +732,11 @@ let texts c =
   | files ->
       let walks target ox =
         let file name = List.assoc_opt ("M." ^ ox ^ name ^ ".fst") files in
+        let folds = Wire_ocaml.[ fold "fold"; fold "fold_step" ] in
         {
-          ocaml = Wire_ocaml.scanner ~target ~step:"S" ~codec:"M" c;
+          ocaml =
+            Wire_ocaml.(
+              to_ml ~visitors:[ ("fold_step", "s.ml") ] (v ~target ~folds c));
           scan = Option.get (file "Scan");
           step = Option.get (file "Step");
           frames = Option.get (file "Frames");
@@ -745,7 +745,7 @@ let texts c =
       in
       Some { stock = walks `OCaml ""; ox = walks `OxCaml "Ox" }
 
-let outputs c = List.map fst (Wire_ocaml.scanner_fields c)
+let outputs c = List.map fst (Wire_ocaml.outputs c)
 
 (* Whether the walks of [w] agree with their F*: [fold], the step
    functions and the walks of a frame of their loops. *)
@@ -754,12 +754,12 @@ let agree_walks ~outputs w =
   let* () = agree ~outputs ~ocaml:w.ocaml ~scan:w.scan () in
   let* () = agree ~root:"fold_step" ~outputs ~ocaml:w.ocaml ~scan:w.step () in
   let* () =
-    agree ~root:"frames_step_record" ~outputs ~ocaml:w.ocaml ~scan:w.frames ()
+    agree ~root:"step_frames_record" ~outputs ~ocaml:w.ocaml ~scan:w.frames ()
   in
   match w.index with
   | None -> Ok ()
   | Some index ->
-      agree ~root:"index_step_record" ~outputs ~ocaml:w.ocaml ~scan:index ()
+      agree ~root:"step_index_record" ~outputs ~ocaml:w.ocaml ~scan:index ()
 
 (* Whether the walks of both scanners agree with their F*. *)
 let agree_both ~outputs t =
@@ -788,7 +788,7 @@ let test_corpus () =
 
 (* The IPv4 scanner with one token of its OCaml changed, in [fold] or, with
    [step], in the step functions or, with [index], in the walk of a frame of
-   the loop of [fold_index_step]; with [ox], of the OxCaml scanner. *)
+   the loop of [fold_step_index]; with [ox], of the OxCaml scanner. *)
 let mutant ?(ox = false) ?(step = false) ?(index = false) ?(all = false) ~from
     ~into () =
   match texts Headers.ipv4 with
@@ -803,7 +803,7 @@ let mutant ?(ox = false) ?(step = false) ?(index = false) ?(all = false) ~from
       | Error why -> Alcotest.failf "IPv4: %s" why);
       let ocaml = replace ~all ~from ~into w.ocaml in
       let root, scan =
-        if index then ("index_step_record", Option.get w.index)
+        if index then ("step_index_record", Option.get w.index)
         else if step then ("fold_step", w.step)
         else ("fold", w.scan)
       in
