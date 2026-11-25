@@ -238,7 +238,9 @@ let key6 =
    are its next value for an IPv4 and an IPv6 packet whose key [args] gives,
    [other] for a packet with no key. With [wide], the key is the [int64]
    values the scanner hands out, as [Flow_sum] folds it; otherwise [int]s, as
-   [Flow_table] takes them. *)
+   [Flow_table] takes them. [i] and [ip6_bytes] are defined beside [valid],
+   not in it: OCaml without flambda inlines no function whose body defines
+   one, and an out-of-line [valid] boxes each [int64] it is passed. *)
 let flow_step ?(wide = false) ~name ~typ ~v4 ~v6 ~other () =
   let ports =
     if wide then
@@ -250,17 +252,17 @@ let flow_step ?(wide = false) ~name ~typ ~v4 ~v6 ~other () =
        else if udp then (Int64.to_int usp lsl 16) lor Int64.to_int udp_\n\
        else 0"
   and conversions =
-    if wide then "let i x = x in\nlet ip6_bytes l = Int64.add 40L l in"
-    else "let i = Int64.to_int in\nlet ip6_bytes l = 40 + Int64.to_int l in"
+    if wide then "let i x = x\nlet ip6_bytes l = Int64.add 40L l"
+    else "let i = Int64.to_int\nlet ip6_bytes l = 40 + Int64.to_int l"
   in
-  "module " ^ name ^ " = struct\ntype t = " ^ typ
+  "module " ^ name ^ " = struct\ntype t = " ^ typ ^ "\n\n" ^ conversions
   ^ "\n\n\
      let[@inline always] invalid base = base\n\n\
      let[@inline always] ports tcp tsp tdp udp usp udp_ =\n" ^ ports
   ^ "\n\nlet[@inline always] valid base "
   ^ String.concat " " (List.map (fun n -> "~" ^ n) flow_fields)
-  ^ " =\n" ^ conversions ^ "\nif ipv4_present then " ^ v4 key4
-  ^ "\nelse if ipv6_present then " ^ v6 key6 ^ "\nelse " ^ other ^ "\nend\n\n"
+  ^ " =\nif ipv4_present then " ^ v4 key4 ^ "\nelse if ipv6_present then "
+  ^ v6 key6 ^ "\nelse " ^ other ^ "\nend\n\n"
 
 (* The consumer [name] that hands each key to [sink]. *)
 let sink_step ~name sink =

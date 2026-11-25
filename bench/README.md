@@ -814,9 +814,10 @@ negative offset (2) and the untagging of the offset and the length (2). On
 OCaml an accumulator of two values would be allocated per key, so
 `Flow_parse` keeps `Flow_sum`'s global state there, and the loop saves less
 (151.9 to 143.2 instructions on OCaml flambda, 308.2 to 298.2 on OCaml;
-256.0 to 245.2 and 405.6 to 392.6 on `mawi`), because the stock and flambda
-register allocators keep the loop's buffer, arrays and lengths on the stack
-around the inlined walk.
+256.0 to 245.2 and 405.6 to 392.6 on `mawi`): the flambda register
+allocator keeps the loop's buffer, arrays and lengths on the stack around the
+inlined walk, and on OCaml the walk called its consumer out of line, as
+below.
 
 On OxCaml `fold_index_step` now walks four frames an iteration, as
 `fold_frames` does, so the poll, the test of the index against the bound
@@ -862,6 +863,33 @@ and after:
 
 The rows with the table do not fold the key. `pnet_packet` takes 66.9 on the
 parse and 108.3 with the table, the Rust scanner 69.2 and 113.5.
+
+On OCaml the scanner then spent more on the parse than `View`, because the
+walk did not inline its consumer. `Flow_step` and `Flow_parse` bound `i` and
+`ip6_bytes` inside `valid`, and OCaml without flambda inlines no function
+whose body defines one, so each of the walk's 8 leaves called `valid`: it
+boxed every `int64` output it passed, a block of 3 words on the minor heap,
+and handed 21 of its 29 arguments through the domain state, where `valid`
+loaded them back and unboxed them. That call was about 150 of the 300
+instructions per packet. The consumers now define both beside `valid`, as
+they define `ports`, and the walk inlines `valid` and the `add4` and `add6`
+of `Flow_sum` behind it; what the loop keeps on the stack is its index and
+bound. The code of the other compilers is unchanged. Counted five times,
+medians, at a load average of 16 before and 23 after on OCaml, 22 and 16
+on the other two:
+
+| Row on `mawi` | Instructions | Cycles |
+| --- | ---: | ---: |
+| scanner, parse only, OCaml | 299.7 to 149.6 | 75.7 to 43.1 |
+| scanner, OCaml | 393.8 to 232.8 | 456.0 to 305.1 |
+| scanner, parse only, OCaml flambda | 145.1 to 145.5 | 47.0 to 45.0 |
+| scanner, OCaml flambda | 248.3 to 248.3 | 245.4 to 258.0 |
+| scanner, parse only, OxCaml | 73.3 to 73.3 | 32.6 to 31.6 |
+| scanner, OxCaml | 185.2 to 185.2 | 201.8 to 191.5 |
+
+In the same counts the `View` row takes 223.0 instructions and 60.2 cycles
+on the OCaml parse; `pnet_packet` takes 67.2 and 26.9 and the Rust scanner
+68.9 and 27.0, counted alike at a load average of 13 and 14.
 
 What the OxCaml parse still spends beyond `pnet_packet` is mostly the
 compiler's: the key's constant part is built again for each key, the loop
