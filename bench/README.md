@@ -891,6 +891,40 @@ In the same counts the `View` row takes 223.0 instructions and 60.2 cycles
 on the OCaml parse; `pnet_packet` takes 67.2 and 26.9 and the Rust scanner
 68.9 and 27.0, counted alike at a load average of 13 and 14.
 
+Half of what every row spends on the parse is branches it mispredicts. The
+same packets sorted by kind (Ethernet type, then IPv4 protocol or IPv6 next
+header), which leaves the parse-only result unchanged, take `pnet_packet`
+11.2 cycles instead of 22.5, the Rust scanner 12.3 instead of 23.0, the
+OxCaml scanner 15.9 instead of 28.2 and the OCaml one 31.8 instead of 49.3,
+with the same instructions (one batch, load average 20). After a
+mispredicted branch the next frame's walk starts again from its index: a
+load of its offset, then of its Ethernet type at that offset, before its
+first choice. `fold_index_step` now loads the next frame's offset, length
+and dispatch fields before it walks the current one, two frames an iteration
+([How a codec runs](../docs/execution.md#generated-code)). Counted nine
+times, interleaved, medians, at a load average of 52 before and 55 after:
+
+| Row on `mawi`, parse only | Instructions | Cycles |
+| --- | ---: | ---: |
+| scanner, OxCaml | 73.1 to 77.1 | 32.7 to 24.2 |
+| scanner, OCaml flambda | 144.7 to 150.1 | 46.5 to 38.5 |
+| scanner, OCaml | 150.3 to 164.3 | 50.3 to 42.4 |
+
+`pnet_packet` took 66.9 instructions and 23.7 cycles and the Rust scanner
+68.8 and 23.5 in the same rounds. Another such batch, at a load average of 38
+to 51, gave 26.1 cycles on OxCaml against 22.7 for `pnet_packet`, and two
+batches of the OxCaml rows alone, at 28 to 50, 20.4 and 20.9 against 22.4
+and 22.5: the cycles of one row move by several between batches at this
+load, so the OxCaml scanner parses level with `pnet_packet`, where it took 9
+cycles more. Seven rounds at a load average of 7 gave 21.5 cycles on OxCaml
+against 30.0 before, 23.7 for `pnet_packet` and 24.0 for the Rust scanner,
+with flambda at 30.8 and OCaml at 35.7. On the sorted packets it takes 13.0
+cycles instead of 15.6.
+With the table the parse is not what bounds the row: the OxCaml scanner
+took 190 cycles against 200, within the noise, and 204 instructions against
+182, as `Flow_step` calls the table's `add4` and `add6` out of line and the
+frame the loop carries is spilled around each call.
+
 What the OxCaml parse still spends beyond `pnet_packet` is mostly the
 compiler's: the key's constant part is built again for each key, the loop
 over the index computes the address of each tagged index (2 per frame) and
