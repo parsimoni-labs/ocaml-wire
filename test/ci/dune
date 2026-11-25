@@ -9,3 +9,9 @@
  (deps (universe))
  (action
   (run bash %{dep:check-everparse-bench.sh})))
+
+(rule
+ (alias runtest)
+ (deps (universe))
+ (action
+  (run bash %{dep:check-merlint-install.sh})))

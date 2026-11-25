@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+opam repository add tangled git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
+opam update tangled
+
+# setup-ocaml can restore installed dev packages whose version has not changed
+# while their source has. Upgrade the overlay packages before compiling merlint.
+packages=$(opam list --installed --short --repos=tangled)
+if [[ -n "$packages" ]]; then
+  # opam package names have no whitespace or glob characters.
+  # shellcheck disable=SC2086
+  opam upgrade $packages
+fi
+opam install merlint

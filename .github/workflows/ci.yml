@@ -246,9 +246,7 @@ jobs:
           dune-version: '3.21'
 
       - run: opam install . --deps-only --with-test
-      - run: opam repository add tangled git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
-
-      - run: opam install merlint
+      - run: bash .github/scripts/install-merlint
 
       # merlint --build runs this itself but reports only the exit code, so
       # run it here first to get the compiler error on its own line.
