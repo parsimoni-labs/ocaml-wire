@@ -249,8 +249,8 @@ let test_foreign_env_codec_operations () =
       Codec.encode ~env:env_b codec_a (UInt8.v 1) buf 0);
   expect_foreign_env ~op:"Codec.decode" ~codec:"EnvA" (fun () ->
       Codec.decode ~env:env_b codec_a buf 0);
-  expect_foreign_env ~op:"Codec.validate_exn" ~codec:"EnvA" (fun () ->
-      Codec.validate_exn ~env:env_b codec_a buf 0);
+  expect_foreign_env ~op:"Codec.validate" ~codec:"EnvA" (fun () ->
+      Codec.validate ~env:env_b codec_a buf 0);
   let p_c = Param.input "limit_c" uint8 in
   let p_d = Param.input "floor_d" uint8 in
   let f_c = Field.v "v" uint8 in
@@ -612,14 +612,16 @@ let test_encode_impure_byte_array_getter () =
 let check_entry_points_agree (type r) what (c : r Codec.t) bytes =
   let buf = Bytes.of_string bytes in
   let verdict f =
-    match f () with () -> "ok" | exception Parse_error _ -> "refused"
+    match f () with
+    | () -> "ok"
+    | exception Wire_runtime.Errors.Parse_error _ -> "refused"
   in
   let decoded =
     match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
   in
   Alcotest.(check string)
     (what ^ ": validate") decoded
-    (verdict (fun () -> Codec.validate_exn c buf 0));
+    (verdict (fun () -> ok (Codec.validate c buf 0)));
   Alcotest.(check string)
     (what ^ ": check") decoded
     (let module V = (val Codec.View.codec c) in
@@ -673,9 +675,9 @@ let test_decode_reports_validate_first_failure () =
   in
   let first = error "first decode" (Codec.decode c buf 0) in
   let validated =
-    match Codec.validate_exn c buf 0 with
-    | () -> Alcotest.fail "validate accepted the record"
-    | exception Parse_error e -> Fmt.str "%a" Error.pp e
+    match Codec.validate c buf 0 with
+    | Ok () -> Alcotest.fail "validate accepted the record"
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   Alcotest.(check string) "first decode" validated first;
   Alcotest.(check string)
@@ -721,9 +723,9 @@ let test_decode_params_reports_validate_first_failure () =
     | Error e -> Fmt.str "%a" Error.pp e
   in
   let validated =
-    match Codec.validate_exn ~env:(env ()) c buf 0 with
-    | () -> Alcotest.fail "validate accepted the record"
-    | exception Parse_error e -> Fmt.str "%a" Error.pp e
+    match Codec.validate ~env:(env ()) c buf 0 with
+    | Ok () -> Alcotest.fail "validate accepted the record"
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   Alcotest.(check string)
     "decode" validated
@@ -765,9 +767,7 @@ let test_validate_data_sized_fields () =
       match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
     in
     let validated =
-      match Codec.validate_exn c buf 0 with
-      | () -> "ok"
-      | exception Parse_error _ -> "refused"
+      match Codec.validate c buf 0 with Ok () -> "ok" | Error _ -> "refused"
     in
     Alcotest.(check string) (what ^ ": decode") "refused" decoded;
     Alcotest.(check string) (what ^ ": validate") decoded validated

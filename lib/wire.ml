@@ -326,7 +326,9 @@ let parse_struct_typ s buf off len =
   check_eof len ~off ~n:(Codec.struct_min_size v);
   let sz = Codec.struct_size_of v buf off in
   check_span len ~off ~n:sz;
-  Codec.validate_struct v buf off;
+  (match Codec.validate_struct v buf off with
+  | Ok () -> ()
+  | Error e -> raise (Parse_error e));
   ((), off + sz)
 
 let parse_fixed size get buf off len =
@@ -544,30 +546,22 @@ and parse_repeat_loop : type elt seq.
   in
   loop s.empty off
 
-exception Parse_error = Parse_error
-
-let of_string_exn ?(consume = `Prefix) typ s =
-  let buf = Bytes.unsafe_of_string s in
+(* The value at the start of [buf], or the error that stopped it. *)
+let parse_all ~copy_slices consume typ buf =
   let available = Bytes.length buf in
-  let value, consumed = parse_direct ~copy_slices:true typ buf 0 available in
-  check_consumption consume ~consumed ~available;
-  value
-
-let of_string ?consume typ s =
-  match of_string_exn ?consume typ s with
-  | v -> Ok v
+  match
+    let value, consumed = parse_direct ~copy_slices typ buf 0 available in
+    check_consumption consume ~consumed ~available;
+    value
+  with
+  | value -> Ok value
   | exception Parse_error e -> Error e
 
-let of_bytes_exn ?(consume = `Prefix) typ b =
-  let available = Bytes.length b in
-  let value, consumed = parse_direct ~copy_slices:false typ b 0 available in
-  check_consumption consume ~consumed ~available;
-  value
+let of_string ?(consume = `Prefix) typ s =
+  parse_all ~copy_slices:true consume typ (Bytes.unsafe_of_string s)
 
-let of_bytes ?consume typ b =
-  match of_bytes_exn ?consume typ b with
-  | v -> Ok v
-  | exception Parse_error e -> Error e
+let of_bytes ?(consume = `Prefix) typ b =
+  parse_all ~copy_slices:false consume typ b
 
 let drain_reader reader =
   let buf = Buffer.create 256 in
@@ -758,7 +752,7 @@ let of_reader_incremental typ reader =
   in
   loop ()
 
-let of_reader_exn typ reader =
+let read_value typ reader =
   if typ_consumes_rest typ then
     let bytes = drain_reader reader in
     parse_or_rewind typ reader bytes (Bytes.length bytes)
@@ -770,7 +764,7 @@ let of_reader_exn typ reader =
     | None -> of_reader_incremental typ reader
 
 let of_reader typ reader =
-  match of_reader_exn typ reader with
+  match read_value typ reader with
   | v -> Ok v
   | exception Parse_error e -> Error e
 (* Binary encoding with Bytesrw.Bytes.Writer *)
@@ -1155,7 +1149,10 @@ let pp_value (type r) (c : r Codec.t) ppf (v : r) =
   let readers = Codec.field_readers c in
   Fmt.pf ppf "@[<hv 2>%s {" (Codec.name c);
   List.iter
-    (fun (name, reader) -> Fmt.pf ppf "@ %s = %d;" name (reader buf 0))
+    (fun (name, reader) ->
+      match reader buf 0 with
+      | Ok n -> Fmt.pf ppf "@ %s = %d;" name n
+      | Error e -> Fmt.pf ppf "@ %s = <%a>;" name Error.pp e)
     readers;
   Fmt.pf ppf "@ }@]"
 

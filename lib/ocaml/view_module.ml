@@ -52,9 +52,7 @@ let root_names =
     "fold_unboxed";
     "fold_frames_unboxed";
     "decode";
-    "decode_exn";
     "validate";
-    "validate_exn";
     "is_valid";
     "encode";
     "size";

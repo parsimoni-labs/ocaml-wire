@@ -26,23 +26,11 @@ let ep_direct label =
                 if not (g.equal d value) then
                   Alcobar.failf "%s of_string decode mismatch" label
             | Error _ -> Alcobar.failf "%s of_string decode failed" label);
-            (match Wire.of_string_exn g.typ s with
-            | d ->
-                if not (g.equal d value) then
-                  Alcobar.failf "%s of_string_exn decode mismatch" label
-            | exception Wire.Parse_error _ ->
-                Alcobar.failf "%s of_string_exn decode failed" label);
             (match Wire.of_bytes g.typ bs with
             | Ok d ->
                 if not (g.equal d value) then
                   Alcobar.failf "%s of_bytes decode mismatch" label
             | Error _ -> Alcobar.failf "%s of_bytes decode failed" label);
-            (match Wire.of_bytes_exn g.typ bs with
-            | d ->
-                if not (g.equal d value) then
-                  Alcobar.failf "%s of_bytes_exn decode mismatch" label
-            | exception Wire.Parse_error _ ->
-                Alcobar.failf "%s of_bytes_exn decode failed" label);
             if Wire.to_string g.typ value <> s then
               Alcobar.failf "%s of_string reencode mismatch" label;
             if string_of_bytes (Wire.to_bytes g.typ value) <> s then
@@ -75,13 +63,6 @@ let ep_streaming label =
                 if not (g.equal d value) then
                   Alcobar.failf "%s of_reader decode mismatch" label
             | Error _ -> Alcobar.failf "%s of_reader decode failed" label);
-            let reader = Bytesrw.Bytes.Reader.of_bytes bs in
-            (match Wire.of_reader_exn g.typ reader with
-            | d ->
-                if not (g.equal d value) then
-                  Alcobar.failf "%s of_reader_exn decode mismatch" label
-            | exception Wire.Parse_error _ ->
-                Alcobar.failf "%s of_reader_exn decode failed" label);
             let buf = Buffer.create (Bytes.length bs) in
             let w = Bytesrw.Bytes.Writer.of_buffer buf in
             Wire.to_writer g.typ value w;
@@ -96,17 +77,11 @@ let ep_validate label =
         Alcobar.[ g.positive ]
         (fun (_value, bs) () ->
           let env = positive_env g in
-          match
-            try
-              Wire.Codec.validate_exn ?env g.codec bs 0;
-              `Ok
-            with
-            | Wire.Parse_error _ -> `Reject
-            | Invalid_argument _ -> `Crash
-          with
-          | `Ok -> ()
-          | `Reject -> Alcobar.failf "%s validate rejected a positive" label
-          | `Crash -> Alcobar.failf "%s validate crashed on a positive" label))
+          match Wire.Codec.validate ?env g.codec bs 0 with
+          | Ok () -> ()
+          | Error _ -> Alcobar.failf "%s validate rejected a positive" label
+          | exception Invalid_argument _ ->
+              Alcobar.failf "%s validate crashed on a positive" label))
 
 let entry_point_cases label =
   [

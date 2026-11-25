@@ -1,6 +1,6 @@
 (* The modes of the code Wire_ocaml generates for OxCaml: a function that reads
    or writes a buffer without keeping it takes it [local], so the buffer may be
-   on the caller's stack; [decode_with] takes its constructor [local]; and every
+   on the caller's stack; [decode_with] takes its continuations [local]; and every
    function is [portable], so a parallel task may call it. Only an OxCaml
    compiler builds this file. *)
 
@@ -21,7 +21,7 @@ let[@inline] fields (b @ local) =
 let stack_fields () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
-  G_ipv4.validate_exn b 0;
+  if not (G_ipv4.is_valid b 0) then Alcotest.fail "the header is refused";
   let r = fields b in
   r
 
@@ -55,8 +55,18 @@ let[@inline] record (r : G_ipv4_record.t @ local) =
   (r.versionihl :> int) + (r.length :> int) + (r.ttl :> int)
   + (r.frag :> int) + (r.sum :> int)
 
-(* [decode_with] with a constructor that closes over a local value, and
-   [decode_local], both on a buffer on the stack. *)
+(* What [decode_with] folds of the header in [b] into one [int], as {!record}
+   does, or [-1] for a header it refuses. *)
+let[@inline] folded (b @ local) =
+  G_ipv4_record.decode_with
+    (fun vihl _tos len _id frag ttl _proto sum _src _dst ->
+      (vihl :> int) + (len :> int) + (ttl :> int) + (frag :> int)
+      + (sum :> int))
+    ~fail:(fun () -> -1)
+    b 0
+
+(* [decode_with] with a constructor that closes over a local value, on a
+   buffer on the stack. *)
 let stack_decode () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
@@ -65,13 +75,15 @@ let stack_decode () =
     G_ipv4.decode_with
       (fun vihl _tos len _id _frag ttl _proto _sum _src _dst ->
         !bias + (vihl :> int) + (len :> int) + (ttl :> int))
+      ~fail:(fun () -> -1)
       b 0
   in
-  let r = G_ipv4_record.decode_local b 0 in
-  with_ + record r
+  with_ + folded b
+
+let decoded () = Result.get_ok (G_ipv4_record.decode (Bytes.of_string packet) 0)
 
 let test_stack_decode () =
-  let r = G_ipv4_record.decode_exn (Bytes.of_string packet) 0 in
+  let r = decoded () in
   let want =
     1 + (r.versionihl :> int) + (r.length :> int) + (r.ttl :> int) + record r
   in
@@ -80,10 +92,10 @@ let test_stack_decode () =
 (* A header written to a buffer on the stack decodes as the one it was
    decoded from. *)
 let stack_write () =
-  let r = G_ipv4_record.decode_exn (Bytes.of_string packet) 0 in
+  let r = decoded () in
   let b = Bytes.create__stack size in
   G_ipv4_record.encode r b 0;
-  let back = record (G_ipv4_record.decode_local b 0) in
+  let back = folded b in
   let valid = G_ipv4.is_valid b 0 in
   valid && back = record r
 

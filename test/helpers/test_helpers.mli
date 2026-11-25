@@ -73,6 +73,10 @@ val multi_record_codec : multi_record Codec.t
 val decode_ok : ('a, Error.t) result -> 'a
 (** [decode_ok r] returns the decoded value, failing the test on [Error]. *)
 
+val ok : ('a, Error.t) result -> 'a
+(** [ok r] is the value of [r], its error raised as the runtime's [Parse_error],
+    for a check that compares an answer with what a field reader raises. *)
+
 val expect_constraint_fail : ('a, Error.t) result -> unit
 (** [expect_constraint_fail r] asserts [r] is [Error] with a [Constraint_failed]
     kind, failing the test otherwise. *)

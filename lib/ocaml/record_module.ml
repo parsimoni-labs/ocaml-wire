@@ -125,12 +125,13 @@ let cold_attr = function
   | `OCaml -> "[@inline never]"
 
 (* A decoder: the frame, the walk binding every field, then [call] on their
-   [value]s, by default their typed values. *)
+   [value]s, by default their typed values; [fail] where a check fails. *)
 let pp_decode ?(src = bytes_src) ?(ox = false) ?(value = typed_value) ppf ~plan
-    ~size ~head ~call =
+    ~size ~head ~fail ~call =
   let fields = all_fields plan in
   let value = value ~src in
-  Fmt.pf ppf "%s =@\n  if %a@\n  else@\n" head (pp_frame ~src) "fail";
+  Fmt.pf ppf "%s =@\n  if off < 0 || off > %s buf - size then %s@\n  else@\n"
+    head src.len fail;
   (* A 32-bit field is handed out as its [int32], bound whether live or not;
      its [int] is live only where a check reads it. *)
   let outputs =
@@ -139,16 +140,15 @@ let pp_decode ?(src = bytes_src) ?(ox = false) ?(value = typed_value) ppf ~plan
         match f.store with Int { width = 32; _ } -> None | _ -> Some f.id)
       fields
   in
-  let m =
-    hot ~ox ~raw32:true ~src ~live:(live plan ~outputs) ~fail:"fail buf off" ()
-  in
+  let m = hot ~ox ~raw32:true ~src ~live:(live plan ~outputs) ~fail () in
   pp_fixed ppf ~m ~plan ~size (fun () ->
       Fmt.pf ppf "%s@\n" (call (List.map value fields)));
   Fmt.pf ppf "@\n"
 
 (* [is_valid] answers with a boolean, loading only the fields a test reads, so
    a caller that drops a bad record on the floor pays for no exception handler;
-   [validate] raises what the codec raises, found off the hot path by [fail]. *)
+   [validate] answers what the codec answers, found off the hot path by
+   [error]. *)
 let pp_validate ~src ppf ~target ~plan ~size =
   let attr = "[@inline]" ^ zero_alloc target in
   Fmt.pf ppf
@@ -163,15 +163,9 @@ let pp_validate ~src ppf ~target ~plan ~size =
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "true@\n");
   Fmt.pf ppf
     "@\n\
-     let%s validate_exn %s off =@\n\
-    \  if not (is_valid buf off) then fail buf off@\n\
-     @\n\
-     let validate %s off =@\n\
-    \  match validate_exn buf off with@\n\
-    \  | () -> Ok ()@\n\
-    \  | exception %s.Parse_error e -> Error e@\n\
+     let validate %s off = if is_valid buf off then Ok () else error buf off@\n\
      @\n"
-    attr src.buf src.buf errors
+    src.buf
 
 (* {2 A record that does not fit}
 
@@ -281,10 +275,13 @@ let pp_cold ~src ppf ~target ~plan ~size =
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "no_error ()@\n");
   Fmt.pf ppf
     "@\n\
+     let[@inline never] error %s off =@\n\
+    \  try fail buf off with %s.Parse_error e -> Error e@\n\
+     @\n\
      let%s too_short %s off =@\n\
     \  %s.encode_too_short ~name:codec_name ~size ~len:(%s buf) off@\n\
      @\n"
-    (cold_attr target) src.buf errors src.len
+    src.buf errors (cold_attr target) src.buf errors src.len
 
 let type_of f =
   let t = Fmt.str "%s.%s.t" rt in
@@ -1089,16 +1086,14 @@ let pp_valid ?(src = bytes_src) ppf ~target ~plan =
     "module Valid : sig@\n\
     \  type t = private %s@\n\
      @\n\
-    \  val v : %s -> t@\n\
+    \  val v : %s -> (t, %s.t) result@\n\
      end = struct@\n\
     \  type t = %s@\n\
      @\n\
-    \  let[@inline] v buf =@\n\
-    \    if %s buf < size then fail buf 0@\n\
-    \    else begin@\n"
-    src.typ src.typ src.typ src.len;
-  if has_checks plan then Fmt.pf ppf "      validate_exn buf 0;@\n";
-  Fmt.pf ppf "      buf@\n    end@\nend@\n@\n";
+    \  let[@inline] v buf = if is_valid buf 0 then Ok buf else error buf 0@\n\
+     end@\n\
+     @\n"
+    src.typ src.typ Emitter.error src.typ;
   List.iter
     (fun f ->
       let attr = read_attr target f in
@@ -1179,7 +1174,6 @@ let pp_view_module ~src ppf ~target ~plan ~size =
     \  type 'b t = private int@\n\
     \  type 'b check = private int@\n\
      @\n\
-    \  val at : 'b %s.t%s -> 'b %s.length -> int -> 'b t@\n\
     \  val check : 'b %s.t%s -> 'b %s.length -> int -> 'b check@\n\
     \  val ok : 'b check -> bool@\n\
     \  val get : 'b check -> 'b t@\n\
@@ -1194,16 +1188,11 @@ let pp_view_module ~src ppf ~target ~plan ~size =
     \  let refused = -1@\n\
      @\n\
     \  let%s check %s len off =@\n"
-    src.brand local src.brand src.brand local src.brand src.brand local
-    src.brand local local attr b_param;
+    src.brand local src.brand src.brand local src.brand local local attr b_param;
   pp_view_check ~src ppf ~target ~plan ~size ~live;
   pp_view_with ~src ppf ~target ~plan ~size ~b:b_param ~live;
   Fmt.pf ppf
     "@\n\
-    \  let%s at %s len off =@\n\
-    \    let c = check b len off in@\n\
-    \    if c < 0 then fail (b : _ %s.t :> %s) off else c@\n\
-     @\n\
     \  let%s ok c = c >= 0@\n\
      @\n\
     \  let failed = Invalid_argument (codec_name ^ \".View.get: the check \
@@ -1212,7 +1201,7 @@ let pp_view_module ~src ppf ~target ~plan ~size =
     \  let%s get c = if c >= 0 then c else raise failed@\n\
      end@\n\
      @\n"
-    attr b src.brand src.typ attr attr
+    attr attr
 
 (* The reads of a view. Beside the views of the module of the codec ([views]),
    which read each field with its accessor, only those with no such
@@ -1256,73 +1245,33 @@ let pp_view ?(src = bytes_src) ?(views = false) ppf ~target ~plan ~size =
       | _ -> ())
     fields
 
-(* A record the encoder wrote that fails its own constraints. On OxCaml the
-   check is [is_valid], which the allocation checker follows, and only a record
-   that fails it reaches [rejected], which raises what [validate] found as an
+(* A record the encoder wrote that fails its own constraints. The check is
+   [is_valid], which OxCaml's allocation checker follows, and only a record
+   that fails it reaches [rejected], which raises what [fail] finds as an
    encoding error and so only raises. *)
 let pp_validate_written ~src ppf ~target =
-  match target with
-  | `OCaml ->
-      Fmt.pf ppf
-        "let[@inline never] validate_written %s off =@\n\
-        \  match validate_exn buf off with@\n\
-        \  | () -> ()@\n\
-        \  | exception %s.Parse_error e -> %s.encode_rejected ~name:codec_name \
-         e@\n\
-         @\n"
-        src.buf errors errors
-  | `OxCaml ->
-      Fmt.pf ppf
-        "let%s rejected %s off =@\n\
-        \  match validate_exn buf off with@\n\
-        \  | () -> no_error ()@\n\
-        \  | exception %s.Parse_error e -> %s.encode_rejected ~name:codec_name \
-         e@\n\
-         @\n\
-         let[@inline][@zero_alloc] validate_written %s off =@\n\
-        \  if not (is_valid buf off) then rejected buf off@\n\
-         @\n"
-        (cold_attr target) src.buf errors errors src.buf
+  Fmt.pf ppf
+    "let%s rejected %s off =@\n\
+    \  try fail buf off@\n\
+    \  with %s.Parse_error e -> %s.encode_rejected ~name:codec_name e@\n\
+     @\n\
+     let%s validate_written %s off =@\n\
+    \  if not (is_valid buf off) then rejected buf off@\n\
+     @\n"
+    (cold_attr target) src.buf errors errors
+    (match target with `OxCaml -> "[@inline][@zero_alloc]" | `OCaml -> "")
+    src.buf
 
-(* [decode_local] builds the generated record in the caller's frame, so a
-   decode of integer fields allocates nothing on the heap; a byte array is
-   still a string on the heap, so with one it makes no such promise.
-   [decode_with] takes the constructor as an argument, which flambda2 inlines
-   with it. *)
+(* [decode_with] takes the constructor and the answer to a record that fails
+   as arguments, [local], so flambda2 inlines them with it and a decode of
+   integer fields allocates nothing on the heap. *)
 let pp_oxcaml ~src ppf ~plan ~size =
-  let fields = all_fields plan in
-  pp_decode ~src ~ox:true ppf ~plan ~size
-    ~head:(Fmt.str "let[@inline] decode_with (make @@ local) %s off" src.buf)
-    ~call:(fun args -> Fmt.str "make %a" pp_list args);
-  (* A byte array is a string on the heap, and a map's functions are the
-     caller's, which may allocate. *)
-  let bytes =
-    List.exists
-      (fun f ->
-        Option.is_some f.map
-        || match f.store with Bytes _ -> true | _ -> false)
-      fields
-  in
   pp_decode ~src ~ox:true ppf ~plan ~size
     ~head:
-      (Fmt.str "let%s decode_local %s off"
-         (if bytes then "" else "[@zero_alloc]")
-         src.buf)
-    ~call:(fun args ->
-      Fmt.str "exclave_ stack_ { %a }"
-        Fmt.(list ~sep:(any "; ") string)
-        (List.map2 (fun f a -> Fmt.str "%s = %s" f.label a) fields args))
-
-(* [decode] answers the codec's error as a value, as [Wire.Codec.decode]
-   does; [decode_exn] raises it. *)
-let pp_decode_result ~src ppf =
-  Fmt.pf ppf
-    "let decode %s off =@\n\
-    \  match decode_exn buf off with@\n\
-    \  | v -> Ok v@\n\
-    \  | exception %s.Parse_error e -> Error e@\n\
-     @\n"
-    src.buf errors
+      (Fmt.str
+         "let[@inline] decode_with (make @@ local) ~(fail @@ local) %s off"
+         src.buf) ~fail:"fail ()" ~call:(fun args ->
+      Fmt.str "make %a" pp_list args)
 
 (* The bits of a 4-byte record a field occupies in a NEON lane, which holds the
    record's bytes in buffer order read as a little-endian word: [(shift,
@@ -1574,9 +1523,8 @@ let pp_codec ~src ~bytes ppf ~target ~plan ~size =
   pp_cold ~src ppf ~target ~plan ~size;
   pp_validate ~src ppf ~target ~plan ~size;
   if has_checks plan then pp_validate_written ~src ppf ~target;
-  pp_decode ~src ppf ~plan ~size ~head:(Fmt.str "let decode_exn %s off" src.buf)
-    ~call:(fun args -> Fmt.str "v %a" pp_list args);
-  pp_decode_result ~src ppf;
+  pp_decode ~src ppf ~plan ~size ~head:(Fmt.str "let decode %s off" src.buf)
+    ~fail:"error buf off" ~call:(fun args -> Fmt.str "Ok (v %a)" pp_list args);
   if target = `OxCaml && bytes then pp_oxcaml ~src ppf ~plan ~size;
   pp_write_int ~src ppf ~target ~plan;
   pp_write ~src ppf ~target ~plan;
@@ -1627,14 +1575,12 @@ let own_names =
     "size";
     "is_valid";
     "validate";
-    "validate_exn";
     "validate_written";
     "rejected";
     "decode";
-    "decode_exn";
     "decode_with";
-    "decode_local";
     "first_error";
+    "error";
     "write_int";
     "write";
     "write_at";

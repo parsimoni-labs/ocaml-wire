@@ -15,7 +15,7 @@ Metrics: ns/op, allocation (words), ratio vs C, throughput.
 
 The C validator checks the schema as it extracts fields. A staged OCaml
 `Codec.get` reads the requested field and does not validate the whole record;
-call `Codec.validate_exn` separately when that is required. The timing ratio
+call `Codec.validate` separately when that is required. The timing ratio
 therefore includes different amounts of validation work.
 
 ## Rules

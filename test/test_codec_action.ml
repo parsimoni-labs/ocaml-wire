@@ -41,7 +41,9 @@ let test_action_fires_on_get () =
   (* Odd value: action rejects *)
   match get_v (Bytes.of_string "\x43") 0 with
   | _ -> Alcotest.fail "expected action to reject odd value"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
+  | exception
+      Wire_runtime.Errors.Parse_error { Error.kind = Constraint_failed _; _ } ->
+      ()
 
 let test_action_validate_does_not_writeback () =
   (* validate runs actions in scratch storage but does not expose their output
@@ -60,7 +62,7 @@ let test_action_validate_does_not_writeback () =
   let codec = Codec.v "ActionValidate" (fun v -> v) [ cf_v2 ] in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
-  Codec.validate_exn ~env codec buf 0;
+  decode_ok (Codec.validate ~env codec buf 0);
   Alcotest.(check int)
     "action output not written back by validate" 0
     (UInt8.to_int (Param.get env action_out2))
@@ -167,7 +169,9 @@ let test_get_action_abort_field () =
   let get_v = Staged.unstage (Codec.get codec cf_v) in
   match get_v (Bytes.of_string "\x42") 0 with
   | _ -> Alcotest.fail "expected abort"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
+  | exception
+      Wire_runtime.Errors.Parse_error { Error.kind = Constraint_failed _; _ } ->
+      ()
 
 let test_get_noaction_ignores_env () =
   (* Passing ~env to get on a field without action is harmless *)
@@ -229,7 +233,9 @@ let test_get_action_with_inputparam () =
   (* 0x40 = 64 > 50: action rejects *)
   match get_v buf_bad 0 with
   | _ -> Alcotest.fail "expected rejection from input param check"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
+  | exception
+      Wire_runtime.Errors.Parse_error { Error.kind = Constraint_failed _; _ } ->
+      ()
 
 let test_get_action_inputparam_noenv () =
   (* An action comparing against an input param is a verdict on the bytes, so
@@ -260,7 +266,9 @@ let test_get_action_inputparam_noenv () =
     (UInt8.to_int (get_v (Bytes.of_string "\x04") 0));
   match get_v (Bytes.of_string "\x05") 0 with
   | _ -> Alcotest.fail "expected rejection above the bound"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
+  | exception
+      Wire_runtime.Errors.Parse_error { Error.kind = Constraint_failed _; _ } ->
+      ()
 
 (* -- Param forwarding into embedded sub-codecs -- *)
 
@@ -536,10 +544,8 @@ let test_validate_constraint_only () =
   let codec = Codec.v "ConstOnly" (fun v -> v) [ cf_x ] in
   let good = Bytes.of_string "\x05" in
   let bad = Bytes.of_string "\x0B" in
-  Codec.validate_exn codec good 0;
-  match Codec.validate_exn codec bad 0 with
-  | () -> Alcotest.fail "expected constraint failure"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
+  decode_ok (Codec.validate codec good 0);
+  expect_constraint_fail (Codec.validate codec bad 0)
 
 let test_validate_where_only () =
   (* Codec with where clause but no field constraints *)
@@ -553,10 +559,8 @@ let test_validate_where_only () =
   in
   let good = Bytes.of_string "\x2A" in
   let bad = Bytes.of_string "\x00" in
-  Codec.validate_exn codec good 0;
-  match Codec.validate_exn codec bad 0 with
-  | () -> Alcotest.fail "expected where failure"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
+  decode_ok (Codec.validate codec good 0);
+  expect_constraint_fail (Codec.validate codec bad 0)
 
 (* -- a field that sizes a later one and sets an output -- *)
 
@@ -622,26 +626,26 @@ let sized_entries name c =
     let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
     [
       ( "plain",
-        (fun () -> Codec.validate_exn c input 0),
-        fun () -> Codec.decode_exn c input 0 );
+        (fun () -> Codec.validate c input 0),
+        fun () -> Codec.decode c input 0 );
       ( "env",
-        (fun () -> Codec.validate_exn ~env:(Codec.env c) c input 0),
-        fun () -> Codec.decode_exn ~env:(Codec.env c) c input 0 );
+        (fun () -> Codec.validate ~env:(Codec.env c) c input 0),
+        fun () -> Codec.decode ~env:(Codec.env c) c input 0 );
       ( "shifted",
-        (fun () -> Codec.validate_exn c shifted 2),
-        fun () -> Codec.decode_exn c shifted 2 );
+        (fun () -> Codec.validate c shifted 2),
+        fun () -> Codec.decode c shifted 2 );
       ( "field",
-        (fun () -> Codec.validate_exn frame input 0),
-        fun () -> Codec.decode_exn frame input 0 );
+        (fun () -> Codec.validate frame input 0),
+        fun () -> Codec.decode frame input 0 );
       ( "field, env",
-        (fun () -> Codec.validate_exn ~env:(Codec.env frame) frame input 0),
-        fun () -> Codec.decode_exn ~env:(Codec.env frame) frame input 0 );
+        (fun () -> Codec.validate ~env:(Codec.env frame) frame input 0),
+        fun () -> Codec.decode ~env:(Codec.env frame) frame input 0 );
       ( "region",
-        (fun () -> Codec.validate_exn fixed input 0),
-        fun () -> Codec.decode_exn fixed input 0 );
+        (fun () -> Codec.validate fixed input 0),
+        fun () -> Codec.decode fixed input 0 );
       ( "param region",
-        (fun () -> Codec.validate_exn ~env:(slot ()) sized input 0),
-        fun () -> Codec.decode_exn ~env:(slot ()) sized input 0 );
+        (fun () -> Codec.validate ~env:(slot ()) sized input 0),
+        fun () -> Codec.decode ~env:(slot ()) sized input 0 );
     ]
 
 let sized_inputs =
@@ -653,9 +657,6 @@ let sized_inputs =
   let* d = bytes in
   [ Bytes.of_string (String.init 4 (fun i -> Char.chr [| a; b; c; d |].(i))) ]
 
-let sized_result f =
-  match f () with v -> Ok v | exception Parse_error e -> Error e
-
 (* No entry point returns a record that breaks a check, and with [exact] each
    accepts exactly what its validate accepts. *)
 let check_sized ~exact name c =
@@ -665,7 +666,7 @@ let check_sized ~exact name c =
       List.iter
         (fun (entry, validate, decode) ->
           let where = Fmt.str "%s, %s, %S" name entry (Bytes.to_string input) in
-          match (sized_result validate, sized_result decode) with
+          match (validate (), decode ()) with
           | _, Ok ((_, _, s) as v) when UInt8.to_int s > sized_limit ->
               Alcotest.failf "%s: decode returned %s" where (sized_show v)
           | Ok (), Error e when exact ->

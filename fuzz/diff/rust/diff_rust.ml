@@ -50,25 +50,36 @@ let contains s sub =
   in
   go 0
 
+(* The codec's error, raised as a reader raises it, so the two compare the
+   same. *)
+let ok = function
+  | Ok v -> v
+  | Error e -> raise (Wire.Private.Types.Parse_error e)
+
 let outcome ?(named = true) f =
   let field path =
     match List.rev path with x :: _ when named -> x | _ -> ""
   in
   match f () with
   | s -> "ok " ^ s
-  | exception Wire.Parse_error { Wire.Error.kind = Unexpected_eof _; _ } ->
+  | exception
+      Wire.Private.Types.Parse_error { Wire.Error.kind = Unexpected_eof _; _ }
+    ->
       "short"
   | exception
-      Wire.Parse_error { Wire.Error.kind = Constraint_failed _; at; field = p }
-    ->
+      Wire.Private.Types.Parse_error
+        { Wire.Error.kind = Constraint_failed _; at; field = p } ->
       Fmt.str "constraint %S at %d" (field p) at
   | exception
-      Wire.Parse_error
+      Wire.Private.Types.Parse_error
         { Wire.Error.kind = Invalid_enum { value; _ }; at; field = p } ->
       Fmt.str "enum %S at %d value %d" (field p) at value
-  | exception Wire.Parse_error { Wire.Error.kind = Value_out_of_range _; _ } ->
+  | exception
+      Wire.Private.Types.Parse_error
+        { Wire.Error.kind = Value_out_of_range _; _ } ->
       "overflow"
-  | exception Wire.Parse_error e -> Fmt.str "parse error %a" Wire.Error.pp e
+  | exception Wire.Private.Types.Parse_error e ->
+      Fmt.str "parse error %a" Wire.Error.pp e
   (* A getter's bounds-checked load or copy past the buffer, or encode's
      frame check. *)
   | exception Invalid_argument m
@@ -99,12 +110,12 @@ let reads_at label c case refs buf off =
   let what w = Fmt.str "%s at offset %d" w off in
   same label (what "decode")
     (outcome (fun () ->
-         quoted (Wire.Codec.to_string c (Wire.Codec.decode_exn c buf off))))
+         quoted (Wire.Codec.to_string c (ok (Wire.Codec.decode c buf off)))))
     (got case (rust case ~op:op_decode buf off out) (fun () ->
          quoted (Bytes.sub_string out 0 case.size)));
   same label (what "validate")
     (outcome (fun () ->
-         Wire.Codec.validate_exn c buf off;
+         ok (Wire.Codec.validate c buf off);
          ""))
     (got case (rust case ~op:op_validate buf off out) (fun () -> ""));
   Array.iteri
@@ -124,9 +135,9 @@ let reads_at label c case refs buf off =
     case.fields
 
 let encodes_at label c case buf off =
-  match Wire.Codec.decode_exn c buf off with
-  | exception (Wire.Parse_error _ | Invalid_argument _) -> ()
-  | v ->
+  match Wire.Codec.decode c buf off with
+  | Error _ | (exception Invalid_argument _) -> ()
+  | Ok v ->
       let canonical = Bytes.of_string (Wire.Codec.to_string c v) in
       List.iter
         (fun (len, off) ->
@@ -162,7 +173,7 @@ let valid label c case refs buf off =
       same label
         (Fmt.str "Valid::at offset %d then read %s" off f.name)
         (outcome (fun () ->
-             Wire.Codec.validate_exn c buf off;
+             ok (Wire.Codec.validate c buf off);
              refs.(i) buf off))
         (got case (rust case ~op:op_valid ~field:i buf off out) (fun () ->
              value case i out)))

@@ -72,13 +72,10 @@ let test_direct_consumption_modes () =
   check_trailing_byte_error "bytes all"
     (of_bytes ~consume:`All uint8 (Bytes.of_string input));
   check_value "all consumed" (of_string ~consume:`All uint8 "\x2a");
-  (match of_string ~consume:`All zeroterm "ok\x00!" with
+  match of_string ~consume:`All zeroterm "ok\x00!" with
   | Error { Error.at = 3; field = []; kind = Trailing_bytes 1 } -> ()
   | Error e -> Alcotest.failf "variable all: wrong error: %a" Error.pp e
-  | Ok _ -> Alcotest.fail "variable all: accepted a trailing byte");
-  Alcotest.check_raises "raising variant"
-    (Parse_error { Error.at = 1; field = []; kind = Trailing_bytes 1 })
-    (fun () -> ignore (of_string_exn ~consume:`All uint8 input))
+  | Ok _ -> Alcotest.fail "variable all: accepted a trailing byte"
 
 let test_parse_uint16_le () =
   let input = "\x01\x02" in
@@ -155,9 +152,9 @@ let overwrite_first slice =
 
 let test_byte_slice_input_ownership () =
   let large_source = String.make (1024 * 1024) '\x2a' in
-  ignore (of_string_exn uint8 large_source : UInt8.t);
+  ignore (decode_ok (of_string uint8 large_source) : UInt8.t);
   let before = Gc.allocated_bytes () in
-  ignore (of_string_exn uint8 large_source : UInt8.t);
+  ignore (decode_ok (of_string uint8 large_source) : UInt8.t);
   let allocated = Gc.allocated_bytes () -. before in
   Fmt.kstr
     (fun msg -> Alcotest.(check bool) msg true (allocated < 4096.))
@@ -165,28 +162,28 @@ let test_byte_slice_input_ownership () =
     allocated;
   let typ = byte_slice ~size:(int 3) in
   let source = String.init 3 (fun i -> Char.chr (Char.code 'a' + i)) in
-  overwrite_first (of_string_exn typ source);
+  overwrite_first (decode_ok (of_string typ source));
   Alcotest.(check string) "direct source string remains immutable" "abc" source;
   let field = Field.v "payload" typ in
   let container = Codec.v "Slice" Fun.id Codec.[ field $ Fun.id ] in
   let source = String.init 3 (fun i -> Char.chr (Char.code 'a' + i)) in
-  overwrite_first (of_string_exn (codec container) source);
+  overwrite_first (decode_ok (of_string (codec container) source));
   Alcotest.(check string) "codec source string remains immutable" "abc" source;
   let source = Bytes.of_string "abc" in
-  overwrite_first (of_bytes_exn typ source);
+  overwrite_first (decode_ok (of_bytes typ source));
   Alcotest.(check bytes)
     "mutable byte input remains aliased" (Bytes.of_string "Xbc") source
 
 let test_int8_negative () =
   let buf = Bytes.of_string "\xFE" in
-  Alcotest.(check int) "-2" (-2) (SInt8.to_int (of_bytes_exn int8 buf))
+  Alcotest.(check int) "-2" (-2) (SInt8.to_int (decode_ok (of_bytes int8 buf)))
 
 let test_int8_full_range () =
   for i = -128 to 127 do
     let s = to_string int8 (SInt8.v i) in
     Alcotest.(check int)
       (Fmt.str "%d" i) i
-      (SInt8.to_int (of_string_exn int8 s))
+      (SInt8.to_int (decode_ok (of_string int8 s)))
   done
 
 (* [of_reader] on a value with no fixed wire size accumulates slices and retries
@@ -218,7 +215,7 @@ let test_reader_incremental_is_not_quadratic () =
   let frame = Wire.to_string typ payload in
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
   let before = Gc.allocated_bytes () in
-  let got = Wire.of_reader_exn typ reader in
+  let got = decode_ok (Wire.of_reader typ reader) in
   let words = (Gc.allocated_bytes () -. before) /. 8. in
   Alcotest.(check string) "payload round-trips" payload got;
   Fmt.kstr
@@ -240,7 +237,7 @@ let test_reader_zeroterm_scan_is_not_quadratic () =
   let frame = Wire.to_string zeroterm payload in
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
   let before = Sys.time () in
-  let got = Wire.of_reader_exn zeroterm reader in
+  let got = decode_ok (Wire.of_reader zeroterm reader) in
   let elapsed = Sys.time () -. before in
   Alcotest.(check string) "payload round-trips" payload got;
   Fmt.kstr
@@ -265,7 +262,7 @@ let test_reader_embedded_zeroterm_scan_is_not_quadratic () =
   let frame = Wire.to_string typ payload in
   let reader = Bytesrw.Bytes.Reader.of_string ~slice_length:1 frame in
   let before = Sys.time () in
-  let got = Wire.of_reader_exn typ reader in
+  let got = decode_ok (Wire.of_reader typ reader) in
   let elapsed = Sys.time () -. before in
   Alcotest.(check string) "payload round-trips" payload got;
   Fmt.kstr
@@ -276,13 +273,15 @@ let test_reader_embedded_zeroterm_scan_is_not_quadratic () =
 
 let test_int16be_negative () =
   let buf = Bytes.of_string "\xFF\xFE" in
-  Alcotest.(check int) "-2 BE" (-2) (SInt16.to_int (of_bytes_exn int16be buf))
+  Alcotest.(check int)
+    "-2 BE" (-2)
+    (SInt16.to_int (decode_ok (of_bytes int16be buf)))
 
 let test_int32be_negative () =
   let buf = Bytes.of_string "\xFF\xFF\xFF\xFE" in
   Alcotest.(check int32)
     "-2 BE" (-2l)
-    (SInt32.to_int32 (of_bytes_exn int32be buf))
+    (SInt32.to_int32 (decode_ok (of_bytes int32be buf)))
 
 let test_int64le_roundtrip () =
   roundtrip "roundtrip" int64 Alcotest.int64 (-0x0102_0304_0506_0708L)
@@ -297,7 +296,7 @@ let test_float64le_roundtrip () =
 
 let test_float64_nan_roundtrip () =
   let s = to_string float64be Float.nan in
-  let v = of_string_exn float64be s in
+  let v = decode_ok (of_string float64be s) in
   Alcotest.(check bool) "nan preserved" true (Float.is_nan v)
 
 let finite_field name typ =
@@ -1481,19 +1480,19 @@ let test_of_string_truncated_variable_codec () =
             (String.length s))
     [ ""; "\x05"; "\xff\x00" ]
 
-(* [Codec.validate_exn] on a buffer too short to hold the fields a check reads must
+(* [Codec.validate] on a buffer too short to hold the fields a check reads must
    fail cleanly, not crash. A check (here a [where]) reads a field at an offset
    that depends on a length; [decode] bounds-checks before validating, but
-   [Codec.validate_exn] runs the check kernel directly. *)
+   [Codec.validate] runs the check kernel directly. *)
 let test_validate_short_buffer_no_crash () =
   let len = Field.v "Len" (where Expr.true_ uint8) in
   let data = Field.v "Data" (byte_array ~size:(Field.ref len)) in
   let c =
     Codec.v "VShort" (fun l d -> (l, d)) Codec.[ len $ fst; data $ snd ]
   in
-  match Codec.validate_exn c (Bytes.create 0) 0 with
-  | () -> Alcotest.fail "validate accepted an empty buffer"
-  | exception Wire.Parse_error _ -> ()
+  match Codec.validate c (Bytes.create 0) 0 with
+  | Ok () -> Alcotest.fail "validate accepted an empty buffer"
+  | Error _ -> ()
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on a short buffer: %s" m
 
@@ -1506,9 +1505,9 @@ let test_validate_rejects_all_zeros_failure () =
   | Ok _ -> Alcotest.fail "decode accepted a non-zero all_zeros byte"
   | exception Invalid_argument m ->
       Alcotest.failf "decode crashed on non-zero all_zeros: %s" m);
-  match Codec.validate_exn c bad 0 with
-  | () -> Alcotest.fail "validate accepted a non-zero all_zeros byte"
-  | exception Wire.Parse_error _ -> ()
+  match Codec.validate c bad 0 with
+  | Ok () -> Alcotest.fail "validate accepted a non-zero all_zeros byte"
+  | Error _ -> ()
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on non-zero all_zeros: %s" m
 
@@ -1529,9 +1528,9 @@ let check_decode_and_validate_reject label c bad =
   | Ok _ -> Alcotest.failf "decode accepted %s" label
   | exception Invalid_argument m ->
       Alcotest.failf "decode crashed on %s: %s" label m);
-  match Codec.validate_exn c bad 0 with
-  | () -> Alcotest.failf "validate accepted %s" label
-  | exception Wire.Parse_error _ -> ()
+  match Codec.validate c bad 0 with
+  | Ok () -> Alcotest.failf "validate accepted %s" label
+  | Error _ -> ()
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed on %s: %s" label m
 

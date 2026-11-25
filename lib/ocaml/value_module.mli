@@ -15,8 +15,7 @@ val ml_record : Format.formatter -> View_module.t -> View_module.record -> unit
 
 val ml_root : Format.formatter -> View_module.t -> View_module.record -> unit
 (** [ml_root ppf t r] writes the same for the codec's own record [r], then
-    [min_size], [is_valid], [decode], [decode_exn], [validate], [validate_exn]
-    and [encode]. *)
+    [min_size], [is_valid], [decode], [validate] and [encode]. *)
 
 val mli_record :
   Format.formatter ->

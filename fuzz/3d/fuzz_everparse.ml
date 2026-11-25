@@ -372,12 +372,10 @@ let record_spans codec env b =
   match Wire.Codec.decode ?env codec b 0 with
   | Error _ -> false
   | Ok _ -> (
-      match
-        Wire.Codec.validate_exn ?env codec b 0;
-        Wire.Codec.wire_size_at ?env codec b 0
-      with
-      | n -> Int.equal n (Bytes.length b)
-      | exception Wire.Parse_error _ -> false)
+      match Wire.Codec.validate ?env codec b 0 with
+      | Error _ -> false
+      | Ok () ->
+          Int.equal (Wire.Codec.wire_size_at ?env codec b 0) (Bytes.length b))
 
 (* Shapes whose accepting side the seeder cannot construct, so
    [generate_corpus] refuses rather than emit a corpus that says the same thing
@@ -445,7 +443,7 @@ let corpus_oracle_case (label, Fuzz_gen.Pack g) =
 let reencodes g codec env v sz =
   let buf = Bytes.create sz in
   match Wire.Codec.encode ?env codec v buf 0 with
-  | exception Wire.Parse_error e ->
+  | exception Wire.Private.Types.Parse_error e ->
       Fmt.kstr (fun s -> Some s) "re-encoding raised %a" Wire.Error.pp e
   | () -> (
       match Wire.Codec.decode ?env codec buf 0 with

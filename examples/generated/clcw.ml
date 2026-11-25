@@ -419,6 +419,9 @@ let[@inline never] fail buf off =
   if off < 0 || off > Bytes.length buf - size then short buf off;
   no_error ()
 
+let[@inline never] error buf off =
+  try fail buf off with Wire_runtime.Errors.Parse_error e -> Error e
+
 let[@inline never] too_short buf off =
   Wire_runtime.Errors.encode_too_short ~name:codec_name ~size
     ~len:(Bytes.length buf) off
@@ -426,15 +429,10 @@ let[@inline never] too_short buf off =
 let[@inline] is_valid buf off =
   if off < 0 || off > Bytes.length buf - size then false else true
 
-let[@inline] validate_exn buf off = if not (is_valid buf off) then fail buf off
+let validate buf off = if is_valid buf off then Ok () else error buf off
 
-let validate buf off =
-  match validate_exn buf off with
-  | () -> Ok ()
-  | exception Wire_runtime.Errors.Parse_error e -> Error e
-
-let decode_exn buf off =
-  if off < 0 || off > Bytes.length buf - size then fail buf off
+let decode buf off =
+  if off < 0 || off > Bytes.length buf - size then error buf off
   else
     let bw1 = Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32 in
     let f1_controlwordtype = bw1 lsr 31 in
@@ -451,26 +449,22 @@ let decode_exn buf off =
     let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
     let f13_spare2 = (bw1 lsr 8) land 0x1 in
     let f14_reportvalue = bw1 land 0xff in
-    v
-      (cast Value.controlwordtype_eq f1_controlwordtype)
-      (cast Value.clcwversion_eq f2_clcwversion)
-      (cast Value.statusfield_eq f3_statusfield)
-      (cast Value.copineffect_eq f4_copineffect)
-      (cast Value.vcid_eq f5_vcid)
-      (cast Value.spare_eq f6_spare)
-      (cast Value.norf_eq f7_norf)
-      (cast Value.nobitlock_eq f8_nobitlock)
-      (cast Value.lockout_eq f9_lockout)
-      (cast Value.wait_eq f10_wait)
-      (cast Value.retransmit_eq f11_retransmit)
-      (cast Value.farmbcounter_eq f12_farmbcounter)
-      (cast Value.spare2_eq f13_spare2)
-      (cast Value.reportvalue_eq f14_reportvalue)
-
-let decode buf off =
-  match decode_exn buf off with
-  | v -> Ok v
-  | exception Wire_runtime.Errors.Parse_error e -> Error e
+    Ok
+      (v
+         (cast Value.controlwordtype_eq f1_controlwordtype)
+         (cast Value.clcwversion_eq f2_clcwversion)
+         (cast Value.statusfield_eq f3_statusfield)
+         (cast Value.copineffect_eq f4_copineffect)
+         (cast Value.vcid_eq f5_vcid)
+         (cast Value.spare_eq f6_spare)
+         (cast Value.norf_eq f7_norf)
+         (cast Value.nobitlock_eq f8_nobitlock)
+         (cast Value.lockout_eq f9_lockout)
+         (cast Value.wait_eq f10_wait)
+         (cast Value.retransmit_eq f11_retransmit)
+         (cast Value.farmbcounter_eq f12_farmbcounter)
+         (cast Value.spare2_eq f13_spare2)
+         (cast Value.reportvalue_eq f14_reportvalue))
 
 let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
     f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock

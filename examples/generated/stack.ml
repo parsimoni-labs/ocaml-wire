@@ -1927,8 +1927,9 @@ let[@inline never] error_at buf length p0 path =
 let min_size = 14
 
 let[@inline never] first_error buf off =
-  ignore (error_at buf (Bytes.length buf) off [] : int);
-  no_error ()
+  match error_at buf (Bytes.length buf) off [] with
+  | _ -> no_error ()
+  | exception Wire_runtime.Errors.Parse_error e -> Error e
 
 let is_valid buf off =
   off >= 0
@@ -1938,27 +1939,17 @@ let is_valid buf off =
       ok
         (check b (Wire_runtime.Buf.length b) ~off ~len:(Bytes.length buf - off))
 
-let decode_exn buf off =
+let decode buf off =
   if off < 0 then Wire_runtime.Errors.negative_offset off;
   match Wire_runtime.Buf.v buf with
   | Wire_runtime.Buf.Any b ->
       let len = Wire_runtime.Buf.length b in
       let c = check b len ~off ~len:(Bytes.length buf - off) in
-      if ok c then of_view b len (get c) else first_error buf off
-
-let decode buf off =
-  match decode_exn buf off with
-  | v -> Ok v
-  | exception Wire_runtime.Errors.Parse_error e -> Error e
-
-let validate_exn buf off =
-  if off < 0 then Wire_runtime.Errors.negative_offset off;
-  if not (is_valid buf off) then first_error buf off
+      if ok c then Ok (of_view b len (get c)) else first_error buf off
 
 let validate buf off =
-  match validate_exn buf off with
-  | () -> Ok ()
-  | exception Wire_runtime.Errors.Parse_error e -> Error e
+  if off < 0 then Wire_runtime.Errors.negative_offset off;
+  if is_valid buf off then Ok () else first_error buf off
 
 let encode (r : t) buf off =
   if off < 0 then Wire_runtime.Errors.negative_offset off;

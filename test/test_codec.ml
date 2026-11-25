@@ -48,15 +48,12 @@ let test_codec_decode_consumption_modes () =
   let variable_codec =
     Codec.v "Terminated" Fun.id Codec.[ variable_field $ Fun.id ]
   in
-  (match
-     Codec.decode ~consume:`All variable_codec (Bytes.of_string "ok\x00!") 0
-   with
+  match
+    Codec.decode ~consume:`All variable_codec (Bytes.of_string "ok\x00!") 0
+  with
   | Error { Error.at = 3; field = []; kind = Trailing_bytes 1 } -> ()
   | Error e -> Alcotest.failf "variable all: wrong error: %a" Error.pp e
-  | Ok _ -> Alcotest.fail "variable all: accepted a trailing byte");
-  Alcotest.check_raises "raising variant"
-    (Parse_error { Error.at = 2; field = []; kind = Trailing_bytes 1 })
-    (fun () -> ignore (Codec.decode_exn ~consume:`All codec buf 1))
+  | Ok _ -> Alcotest.fail "variable all: accepted a trailing byte"
 
 let test_record_roundtrip () =
   let original =
@@ -192,27 +189,23 @@ let test_validate_rejects_bad_where () =
   (* get returns raw value without checking *)
   Alcotest.(check int) "get bypasses where" 7 (UInt8.to_int (get_x buf 0));
   (* validate catches the violation *)
-  match Codec.validate_exn validate_codec buf 0 with
-  | () -> Alcotest.fail "expected validate to reject where violation"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
+  expect_constraint_fail (Codec.validate validate_codec buf 0)
 
 let test_validate_rejects_bad_constraint () =
   (* constraint requires x <= 10, set x = 11 *)
   let buf = Bytes.of_string "\x0B" in
   let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
   Alcotest.(check int) "get bypasses constraint" 11 (UInt8.to_int (get_x buf 0));
-  match Codec.validate_exn validate_codec buf 0 with
-  | () -> Alcotest.fail "expected validate to reject constraint violation"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ()
+  expect_constraint_fail (Codec.validate validate_codec buf 0)
 
 let test_validate_then_get () =
   (* x = 8 satisfies both where (= 8) and constraint (<= 10) *)
   let buf = Bytes.of_string "\x08" in
-  Codec.validate_exn validate_codec buf 0;
+  decode_ok (Codec.validate validate_codec buf 0);
   let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
   Alcotest.(check int) "validate then get" 8 (UInt8.to_int (get_x buf 0))
 
-(* [Codec.validate_exn] is the safety gate before a zero-copy [get] on untrusted
+(* [Codec.validate] is the safety gate before a zero-copy [get] on untrusted
    input, so it must run decode's structural bounds check even for a codec with
    no constraints (whose constraint validator is a no-op). A short buffer must be
    rejected, not silently accepted. *)
@@ -222,15 +215,15 @@ let test_validate_bounds_constraint_free () =
       (fun a b -> (a, b))
       Codec.[ Field.v "a" uint32be $ fst; Field.v "b" uint32be $ snd ]
   in
-  (match Codec.validate_exn c (Bytes.make 2 '\000') 0 with
-  | exception Parse_error { Error.kind = Unexpected_eof _; _ } -> ()
-  | exception Parse_error _ ->
+  (match Codec.validate c (Bytes.make 2 '\000') 0 with
+  | Error { Error.kind = Unexpected_eof _; _ } -> ()
+  | Error _ ->
       Alcotest.fail "validate failed with the wrong error on a short buffer"
-  | () -> Alcotest.fail "validate accepted a buffer too short for the codec");
+  | Ok () -> Alcotest.fail "validate accepted a buffer too short for the codec");
   (* A full buffer still validates. *)
-  Codec.validate_exn c (Bytes.make 8 '\000') 0
+  decode_ok (Codec.validate c (Bytes.make 8 '\000') 0)
 
-(* [all_zeros] padding must read as all-zero. Decode enforces it; [Codec.validate_exn]
+(* [all_zeros] padding must read as all-zero. Decode enforces it; [Codec.validate]
    must too, or validate-then-get silently accepts tampered padding bytes. *)
 let test_validate_all_zeros () =
   let c =
@@ -238,17 +231,16 @@ let test_validate_all_zeros () =
       (fun tag pad -> (tag, pad))
       Codec.[ Field.v "tag" uint8 $ fst; Field.v "pad" all_zeros $ snd ]
   in
-  Codec.validate_exn c (Bytes.of_string "\x01\x00\x00\x00") 0;
+  decode_ok (Codec.validate c (Bytes.of_string "\x01\x00\x00\x00") 0);
   let tampered = Bytes.of_string "\x01\x00\x05\x00" in
   (match Codec.decode c tampered 0 with
   | Error { Error.kind = Non_zero_padding; _ } -> ()
   | Ok _ -> Alcotest.fail "decode accepted non-zero all_zeros padding"
   | Error _ -> Alcotest.fail "decode failed with the wrong error");
-  match Codec.validate_exn c tampered 0 with
-  | exception Parse_error { Error.kind = Non_zero_padding; _ } -> ()
-  | () -> Alcotest.fail "validate accepted non-zero all_zeros padding"
-  | exception Parse_error _ ->
-      Alcotest.fail "validate failed with the wrong error"
+  match Codec.validate c tampered 0 with
+  | Error { Error.kind = Non_zero_padding; _ } -> ()
+  | Ok () -> Alcotest.fail "validate accepted non-zero all_zeros padding"
+  | Error _ -> Alcotest.fail "validate failed with the wrong error"
 
 (* A field [~self_constraint] violation reports which predicate failed and the
    offending field value, so a demux can route on it (e.g. a version field that
@@ -321,17 +313,13 @@ let shadow_inner =
     (fun x y -> (x, y))
     Codec.[ Field.v "x" uint8 $ fst; Field.v "y" uint8 $ snd ]
 
-(* [Codec.validate_exn], and the validator built from [s], the same layout as a
+(* [Codec.validate], and the validator built from [s], the same layout as a
    struct, read the codec's own [x]: they accept [own], where it holds the
    value the codec needs, and refuse [sub], where only the sub-codec's [x]
    does. *)
 let check_validates_own_x c s ~own ~sub =
   let v = Codec.validator_of_struct s in
-  let accepts f bytes =
-    match f (Bytes.of_string bytes) 0 with
-    | () -> true
-    | exception Parse_error _ -> false
-  in
+  let accepts f bytes = Result.is_ok (f (Bytes.of_string bytes) 0) in
   List.iter
     (fun (what, f) ->
       Alcotest.(check bool) (what ^ " reads own x") true (accepts f own);
@@ -339,7 +327,7 @@ let check_validates_own_x c s ~own ~sub =
         (what ^ " ignores the sub-codec's x")
         false (accepts f sub))
     [
-      ("validate", Codec.validate_exn c);
+      ("validate", Codec.validate c);
       ("validate_struct", Codec.validate_struct v);
     ]
 
@@ -399,7 +387,9 @@ let test_own_field_shadows_readers () =
   match List.assoc_opt "x" (Codec.field_readers outer) with
   | None -> Alcotest.fail "no reader for x"
   | Some read ->
-      Alcotest.(check int) "own x" 7 (read (Bytes.of_string "\x01\x02\x07") 0)
+      Alcotest.(check int)
+        "own x" 7
+        (decode_ok (read (Bytes.of_string "\x01\x02\x07") 0))
 
 (* [Codec.field_readers] lists each visible name once, and none of the entries
    the scope keeps for the fields it shadows. *)
@@ -456,9 +446,7 @@ let test_validate_negative_span () =
     match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
   in
   let validated =
-    match Codec.validate_exn c buf 0 with
-    | () -> "ok"
-    | exception Wire.Parse_error _ -> "refused"
+    match Codec.validate c buf 0 with Ok () -> "ok" | Error _ -> "refused"
   in
   Alcotest.(check string) "decode" "refused" decoded;
   Alcotest.(check string) "validate agrees" decoded validated
@@ -485,9 +473,9 @@ let test_validate_gated_optional () =
   (match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "decode accepted a missing payload"
   | Error _ -> ());
-  match Codec.validate_exn c buf 0 with
-  | () -> Alcotest.fail "validate accepted a missing payload"
-  | exception Wire.Parse_error _ -> ()
+  match Codec.validate c buf 0 with
+  | Ok () -> Alcotest.fail "validate accepted a missing payload"
+  | Error _ -> ()
 
 (* An overlong span left in a record whose last span takes the rest: the
    record's extent still fits, the span does not, and both entry points refuse
@@ -509,13 +497,13 @@ let test_overlong_span () =
   (match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "decode accepted an overlong span"
   | Error _ -> ());
-  match Codec.validate_exn c buf 0 with
-  | () -> Alcotest.fail "validate accepted an overlong span"
-  | exception Wire.Parse_error _ -> ()
+  match Codec.validate c buf 0 with
+  | Ok () -> Alcotest.fail "validate accepted an overlong span"
+  | Error _ -> ()
 
 (* A field's own decode-side check (enum membership, lookup bound, a bounded
    embedded element) lives in its reader, not in a user constraint, so
-   [Codec.validate_exn] must run the validator pass for every codec or it would
+   [Codec.validate] must run the validator pass for every codec or it would
    accept inputs [decode] rejects. Each case feeds bytes both reject. *)
 let test_validate_matches_decode_rejections () =
   let rejects what c bytes =
@@ -523,9 +511,9 @@ let test_validate_matches_decode_rejections () =
     (match Codec.decode c buf 0 with
     | Error _ -> ()
     | Ok _ -> Alcotest.failf "%s: decode accepted a bad input" what);
-    match Codec.validate_exn c buf 0 with
-    | exception Parse_error _ -> ()
-    | () -> Alcotest.failf "%s: validate accepted what decode rejects" what
+    match Codec.validate c buf 0 with
+    | Error _ -> ()
+    | Ok () -> Alcotest.failf "%s: validate accepted what decode rejects" what
   in
   let enum_c =
     Codec.v "E" Fun.id
@@ -551,7 +539,7 @@ let test_validate_matches_decode_rejections () =
   in
   rejects "array element constraint" arr_c "\x01\x63"
 
-(* [Codec.validate_exn] is the gate [codec.mli] tells a caller to run on untrusted
+(* [Codec.validate] is the gate [codec.mli] tells a caller to run on untrusted
    input before reading fields zero-copy, so a sub-codec used as a field has to
    be checked where it sits. EverParse compiles that field to a call to the
    nested struct's validator, which enforces everything the struct declares, so
@@ -646,11 +634,11 @@ let test_validate_runs_sub_codec_checks () =
         | Ok _ -> Alcotest.failf "%s: decode accepted a bad sub-codec" what
         | Error e -> e
       in
-      match Codec.validate_exn c buf 0 with
-      | () ->
+      match Codec.validate c buf 0 with
+      | Ok () ->
           Alcotest.failf "%s: validate accepted what decode rejects (%a)" what
             Error.pp decoded
-      | exception Parse_error e ->
+      | Error e ->
           if
             not
               (Error.equal
@@ -681,10 +669,11 @@ let test_decode_enforces_typ_where () =
   | Error _ -> Alcotest.fail "decode rejected a valid input"
 
 let test_validate_enforces_typ_where () =
-  (match Codec.validate_exn typ_where_codec (Bytes.of_string "\006\000") 0 with
-  | () -> Alcotest.fail "validate accepted a Wire.where violation"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ());
-  Codec.validate_exn typ_where_codec (Bytes.of_string "\001\000") 0
+  (match Codec.validate typ_where_codec (Bytes.of_string "\006\000") 0 with
+  | Ok () -> Alcotest.fail "validate accepted a Wire.where violation"
+  | Error { Error.kind = Constraint_failed _; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e);
+  decode_ok (Codec.validate typ_where_codec (Bytes.of_string "\001\000") 0)
 
 (* decode runs field actions; validate must run the same ones, or the two paths
    disagree on a codec whose action can fail (here [return_bool (x < 128)]). *)
@@ -704,11 +693,13 @@ let test_validate_runs_field_action () =
   | Error { Error.kind = Constraint_failed _; _ } -> ()
   | _ -> Alcotest.fail "decode did not reject the action violation");
   (match
-     Codec.validate_exn action_validate_codec (Bytes.of_string "\200\000") 0
+     Codec.validate action_validate_codec (Bytes.of_string "\200\000") 0
    with
-  | () -> Alcotest.fail "validate skipped the field action decode enforces"
-  | exception Parse_error { Error.kind = Constraint_failed _; _ } -> ());
-  Codec.validate_exn action_validate_codec (Bytes.of_string "\100\000") 0
+  | Ok () -> Alcotest.fail "validate skipped the field action decode enforces"
+  | Error { Error.kind = Constraint_failed _; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e);
+  decode_ok
+    (Codec.validate action_validate_codec (Bytes.of_string "\100\000") 0)
 
 (* A [Wire.where] inside a container element has no 3D projection (EverParse
    rejects the emitted refined element), so it is rejected at construction rather
@@ -997,9 +988,9 @@ let test_out_of_range_offset_follows_the_frame () =
     | Error e -> e.at
   in
   let validated_at base b =
-    match Codec.validate_exn c b base with
-    | () -> Alcotest.fail "expected validate to refuse the wide value"
-    | exception Wire.Parse_error e -> e.at
+    match Codec.validate c b base with
+    | Ok () -> Alcotest.fail "expected validate to refuse the wide value"
+    | Error e -> e.at
   in
   let wide = Bytes.make 8 '\xff' in
   let shifted = Bytes.cat (Bytes.make 8 '\x00') wide in
@@ -1322,15 +1313,14 @@ let test_bitfield_error_offset () =
   List.iter
     (fun (input, field, at) ->
       let buf = Bytes.of_string input in
-      let check what f =
-        match f () with
-        | exception Parse_error e ->
+      let check what = function
+        | Error (e : Error.t) ->
             Alcotest.(check (list string)) (what ^ ": field") [ field ] e.field;
             Alcotest.(check int) (what ^ ": offset of " ^ field) at e.at
-        | () -> Alcotest.failf "%s: accepted a bad %s" what field
+        | Ok _ -> Alcotest.failf "%s: accepted a bad %s" what field
       in
-      check "validate" (fun () -> Codec.validate_exn c buf 1);
-      check "decode" (fun () -> ignore (Codec.decode_exn c buf 1)))
+      check "validate" (Codec.validate c buf 1);
+      check "decode" (Codec.decode c buf 1))
     [
       ("\x00\xe0\x00\x00\x00", "a", 1);
       ("\x00\x1f\x00\x00\x00", "b", 1);
@@ -1350,7 +1340,7 @@ let test_set_dependent_byte_refinement () =
     set buf 0 "XY";
     Alcotest.(check bytes)
       "valid set writes its own field" (Bytes.of_string expected) buf;
-    Codec.validate_exn codec buf 0
+    decode_ok (Codec.validate codec buf 0)
   in
   let len = Field.v "len" uint8 in
   let data =
@@ -1474,7 +1464,7 @@ let test_decode_words () =
   let j = get wide_j and k = get wide_k in
   for _ = 1 to 1000 do
     let buf, off = random_frame rand wide_codec in
-    let r = Codec.decode_exn wide_codec buf off in
+    let r = decode_ok (Codec.decode wide_codec buf off) in
     let check name want got = Alcotest.(check int) name want got in
     check "A" (UInt8.to_int (a buf off)) r.wa;
     check "B" (SInt8.to_int (b buf off)) r.wb;
@@ -1493,27 +1483,24 @@ let test_decode_words () =
   let s = get eight_s in
   for _ = 1 to 1000 do
     let buf, off = random_frame rand eight_codec in
-    let p', q', r', s' = Codec.decode_exn eight_codec buf off in
+    let p', q', r', s' = decode_ok (Codec.decode eight_codec buf off) in
     Alcotest.(check int32) "P" (SInt32.to_int32 (p buf off)) p';
     Alcotest.(check int) "Q" (UInt16.to_int (q buf off)) q';
     Alcotest.(check int) "R" (SInt8.to_int (r buf off)) r';
     Alcotest.(check int) "S" (UInt8.to_int (s buf off)) s'
   done
 
-(* The staged decoder and encoder do what [decode_exn] and [encode] do, a
-   frame too short for the record included. *)
+(* The staged decoder and encoder do what [decode] and [encode] do, a frame
+   too short for the record included. *)
 let test_staged_decoder () =
   let rand = Random.State.make [| 7 |] in
   let decode = Staged.unstage (Codec.decoder wide_codec) in
   let encode = Staged.unstage (Codec.encoder wide_codec) in
-  let outcome f =
-    match f () with v -> Ok v | exception Parse_error e -> Error e
-  in
   for _ = 1 to 200 do
     let buf, off = random_frame rand wide_codec in
     let off = if Random.State.int rand 8 = 0 then Bytes.length buf else off in
-    let want = outcome (fun () -> Codec.decode_exn wide_codec buf off) in
-    let got = outcome (fun () -> decode buf off) in
+    let want = Codec.decode wide_codec buf off in
+    let got = decode buf off in
     Alcotest.(check bool) "decode" true (want = got);
     match want with
     | Error _ -> ()

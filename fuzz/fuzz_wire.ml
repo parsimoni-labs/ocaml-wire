@@ -22,10 +22,10 @@ let nested_tests () =
   @ nested_cases "nested(d3)" 3
   @ nested_cases "nested(d4)" 4
 
-(* [Codec.validate_exn] and [Codec.decode] must agree on which bytes are valid. A
+(* [Codec.validate] and [Codec.decode] must agree on which bytes are valid. A
    check that reaches one and not the other leaves a caller reading fields it
    never validated, and the differential lane cannot see it: its OCaml side is
-   [Codec.decode_exn], so it never runs the gate. *)
+   [Codec.decode], so it never runs the gate. *)
 let validate_agrees_tests () =
   validate_agrees_cases "validate_agrees(d2)" 2
   @ validate_agrees_cases "validate_agrees(d3)" 3

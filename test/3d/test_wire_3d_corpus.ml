@@ -228,12 +228,9 @@ let test_corpus_verdict_resolves_params () =
         match Codec.decode ~env c b 0 with
         | Error _ -> false
         | Ok v -> (
-            match
-              Codec.validate_exn ~env c b 0;
-              Codec.size_of_value c v
-            with
-            | n -> Int.equal n (Bytes.length b)
-            | exception Wire.Parse_error _ -> false)
+            match Codec.validate ~env c b 0 with
+            | Error _ -> false
+            | Ok () -> Int.equal (Codec.size_of_value c v) (Bytes.length b))
       in
       if not (Bool.equal accepts verdict) then
         Alcotest.failf "corpus records %b for size=%d %s, the codec answers %b"

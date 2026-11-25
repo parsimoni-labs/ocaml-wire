@@ -209,19 +209,20 @@ let test_codec_embed_tail () =
   let answer f =
     match f () with
     | v -> "ok " ^ v
-    | exception Parse_error e -> Fmt.str "error %a" Error.pp e
+    | exception Wire_runtime.Errors.Parse_error e ->
+        Fmt.str "error %a" Error.pp e
   in
   let show (a, r) = Fmt.str "%d %S" (UInt8.to_int a) r in
   let answers n =
     let b = Bytes.init n (fun i -> Char.chr (i + 1)) in
     [
-      answer (fun () -> show (Codec.decode_exn framed_tail b 0));
-      answer (fun () -> Codec.validate_exn framed_tail b 0 |> fun () -> "");
+      answer (fun () -> show (ok (Codec.decode framed_tail b 0)));
+      answer (fun () -> ok (Codec.validate framed_tail b 0) |> fun () -> "");
       answer (fun () ->
-          match Codec.decode_exn gated_tail b 0 with
+          match ok (Codec.decode gated_tail b 0) with
           | _, Some t -> show t
           | _, None -> "none");
-      answer (fun () -> Codec.validate_exn gated_tail b 0 |> fun () -> "");
+      answer (fun () -> ok (Codec.validate gated_tail b 0) |> fun () -> "");
     ]
   in
   let check n want =

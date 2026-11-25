@@ -363,7 +363,7 @@ let show_stack (p : Packet_stack.t) =
 let stack_answer show f =
   match f () with
   | v -> "ok " ^ show v
-  | exception Parse_error e -> Fmt.str "error %a" Error.pp e
+  | exception Wire_runtime.Errors.Parse_error e -> Fmt.str "error %a" Error.pp e
 
 let stack_slot = Param.input "stack_slot" uint8
 
@@ -385,8 +385,8 @@ let stack_answers =
   let unit () = "" in
   fun input ->
     let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
-    let decode c b off () = Codec.decode_exn c b off in
-    let validate c b off () = Codec.validate_exn c b off in
+    let decode c b off () = Test_helpers.ok (Codec.decode c b off) in
+    let validate c b off () = Test_helpers.ok (Codec.validate c b off) in
     [
       stack_answer show_stack (decode Packet_stack.codec input 0);
       stack_answer show_stack (decode Packet_stack.codec shifted 2);
@@ -395,9 +395,9 @@ let stack_answers =
       stack_answer show_stack (decode frame input 0);
       stack_answer unit (validate frame input 0);
       stack_answer show_stack (fun () ->
-          Codec.decode_exn ~env:(env ()) param_frame input 0);
+          Test_helpers.ok (Codec.decode ~env:(env ()) param_frame input 0));
       stack_answer unit (fun () ->
-          Codec.validate_exn ~env:(env ()) param_frame input 0);
+          Test_helpers.ok (Codec.validate ~env:(env ()) param_frame input 0));
       stack_answer show_ipv4 (decode Packet_stack.ipv4 input 14);
       stack_answer unit (validate Packet_stack.ipv4 input 14);
     ]
@@ -667,8 +667,8 @@ let test_walk_shared_gates () =
 let test_region_bounds_nested () =
   let trailer = Bytes.concat Bytes.empty stack_seeds in
   let answer frame buf =
-    let decode () = Codec.decode_exn frame buf 0 in
-    let validate () = Codec.validate_exn frame buf 0 in
+    let decode () = Test_helpers.ok (Codec.decode frame buf 0) in
+    let validate () = Test_helpers.ok (Codec.validate frame buf 0) in
     [ stack_answer show_stack decode; stack_answer (fun () -> "") validate ]
     |> String.concat " / "
   in

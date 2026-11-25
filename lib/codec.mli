@@ -138,15 +138,10 @@ val decode :
     size to 0 and silently truncate the field, so it is rejected up front the
     same way {!encode} does. *)
 
-val decode_exn :
-  ?consume:Types.consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
-(** [decode_exn ?env c buf off] is like {!decode} but raises
-    {!Types.Parse_error} on failure. *)
-
-val decoder : 'r t -> (bytes -> int -> 'r) Staged.t
-(** [decoder c] is [decode_exn c], staged: [c] is compiled when the stage is
-    built, and each call runs its decoder with no other dispatch. Unstage it
-    once and call the result per record. It raises what {!decode_exn} raises. *)
+val decoder : 'r t -> (bytes -> int -> ('r, Types.parse_error) result) Staged.t
+(** [decoder c] is [decode c], staged: [c] is compiled when the stage is built,
+    and each call runs its decoder with no other dispatch. Unstage it once and
+    call the result per record. It raises what {!decode} raises. *)
 
 val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
 (** [encode ?env c r buf off] encodes record [r] into [buf] at offset [off].
@@ -223,19 +218,14 @@ val to_struct : 'r t -> Types.struct_
 
 val validate :
   ?env:Param.env -> 'r t -> bytes -> int -> (unit, Types.parse_error) result
-(** [validate ?env c buf off] is {!validate_exn}, answering the record's error
-    as a value. *)
-
-val validate_exn : ?env:Param.env -> 'r t -> bytes -> int -> unit
-(** [validate_exn ?env c buf off] checks field [~constraint_] and [~where]
-    clauses without constructing a record. Field [~action]s do fire, so a
-    rejecting action fails validation, but assigned output parameters are not
-    written back to [?env]. [?env] supplies bindings for any [Param.input]
-    referenced in those clauses.
+(** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
+    without constructing a record, and answers the record's error as a value.
+    Field [~action]s do fire, so a rejecting action fails validation, but
+    assigned output parameters are not written back to [?env]. [?env] supplies
+    bindings for any [Param.input] referenced in those clauses.
 
     Raises [Invalid_argument] if [off] is negative or if [?env] belongs to
-    another codec or leaves an input parameter unbound, and {!Types.Parse_error}
-    on constraint/where-clause failure. *)
+    another codec or leaves an input parameter unbound. *)
 
 val get :
   ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
@@ -574,7 +564,8 @@ val rename : string -> 'r t -> 'r t
 val doc : 'r t -> string option
 (** [doc c] is the note attached via {!v}'s [?doc], if any. *)
 
-val field_readers : 'r t -> (string * (bytes -> int -> int)) list
+val field_readers :
+  'r t -> (string * (bytes -> int -> (int, Types.parse_error) result)) list
 (** [field_readers c] returns the int-valued field readers of [c], indexed by
     field name. Used for cross-codec name resolution when [c] is embedded as a
     sub-codec via {!Wire.codec}. *)
@@ -600,9 +591,10 @@ val validator_of_struct : Types.struct_ -> validator
     clauses, and per-field actions are compiled to operate on a per-decode int
     array; the resulting validator is reusable. *)
 
-val validate_struct : validator -> bytes -> int -> unit
-(** [validate_struct v buf off] runs the validator. Raises {!Types.Parse_error}
-    on failure. *)
+val validate_struct :
+  validator -> bytes -> int -> (unit, Types.parse_error) result
+(** [validate_struct v buf off] runs the validator, answering its error as a
+    value. *)
 
 val struct_size_of : validator -> bytes -> int -> int
 (** [struct_size_of v buf off] is the byte size of the struct starting at [off].

@@ -37,7 +37,7 @@ let slice = Bytesrw.Bytes.Slice.to_string
 let test_values () =
   let frame = capture_frame () in
   let p = Result.get_ok (Codec.decode Packet_stack.capture frame 0) in
-  let r = S_capture.decode_exn frame 0 in
+  let r = Result.get_ok (S_capture.decode frame 0) in
   Alcotest.(check string) "dst" (slice p.dst) (slice r.dst);
   Alcotest.(check int)
     "ether_type"
@@ -88,7 +88,7 @@ let test_bad_input () =
         ()
     | Ok _ | Error _ ->
         Alcotest.failf "decode disagrees on %S at %d" (Bytes.to_string b) off
-    | exception Parse_error e ->
+    | exception Wire_runtime.Errors.Parse_error e ->
         Alcotest.failf "decode raised %a on %S" Error.pp e (Bytes.to_string b)
     | exception Invalid_argument m ->
         Alcotest.failf "decode raised Invalid_argument %s on %S" m
@@ -98,7 +98,7 @@ let test_bad_input () =
 (* The printer shows the record as the codec decodes it, its slices by their
    bytes. *)
 let test_pp () =
-  let r = S_capture.decode_exn (capture_frame ()) 0 in
+  let r = Result.get_ok (S_capture.decode (capture_frame ()) 0) in
   let s = Fmt.str "%a" S_capture.pp r in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains s sub))

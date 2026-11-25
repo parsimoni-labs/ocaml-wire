@@ -12,10 +12,10 @@ val parse_error :
   ?field:string list ->
   at:int ->
   Wire_runtime.Error.kind ->
-  (unit -> 'a) ->
+  ('a, Wire_runtime.Error.t) result ->
   unit
-(** [parse_error what ?field ~at kind f] checks that [f ()] raises a parse error
-    of [kind] at [at], naming [field] (default none). *)
+(** [parse_error what ?field ~at kind r] checks that [r] is an error of [kind]
+    at [at], naming [field] (default none). *)
 
 val invalid : string -> (unit -> 'a) -> unit
 (** [invalid what f] checks that [f ()] raises [Invalid_argument]. *)
@@ -23,7 +23,7 @@ val invalid : string -> (unit -> 'a) -> unit
 val round_trip :
   string ->
   size:int ->
-  decode:(bytes -> int -> 'r) ->
+  decode:(bytes -> int -> ('r, Wire_runtime.Error.t) result) ->
   encode:('r -> bytes -> int -> unit) ->
   int list ->
   unit
@@ -34,7 +34,10 @@ val round_trip :
 val big_round_trip :
   string ->
   size:int ->
-  decode:(Wire_runtime.Unchecked.Bigstring.t -> int -> 'r) ->
+  decode:
+    (Wire_runtime.Unchecked.Bigstring.t ->
+    int ->
+    ('r, Wire_runtime.Error.t) result) ->
   encode:('r -> Wire_runtime.Unchecked.Bigstring.t -> int -> unit) ->
   int list ->
   unit

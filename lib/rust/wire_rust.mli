@@ -10,7 +10,7 @@
     The module has [SIZE], the record's size; [DIGEST], {!digest} of the codec,
     for a build to check the code against the codec it comes from; a [Record]
     struct of the field values; [validate buf off] and [decode buf off], which
-    check the record as {!Wire.Codec.validate_exn} does, with the checks, their
+    check the record as {!Wire.Codec.validate} does, with the checks, their
     order and their arithmetic taken from {!Wire_ocaml.Plan}, as {!scanner}'s
     are; [write buf off v1 ... vn] and [encode r buf off], which refuse a value
     that does not fit its field before writing and a record that breaks its

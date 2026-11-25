@@ -922,41 +922,32 @@ let ml_root ppf t (r : V.record) =
     "let min_size = %d@\n\
      @\n\
      let[@inline never] first_error buf off =@\n\
-     ignore (error_at buf (Bytes.length buf) off [] : int);@\n\
-     no_error ()@\n\
+     match error_at buf (Bytes.length buf) off [] with@\n\
+     | _ -> no_error ()@\n\
+     | exception %s.Parse_error e -> Error e@\n\
      @\n\
      let is_valid buf off =@\n\
      off >= 0 &&@\n\
      match Wire_runtime.Buf.v buf with@\n\
      | Wire_runtime.Buf.Any b -> ok (%s)@\n\
      @\n\
-     let decode_exn buf off =@\n\
+     let decode buf off =@\n\
      if off < 0 then %s.negative_offset off;@\n\
      match Wire_runtime.Buf.v buf with@\n\
      | Wire_runtime.Buf.Any b ->@\n\
      let len = Wire_runtime.Buf.length b in@\n\
      let c = %s in@\n\
-     if ok c then of_view b len (get c) else first_error buf off@\n\
-     @\n\
-     let decode buf off =@\n\
-     match decode_exn buf off with@\n\
-     | v -> Ok v@\n\
-     | exception %s.Parse_error e -> Error e@\n\
-     @\n\
-     let validate_exn buf off =@\n\
-     if off < 0 then %s.negative_offset off;@\n\
-     if not (is_valid buf off) then first_error buf off@\n\
+     if ok c then Ok (of_view b len (get c)) else first_error buf off@\n\
      @\n\
      let validate buf off =@\n\
-     match validate_exn buf off with@\n\
-     | () -> Ok ()@\n\
-     | exception %s.Parse_error e -> Error e@\n\
+     if off < 0 then %s.negative_offset off;@\n\
+     if is_valid buf off then Ok () else first_error buf off@\n\
      @\n"
-    (min_size r)
+    (min_size r) errors
     (root_check t ~stop:"Bytes.length buf" ())
     errors
     (root_check t ~len:"len" ~stop:"Bytes.length buf" ())
-    errors errors errors;
+    errors;
   pp_root_encode ppf t
 
 (* {1 The interface} *)
@@ -1001,11 +992,6 @@ let mli_root ppf ~target t (r : V.record) =
     "[decode buf off] is the record at [off] in [buf], checked to the end of \
      [buf] as {!val-check} checks it, or the codec's error. Raises \
      [Invalid_argument] if [off] is negative.";
-  pp_val ~target ppf "decode_exn" "bytes -> int -> t"
-    (Fmt.str
-       "[decode_exn buf off] is like {!val-decode} but raises \
-        [%s.Errors.Parse_error]."
-       rt);
   pp_val ~target ppf "is_valid" "bytes -> int -> bool"
     "[is_valid buf off] is [true] iff the record at [off] in [buf] passes its \
      checks. It never raises.";
@@ -1014,11 +1000,6 @@ let mli_root ppf ~target t (r : V.record) =
     "[validate buf off] is [Ok ()] if the record at [off] in [buf] passes its \
      checks and the codec's error otherwise. Raises [Invalid_argument] if \
      [off] is negative.";
-  pp_val ~target ppf "validate_exn" "bytes -> int -> unit"
-    (Fmt.str
-       "[validate_exn buf off] is like {!val-validate} but raises \
-        [%s.Errors.Parse_error]."
-       rt);
   pp_val ~target ppf "encode" "t -> bytes -> int -> unit"
     "[encode r buf off] writes [r] at [off] in [buf]. Raises \
      [Invalid_argument] if [r] does not fit, or if its values break a size, a \

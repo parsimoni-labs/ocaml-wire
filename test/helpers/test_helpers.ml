@@ -111,6 +111,10 @@ let decode_ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected parse error: %a" Error.pp e
 
+let ok = function
+  | Ok v -> v
+  | Error e -> raise (Wire_runtime.Errors.Parse_error e)
+
 let expect_constraint_fail = function
   | Ok _ -> Alcotest.fail "expected a Constraint_failed parse error"
   | Error { Error.kind = Constraint_failed _; _ } -> ()

@@ -72,10 +72,17 @@ let test_fixed () =
         end
   done
 
+(* A result's value, its error raised as a getter raises it, so that the
+   two compare the same. *)
+let ok = function
+  | Ok v -> v
+  | Error e -> raise (Wire_runtime.Errors.Parse_error e)
+
 let outcome f =
   match f () with
   | s -> "ok " ^ s
-  | exception Parse_error e -> Fmt.str "parse error %a" Error.pp e
+  | exception Wire_runtime.Errors.Parse_error e ->
+      Fmt.str "parse error %a" Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
 let byte () = Char.chr (Random.State.int rand 256)
@@ -88,7 +95,7 @@ let fix_checked buf off =
     (List.nth [ 1; 6; 17 ] (Random.State.int rand 3))
 
 (* The accessors of a record checked at offset 0 read what [Codec.get]
-   reads, where [Codec.validate_exn] accepts the record; [read buf] raises
+   reads, where [Codec.validate] accepts the record; [read buf] raises
    the codec's error otherwise. *)
 let viewed ?(fix = fun _ _ -> ()) codec ~read ~gets =
   let size = Codec.min_wire_size codec in
@@ -98,7 +105,7 @@ let viewed ?(fix = fun _ _ -> ()) codec ~read ~gets =
     if Random.State.bool rand && len >= size then fix buf 0;
     let expected =
       outcome (fun () ->
-          Codec.validate_exn codec buf 0;
+          ok (Codec.validate codec buf 0);
           String.concat "," (List.map (fun get -> get buf) gets))
     in
     let got = outcome (fun () -> String.concat "," (read buf)) in
@@ -121,7 +128,7 @@ let test_accessors () =
         get Schemas.ipv4 Schemas.ipv4_dst u32;
       ]
     ~read:(fun buf ->
-      G_ipv4.validate_exn buf 0;
+      ok (G_ipv4.validate buf 0);
       let (Buf.Any b) = Buf.v buf in
       let v = G_ipv4.get (G_ipv4.check b (Buf.length b) 0) in
       [
@@ -136,7 +143,7 @@ let test_accessors () =
             string_of_int (UInt8.to_int v));
       ]
     ~read:(fun buf ->
-      G_checked.validate_exn buf 0;
+      ok (G_checked.validate buf 0);
       let (Buf.Any b) = Buf.v buf in
       let v = G_checked.get (G_checked.check b (Buf.length b) 0) in
       [ string_of_int (UInt8.to_int (G_checked.proto b v)) ]);
@@ -147,14 +154,14 @@ let test_accessors () =
         get Schemas.mixed Schemas.mixed_h string_of_int;
       ]
     ~read:(fun buf ->
-      G_mixed.validate_exn buf 0;
+      ok (G_mixed.validate buf 0);
       let (Buf.Any b) = Buf.v buf in
       let v = G_mixed.get (G_mixed.check b (Buf.length b) 0) in
       [ i32 (G_mixed.f b v); string_of_int (G_mixed.h b v) ]);
   viewed Schemas.eth
     ~gets:[ get Schemas.eth Schemas.eth_src Fun.id ]
     ~read:(fun buf ->
-      G_eth.validate_exn buf 0;
+      ok (G_eth.validate buf 0);
       let (Buf.Any b) = Buf.v buf in
       let v = G_eth.get (G_eth.check b (Buf.length b) 0) in
       [ G_eth.src b v ])

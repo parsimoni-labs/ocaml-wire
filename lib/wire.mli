@@ -771,10 +771,10 @@ val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions.
 
     [decode] must be total over the wire values [t] and its constraints admit.
-    {!Codec.validate_exn} and {!Codec.View.val-check} do not call it, so a
-    [decode] that raises on such a value makes {!Codec.decode} raise on a buffer
-    they accept. For a table indexed by the wire value use {!lookup}, whose
-    bound they check. *)
+    {!Codec.validate} and {!Codec.View.val-check} do not call it, so a [decode]
+    that raises on such a value makes {!Codec.decode} raise on a buffer they
+    accept. For a table indexed by the wire value use {!lookup}, whose bound
+    they check. *)
 
 val bool : bool -> bool expr
 (** Constant boolean expression. *)
@@ -908,15 +908,15 @@ val byte_array_where :
     each byte must satisfy [per_byte]. The argument to [per_byte] is an
     expression bound to the current byte's integer value.
 
-    Decode raises {!exception:Parse_error} on the first byte that violates the
-    constraint; encode raises [Invalid_argument]. Encoding otherwise follows
-    {!byte_array}: the string must be exactly [size] bytes. The motivating shape
-    is SSH name-list payloads (RFC 4251 sec 5), where every byte must be
-    printable US-ASCII. Raises [Invalid_argument] on a literal [size] that is
-    negative or more than a buffer can hold, and on a [per_byte] that reads a
-    parameter or another field, or whose arithmetic 3d.exe cannot verify: it
-    projects to a one-byte element struct of its own, whose {!val-sizeof_this}
-    is [1]. *)
+    Decode answers {!Error.constructor-Constraint_failed} for the first byte
+    that violates the constraint; encode raises [Invalid_argument]. Encoding
+    otherwise follows {!byte_array}: the string must be exactly [size] bytes.
+    The motivating shape is SSH name-list payloads (RFC 4251 sec 5), where every
+    byte must be printable US-ASCII. Raises [Invalid_argument] on a literal
+    [size] that is negative or more than a buffer can hold, and on a [per_byte]
+    that reads a parameter or another field, or whose arithmetic 3d.exe cannot
+    verify: it projects to a one-byte element struct of its own, whose
+    {!val-sizeof_this} is [1]. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
 (** Fixed-size byte sequence exposed as a zero-copy slice by bytes-based
@@ -1037,11 +1037,6 @@ module Error = Wire_runtime.Error
     such as unexpected end of input or a constraint violation, from semantic
     failure such as an invalid enum or tag. *)
 
-exception Parse_error of Error.t
-(** Raised by the [_exn] direct decoders ({!of_string_exn}, {!of_bytes_exn},
-    {!of_reader_exn}), by {!Codec.decode_exn}, and by {!Codec.validate_exn} on
-    parse or constraint failure. *)
-
 (** {1 Direct Decoding and Encoding}
 
     These functions interpret a ['a typ] directly and exchange ordinary OCaml
@@ -1084,9 +1079,6 @@ val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, Error.t) result
     the failed decode are not rolled back. Push back makes
     [Bytesrw.Bytes.Reader.pos] non-monotonic across a failed decode. *)
 
-val of_reader_exn : 'a typ -> Bytesrw.Bytes.Reader.t -> 'a
-(** Like {!of_reader} but raises {!exception:Parse_error} on failure. *)
-
 val of_string : ?consume:consumption -> 'a typ -> string -> ('a, Error.t) result
 (** Decodes one value from the start of the string. [consume] defaults to
     [`Prefix], leaving trailing bytes uninterpreted; [`All] returns a
@@ -1095,15 +1087,9 @@ val of_string : ?consume:consumption -> 'a typ -> string -> ('a, Error.t) result
     values that escape in the result receive their own backing bytes so they
     cannot modify the source string. *)
 
-val of_string_exn : ?consume:consumption -> 'a typ -> string -> 'a
-(** Like {!of_string} but raises {!exception:Parse_error} on failure. *)
-
 val of_bytes : ?consume:consumption -> 'a typ -> bytes -> ('a, Error.t) result
 (** Decodes one value from the start of the byte sequence, with the same
     [consume] contract as {!of_string}. *)
-
-val of_bytes_exn : ?consume:consumption -> 'a typ -> bytes -> 'a
-(** Like {!of_bytes} but raises {!exception:Parse_error} on failure. *)
 
 (** {1 Direct Encoding}
 
@@ -1268,15 +1254,10 @@ module Codec : sig
       an unbound input param would resolve a parametric field size to 0 and
       silently truncate the field. *)
 
-  val decode_exn :
-    ?consume:consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
-  (** Like {!decode} but raises {!exception:Parse_error} on failure. *)
-
-  val decoder : 'r t -> (bytes -> int -> 'r) Staged.t
-  (** [decoder c] is [decode_exn c], staged: [c] is compiled when the stage is
+  val decoder : 'r t -> (bytes -> int -> ('r, Error.t) result) Staged.t
+  (** [decoder c] is [decode c], staged: [c] is compiled when the stage is
       built, and each call runs its decoder with no other dispatch. Unstage it
-      once and call the result per record. It raises what {!decode_exn} raises.
-  *)
+      once and call the result per record. It raises what {!decode} raises. *)
 
   val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
   (** [encode ?env c r buf off] encodes one record value into a buffer at the
@@ -1324,19 +1305,14 @@ module Codec : sig
 
   val validate :
     ?env:Param.env -> 'r t -> bytes -> int -> (unit, Error.t) result
-  (** [validate ?env c buf off] is {!validate_exn}, answering the record's error
-      as a value. *)
-
-  val validate_exn : ?env:Param.env -> 'r t -> bytes -> int -> unit
-  (** [validate_exn ?env c buf off] checks field [~constraint_] and [~where]
-      clauses without constructing a record. Field [~action]s do fire, so a
-      rejecting action fails validation, but assigned output parameters are not
-      written back to [?env]. [?env] supplies bindings for any
-      {!val:Param.input} referenced in those clauses.
+  (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
+      without constructing a record, and answers the record's error as a value.
+      Field [~action]s do fire, so a rejecting action fails validation, but
+      assigned output parameters are not written back to [?env]. [?env] supplies
+      bindings for any {!val:Param.input} referenced in those clauses.
 
       Raises [Invalid_argument] when [off] is negative or when [?env] belongs to
-      another codec or leaves an input parameter unbound, and
-      {!exception-Parse_error} on failure. *)
+      another codec or leaves an input parameter unbound. *)
 
   val get :
     ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
@@ -1608,7 +1584,8 @@ module Codec : sig
   val field_ref : ('a, 'r) field -> int expr
   (** Field reference expression from a bound field handle. *)
 
-  val field_readers : 'r t -> (string * (bytes -> int -> int)) list
+  val field_readers :
+    'r t -> (string * (bytes -> int -> (int, Error.t) result)) list
   (** [field_readers c] is the decoder's own reader for every named int-valued
       field of [c], keyed by field name: [read buf base] is the value
       {!val-decode} makes of that field's bytes, converted to [int] (a [Map]
@@ -1618,9 +1595,8 @@ module Codec : sig
       Unlike {!get} it needs no field handle, so a caller holding only a
       type-erased codec can still read a field by name -- which is how the
       differential fuzzer compares the OCaml decoder against a generated C
-      validator field by field. Raises {!exception-Parse_error} when the field's
-      bytes are out of the buffer, or when the value does not fit an OCaml
-      [int]. *)
+      validator field by field. A reader answers an error when the field's bytes
+      are out of the buffer, or when the value does not fit an OCaml [int]. *)
 
   (** {2 Bitfield batch access}
 
@@ -1726,8 +1702,9 @@ module Codec : sig
   val validator_of_struct : Types.struct_ -> validator
   (** [validator_of_struct s] compiles [s] into a validator. *)
 
-  val validate_struct : validator -> bytes -> int -> unit
-  (** Run the validator. Raises {!exception-Parse_error} on failure. *)
+  val validate_struct : validator -> bytes -> int -> (unit, Error.t) result
+  (** [validate_struct v buf off] runs the validator [v] on the struct at [off],
+      answering its error as a value. *)
 
   val struct_size_of : validator -> bytes -> int -> int
   (** Byte size of the struct starting at [off]. *)

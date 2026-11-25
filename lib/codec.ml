@@ -26,7 +26,12 @@ let pp = pp
 type validator = Codec_struct.t
 
 let validator_of_struct = Codec_struct.v
-let validate_struct = Codec_struct.validate
+
+let validate_struct v buf off =
+  match Codec_struct.validate v buf off with
+  | () -> Ok ()
+  | exception Types.Parse_error e -> Error e
+
 let struct_size_of = Codec_struct.size_of
 let struct_min_size = Codec_struct.min_size
 let wire_size_info_of_validator = Codec_struct.wire_size_info
@@ -498,9 +503,15 @@ let decode ?consume ?env t buf off =
 
 let decoder t =
   let c = compiled t in
-  match c.plain_decode with
-  | Some decode -> Staged.stage decode
-  | None -> Staged.stage (fun buf off -> decode_slow `Prefix None t c buf off)
+  let decode =
+    match c.plain_decode with
+    | Some decode -> decode
+    | None -> fun buf off -> decode_slow `Prefix None t c buf off
+  in
+  Staged.stage (fun buf off ->
+      match decode buf off with
+      | v -> Ok v
+      | exception Types.Parse_error e -> Error e)
 
 let encode_slow e t v buf off =
   if off < 0 then
@@ -573,7 +584,7 @@ let validate_exn ?env:e (t : _ t) buf off =
           else c.plain_validate buf off
       | None -> validate_first t buf off)
   | _ ->
-      require_env ~op:"validate_exn" t e;
+      require_env ~op:"validate" t e;
       let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
       (compiled t).validate ?env_slots buf off
 
@@ -1267,7 +1278,11 @@ let field_readers_ctx (t : _ t) =
 let field_readers t =
   List.map
     (fun (name, read) ->
-      (name, fun buf off -> read no_runtime (Input_end.of_bytes buf) buf off))
+      ( name,
+        fun buf off ->
+          match read no_runtime (Input_end.of_bytes buf) buf off with
+          | v -> Ok v
+          | exception Types.Parse_error e -> Error e ))
     (field_readers_ctx t)
 
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)

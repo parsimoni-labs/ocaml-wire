@@ -187,7 +187,10 @@ let test_views_moved_field () =
       Bytes.set_int32_be buf 0 0x0010_0000l;
       match S_sized.tail b v with
       | n -> Alcotest.failf "a tail past the buffer read %d" (UInt8.to_int n)
-      | exception Parse_error { Error.kind = Unexpected_eof _; _ } -> ())
+      | exception
+          Wire_runtime.Errors.Parse_error { Error.kind = Unexpected_eof _; _ }
+        ->
+          ())
 
 let suite =
   ( "view_module",

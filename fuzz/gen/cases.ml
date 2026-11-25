@@ -438,7 +438,7 @@ let streaming_cases label g =
     in
     [ pos_case ]
 
-(* Exercises {!Wire.Codec.validate_exn}: validation-only path that should
+(* Exercises {!Wire.Codec.validate}: validation-only path that should
    accept positives and reject (without crashing) random/adversarial.
    When the codec references [Param.input], positives pull the env from
    [g.env.positive] and the safety streams fuzz the env. *)
@@ -573,9 +573,6 @@ let span_fault_case label (Span_fault (name, x)) =
           ]
       in
       check "decode" pad data byte (Wire.Codec.decode codec buf pad);
-      check "validate" pad data byte
-        (match Wire.Codec.validate_exn codec buf pad with
-        | () -> Ok ()
-        | exception Wire.Parse_error e -> Error e))
+      check "validate" pad data byte (Wire.Codec.validate codec buf pad))
 
 let span_fault_cases label = List.map (span_fault_case label) span_faults

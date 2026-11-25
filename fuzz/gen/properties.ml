@@ -98,18 +98,12 @@ let check_direct_codec_encode_agree label kind g value =
    A wrong [size_of_value] then shows up here as a mismatch -- or, if it
    under-counts, as an [encode] overrun -- rather than silently. *)
 let check_positive_decode label g value bs env =
-  (match Wire.Codec.decode ?env g.codec bs 0 with
+  match Wire.Codec.decode ?env g.codec bs 0 with
   | Ok decoded ->
       if not (g.equal decoded value) then
         Alcobar.failf "%s positive decode mismatch" label
   | Error error ->
-      Alcobar.failf "%s positive decode failed: %a" label Wire.Error.pp error);
-  match Wire.Codec.decode_exn ?env g.codec bs 0 with
-  | decoded ->
-      if not (g.equal decoded value) then
-        Alcobar.failf "%s positive decode_exn mismatch" label
-  | exception Wire.Parse_error e ->
-      Alcobar.failf "%s positive decode_exn failed: %a" label Wire.Error.pp e
+      Alcobar.failf "%s positive decode failed: %a" label Wire.Error.pp error
 
 (* The names of the input params a codec reads out of an env, [[]] for one that
    reads none. An [~action] codec writes output params and needs an env without
@@ -172,10 +166,10 @@ let check_env_required label g bs =
       (match Wire.Codec.decode g.codec bs 0 with
       | _ -> Alcobar.failf "%s decode answered with no env bound" label
       | exception Invalid_argument _ -> ());
-      match Wire.Codec.validate_exn g.codec bs 0 with
-      | () -> Alcobar.failf "%s validate passed with no env bound" label
+      match Wire.Codec.validate g.codec bs 0 with
+      | Ok () -> Alcobar.failf "%s validate passed with no env bound" label
       | exception Invalid_argument _ -> ()
-      | exception Wire.Parse_error _ ->
+      | Error _ ->
           Alcobar.failf "%s validate reported a parse error with no env bound"
             label)
 
@@ -197,12 +191,10 @@ let check_positive label g (value, bs) =
   check_positive_encode label g value bs env sz
 
 let validate_one ?env g bs =
-  try
-    Wire.Codec.validate_exn ?env g.codec bs 0;
-    `Ok
-  with
-  | Invalid_argument _ -> `Crash
-  | Wire.Parse_error e ->
+  match Wire.Codec.validate ?env g.codec bs 0 with
+  | Ok () -> `Ok
+  | exception Invalid_argument _ -> `Crash
+  | Error e ->
       (* A parse error's offset is never negative. Most kinds point inside the
          input, but [Unexpected_eof] and [Missing_terminator] report where a
          read (or a field that does not fit) ran past the end, so their offset
@@ -293,9 +285,9 @@ let decode_at ?env g bs off =
   | exception Invalid_argument _ -> Crashed
 
 let validate_at ?env g bs off =
-  match Wire.Codec.validate_exn ?env g.codec bs off with
-  | () -> Accepted ()
-  | exception Wire.Parse_error e -> Rejected e
+  match Wire.Codec.validate ?env g.codec bs off with
+  | Ok () -> Accepted ()
+  | Error e -> Rejected e
   | exception Invalid_argument _ -> Crashed
 
 (* Two rejections of the same buffer, blamed on the same field, must give the
@@ -309,9 +301,9 @@ let same_rejection (a : Wire.Error.t) (b : Wire.Error.t) =
   List.compare String.compare a.Wire.Error.field b.Wire.Error.field <> 0
   || same_kind a b
 
-(* [Codec.validate_exn] is the gate [codec.mli] tells a caller to run on untrusted
-   input before reading fields zero-copy, so it must raise on exactly the bytes
-   [Codec.decode] returns [Error] on, and for the same reason. Two entry points
+(* [Codec.validate] is the gate [codec.mli] tells a caller to run on untrusted
+   input before reading fields zero-copy, so it must answer [Error] on exactly the bytes
+   [Codec.decode] answers [Error] on, and for the same reason. Two entry points
    of one library that disagree about which bytes are valid are a parser
    differential inside it: what the caller validated is not what it goes on to
    read. Only the reason is compared, not the offset -- validate reaches a
@@ -453,7 +445,7 @@ let check_field_get label ?env a value bs =
                   Alcobar.failf
                     "%s field %s: Codec.get raised on a positive: %s" label
                     f.name m
-              | exception Wire.Parse_error e ->
+              | exception Wire.Private.Types.Parse_error e ->
                   Alcobar.failf "%s field %s: Codec.get rejected a positive: %a"
                     label f.name Wire.Error.pp e
               | got ->
@@ -494,7 +486,7 @@ let check_field_set label ~strict a target bs =
                     "%s field %s: Codec.get raised on bytes Codec.set just \
                      wrote: %s"
                     label f.name m
-              | exception Wire.Parse_error e ->
+              | exception Wire.Private.Types.Parse_error e ->
                   if strict then
                     Alcobar.failf
                       "%s field %s: Codec.get rejects the value Codec.set just \
@@ -548,7 +540,8 @@ let field_snapshot ?env a buf fc =
       | None -> None
       | Some get -> (
           match get buf 0 with
-          | (exception Invalid_argument _) | (exception Wire.Parse_error _) ->
+          | (exception Invalid_argument _)
+          | (exception Wire.Private.Types.Parse_error _) ->
               None
           | before ->
               Some
@@ -556,7 +549,7 @@ let field_snapshot ?env a buf fc =
                   fun after_buf ->
                     match get after_buf 0 with
                     | (exception Invalid_argument _)
-                    | (exception Wire.Parse_error _) ->
+                    | (exception Wire.Private.Types.Parse_error _) ->
                         false
                     | after -> f.equal before after )))
 
@@ -613,7 +606,8 @@ let check_field_write_back label a bs =
       match (stage_get a f.field, stage_set a f.field) with
       | Some get, Some set -> (
           match get bs 0 with
-          | (exception Invalid_argument _) | (exception Wire.Parse_error _) ->
+          | (exception Invalid_argument _)
+          | (exception Wire.Private.Types.Parse_error _) ->
               ()
           | v -> (
               let buf = Bytes.copy bs in
@@ -720,7 +714,7 @@ let check_field_reads label kind ?env a g bs =
                     "%s %s field %s: Codec.get raised on a buffer validate \
                      accepted: %s"
                     label kind f.name m
-            | exception Wire.Parse_error _ -> ()
+            | exception Wire.Private.Types.Parse_error _ -> ()
             | got ->
                 Option.iter
                   (fun record ->
@@ -758,7 +752,7 @@ let size_at g bs off =
   match Wire.Codec.wire_size_at g.codec bs off with
   | n -> Some n
   | exception Invalid_argument _ -> None
-  | exception Wire.Parse_error _ -> None
+  | exception Wire.Private.Types.Parse_error _ -> None
 
 let pad_before pad bs =
   let k = Bytes.length pad in
@@ -806,7 +800,7 @@ let check_offset_invariance label ?env a g pad bs =
     let bs' = pad_before pad bs in
     check_shifted label "Codec.decode" ~k ~same:g.equal (decode_at ?env g bs 0)
       (decode_at ?env g bs' k);
-    check_shifted label "Codec.validate_exn" ~k
+    check_shifted label "Codec.validate" ~k
       ~same:(fun () () -> true)
       (validate_at ?env g bs 0) (validate_at ?env g bs' k);
     (* [wire_size_at] takes no env, so on a codec with an input param it would
@@ -833,7 +827,7 @@ let check_offset_invariance label ?env a g pad bs =
                 let read buf off =
                   match get buf off with
                   | v -> Accepted v
-                  | exception Wire.Parse_error e -> Rejected e
+                  | exception Wire.Private.Types.Parse_error e -> Rejected e
                   | exception Invalid_argument _ -> Crashed
                 in
                 check_shifted
@@ -1048,7 +1042,7 @@ let check_frame_isolation label kind ?env a g bs interloper =
   let label = Fmt.str "%s %s" label kind in
   check_repeated label "Codec.decode" ~same:g.equal alone_decode
     (decode_at ?env g bs 0);
-  check_repeated label "Codec.validate_exn"
+  check_repeated label "Codec.validate"
     ~same:(fun () () -> true)
     alone_validate (validate_at ?env g bs 0);
   if alone_size <> size_at g bs 0 then
@@ -1088,7 +1082,13 @@ type 'a answer = Value of 'a | Parse of Wire.Error.t | Invalid of string
 let answer f =
   match f () with
   | v -> Value v
-  | exception Wire.Parse_error e -> Parse e
+  | exception Wire.Private.Types.Parse_error e -> Parse e
+  | exception Invalid_argument m -> Invalid m
+
+let answer_result f =
+  match f () with
+  | Ok v -> Value v
+  | Error e -> Parse e
   | exception Invalid_argument m -> Invalid m
 
 let map_answer f = function
@@ -1124,10 +1124,10 @@ let check_answer label what ?(pp = pp_some) ~equal (na, a) (nb, b) =
 let warm c = ignore (Wire.Codec.min_wire_size c)
 
 let decode_answer ?env c bs =
-  answer (fun () -> Wire.Codec.decode_exn ?env c bs 0)
+  answer_result (fun () -> Wire.Codec.decode ?env c bs 0)
 
 let validate_answer ?env c bs =
-  answer (fun () -> Wire.Codec.validate_exn ?env c bs 0)
+  answer_result (fun () -> Wire.Codec.validate ?env c bs 0)
 
 module View = Wire.Codec.View
 
@@ -1152,7 +1152,7 @@ let check_core label ?env ~equal ~names:((nf, fast), (ng, general)) bs =
   check_answer label "Codec.decode" ~equal
     (nf, decode_answer ?env fast bs)
     (ng, decode_answer ?env general bs);
-  check_answer label "Codec.validate_exn" ~equal:unit_equal
+  check_answer label "Codec.validate" ~equal:unit_equal
     (nf, validate_answer ?env fast bs)
     (ng, validate_answer ?env general bs)
 
@@ -1177,7 +1177,7 @@ let check_accessors label ?env ~fast ~general checks bs =
     ("the fast path", fast_valid)
     ("the general path", check_answer_of ?env general bs);
   (* A misuse names the call that refused it: [View.codec] or
-     [Codec.validate_exn]. The two must refuse the same misuse. *)
+     [Codec.validate]. The two must refuse the same misuse. *)
   let misuse = function
     | Invalid m -> (
         match String.index_opt m ':' with
@@ -1190,9 +1190,9 @@ let check_accessors label ?env ~fast ~general checks bs =
     | Parse _ -> Value false
     | Invalid _ as a -> misuse a
   in
-  check_answer label "View.check against validate_exn" ~equal:Bool.equal
+  check_answer label "View.check against validate" ~equal:Bool.equal
     ("View.check", misuse fast_valid)
-    ("Codec.validate_exn", accepted (validate_answer ?env general bs));
+    ("Codec.validate", accepted (validate_answer ?env general bs));
   List.iter
     (fun (Field_check f) ->
       let reference = field_get ?env general f.field bs in
@@ -1269,7 +1269,7 @@ let check_cold_warm label kind ?env a g bs =
       (snd names, f g.codec)
   in
   cold_vs_warm "Codec.decode" ~equal:g.equal (fun c -> decode_answer ?env c bs);
-  cold_vs_warm "Codec.validate_exn" ~equal:unit_equal (fun c ->
+  cold_vs_warm "Codec.validate" ~equal:unit_equal (fun c ->
       validate_answer ?env c bs);
   check_answer label "View.check" ~equal:Bool.equal
     (fst names, check_answer_of ?env (Testing.fresh a.acodec) bs)

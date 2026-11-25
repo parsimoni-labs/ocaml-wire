@@ -4,14 +4,14 @@ module T = Types
 type view = Get | Get_int | Of_word
 
 type ops = {
-  decode : bytes -> int -> string;
-  validate : bytes -> int -> unit;
+  decode : bytes -> int -> (string, Wire.Error.t) result;
+  validate : bytes -> int -> (unit, Wire.Error.t) result;
   encode : string -> bytes -> int -> unit;
   gets : (string * view * (bytes -> int -> string)) list;
   reads : (string * view) list;
-  valid : bytes -> string list;
+  valid : bytes -> (string list, Wire.Error.t) result;
   is_valid : bytes -> int -> bool;
-  view : bytes -> int -> string list;
+  view : bytes -> int -> (string list, Wire.Error.t) result;
   checked : bytes -> int -> bool * string list;
 }
 
@@ -170,10 +170,17 @@ let codecs =
 
 (* {1 The comparison} *)
 
+(* An error answered as a value, raised to stop where it is answered, so a
+   decoder and a reader that raises it compare the same. *)
+exception Refused of Wire.Error.t
+
+let ok = function Ok v -> v | Error e -> raise (Refused e)
+
 let outcome f =
   match f () with
   | s -> "ok " ^ s
-  | exception Wire.Parse_error e -> Fmt.str "parse error %a" Wire.Error.pp e
+  | exception (Refused e | Wire.Private.Types.Parse_error e) ->
+      Fmt.str "parse error %a" Wire.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
 let view_name name = function
@@ -210,30 +217,30 @@ let both case f =
   f "bytes" case.m.bytes;
   f "bigstring" case.m.bigstring
 
-(* [is_valid], [View.at] and [View.check] at [off], against [Codec.validate_exn]
-   and each field's reader there. *)
+(* [is_valid], [validate] then the view's reads, and [View.check] at [off],
+   against [Codec.validate] and each field's reader there. *)
 let views_at case c ~what ~validated ops buf off =
   same case.label (what "is_valid")
     (string_of_bool (validated = "ok "))
     (string_of_bool (ops.is_valid buf off));
   let expected =
     outcome (fun () ->
-        Wire.Codec.validate_exn c buf off;
+        ok (Wire.Codec.validate c buf off);
         String.concat ","
           (List.map
              (fun (name, _) -> List.assoc name case.refs buf off)
              ops.reads))
   in
   same case.label
-    (what "View.at then each read")
+    (what "validate then each view read")
     expected
-    (outcome (fun () -> String.concat "," (ops.view buf off)));
+    (outcome (fun () -> String.concat "," (ok (ops.view buf off))));
   let checked =
     outcome (fun () ->
         match ops.checked buf off with
         | true, reads -> String.concat "," reads
         | false, _ ->
-            Wire.Codec.validate_exn c buf off;
+            ok (Wire.Codec.validate c buf off);
             "")
   in
   same case.label (what "View.check then each read") expected checked
@@ -242,20 +249,21 @@ let views_at case c ~what ~validated ops buf off =
 let reads_at case (Fuzz_gen.Pack g) buf off =
   let c = Fuzz_gen.codec g in
   let decoded =
-    outcome (fun () -> Wire.Codec.to_string c (Wire.Codec.decode_exn c buf off))
+    outcome (fun () ->
+        Wire.Codec.to_string c (ok (Wire.Codec.decode c buf off)))
   in
   let validated =
     outcome (fun () ->
-        Wire.Codec.validate_exn c buf off;
+        ok (Wire.Codec.validate c buf off);
         "")
   in
   both case (fun kind ops ->
       let what w = Fmt.str "%s %s at offset %d" kind w off in
       same case.label (what "decode") decoded
-        (outcome (fun () -> ops.decode buf off));
+        (outcome (fun () -> ok (ops.decode buf off)));
       same case.label (what "validate") validated
         (outcome (fun () ->
-             ops.validate buf off;
+             ok (ops.validate buf off);
              ""));
       List.iter
         (fun (name, view, read) ->
@@ -271,9 +279,9 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
 let encodes_at case (Fuzz_gen.Pack g) buf off =
   let c = Fuzz_gen.codec g in
   let size = Wire.Codec.wire_size c in
-  match Wire.Codec.decode_exn c buf off with
-  | exception (Wire.Parse_error _ | Invalid_argument _) -> ()
-  | v ->
+  match Wire.Codec.decode c buf off with
+  | Error _ | (exception Invalid_argument _) -> ()
+  | Ok v ->
       let canonical = Wire.Codec.to_string c v in
       let into (len, off) =
         let run f =
@@ -298,13 +306,13 @@ let encodes_at case (Fuzz_gen.Pack g) buf off =
           (size, -1);
         ]
 
-(* [Valid.v] on the buffer and each read, against [Codec.validate_exn] and each
+(* [Valid.v] on the buffer and each read, against [Codec.validate] and each
    field's reader at offset 0. *)
 let valid case (Fuzz_gen.Pack g) buf =
   let c = Fuzz_gen.codec g in
   let expected keys =
     outcome (fun () ->
-        Wire.Codec.validate_exn c buf 0;
+        ok (Wire.Codec.validate c buf 0);
         String.concat ","
           (List.map (fun (name, _) -> List.assoc name case.refs buf 0) keys))
   in
@@ -312,7 +320,7 @@ let valid case (Fuzz_gen.Pack g) buf =
       same case.label
         (Fmt.str "%s Valid.v then each read" kind)
         (expected ops.reads)
-        (outcome (fun () -> String.concat "," (ops.valid buf))))
+        (outcome (fun () -> String.concat "," (ok (ops.valid buf)))))
 
 let check label (Fuzz_gen.Pack g as codec) m =
   let c = Fuzz_gen.codec g in
@@ -752,13 +760,10 @@ let codec_agrees (Reference r) ~general bounded value =
   scan_same r.label "the general decoder" show_snapshot value slow;
   let validated =
     Option.fold ~none:false
-      ~some:(fun b ->
-        match Wire.Codec.validate_exn r.codec b 0 with
-        | () -> true
-        | exception Wire.Parse_error _ -> false)
+      ~some:(fun b -> Result.is_ok (Wire.Codec.validate r.codec b 0))
       bounded
   in
-  scan_same r.label "Codec.validate_exn" string_of_bool (Option.is_some value)
+  scan_same r.label "Codec.validate" string_of_bool (Option.is_some value)
     validated
 
 let check_scan ?oracle ?strides ?(expand = true) (Reference r as ref_) backends

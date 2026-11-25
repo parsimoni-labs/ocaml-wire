@@ -132,25 +132,31 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     "{@\n\
     \      Diff_ocaml.decode =@\n\
     \        (fun b o ->@\n\
-    \          let out = Diff_ocaml.big (Bytes.create %s.min_size) in@\n\
-    \          %s.encode (%s.decode_exn (%s) o) out 0;@\n\
-    \          Diff_ocaml.string_of_big out);@\n\
-    \      validate = (fun b o -> %s.validate_exn (%s) o);@\n\
+    \          Result.map (fun r ->@\n\
+    \              let out = Diff_ocaml.big (Bytes.create %s.min_size) in@\n\
+    \              %s.encode r out 0;@\n\
+    \              Diff_ocaml.string_of_big out)@\n\
+    \            (%s.decode (%s) o));@\n\
+    \      validate = (fun b o -> %s.validate (%s) o);@\n\
     \      encode =@\n\
     \        (fun s b o ->@\n\
-    \          let r = %s.decode_exn (Diff_ocaml.big (Bytes.of_string s)) 0 in@\n\
+    \          let r = Result.get_ok (%s.decode (Diff_ocaml.big \
+     (Bytes.of_string s)) 0) in@\n\
     \          %a);@\n\
     \      gets = [@\n\
      %a      ];@\n\
     \      reads = [ %a ];@\n\
-    \      valid = (fun b -> let v = %s.Valid.v (%s) in [ %a ]);@\n\
+    \      valid = (fun b -> Result.map (fun v -> [ %a ]) (%s.Valid.v (%s)));@\n\
     \      is_valid = (fun b o -> %s.is_valid (%s) o);@\n\
     \      view =@\n\
     \        (fun b o ->@\n\
-    \          match %s.v (%s) with@\n\
-    \          | %s.Any bb ->@\n\
-    \              let v = %s.View.at bb (%s.length bb) o in@\n\
-    \              [ %a ]);@\n\
+    \          Result.map (fun () ->@\n\
+    \              match %s.v (%s) with@\n\
+    \              | %s.Any bb ->@\n\
+    \                  let v = %s.View.get (%s.View.check bb (%s.length bb) o) \
+     in@\n\
+    \                  [ %a ])@\n\
+    \            (%s.validate (%s) o));@\n\
     \      checked =@\n\
     \        (fun b o ->@\n\
     \          match %s.v (%s) with@\n\
@@ -166,11 +172,11 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     fields
     Fmt.(
       list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
-    reads m buf
+    reads
     Fmt.(list ~sep:(any "; ") (pp_read ~m))
-    reads m buf brand buf brand m brand
+    reads m buf m buf brand buf brand m m brand
     Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
-    reads brand buf brand m brand m m
+    reads m buf brand buf brand m brand m m
     Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
     reads
 
@@ -182,39 +188,45 @@ let pp_access ppf (f, v) =
   | _ -> Fmt.pf ppf "string_of_int (M.view_%s_int bb v)" f.ident
 
 (* The glue over [M] whose views are the module's: [check], [ok], [get] and
-   an accessor per field, where [Valid.v] and [View.at] were. *)
+   an accessor per field, where [Valid.v] and [View] were. *)
 let pp_ops_views ppf fields =
   let reads = reads fields in
   Fmt.pf ppf
     "{@\n\
     \      Diff_ocaml.decode =@\n\
     \        (fun b o ->@\n\
-    \          let out = Bytes.create M.min_size in@\n\
-    \          M.encode (M.decode_exn b o) out 0;@\n\
-    \          Bytes.to_string out);@\n\
-    \      validate = (fun b o -> M.validate_exn b o);@\n\
+    \          Result.map (fun r ->@\n\
+    \              let out = Bytes.create M.min_size in@\n\
+    \              M.encode r out 0;@\n\
+    \              Bytes.to_string out)@\n\
+    \            (M.decode b o));@\n\
+    \      validate = (fun b o -> M.validate b o);@\n\
     \      encode =@\n\
     \        (fun s b o ->@\n\
-    \          let r = M.decode_exn (Bytes.of_string s) 0 in@\n\
+    \          let r = Result.get_ok (M.decode (Bytes.of_string s) 0) in@\n\
     \          M.encode r b o);@\n\
     \      gets = [@\n\
      %a      ];@\n\
     \      reads = [ %a ];@\n\
     \      valid =@\n\
     \        (fun b ->@\n\
-    \          M.validate_exn b 0;@\n\
-    \          match Wire_runtime.Buf.v b with@\n\
-    \          | Wire_runtime.Buf.Any bb ->@\n\
-    \              let v = M.get (M.check bb (Wire_runtime.Buf.length bb) 0) in@\n\
-    \              [ %a ]);@\n\
+    \          Result.map (fun () ->@\n\
+    \              match Wire_runtime.Buf.v b with@\n\
+    \              | Wire_runtime.Buf.Any bb ->@\n\
+    \                  let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
+     0) in@\n\
+    \                  [ %a ])@\n\
+    \            (M.validate b 0));@\n\
     \      is_valid = (fun b o -> M.is_valid b o);@\n\
     \      view =@\n\
     \        (fun b o ->@\n\
-    \          M.validate_exn b o;@\n\
-    \          match Wire_runtime.Buf.v b with@\n\
-    \          | Wire_runtime.Buf.Any bb ->@\n\
-    \              let v = M.get (M.check bb (Wire_runtime.Buf.length bb) o) in@\n\
-    \              [ %a ]);@\n\
+    \          Result.map (fun () ->@\n\
+    \              match Wire_runtime.Buf.v b with@\n\
+    \              | Wire_runtime.Buf.Any bb ->@\n\
+    \                  let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
+     o) in@\n\
+    \                  [ %a ])@\n\
+    \            (M.validate b o));@\n\
     \      checked =@\n\
     \        (fun b o ->@\n\
     \          match Wire_runtime.Buf.v b with@\n\

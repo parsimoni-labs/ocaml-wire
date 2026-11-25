@@ -10,10 +10,11 @@
 type view = Get | Get_int | Of_word
 
 type ops = {
-  decode : bytes -> int -> string;
+  decode : bytes -> int -> (string, Wire.Error.t) result;
       (** The generated decoder, the record it returns written back at offset 0
           by the generated encoder. *)
-  validate : bytes -> int -> unit;  (** The generated validator. *)
+  validate : bytes -> int -> (unit, Wire.Error.t) result;
+      (** The generated validator. *)
   encode : string -> bytes -> int -> unit;
       (** [encode s buf off] writes, through the generated encoder, the record
           the bytes [s] decode to. *)
@@ -22,11 +23,12 @@ type ops = {
   reads : (string * view) list;
       (** The reads {!field-valid} makes, in order: [read_<f>] as
           {!constructor-Get}, [read_<f>_int] as {!constructor-Get_int}. *)
-  valid : bytes -> string list;
+  valid : bytes -> (string list, Wire.Error.t) result;
       (** [Valid.v] on the buffer, then each of {!field-reads}. *)
   is_valid : bytes -> int -> bool;  (** The generated [is_valid]. *)
-  view : bytes -> int -> string list;
-      (** [View.at buf off], then each of {!field-reads} through [view_<f>]. *)
+  view : bytes -> int -> (string list, Wire.Error.t) result;
+      (** [validate buf off], then [View.check] and each of {!field-reads}
+          through [view_<f>]. *)
   checked : bytes -> int -> bool * string list;
       (** [View.check buf off]: [View.ok] of it, then each of {!field-reads}
           through [view_<f>]. *)
@@ -80,11 +82,11 @@ val specialisable : 'r Wire.Codec.t -> bool
 val check : string -> Fuzz_gen.packed -> t -> bytes -> unit
 (** [check label p m buf] compares [m], generated from [p]'s codec, with the
     codec on [buf] at several offsets: decode and validate give the same value
-    or raise the same error, every getter reads what {!Wire.Codec.get} reads or
-    raises what it raises, encode writes the same bytes or raises the same error
-    into buffers around the record, and [Valid.v] with its reads agrees with
-    {!Wire.Codec.validate_exn} then {!Wire.Codec.get}, on [bytes] and on a
-    bigarray. Fails with {!Alcobar.failf}. *)
+    or the same error, every getter reads what {!Wire.Codec.get} reads or raises
+    what it raises, encode writes the same bytes or raises the same error into
+    buffers around the record, and [Valid.v] with its reads agrees with
+    {!Wire.Codec.validate} then {!Wire.Codec.get}, on [bytes] and on a bigarray.
+    Fails with {!Alcobar.failf}. *)
 
 val report : string -> (string * Fuzz_gen.packed * string) list -> bool
 (** [report name refused] prints how many of the sampled {!codecs}, and of the
@@ -183,7 +185,7 @@ val check_scan :
 (** [check_scan ?oracle r backends buf] compares each scanner with [r]'s codec
     on frames of [buf] at several offsets, bounds past the buffer included: the
     outputs, acceptance against {!Wire.Codec.decode}, its general path and
-    {!Wire.Codec.validate_exn}, [fold_frames] at several strides, and, with
+    {!Wire.Codec.validate}, [fold_frames] at several strides, and, with
     [oracle], the acceptance and consumed prefix of the EverParse C validators
     of the standalone and FFI projections, and the visitor scalars of the FFI
     one. A read must not change [buf]. Fails with {!Alcobar.failf}. *)

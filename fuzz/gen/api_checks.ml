@@ -292,10 +292,12 @@ let check_struct_validator len data_s =
   | `Variable size_of ->
       check_int "Codec.wire_size_info_of_validator" (Bytes.length bytes)
         (size_of bytes 0));
-  (try Wire.Codec.validate_struct validator bytes 0 with
-  | Wire.Parse_error e ->
+  (match Wire.Codec.validate_struct validator bytes 0 with
+  | Ok () -> ()
+  | Error e ->
       Alcobar.failf "validate_struct rejected positive: %a" Wire.Error.pp e
-  | Invalid_argument e -> Alcobar.failf "validate_struct crashed: %s" e);
+  | exception Invalid_argument e ->
+      Alcobar.failf "validate_struct crashed: %s" e);
   match Wire.of_bytes (Wire.Private.Types.struct_typ raw_struct) bytes with
   | Ok () -> ()
   | Error e ->

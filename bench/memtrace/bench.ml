@@ -14,7 +14,7 @@ type 'a schema = {
   size : int;
   default : 'a;
   make_data : int -> bytes array;
-  decode : bytes -> int -> 'a;
+  decode : bytes -> int -> ('a, Wire.Error.t) result;
   encode : 'a -> bytes -> int -> unit;
 }
 
@@ -26,7 +26,7 @@ let schema name codec size default make_data =
     size;
     default;
     make_data;
-    decode = Wire.Codec.decode_exn codec;
+    decode = Wire.Codec.decode codec;
     encode = Wire.Codec.encode codec;
   }
 
@@ -313,7 +313,9 @@ let run_schema (Any s) =
   Fmt.pr "  %s decode...\n%!" s.name;
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do
-      ignore (s.decode data.(i) 0)
+      match s.decode data.(i) 0 with
+      | Ok _ -> ()
+      | Error e -> Fmt.failwith "%s: %a" s.name Wire.Error.pp e
     done
   done;
   Fmt.pr "  %s encode...\n%!" s.name;
@@ -325,7 +327,7 @@ let run_schema (Any s) =
   Fmt.pr "  %s roundtrip...\n%!" s.name;
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do
-      try s.encode (s.decode data.(i) 0) buf 0 with Wire.Parse_error _ -> ()
+      match s.decode data.(i) 0 with Ok v -> s.encode v buf 0 | Error _ -> ()
     done
   done
 
@@ -382,11 +384,13 @@ let run_clcw_polling () =
 
 let run_kexinit () =
   let buf = kexinit_wire () in
-  let decode = Wire.Codec.decode_exn kexinit_codec in
+  let decode = Wire.Codec.decode kexinit_codec in
   Fmt.pr "  KEXINIT decode (10 length-prefixed name-lists)...\n%!";
   for _ = 1 to iterations do
     for _ = 1 to n_values do
-      ignore (Sys.opaque_identity (decode buf 0))
+      match Sys.opaque_identity (decode buf 0) with
+      | Ok _ -> ()
+      | Error e -> Fmt.failwith "KEXINIT: %a" Wire.Error.pp e
     done
   done
 

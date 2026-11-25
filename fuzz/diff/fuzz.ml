@@ -22,22 +22,20 @@ open Fuzz_gen
 
 let pp_hex ppf s = String.iter (fun c -> Fmt.pf ppf "%02x" (Char.code c)) s
 
-(* The parse error a clean rejection raised, [None] on acceptance. *)
-let rejection f =
-  match f () with () -> None | exception Wire.Parse_error e -> Some e
+(* The error of a clean rejection, [None] on acceptance. *)
+let rejection = function Ok _ -> None | Error e -> Some e
 
 let pp_verdict ppf = function
   | None -> Fmt.string ppf "accepts"
   | Some e -> Fmt.pf ppf "rejects (%a)" Wire.Error.pp e
 
 (* The EverParse validator accepts iff the bytes parse (enough input, valid
-   structure) and every refinement holds. [Codec.decode_exn] is exactly that:
-   it decodes (length + structure) and validates (refinements), raising
-   [Parse_error] on a clean rejection. (Plain [Codec.decode]
-   returns a [result], so its rejection is easy to drop by mistake.) Any other
-   exception surfaces as a crash, which is itself a divergence to report.
+   structure) and every refinement holds. [Codec.decode] is exactly that: it
+   decodes (length + structure) and validates (refinements), answering the
+   error of a clean rejection. Any exception surfaces as a crash, which is
+   itself a divergence to report.
 
-   [Codec.validate_exn] is the gate a caller actually runs on untrusted input and
+   [Codec.validate] is the gate a caller actually runs on untrusted input and
    the closer counterpart of a C validator, since it checks without building a
    record. Run it alongside, so a refinement that reaches one of the two OCaml
    paths but not the other is caught here rather than papered over by whichever
@@ -45,15 +43,15 @@ let pp_verdict ppf = function
    must reach the same verdict too. *)
 let general_verdict (Pack g) =
   let general = Wire.Private.Testing.general (codec g) in
-  fun b -> rejection (fun () -> ignore (Wire.Codec.decode_exn general b 0))
+  fun b -> rejection (Wire.Codec.decode general b 0)
 
 let ocaml_accepts label (Pack g) general b =
   let c = codec g in
-  let decoded = rejection (fun () -> ignore (Wire.Codec.decode_exn c b 0)) in
-  let validated = rejection (fun () -> Wire.Codec.validate_exn c b 0) in
+  let decoded = rejection (Wire.Codec.decode c b 0) in
+  let validated = rejection (Wire.Codec.validate c b 0) in
   let slow = general b in
   if Option.is_none decoded <> Option.is_none validated then
-    failf "%s: on %a, OCaml decode %a but Codec.validate_exn %a" label pp_hex
+    failf "%s: on %a, OCaml decode %a but Codec.validate %a" label pp_hex
       (Bytes.to_string b) pp_verdict decoded pp_verdict validated;
   if Option.is_none decoded <> Option.is_none slow then
     failf "%s: on %a, OCaml decode %a but its general path %a" label pp_hex
@@ -63,7 +61,8 @@ let ocaml_accepts label (Pack g) general b =
 type field_check = {
   fname : string;
   width : int;  (** Bytes the field occupies on the wire. *)
-  read : bytes -> int -> int;  (** The OCaml decoder's reader for it. *)
+  read : bytes -> int -> (int, Wire.Error.t) result;
+      (** The OCaml decoder's reader for it. *)
 }
 (** One field both sides report, with what the OCaml side needs to read it. *)
 
@@ -81,17 +80,17 @@ let diff_field label b c_fields f =
   | Some raw -> (
       let c = to_slot f.width raw in
       match f.read b 0 with
-      | v ->
+      | Ok v ->
           let o = to_slot f.width (Int64.of_int v) in
           if not (Int64.equal o c) then
             failf
               "%s: field %s: OCaml decoded 0x%Lx but EverParse C decoded 0x%Lx \
                from %a"
               label f.fname o c pp_hex (Bytes.to_string b)
-      | exception Wire.Parse_error _ ->
+      | Error _ ->
           (* [Codec.field_readers] reports through an OCaml [int], one bit short
              of an 8-byte field, so past 2^62 it has no [int] to report and
-             raises instead. All the comparison can pin there is that the C side
+             answers an error instead. All the comparison can pin there is that the C side
              does not fit an [int] either, which still holds the field's top two
              bits to what the OCaml decoder made of them. *)
           if Int64.unsigned_to_int c <> None then

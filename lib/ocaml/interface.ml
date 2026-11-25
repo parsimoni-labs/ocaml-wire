@@ -295,7 +295,7 @@ let pp_record_type ppf r =
   pp_val r.target ppf "pp" "Format.formatter -> t -> unit"
     "[pp ppf r] prints an unspecified representation of [r] on [ppf]."
 
-(* [is_valid] to [decode_exn], on the buffer [b]. *)
+(* [is_valid] to [decode], on the buffer [b]. *)
 let pp_checks ppf r b =
   let target = r.target in
   let t = decoded r in
@@ -308,40 +308,24 @@ let pp_checks ppf r b =
     "[validate buf off] is [Ok ()] if the record at [off] in [buf] fits and \
      passes its checks, and the codec's error otherwise. Raises \
      [Invalid_argument] if [off] is negative.";
-  pp_val ~zero_alloc:true target ppf "validate_exn"
-    (arrows [ buf b; "int"; "unit" ])
-    (Fmt.str "[validate_exn buf off] is like {!validate} but raises %s."
-       parse_exn);
   let portable = no_map r.fields in
   pp_val ~portable target ppf "decode"
     (arrows [ buf b; "int"; Fmt.str "(%s, %s) result" t parse_error ])
     "[decode buf off] is the record at [off] in [buf], or the codec's error. \
-     Raises [Invalid_argument] if [off] is negative.";
-  pp_val ~portable target ppf "decode_exn"
-    (arrows [ buf b; "int"; t ])
-    (Fmt.str "[decode_exn buf off] is like {!decode} but raises %s." parse_exn)
+     Raises [Invalid_argument] if [off] is negative."
 
 let pp_oxcaml_decoders ppf r =
   let b = bytes_buf r.target in
   let k = arrows (List.map (typed ~maps:r.maps) r.fields @ [ "'a" ]) in
   pp_val ~portable:(no_map r.fields) r.target ppf "decode_with"
-    (arrows [ "(" ^ k ^ ") @ local"; buf b; "int"; "'a" ])
-    "[decode_with k buf off] is [k] applied to the fields of the record at \
-     [off] in [buf], in order. [k] is [local], so flambda2 inlines it. Raises \
-     as {!decode_exn} does.";
-  let bytes =
-    List.exists
-      (fun f -> match f.store with Bytes _ -> true | _ -> false)
-      r.fields
-  in
-  (* A map's functions are the caller's: they may allocate, and are not
-     portable. *)
-  let plain = no_map r.fields in
-  pp_val ~zero_alloc:((not bytes) && plain) ~portable:plain r.target ppf
-    "decode_local"
-    (arrows [ buf b; "int"; "t @ local" ])
-    "[decode_local buf off] is like {!decode_exn} but builds the record on the \
-     caller's stack."
+    (arrows
+       [
+         "(" ^ k ^ ") @ local"; "fail:(unit -> 'a) @ local"; buf b; "int"; "'a";
+       ])
+    "[decode_with k ~fail buf off] is [k] applied to the fields of the record \
+     at [off] in [buf], in order, if it fits and passes its checks, and [fail \
+     ()] otherwise. [k] and [fail] are [local], so flambda2 inlines them. \
+     Raises [Invalid_argument] if [off] is negative."
 
 let pp_writes ppf r b =
   let target = r.target in
@@ -458,9 +442,9 @@ let pp_valid ppf r b =
   pp_doc ppf "The type for buffers whose record at offset 0 passed its checks.";
   Fmt.pf ppf "@\n";
   pp_val target ppf "v"
-    (arrows [ b.typ; "t" ])
-    "[v buf] is [buf], once its record at offset 0 passed its checks. Raises \
-     as {!validate_exn} does otherwise.";
+    (arrows [ b.typ; Fmt.str "(t, %s) result" parse_error ])
+    "[v buf] is [buf], once its record at offset 0 passed its checks, and the \
+     codec's error otherwise.";
   Fmt.pf ppf "end@\n@\n";
   List.iter
     (fun f ->
@@ -493,10 +477,6 @@ let pp_view_module ppf r b =
   Fmt.pf ppf "@\ntype 'b check = private int@\n";
   pp_doc ppf "The type for the answers of {!val-check}.";
   Fmt.pf ppf "@\n";
-  pp_val target ppf "at"
-    (arrows [ named b; length b; "int"; "'b t" ])
-    "[at b len off] is the record at [off] in the buffer [b] of length [len]. \
-     Raises as {!validate_exn} does where its checks fail.";
   pp_val target ppf "check"
     (arrows [ named b; length b; "int"; "'b check" ])
     "[check b len off] checks the record at [off] in the buffer [b] of length \
@@ -680,10 +660,10 @@ let pp_preamble ppf r =
     wheres;
   Fmt.pf ppf
     "@\n\
-     A check or a decoder answers the codec's error, a [%s], or raises it as \
-     %s; a write raises [Invalid_argument] where the codec's encoder does. *)@\n\
+     A check or a decoder answers the codec's error, a [%s], and never raises \
+     it; a write raises [Invalid_argument] where the codec's encoder does. *)@\n\
      @\n"
-    parse_error parse_exn
+    parse_error
 
 let pp_digest target ppf =
   pp_val target ppf "digest" "string"
