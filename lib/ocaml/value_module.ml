@@ -154,16 +154,18 @@ let rec pp_text : type a. V.t -> a T.typ -> string =
   | T.Optional { inner; _ } ->
       Fmt.str
         "(fun ppf -> function None -> Format.pp_print_string ppf \"None\" | \
-         Some x -> Format.fprintf ppf \"Some (%%a)\" %s x)"
+         Some x -> Format.pp_print_string ppf \"Some (\"; %s ppf x; \
+         Format.pp_print_char ppf ')')"
         (pp_text t inner)
   | T.Single_elem { elem; _ } -> pp_text t elem
   | T.Where { inner; _ } -> pp_text t inner
   | T.Enum { base; _ } -> pp_text t base
   | T.Codec { codec_id; _ } -> sub_module t codec_id ^ ".pp"
   | T.Byte_slice _ ->
-      "(fun ppf s -> Format.fprintf ppf \"%S\" (Bytesrw.Bytes.Slice.to_string \
-       s))"
-  | T.Byte_array _ -> "(fun ppf s -> Format.fprintf ppf \"%S\" s)"
+      "(fun ppf s -> Format.pp_print_string ppf (String.escaped \
+       (Bytesrw.Bytes.Slice.to_string s)))"
+  | T.Byte_array _ ->
+      "(fun ppf s -> Format.pp_print_string ppf (String.escaped s))"
   | T.Unit -> "(fun ppf () -> Format.pp_print_string ppf \"()\")"
   | typ -> (
       match leaf typ with
@@ -172,18 +174,27 @@ let rec pp_text : type a. V.t -> a T.typ -> string =
           let t = store_type s in
           String.sub t 0 (String.length t - 2) ^ ".pp")
 
-(* [pp ppf r] prints [r] as an OCaml record. *)
+(* [pp ppf r] prints [r] as an OCaml record, with [Format]'s primitives. *)
 let pp_printer ppf t (r : V.record) =
   match named r.struct_ with
   | [] -> Fmt.pf ppf "let pp ppf () = Format.pp_print_string ppf \"()\"@\n@\n"
   | fields ->
-      Fmt.pf ppf "let pp ppf (r : t) =@\nFormat.fprintf ppf \"@@[<hv 2>{ \";@\n";
+      Fmt.pf ppf
+        "let pp ppf (r : t) =@\n\
+         let field name pp_v x =@\n\
+         Format.pp_print_space ppf ();@\n\
+         Format.pp_print_string ppf (name ^ \" = \");@\n\
+         pp_v ppf x;@\n\
+         Format.pp_print_char ppf ';'@\n\
+         in@\n\
+         Format.pp_open_hvbox ppf 2;@\n\
+         Format.pp_print_char ppf '{';@\n";
       List.iter
         (fun (l, T.Field f) ->
-          Fmt.pf ppf "Format.fprintf ppf \"%s = %%a;@@ \" %s r.%s;@\n" l
-            (pp_text t f.field_typ) l)
+          Fmt.pf ppf "field %S %s r.%s;@\n" l (pp_text t f.field_typ) l)
         fields;
-      Fmt.pf ppf "Format.fprintf ppf \"}@@]\"@\n@\n"
+      Fmt.pf ppf
+        "Format.pp_print_string ppf \" }\";@\nFormat.pp_close_box ppf ()@\n@\n"
 
 (* [of_view b len v] is the record at the view [v], read through the
    accessors: only after a check that passed. *)
