@@ -2,8 +2,18 @@
 
 ### Breaking
 
-- `Wire.Codec.validate` returns a `result`, as `decode` does. Call
-  `validate_exn` to keep raising (#492, @samoht)
+- The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
+  `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
+  `pp_parse_error`, and a record for `parse_error` and `eof` (#PR, @samoht)
+
+- `Wire.Parse_error`, `of_string_exn`, `of_bytes_exn`, `of_reader_exn` and
+  `Codec.decode_exn` are removed, so no decoder raises on bad input: match
+  on the result of `of_string`, `of_bytes`, `of_reader` or `decode` (#PR,
+  @samoht)
+
+- `Wire.Codec.validate` returns a `result`, as `decode` does, and so do
+  `Codec.validate_struct` and the readers of `Codec.field_readers`: match on
+  it where the call raised (#492, #PR, @samoht)
 
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
   call a sub-codec's constructor on a record it then rejects, so a
