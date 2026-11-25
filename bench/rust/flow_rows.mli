@@ -12,6 +12,11 @@ val flow_view : bytes -> int array -> int array -> unit
 (** [flow_view buf offs lens] reads each frame with the record modules of the
     fixed headers, the layers linked here. *)
 
+val flow_check : bytes -> int array -> int array -> unit
+(** [flow_check buf offs lens] checks each frame with the [check] the scanner of
+    [Packet_stack.capture] writes, then reads it through its views: an accessor
+    per field, and per sub-record one that enters it. *)
+
 val replay : int array -> unit
 (** [replay keys] hands the keys of {!Flow_keys.take} to the sink, with no
     parse. *)

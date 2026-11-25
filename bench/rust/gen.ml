@@ -8,7 +8,9 @@
    checksum reads, as [G_selected]; flow_read.ml, the scanner of
    [Packet_stack.capture] handing out the flow classifier's fields to the
    consumer [Flow_step], as [G_flow], and the same scanner handing them to
-   [Flow_parse], which folds them into [Flow_sum], as [G_flow_parse]; and the record modules of the fixed
+   [Flow_parse], which folds them into [Flow_sum], as [G_flow_parse];
+   g_capture.ml, the scanner of [Packet_stack.capture] with every output, whose
+   views the check/view row reads; and the record modules of the fixed
    header codecs of [Headers], g_eth.ml, g_ipv4.ml, g_ipv6.ml, g_tcp.ml and
    g_udp.ml, with their interfaces. A scanner shares its consumers' module so that the compiler
    sees the fold and the consumer it inlines in one unit in every profile, and
@@ -346,6 +348,9 @@ let () =
               "ignore (" ^ fold ^ " ~init:0 : int)")
          ^ scanner ~core:"G_flow_parse" ~step:"Flow_parse" ~consumer
              ~entry:"parse" parse));
+      (let codec = "Packet_stack.capture" and c = Packet_stack.capture in
+       write "g_capture.ml" (Wire_ocaml.scanner ~target ~codec c);
+       write "g_capture.mli" (Wire_ocaml.scanner_mli ~target ~codec c));
       headers
         {
           g =

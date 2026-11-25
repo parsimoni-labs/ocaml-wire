@@ -591,6 +591,7 @@ passes and not timed; the report fails unless every row agrees. The default pack
 | `Wire.Codec capture decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of the pcap record around the frame, its `incl_len` bounding `Packet_stack.capture`, then the nested values |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of `headers.ml`, IPv6 included | `View.check`/`View.ok` per header, `view_<field>` per field; the harness links the layers and checks each header ends inside the capture |
 | `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_index_step` over the frames, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
+| `wire.ocaml check/view, accessors` | the views the generated OCaml scanner of `Packet_stack.capture` writes | `check` per frame, then the accessor of each field, each sub-record (`ipv4`, `ipv6`, `tcp`, `udp`) entered through the accessor of its field, which tests its presence and places it again |
 | `wire.rust scanner, selected outputs` | generated Rust scanner of `Packet_stack.capture` | `scan` per frame |
 | `wire.rust, linked headers` | generated Rust of `headers.ml` | `Valid::at` per header, then a read per field; the harness links the layers |
 | EverParse C (`BUILD_EVERPARSE=1`) | the verified validator of `Packet_stack.capture` | `CapturedStackValidateWireCapturedStack` per frame, then the members of the default `CapturedStack_Fields` visitor, zeroed per frame |
@@ -941,6 +942,52 @@ the constraints, 9.0%), 9.9% in the compiled constraint expressions, 7.4% in
 `Codec_layout` (offsets computed per decode) and 7.4% elsewhere. Allocation
 costs little: 51.1 minor words (409 bytes) per packet on OCaml 5.4.1, none
 promoted, and no GC function of the runtime reaches 5 samples.
+
+### The generated views
+
+The row `wire.ocaml check/view, accessors` reads the frames through the
+views the scanner of `Packet_stack.capture` writes (docs/execution.md,
+Generated code): one `check` per frame, which makes every check of the
+frame once, then an accessor per field, `ipv4 b len v` answering a check
+of `Captured_ipv4` and `Captured_ipv4.tcp` one of `Stack_tcp`, each
+testing again the presence of its record and placing it. The loop is
+`flow_rows.ml`'s, as the other rows': no unchecked array read, the IPv4
+and IPv6 keys in a function each. It is compared below with the scanner's
+`fold_step` row, with the linked headers row and with the hand-written
+prototype of the same module the design was measured on (its `check` and
+`enter` written by hand, with the IPv4 header's own word tests, one
+function per frame), not committed.
+
+Counted with `bench/count.sh` on `mawi parse`, on the tree of the commit
+that adds this section with the prototype's module and row added for the
+count, each row five times, the median of its instructions and of its
+cycles per packet, at a load average of 2.9 before and 4.2 after:
+
+| Row, parse only | OCaml | OCaml flambda | OxCaml |
+| --- | ---: | ---: | ---: |
+| check/view, accessors | 237.1 / 51.6 | 244.0 / 53.0 | 174.3 / 43.1 |
+| scanner, `fold_step` | 150.0 / 43.1 | 144.6 / 42.0 | 73.2 / 30.0 |
+| `View.check`, linked headers | 222.2 / 48.8 | 250.1 / 52.7 | 197.9 / 48.8 |
+| prototype, check + enter, re-read | 230.0 / 50.7 | 233.7 / 52.8 | 213.0 / 50.2 |
+
+`pnet_packet 0.35` takes 66.7 / 22.5 and the Rust scanner 68.7 / 23.0,
+counted alike. On OxCaml the views spend 39 instructions and 7 cycles
+less than the prototype, and 24 and 6 less than the linked headers: the
+check is the scanner's walk on `int64#`, and each accessor's tests read
+`int64#` too, a bitfield through its word with one masked test, fields
+sharing a 64-bit word from one load of it, a span and the record after it
+with one bound test. They still spend 101 instructions and 13 cycles more
+than `fold_step`: what remains per IPv4 TCP packet, read in the
+disassembly, is the re-read by design (the EtherType again for `ipv4`,
+the IPv4 word and protocol again for `tcp`, about 20 instructions), the
+answer of each check joined from its failures then tested by `ok` and
+`get` (about 4 per record), the IHL tested again not to make the options
+negative (2), positions and returned fields tagged at the accessor's
+boundary, and the call of the IPv4 or IPv6 function with its spills
+around the walk. On OCaml and flambda the views cost 7 and 10 more than
+the prototype: the same IHL test, a bitfield word masked to 16 bits and
+then by its test, and `ok` and `get` testing the answer twice, which only
+flambda2 merges.
 
 ### One loop, interpreted or generated (`make bench-flow-swap`)
 

@@ -879,6 +879,9 @@ let flow_rows =
     ( "wire.ocaml scanner, selected outputs, fold_step" ^ target,
       flow_scanner,
       flow_scanner_parse );
+    ( "wire.ocaml check/view, accessors" ^ target,
+      Flow_rows.flow_check,
+      Flow_rows_parse.flow_check );
   ]
 
 let pp_flows ppf (flows, sum) = Fmt.pf ppf "%d flows, %d" flows sum

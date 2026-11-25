@@ -22,6 +22,8 @@
   stack_read.ml
   selected_read.ml
   flow_read.ml
+  g_capture.ml
+  g_capture.mli
   g_eth.ml
   g_eth.mli
   g_ipv4.ml
@@ -42,6 +44,8 @@
   stack_read.ml
   selected_read.ml
   flow_read.ml
+  g_capture.ml
+  g_capture.mli
   g_eth.ml
   g_eth.mli
   g_ipv4.ml
@@ -162,6 +166,7 @@
   flow_swap_interpreted
   flow_swap_parse
   flow_swap_interpreted_parse
+  g_capture
   g_eth
   g_ipv4
   g_ipv6
