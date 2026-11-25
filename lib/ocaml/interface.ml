@@ -187,6 +187,9 @@ let describe ~name ~maps f =
    brackets them. *)
 let args fields = String.concat "" (List.map (fun f -> " " ^ f.label) fields)
 
+let labelled_args fields =
+  String.concat "" (List.map (fun f -> " ~" ^ f.label) fields)
+
 (* {2 Field types} *)
 
 (* The type of a field's typed value: its map's, or its carrier's. *)
@@ -343,9 +346,10 @@ let pp_oxcaml_decoders ppf r =
 let pp_writes ppf r b =
   let target = r.target in
   let checked = no_map r.fields in
-  let a = args r.fields in
-  let typed = List.map (typed ~maps:r.maps) r.fields in
-  let plain = List.map plain r.fields in
+  let a = labelled_args r.fields in
+  let label f t = f.label ^ ":" ^ t in
+  let typed = List.map (fun f -> label f (typed ~maps:r.maps f)) r.fields in
+  let plain = List.map (fun f -> label f (plain f)) r.fields in
   let rejected =
     if has_checks r.plan then ", or if the record breaks a constraint" else ""
   in

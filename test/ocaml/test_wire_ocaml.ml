@@ -108,7 +108,8 @@ let test_ipv4 () =
   reads Schemas.ipv4 ~decode:G_ipv4.decode_exn ~validate:G_ipv4.validate_exn;
   writes Schemas.ipv4
     ~write:(fun (a, b, c, d, e, f, g, h, i, j) buf off ->
-      G_ipv4.write buf off a b c d e f g h i j)
+      G_ipv4.write buf off ~versionihl:a ~tos:b ~length:c ~id:d ~frag:e ~ttl:f
+        ~proto:g ~sum:h ~src:i ~dst:j)
     (decoded Schemas.ipv4 200)
 
 let test_ipv4_record () =
@@ -141,7 +142,8 @@ let test_checked () =
   writes Schemas.checked
     ~write:(fun (a, b, c, d, e) ->
       let a = G_checked.Value.version a and b = G_checked.Value.ihl b in
-      fun buf off -> G_checked.write buf off a b c d e)
+      fun buf off ->
+        G_checked.write buf off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e)
     (decoded ~fix:fix_checked Schemas.checked 200
     @ List.init 300 (fun _ -> wild ()))
 
@@ -156,13 +158,13 @@ let test_mixed () =
   writes Schemas.mixed
     ~write:(fun (a, b, c, d, e, f, g, h) ->
       let g = G_mixed.Value.g g and h = G_mixed.Value.h h in
-      fun buf off -> G_mixed.write buf off a b c d e f g h)
+      fun buf off -> G_mixed.write buf off ~a ~b ~c ~d ~e ~f ~g ~h)
     (decoded Schemas.mixed 200 @ List.init 200 (fun _ -> wild ()))
 
 let test_small () =
   reads Schemas.small ~decode:G_small.decode_exn ~validate:G_small.validate_exn;
   writes Schemas.small
-    ~write:(fun (a, b) buf off -> G_small.write buf off a b)
+    ~write:(fun (a, b) buf off -> G_small.write buf off ~type_:a ~local__:b)
     (decoded Schemas.small 100)
 
 let test_eth () =
@@ -171,7 +173,7 @@ let test_eth () =
   writes Schemas.eth
     ~write:(fun (a, b, c) ->
       let a = G_eth.Value.dst a and b = G_eth.Value.src b in
-      fun buf off -> G_eth.write buf off a b c)
+      fun buf off -> G_eth.write buf off ~dst:a ~src:b ~type_:c)
     (decoded Schemas.eth 100
     @ List.init 100 (fun _ ->
         ( str (4 + Random.State.int rand 4),
@@ -203,7 +205,9 @@ let test_write_int () =
     in
     Alcotest.(check string)
       "checked" (run typed)
-      (run (fun buf off -> G_checked.write_int buf off a b c d e))
+      (run (fun buf off ->
+           G_checked.write_int buf off ~version:a ~ihl:b ~length:c ~ttl:d
+             ~proto:e))
   done;
   let size = Codec.min_wire_size Schemas.mixed in
   for _ = 1 to 2000 do
@@ -231,7 +235,7 @@ let test_write_int () =
     in
     Alcotest.(check string)
       "mixed" (run typed)
-      (run (fun buf off -> G_mixed.write_int buf off a b c d e f g h))
+      (run (fun buf off -> G_mixed.write_int buf off ~a ~b ~c ~d ~e ~f ~g ~h))
   done
 
 let test_wide () =
@@ -245,7 +249,7 @@ let test_wide () =
       let module V = G_wide.Value in
       let a = V.a a and b = V.b b and c = V.c c in
       let d = V.d d and e = V.e e and f = V.f f in
-      fun buf off -> G_wide.write buf off a b c d e f)
+      fun buf off -> G_wide.write buf off ~a ~b ~c ~d ~e ~f)
     (decoded Schemas.wide 200 @ List.init 300 (fun _ -> wild ()))
 
 (* A field taken out of its word reads what its own getter reads, from a
@@ -350,7 +354,7 @@ let test_signed () =
   reads Schemas.signed ~decode:G_signed.decode_exn
     ~validate:G_signed.validate_exn;
   writes Schemas.signed
-    ~write:(fun (a, b) buf off -> G_signed.write buf off a b)
+    ~write:(fun (a, b) buf off -> G_signed.write buf off ~s:a ~t:b)
     (decoded Schemas.signed 200)
 
 (* [packed]'s fields store as a few wide words: each value, a negative one
@@ -363,7 +367,8 @@ let test_packed () =
     ~write:(fun r ->
       let e = G_packed.Value.e r.e in
       fun buf off ->
-        G_packed.write buf off r.a r.b r.c r.d e r.f r.g r.h r.i r.j r.k r.l)
+        G_packed.write buf off ~a:r.a ~b:r.b ~c:r.c ~d:r.d ~e ~f:r.f ~g:r.g
+          ~h:r.h ~i:r.i ~j:r.j ~k:r.k ~l:r.l)
     (decoded packed 300);
   let wild k = Random.State.int rand (k + 40) - 20 in
   let size = Codec.min_wire_size packed in
@@ -397,7 +402,8 @@ let test_packed () =
     in
     Alcotest.(check string)
       "packed" (run typed)
-      (run (fun buf off -> G_packed.write_int buf off a b c d e f g h i j k l))
+      (run (fun buf off ->
+           G_packed.write_int buf off ~a ~b ~c ~d ~e ~f ~g ~h ~i ~j ~k ~l))
   done
 
 (* Values that make each check of [refined] pass or fail, often several at
@@ -420,7 +426,7 @@ let test_refined () =
   writes Schemas.refined
     ~write:(fun (a, b, c, d) ->
       let a = G_refined.Value.hi a and b = G_refined.Value.lo b in
-      fun buf off -> G_refined.write buf off a b c d)
+      fun buf off -> G_refined.write buf off ~hi:a ~lo:b ~kind:c ~code:d)
     (decoded ~fix:fix_refined Schemas.refined 200
     @ List.init 300 (fun _ -> wild ()))
 
@@ -441,7 +447,7 @@ let test_overflow () =
   writes Schemas.overflow
     ~write:(fun (a, hi, lo, b, c) ->
       let hi = G_overflow.Value.hi hi and lo = G_overflow.Value.lo lo in
-      fun buf off -> G_overflow.write buf off a hi lo b c)
+      fun buf off -> G_overflow.write buf off ~a ~hi ~lo ~b ~c)
     (decoded ~fix Schemas.overflow 200
     @ [
         (u32 9l, 0, 0, u32 1l, u32 1l);
@@ -638,7 +644,8 @@ let test_mapped () =
   writes Schemas.mapped
     ~write:(fun (a, b, c, d, e) ->
       let e = G_mapped.Value.rest e in
-      fun buf off -> G_mapped.write buf off a b c d e)
+      fun buf off ->
+        G_mapped.write buf off ~len:a ~addr:b ~proto:c ~flag:d ~rest:e)
     (decoded Schemas.mapped 300);
   getter Schemas.mapped Schemas.mapped_len ~get:G_mapped.Get.len
     ~show:string_of_int;
@@ -975,13 +982,15 @@ let test_bigstring () =
     let on_bytes =
       outcome (fun () ->
           let buf = Bytes.make len '\xaa' in
-          G_checked.write_int buf off a b c d e;
+          G_checked.write_int buf off ~version:a ~ihl:b ~length:c ~ttl:d
+            ~proto:e;
           Bytes.to_string buf)
     in
     let on_big =
       outcome (fun () ->
           let buf = bigstring (Bytes.make len '\xaa') in
-          G_checked.Bigstring.write_int buf off a b c d e;
+          G_checked.Bigstring.write_int buf off ~version:a ~ihl:b ~length:c
+            ~ttl:d ~proto:e;
           big_to_string buf)
     in
     Alcotest.(check string) "write" on_bytes on_big

@@ -99,7 +99,8 @@ let restamp buf n out =
       let route = Routing_workload.route_of_apid (apid :> int) in
       let seq = seqs.(route) in
       seqs.(route) <- P.Value.seqcount_low ((seq :> int) + 1);
-      P.write_at o olen !off version type_ sechdr apid seqflags seq dlen;
+      P.write_at o olen !off ~version ~type_ ~sechdrflag:sechdr ~apid ~seqflags
+        ~seqcount:seq ~datalength:dlen;
       off := !off + hdr + (dlen :> int) + 1;
       incr i
     end
@@ -122,13 +123,15 @@ let frame n out =
   let carry = ref 0 and p = ref 0 in
   for f = 0 to n - 1 do
     let base = f * cadu_size in
-    F.write_int_at o olen base 0 0x1FF (f land 7) 1 (f land 0xFF)
-      ((f lsr 3) land 0xFF)
-      0 0 0 3 !carry;
+    F.write_int_at o olen base ~version:0 ~scid:0x1FF ~vcid:(f land 7)
+      ~ocfflag:1 ~mccount:(f land 0xFF)
+      ~vccount:((f lsr 3) land 0xFF)
+      ~sechdrflag:0 ~syncflag:0 ~packetorder:0 ~seglenid:3 ~firsthdrptr:!carry;
     let off = ref (base + hdr + !carry) in
     while !off + pkt_size <= base + cadu_size do
-      P.write_at o olen !off version type_ sechdr (P.Value.apid_low !p) seqflags
-        (P.Value.seqcount_low !p) dlen;
+      P.write_at o olen !off ~version ~type_ ~sechdrflag:sechdr
+        ~apid:(P.Value.apid_low !p) ~seqflags
+        ~seqcount:(P.Value.seqcount_low !p) ~datalength:dlen;
       off := !off + pkt_size;
       incr p
     done;
@@ -141,11 +144,12 @@ let report n out =
   let (Buf.Any o) = Buf.v out in
   let olen = Buf.length o in
   for i = 0 to n - 1 do
-    C.write_int_at o olen (i * C.size) 0 0 0 1 7 0 0 0
-      (((i land 0xFFF) + 1) lsr 12)
-      (((i land 0x3F) + 1) lsr 6)
-      ((i lsr 13) land 1)
-      0 0 (i land 0xFF)
+    C.write_int_at o olen (i * C.size) ~controlwordtype:0 ~clcwversion:0
+      ~statusfield:0 ~copineffect:1 ~vcid:7 ~spare:0 ~norf:0 ~nobitlock:0
+      ~lockout:(((i land 0xFFF) + 1) lsr 12)
+      ~wait:(((i land 0x3F) + 1) lsr 6)
+      ~retransmit:((i lsr 13) land 1)
+      ~farmbcounter:0 ~spare2:0 ~reportvalue:(i land 0xFF)
   done;
   out
 

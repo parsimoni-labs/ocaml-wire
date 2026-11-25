@@ -367,6 +367,14 @@ let pp_values ppf fields =
 
 let pp_vars ppf fields = pp_list ppf (List.map (fun f -> f.id) fields)
 
+(* The labelled parameters of a write: each field's value under its label. *)
+let pp_labelled ppf fields =
+  pp_list ppf (List.map (fun f -> Fmt.str "~%s:%s" f.label f.id) fields)
+
+let labelled fields args =
+  String.concat " "
+    (List.map2 (fun f a -> Fmt.str "~%s:%s" f.label a) fields args)
+
 (* Writes take each value in its plain form: an [int] for a field up to 16 bits
    or a bitfield, an [int32] for a 32-bit field, a [string] for a byte array. *)
 
@@ -717,7 +725,7 @@ let pp_write_int ?(src = bytes_src) ppf ~target ~plan =
       fields
   then pp_first_error ~src ppf ~target fields;
   Fmt.pf ppf "let[@@inline]%s write_int %s off %a =@\n" (zero_alloc target)
-    src.buf pp_vars fields;
+    src.buf pp_labelled fields;
   unbox_int32s ~src ppf fields;
   pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan
     ~in_range:(fun _ -> false)
@@ -759,7 +767,7 @@ let pp_write ?(src = bytes_src) ppf ~target ~plan =
     else target
   in
   Fmt.pf ppf "let[@@inline]%s write %s off %a =@\n" (zero_alloc target) src.buf
-    pp_vars fields;
+    pp_labelled fields;
   List.iter
     (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value ~src f))
     fields;
@@ -789,7 +797,7 @@ let pp_write_at ?(src = bytes_src) ~ints ppf ~target ~plan =
     \  let buf = (b : _ %s.t :> %s) and len = (len : _ %s.length :> int) in@\n"
     (zero_alloc target)
     (if ints then "write_int_at" else "write_at")
-    b src.brand pp_vars fields src.brand src.typ src.brand;
+    b src.brand pp_labelled fields src.brand src.typ src.brand;
   if ints then begin
     unbox_int32s ~src ppf fields;
     pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
@@ -930,8 +938,8 @@ let pp_printer ppf fields =
     "  Format.pp_print_string ppf \" }\";@\n  Format.pp_close_box ppf ()@\n@\n"
 
 let pp_encode ~src ppf fields =
-  Fmt.pf ppf "let encode t %s off = write buf off %a@\n" src.buf pp_list
-    (List.map (fun f -> "t." ^ f.label) fields)
+  Fmt.pf ppf "let encode t %s off = write buf off %s@\n" src.buf
+    (labelled fields (List.map (fun f -> "t." ^ f.label) fields))
 
 (* [Get.<field> buf off] reads one field as [Codec.get] does, with the same
    bounds-checked load: the compiler's check jumps to a handler that does not
@@ -1613,7 +1621,7 @@ let pp_x4_store ~src ppf fields =
     \    end@\n\
      @\n"
     src.brand
-    (String.concat " " of_word)
+    (labelled (List.map fst fields) of_word)
     src.brand src.brand src.brand src.typ src.brand src.brand src.brand
     src.brand src.typ src.brand
 
@@ -1657,7 +1665,7 @@ let pp_x4_write ~src ppf fields =
      end@\n\
      @\n"
     src.brand (String.concat " " ids)
-    (String.concat " " (List.map (Fmt.str "(V.get %s k)") ids))
+    (labelled (List.map fst fields) (List.map (Fmt.str "(V.get %s k)") ids))
     src.brand (String.concat " " ids)
     (String.concat "\n      |> V.logor " over)
     (String.concat " " ids)

@@ -88,8 +88,8 @@ let test_write () =
       outcome (fun () ->
           for k = 0 to 3 do
             let f i = fields.(i).(k) in
-            G.write_int_at bs (Buf.length bs) (off + (4 * k)) (f 0) (f 1) (f 2)
-              (f 3) (f 4) (f 5) (f 6)
+            G.write_int_at bs (Buf.length bs) (off + (4 * k)) ~a:(f 0) ~b:(f 1)
+              ~c:(f 2) ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
           done)
     in
     let name = Fmt.str "len %d off %d" len off in
@@ -121,8 +121,8 @@ let test_parts () =
       outcome (fun () ->
           for k = 0 to 3 do
             let f i = lanes.(i).(k) land ((1 lsl widths.(i)) - 1) in
-            G.write_int_at bs (Buf.length bs) (off + (4 * k)) (f 0) (f 1) (f 2)
-              (f 3) (f 4) (f 5) (f 6)
+            G.write_int_at bs (Buf.length bs) (off + (4 * k)) ~a:(f 0) ~b:(f 1)
+              ~c:(f 2) ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
           done)
     in
     let name = Fmt.str "len %d off %d" len off in

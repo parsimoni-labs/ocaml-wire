@@ -73,11 +73,12 @@ let report n out =
         ++ retransmit_bits (V.shift_right_logical 13 x)
         ++ reportvalue_bits x));
   for i = n / 4 * 4 to n - 1 do
-    C.write_int_at o olen (i * C.size) 0 0 0 1 7 0 0 0
-      (((i land 0xFFF) + 1) lsr 12)
-      (((i land 0x3F) + 1) lsr 6)
-      ((i lsr 13) land 1)
-      0 0 (i land 0xFF)
+    C.write_int_at o olen (i * C.size) ~controlwordtype:0 ~clcwversion:0
+      ~statusfield:0 ~copineffect:1 ~vcid:7 ~spare:0 ~norf:0 ~nobitlock:0
+      ~lockout:(((i land 0xFFF) + 1) lsr 12)
+      ~wait:(((i land 0x3F) + 1) lsr 6)
+      ~retransmit:((i lsr 13) land 1)
+      ~farmbcounter:0 ~spare2:0 ~reportvalue:(i land 0xFF)
   done;
   out
 
