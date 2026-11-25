@@ -334,7 +334,11 @@ let pp_oxcaml_decoders ppf r =
       (fun f -> match f.store with Bytes _ -> true | _ -> false)
       r.fields
   in
-  pp_val ~zero_alloc:(not bytes) r.target ppf "decode_local"
+  (* A map's functions are the caller's: they may allocate, and are not
+     portable. *)
+  let plain = no_map r.fields in
+  pp_val ~zero_alloc:((not bytes) && plain) ~portable:plain r.target ppf
+    "decode_local"
     (arrows [ buf b; "int"; "t @ local" ])
     "[decode_local buf off] is like {!decode_exn} but builds the record on the \
      caller's stack."
@@ -349,7 +353,7 @@ let pp_writes ppf r b =
   let rejected =
     if has_checks r.plan then ", or if the record breaks a constraint" else ""
   in
-  pp_val target ppf "encode"
+  pp_val ~portable:checked target ppf "encode"
     (arrows [ "t"; buf b; "int"; "unit" ])
     "[encode r buf off] writes the record [r] at [off] in [buf]. Raises as \
      {!write} does.";

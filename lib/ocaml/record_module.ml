@@ -1294,9 +1294,13 @@ let pp_oxcaml ~src ppf ~plan ~size =
   pp_decode ~src ~ox:true ppf ~plan ~size
     ~head:(Fmt.str "let[@inline] decode_with (make @@ local) %s off" src.buf)
     ~call:(fun args -> Fmt.str "make %a" pp_list args);
+  (* A byte array is a string on the heap, and a map's functions are the
+     caller's, which may allocate. *)
   let bytes =
     List.exists
-      (fun f -> match f.store with Bytes _ -> true | _ -> false)
+      (fun f ->
+        Option.is_some f.map
+        || match f.store with Bytes _ -> true | _ -> false)
       fields
   in
   pp_decode ~src ~ox:true ppf ~plan ~size
