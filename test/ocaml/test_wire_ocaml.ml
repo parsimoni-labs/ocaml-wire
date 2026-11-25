@@ -1368,7 +1368,7 @@ let test_nested_no_alloc () =
     done;
     !acc
   in
-  let batch () = S_nested.fold_frames_step buf 0 len ~stride ~init:0 in
+  let batch () = S_nested.fold_step_frames buf 0 len ~stride ~init:0 in
   let measured what f =
     let before = Gc.minor_words () in
     let v = Sys.opaque_identity (f ()) in
@@ -1378,18 +1378,18 @@ let test_nested_no_alloc () =
     v
   in
   Alcotest.(check int)
-    "fold_step and fold_frames_step"
+    "fold_step and fold_step_frames"
     (measured "fold_step" each)
-    (measured "fold_frames_step" batch);
+    (measured "fold_step_frames" batch);
   let offs = Array.init frames (fun i -> i * stride)
   and lens = Array.make frames stride in
-  let index () = S_nested.fold_index_step buf ~offs ~lens ~init:0 in
+  let index () = S_nested.fold_step_index buf ~offs ~lens ~init:0 in
   Alcotest.(check int)
-    "fold_step and fold_index_step"
+    "fold_step and fold_step_index"
     (measured "fold_step" each)
-    (measured "fold_index_step" index);
-  match S_nested.fold_index_step buf ~offs ~lens:[| stride |] ~init:0 with
-  | _ -> Alcotest.fail "fold_index_step: offs and lens of different lengths"
+    (measured "fold_step_index" index);
+  match S_nested.fold_step_index buf ~offs ~lens:[| stride |] ~init:0 with
+  | _ -> Alcotest.fail "fold_step_index: offs and lens of different lengths"
   | exception Invalid_argument _ -> ()
 
 let refused what generate =
@@ -1643,7 +1643,7 @@ let test_decisions () =
   let index ahead = function
     | Frame_loop
         {
-          name = "fold_index_step";
+          name = "fold_step_index";
           need = 34;
           frames = 2;
           short = None;

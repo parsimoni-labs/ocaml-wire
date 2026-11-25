@@ -9,10 +9,10 @@ module _ : Wire.Scan with type step = Scan_step.t = Generated
 module _ : Wire.Scan with type step = Scan_step.t = Interpreted
 
 module Flows (S : Wire.Scan with type step = Scan_step.t) = struct
-  let index buf ~offs ~lens = S.fold_index_step buf ~offs ~lens ~init:[]
+  let index buf ~offs ~lens = S.fold_step_index buf ~offs ~lens ~init:[]
 
   let frames buf ~stride =
-    S.fold_frames_step buf 0 (Bytes.length buf) ~stride ~init:[]
+    S.fold_step_frames buf 0 (Bytes.length buf) ~stride ~init:[]
 
   let one buf off len = S.fold_step buf off len ~init:[]
 end
@@ -83,9 +83,9 @@ let test_same () =
   let module G = Flows (Generated) in
   let module I = Flows (Interpreted) in
   let seen = Alcotest.(list string) in
-  Alcotest.check seen "fold_index_step" (G.index buf ~offs ~lens)
+  Alcotest.check seen "fold_step_index" (G.index buf ~offs ~lens)
     (I.index buf ~offs ~lens);
-  Alcotest.check seen "fold_frames_step" (G.frames buf ~stride)
+  Alcotest.check seen "fold_step_frames" (G.frames buf ~stride)
     (I.frames buf ~stride);
   List.iter
     (fun (off, len) ->

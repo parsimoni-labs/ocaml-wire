@@ -59,9 +59,22 @@ let bridge_mli ?(maps = []) ?record ~codec ~core c =
       Swap.record_mli ~record ~core (handles ~maps:(typs_of maps) ~codec c)
 
 let scanner_fields = scanner_fields
+let outputs = scanner_fields
+
+(* The folds [scanner] writes: [fold] with the outputs [fields], and with
+   [step] the fold [fold_step] calling it by name. *)
+let scanner_folds ?fields ?step () =
+  { Writer.name = "fold"; outputs = fields; visitor = None }
+  ::
+  (match step with
+  | None -> []
+  | Some m ->
+      [ { Writer.name = "fold_step"; outputs = fields; visitor = Some m } ])
 
 let walk ?target ?fields ?step ~codec c =
-  Writer.v ?target ?fields ?step ~require:`Walk ~codec c
+  Writer.v ?target
+    ~folds:(scanner_folds ?fields ?step ())
+    ~require:`Walk ~codec c
 
 let scanner ?target ?fields ?step ~codec c =
   Writer.ml (walk ?target ?fields ?step ~codec c)
@@ -119,6 +132,8 @@ let scanner_views c =
   in
   view "" t.root
 
+let views = scanner_views
+
 let fstar ?fields ~codec c =
   try Fstar_module.modules ?fields ~codec c
   with Unsupported why -> refuse ~codec why
@@ -144,6 +159,166 @@ let scanner_bridge_mli ?(target = `OCaml) ?fields ~codec ~core c =
   let outputs = scan_outputs ?fields c in
   Interface.bridge ~maps:false ~swap:true ~codec ~core
   ^ Swap.scanner_mli ~target ~core outputs
+
+(* {1 The generator} *)
+
+type fold = Writer.fold
+
+let fold ?outputs name = { Writer.name; outputs; visitor = None }
+
+(* The compiler the generator runs on, which is the one that builds what it
+   writes. *)
+let building : target =
+  match Sys.ocaml_release.extra with Some (_, "ox") -> `OxCaml | _ -> `OCaml
+
+type t =
+  | T : {
+      name : string;
+      target : target;
+      buffer : buffer;
+      simd : bool;
+      folds : fold list option;
+      maps : map list option;
+      codec : 'r Wire.Codec.t;
+    }
+      -> t
+
+(* The module of a visitor's source file: [flow_step.ml] is [Flow_step]. *)
+let visitor_module file =
+  let base = Filename.basename file in
+  let stem =
+    match String.index_opt base '.' with
+    | Some i -> String.sub base 0 i
+    | None -> base
+  in
+  String.capitalize_ascii stem
+
+let writer ?(visitors = []) (T t) =
+  let folds =
+    Option.map
+      (List.map (fun (f : fold) ->
+           match List.assoc_opt f.name visitors with
+           | None -> f
+           | Some file -> { f with visitor = Some (visitor_module file) }))
+      t.folds
+  in
+  (match t.folds with
+  | Some folds ->
+      List.iter
+        (fun (n, _) ->
+          if not (List.exists (fun (f : fold) -> f.name = n) folds) then
+            Fmt.invalid_arg "Wire_ocaml: %s declares no fold %S" t.name n)
+        visitors
+  | None -> ());
+  let require =
+    if t.simd || Option.is_some t.maps then `Record
+    else match t.folds with Some (_ :: _) -> `Walk | _ -> `Any
+  in
+  Writer.v ~target:t.target ~buffer:t.buffer ~simd:t.simd ?maps:(named t.maps)
+    ?folds ~require ~codec:(Gen.to_struct t.codec).name t.codec
+
+let v ?name ?(target = building) ?(buffer = `Bytes) ?(simd = false) ?folds ?maps
+    codec =
+  let name =
+    match name with
+    | Some n -> n
+    | None ->
+        String.uncapitalize_ascii
+          (View_module.module_of_codec (Gen.to_struct codec).name)
+  in
+  let t = T { name; target; buffer; simd; folds; maps; codec } in
+  (* Refused when declared, not when printed. *)
+  ignore (writer t : Writer.t);
+  t
+
+let name (T t) = t.name
+let to_ml ?visitors t = Writer.ml (writer ?visitors t)
+let to_mli ?visitors t = Writer.mli (writer ?visitors t)
+
+(* {2 The generator's command line} *)
+
+let usage =
+  "usage: gen.exe [--visitor FOLD=FILE]... FILE...\n\
+   Writes each FILE, <name>.ml or <name>.mli, the module or the interface of \
+   the module <name>; FOLD of each written module calls the visitor of the \
+   source file FILE by name."
+
+let fail fmt =
+  Fmt.kstr
+    (fun msg ->
+      Fmt.epr "%s: %s@.%s@." Sys.executable_name msg usage;
+      exit 2)
+    fmt
+
+(* The visitors and the files a command line names. *)
+let rec parse visitors files = function
+  | [] -> (List.rev visitors, List.rev files)
+  | "--visitor" :: v :: rest -> (
+      match String.index_opt v '=' with
+      | Some i ->
+          let fold = String.sub v 0 i
+          and file = String.sub v (i + 1) (String.length v - i - 1) in
+          parse ((fold, file) :: visitors) files rest
+      | None -> fail "--visitor %s: expected FOLD=FILE" v)
+  | "--visitor" :: [] -> fail "--visitor needs FOLD=FILE"
+  | file :: rest -> parse visitors (file :: files) rest
+
+(* The module a file is written from and which of its texts it holds:
+   [stack.mli] is the interface of [stack]. *)
+let target_of file =
+  let base = Filename.basename file in
+  match String.split_on_char '.' base with
+  | stem :: "ml" :: _ -> (stem, `Ml)
+  | stem :: "mli" :: _ -> (stem, `Mli)
+  | _ -> fail "%s: not a .ml or .mli file" file
+
+let write file text =
+  let oc = open_out_bin file in
+  output_string oc text;
+  close_out oc
+
+let main ts =
+  let visitors, files = parse [] [] (List.tl (Array.to_list Sys.argv)) in
+  if files = [] then fail "no file to write";
+  let written =
+    List.map
+      (fun file ->
+        let stem, kind = target_of file in
+        match List.find_opt (fun t -> name t = stem) ts with
+        | None ->
+            fail "%s: no module %s among %s" file stem
+              (String.concat ", " (List.map name ts))
+        | Some t -> (file, kind, t))
+      files
+  in
+  List.iter
+    (fun (fold, file) ->
+      if
+        not
+          (List.exists
+             (fun (_, _, T t) ->
+               List.exists
+                 (fun (f : fold) -> f.name = fold)
+                 (Option.value ~default:[] t.folds))
+             written)
+      then
+        fail "--visitor %s=%s: no module written declares a fold %s" fold file
+          fold)
+    visitors;
+  List.iter
+    (fun (file, kind, (T t as m)) ->
+      let visitors =
+        List.filter
+          (fun (fold, _) ->
+            List.exists
+              (fun (f : fold) -> f.name = fold)
+              (Option.value ~default:[] t.folds))
+          visitors
+      in
+      match kind with
+      | `Ml -> write file (to_ml ~visitors m)
+      | `Mli -> write file (to_mli ~visitors m))
+    written
 
 (* {1 The plan, for other backends} *)
 

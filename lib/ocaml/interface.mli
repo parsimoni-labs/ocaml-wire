@@ -59,22 +59,17 @@ val record_after_views :
     [Global], after the module's views. *)
 
 val scan_preamble :
-  Format.formatter ->
-  codec:string ->
-  plan:Planner.plan ->
-  selected:Planner.output list ->
-  unit
-(** [scan_preamble ppf ~codec ~plan ~selected] is the head of the interface of a
-    module whose folds hand out [selected]. *)
+  Format.formatter -> codec:string -> plan:Planner.plan -> unit
+(** [scan_preamble ppf ~codec ~plan] is the head of the interface of a module
+    whose folds hand out outputs of [plan]. *)
 
 val scan_members :
   Format.formatter ->
   target:target ->
-  selected:Planner.output list ->
-  step:string option ->
+  plan:Planner.plan ->
+  folds:Scan_module.fold list ->
   unit
-(** [scan_members ppf ~target ~selected ~step] states the folds, with the step
-    folds of the module [step]. *)
+(** [scan_members ppf ~target ~plan ~folds] states each of [folds]. *)
 
 val bridge : maps:bool -> swap:bool -> codec:string -> core:string -> string
 (** [bridge ~maps ~swap ~codec ~core] is the preamble of the interface of the

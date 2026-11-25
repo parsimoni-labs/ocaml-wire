@@ -20,6 +20,7 @@ val scanner_fields : 'a Wire.Codec.t -> (string * bool) list
 
 type scan = {
   plan : plan;
+  fold : string;  (** The fold being written. *)
   selected : output list;
   m : Emitter.mode;
   ppf : Format.formatter;
@@ -33,20 +34,28 @@ val slots : plan -> output list -> output list
 (** [slots plan outputs] is the outputs among [outputs] that are slots; see
     {!Wire_ocaml.Plan.slots}. *)
 
+type fold = {
+  name : string;
+  selected : output list;  (** The outputs it hands out. *)
+  visitor : string option;  (** The module it calls by name, if any. *)
+}
+(** A fold a module declares. *)
+
 val walks :
   ?decide:(Decision.t -> unit) ->
   target:[ `OCaml | `OxCaml ] ->
-  selected:output list ->
-  ?step:string ->
+  folds:fold list ->
   ?size:int ->
   taken:(string, unit) Hashtbl.t ->
   plan ->
   string
-(** [walks ?decide ~target ~selected ?step ?size ~taken plan] is the walks of a
-    module over [plan]: [fold], [fold_frames], with [step] the step folds, on
-    OxCaml the unboxed folds, then [check]: [check b length ~off ~len], or
-    [check b length off] for a codec of constant [size]. Each function it writes
-    is named apart from [taken], which it adds to. [decide] is given each
+(** [walks ?decide ~target ~folds ?size ~taken plan] is the walks of a module
+    over [plan]: for each of [folds] named [n], without a visitor [n] and
+    [n_frames], which take their consumer as arguments, and on OxCaml
+    [n_unboxed] and [n_frames_unboxed]; with a visitor [n], [n_frames] and
+    [n_index], which call it by name. Then [check]: [check b length ~off ~len],
+    or [check b length off] for a codec of constant [size]. Each function it
+    writes is named apart from [taken], which it adds to. [decide] is given each
     decision the walks take, in the order it writes them. *)
 
 val without_dead_bindings : string -> string
@@ -82,9 +91,10 @@ val fstar : ?fields:string list -> 'a Wire.Codec.t -> fstar
     Raises {!Planner.Unsupported} on a codec whose walk needs a slot. *)
 
 val fstar_step : ?fields:string list -> step:string -> 'a Wire.Codec.t -> fstar
-(** [fstar_step ?fields ~step c] is {!fstar} for [step_within] and [fold_step]
-    in the scanner of [c] with [~step], whose values are [int64]: they call the
-    module [step]'s [invalid] and [valid] by name. *)
+(** [fstar_step ?fields ~step c] is {!fstar} for [fold_step] and
+    [fold_step_within], the fold of [c] named [fold_step] whose visitor is the
+    module [step], with values in [int64]: they call [step]'s [invalid] and
+    [valid] by name. *)
 
 val fstar_ox : ?fields:string list -> 'a Wire.Codec.t -> fstar
 (** [fstar_ox ?fields c] is {!fstar} for the [fold] of the OxCaml scanner of
@@ -104,7 +114,7 @@ val fstar_frame :
   'a Wire.Codec.t ->
   fstar
 (** [fstar_frame ?fields ~ox ~index ~step c] is the F* rendering of the walk of
-    a frame of the loop of [fold_frames_step], or with [index] of
-    [fold_index_step], in the scanner of [c] with [~step], of OxCaml with [ox]:
+    a frame of the loop of [fold_step_frames], or with [index] of
+    [fold_step_index], of the fold {!fstar_step} renders, of OxCaml with [ox]:
     the walk of a frame the loop knows to hold the bytes it tests, with the
     fields it loads ahead as parameters. *)

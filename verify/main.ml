@@ -215,8 +215,8 @@ let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
         "fold_step buf off len ~init:0",
         "frames_step_record",
         "~current",
-        "fold_frames_step",
-        "fold_frames_step buf off len ~stride ~init:0" )
+        "fold_step_frames",
+        "fold_step_frames buf off len ~stride ~init:0" )
     else
       ( "fold",
         "fold buf off len ~invalid ~valid",

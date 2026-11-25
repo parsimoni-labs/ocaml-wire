@@ -100,12 +100,12 @@ let stacked () =
   in
   let step b o n = S_stacked.fold_step b o n ~init:0 in
   let batch b n =
-    S_stacked.fold_frames_step b 0 (Bytes.length b) ~stride:n ~init:0
+    S_stacked.fold_step_frames b 0 (Bytes.length b) ~stride:n ~init:0
   in
   let want = [ 6808; 39185; -1; -1; -1; -1 ] in
   check "stacked: fold" (List.map (fun b -> fold b 0 9) frames = want);
   check "stacked: fold_step" (List.map (fun b -> step b 0 9) frames = want);
-  check "stacked: fold_frames_step"
+  check "stacked: fold_step_frames"
     (batch (Bytes.concat Bytes.empty frames) 9 = List.fold_left ( + ) 0 want);
   List.iter
     (fun n ->

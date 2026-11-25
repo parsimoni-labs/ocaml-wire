@@ -13,10 +13,15 @@ type target = [ `OCaml | `OxCaml ]
 type require = [ `Record | `Walk | `Any ]
 type buffer = [ `Bytes | `Bigstring ]
 
+type fold = {
+  name : string;
+  outputs : string list option;
+  visitor : string option;
+}
+
 type walk = {
   plan : plan;
-  selected : output list;
-  step : string option;
+  folds : Scan_module.fold list;
   views : View_module.t;
 }
 
@@ -95,18 +100,60 @@ let checked_record ~codec ~needed ~make record =
   | _ -> ());
   record
 
-(* The walk's outputs and views. Accessors are named apart from the module's
+(* The names a fold defines: without a visitor, its consumer's form and on
+   OxCaml the unboxed one; with one, the step forms. *)
+let fold_names (f : fold) =
+  let n = f.name in
+  match f.visitor with
+  | None -> [ n; n ^ "_frames"; n ^ "_unboxed"; n ^ "_frames_unboxed" ]
+  | Some _ -> [ n; n ^ "_frames"; n ^ "_index"; n ^ "_within" ]
+
+(* The folds' names are apart from each other and from the module's own. *)
+let clash_folds ~codec ~record folds =
+  let own =
+    List.filter
+      (fun n -> not (String.starts_with ~prefix:"fold" n))
+      View_module.root_names
+    @ if Option.is_none record then [] else own_names
+  in
+  let names =
+    List.map (fun n -> (None, n)) own
+    @ List.concat_map
+        (fun (f : fold) -> List.map (fun n -> (Some f.name, n)) (fold_names f))
+        folds
+  in
+  match Names.clash names with
+  | Some (None, Some f, n) | Some (Some f, None, n) ->
+      Fmt.kstr (refuse ~codec)
+        "the fold %S defines %s, which the generated module defines for itself"
+        f n
+  | Some (Some g, Some f, n) ->
+      Fmt.kstr (refuse ~codec) "the folds %S and %S both define %s" g f n
+  | Some (None, None, _) | None -> ()
+
+(* The walk's folds and views. Accessors are named apart from the module's
    values, but not from each other nor from the names a field defines in the
-   record's members. *)
-let checked_walk ~codec ~record ?fields ?step c = function
+   record's members; a fold's names are apart from all of them. *)
+let checked_walk ~codec ~record ~folds c = function
   | Error _ -> None
   | Ok plan ->
-      let reserved = if Option.is_none record then [] else record_values in
-      let selected, views =
+      let defined = List.concat_map fold_names folds in
+      let reserved =
+        (if Option.is_none record then [] else record_values) @ defined
+      in
+      let folds, views =
         match
-          (Scan_module.selected plan fields, View_module.of_codec ~reserved c)
+          ( List.map
+              (fun (f : fold) ->
+                {
+                  Scan_module.name = f.name;
+                  selected = Scan_module.selected plan f.outputs;
+                  visitor = f.visitor;
+                })
+              folds,
+            View_module.of_codec ~reserved c )
         with
-        | sv -> sv
+        | fv -> fv
         | exception Unsupported reason -> refuse ~codec reason
       in
       let accessors =
@@ -124,10 +171,10 @@ let checked_walk ~codec ~record ?fields ?step c = function
               (record_names r)
       in
       clash ~codec (accessors @ fields);
-      Some { plan; selected; step; views }
+      Some { plan; folds; views }
 
 let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?make ?(maps = [])
-    ?fields ?step ~require ~codec c =
+    ?folds ~require ~codec c =
   let typs = List.map (fun (path, _, typ) -> (path, typ)) maps in
   let record = record_part ~maps:typs c in
   (* The walk reads [bytes]: a module on a bigarray is a fixed record's. *)
@@ -150,7 +197,13 @@ let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?make ?(maps = [])
   let record = checked_record ~codec ~needed ~make record in
   if simd && target <> `OxCaml then
     refuse ~codec "~simd needs the OxCaml target";
-  let walk = checked_walk ~codec ~record ?fields ?step c walk in
+  let folds =
+    match folds with
+    | Some folds -> folds
+    | None -> [ { name = "fold"; outputs = None; visitor = None } ]
+  in
+  clash_folds ~codec ~record folds;
+  let walk = checked_walk ~codec ~record ~folds c walk in
   let plan =
     match (record, walk) with
     | Some (plan, _), _ -> plan
@@ -238,8 +291,8 @@ let body ?decide t =
           (fun m -> take (View_module.member_name m))
           w.views.root.members;
         let walk =
-          Scan_module.walks ?decide ~target:t.target ~selected:w.selected
-            ?step:w.step ?size:w.views.size ~taken w.plan
+          Scan_module.walks ?decide ~target:t.target ~folds:w.folds
+            ?size:w.views.size ~taken w.plan
         in
         (* Without a record's members, the module decodes and encodes the
            codec's values through its views. *)
@@ -300,9 +353,7 @@ let mli t =
       | Some (plan, size), _ ->
           Interface.record_preamble ppf ~target:t.target ~simd:t.simd
             ~make:t.make ~maps:t.maps ~codec:t.codec ~plan ~size
-      | None, Some w ->
-          Interface.scan_preamble ppf ~codec:t.codec ~plan:w.plan
-            ~selected:w.selected
+      | None, Some w -> Interface.scan_preamble ppf ~codec:t.codec ~plan:w.plan
       | None, None -> ());
       Interface.pp_digest t.target ppf;
       let views = Option.is_some t.walk in
@@ -313,8 +364,8 @@ let mli t =
         t.record;
       Option.iter
         (fun w ->
-          Interface.scan_members ppf ~target:t.target ~selected:w.selected
-            ~step:w.step;
+          Interface.scan_members ppf ~target:t.target ~plan:w.plan
+            ~folds:w.folds;
           let values =
             if Option.is_some t.record then None
             else

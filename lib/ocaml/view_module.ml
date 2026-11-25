@@ -47,8 +47,8 @@ let root_names =
     "fold";
     "fold_frames";
     "fold_step";
-    "fold_frames_step";
-    "fold_index_step";
+    "fold_step_frames";
+    "fold_step_index";
     "fold_unboxed";
     "fold_frames_unboxed";
     "decode";

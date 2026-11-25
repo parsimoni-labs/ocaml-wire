@@ -64,8 +64,8 @@
     but if its bytes change after the check, a read may return a value that
     breaks a constraint. A view is an [int], so it allocates nothing. The module
     has [size], [decode], [validate] and [write buf off v1 ... vn], which stores
-    field values in order. Without [~make] it also defines a record [t] of the
-    field values, its constructor [v], its printer [pp] and [encode].
+    field values in order. Without [~make] it also defines a record of the field
+    values, its constructor [v], its printer [pp] and [encode].
 
     With [~buffer:`Bigstring] the module reads and writes a bigarray of bytes
     instead, with the same functions and the same errors, and no walk:
@@ -104,6 +104,109 @@ val map : string -> typ:string -> 'a Wire.typ -> map
     have the OCaml type [typ], as in
     [map "Page.u16be_int" ~typ:"int" Page.u16be_int]. *)
 
+(** {1:generating Generating}
+
+    A generator executable declares the modules of its codecs and hands them to
+    {!main}, which writes the files its command line names:
+    {v
+    let () =
+      Wire_ocaml.(
+        main
+          [
+            v Space.clcw_codec;
+            v Packet_stack.capture
+              ~folds:[ fold "classify" ~outputs:[ "ipv4_src"; "ipv4_dst" ] ];
+          ])
+    v}
+    One dune rule writes each module, its interface and the visitors its folds
+    call:
+    {v
+    (rule
+     (targets captured_stack.ml captured_stack.mli)
+     (action
+      (run ./gen.exe %{targets} --visitor classify=%{dep:flow_step.ml})))
+    v} *)
+
+type fold
+(** The type for the folds a module declares. *)
+
+val fold : ?outputs:string list -> string -> fold
+(** [fold ?outputs name] is the fold [name], which checks the record of a frame
+    and hands [outputs] (default: every one, {!outputs}) to a consumer; the
+    others are not read unless a check needs them, and every check still runs.
+    Its consumer is the visitor the module is written with for [name] (see
+    {!to_ml}): the module [V] of the visitor's source file, with the type [V.t]
+    of its accumulators, [V.valid : V.t -> o1:int64 -> ... -> on:int64 -> V.t]
+    (a presence is a [bool]) and [V.invalid : V.t -> V.t], which the fold calls
+    by name. Its functions are [name buf off len ~init], one frame;
+    [name_frames buf off len ~stride ~init], the [len / stride] frames of
+    [stride] bytes at [off]; and [name_index buf ~offs ~lens ~init], the frames
+    of [lens.(i)] bytes at [offs.(i)], reading the length of [buf] once. OCaml
+    without flambda never inlines a function passed as an argument, so the
+    visitor is called with no closure call, and nothing is boxed where the
+    compiler inlines [valid] (docs/execution.md, Generated code). Without a
+    visitor, the fold takes its consumer as arguments:
+    [name buf off len ~invalid ~valid] and
+    [name_frames buf off len ~stride ~init ~invalid ~valid], and on OxCaml
+    [name_unboxed] and [name_frames_unboxed], which hand the outputs out
+    unboxed. *)
+
+type t
+(** The type for the module generated from a codec. *)
+
+val v :
+  ?name:string ->
+  ?target:target ->
+  ?buffer:buffer ->
+  ?simd:bool ->
+  ?folds:fold list ->
+  ?maps:map list ->
+  'r Wire.Codec.t ->
+  t
+(** [v ?name ?target ?buffer ?simd ?folds ?maps c] is the module of [c], named
+    [name] (default: the codec's name, lower-cased and split at its words:
+    [CapturedIPv4] is [captured_ipv4]), for [target] (default: the compiler the
+    generator runs on), on [buffer] (default [`Bytes]), with [folds] (default:
+    one fold [fold] of every output, without a visitor, when the module has
+    folds). The module never refers to [c]. [maps], [simd] and [buffer] are as
+    for {!ml}.
+
+    Raises [Invalid_argument], naming the field and the reason, as {!ml} does,
+    for [folds] on a codec no fold covers (see {!scanner}), and naming the
+    names, for a fold whose functions take a name the module defines or another
+    fold's. *)
+
+val name : t -> string
+(** [name t] is the name of [t]'s module: its file is [name t ^ ".ml"]. *)
+
+val to_ml : ?visitors:(string * string) list -> t -> string
+(** [to_ml ?visitors t] is the source of [t]'s module. Each of [visitors] is a
+    fold's name and the source file of its visitor, whose module ([flow_step.ml]
+    is [Flow_step]) the fold calls by name; a fold that none names takes its
+    consumer as arguments. Raises [Invalid_argument] for a fold [t] does not
+    declare. *)
+
+val to_mli : ?visitors:(string * string) list -> t -> string
+(** [to_mli ?visitors t] is the interface of [to_ml ?visitors t]. *)
+
+val main : t list -> unit
+(** [main ts] is a generator's command line,
+    [gen.exe [--visitor FOLD=FILE]... FILE...]. It writes each [FILE]:
+    [<name>.ml] and [<name>.mli], the module of [ts] named [<name>] and its
+    interface; anything after the extension is ignored, so [stack.ml.raw] is the
+    module [stack] too. [--visitor FOLD=FILE] gives each written module's fold
+    [FOLD] the visitor of the source file [FILE]: naming the visitor in the rule
+    makes dune rebuild the module when it changes. It exits with status 2 and a
+    message on a file that names no module of [ts] and on a visitor of a fold no
+    written module declares. *)
+
+val outputs : 'r Wire.Codec.t -> (string * bool) list
+(** [outputs c] is the outputs a fold of [c] hands out, in declaration order:
+    each named scalar field, its name the path of field labels ({!ident}) joined
+    with ['_'], and for each optional field [<path>_present], flagged [true]. A
+    field in an anonymous one is checked but not an output. Raises
+    [Invalid_argument] for a codec no fold covers. *)
+
 val ml :
   ?target:target ->
   ?buffer:buffer ->
@@ -116,9 +219,9 @@ val ml :
 (** [ml ?target ?buffer ?simd ?make ?maps ~codec c] is the source of a module
     specialised to [c], for [target] (default [`OCaml]), on [buffer] (default
     [`Bytes]). [codec], the OCaml path of [c], names it in the module's header;
-    the module itself never refers to [c]. [make] is [(f, t)]: [f] the path of a
+    the module itself never refers to [c]. [make] is [(f, r)]: [f] the path of a
     function taking the field values in order, which builds the decoded value,
-    and [t] the path of the type it returns. It defaults to a generated record,
+    and [r] the path of the type it returns. It defaults to a generated record,
     which a codec with a map field cannot use.
 
     It is the one module of [c], whatever its shape: on [bytes] without [maps],
@@ -126,9 +229,9 @@ val ml :
     every output. A codec that is not a record of named scalars at constant
     offsets (a field of variable size, an optional field, a record a field
     holds, a sized region, an anonymous field) has no members of a fixed record;
-    its module holds, beside the views, a record type [t] for each record of the
+    its module holds, beside the views, a record type for each record of the
     codec (an optional field an option, a field of bytes a slice of the buffer
-    or a string, a record a field holds its module's [t]), [min_size],
+    or a string, a record a field holds its module's record), [min_size],
     [decode buf off] and [decode_exn], which check the record to the end of
     [buf] as {!scanner}'s [check] does and then read each field through its
     accessor, [validate], [validate_exn] and [is_valid], [encode r buf off],
@@ -251,12 +354,12 @@ val scanner :
     [len / stride] frames of [stride] bytes, each checked on its own; it raises
     [Invalid_argument] for bad bounds or a [stride] that is not positive.
 
-    [step], the path of a module with a type [t], the accumulator, and
+    [step], the path of a module [M] with a type [M.t], the accumulator, and
     [valid : t -> f1:int64 -> ... -> fn:int64 -> t] (a presence is a [bool]) and
     [invalid : t -> t], adds [fold_step buf off len ~init] and
-    [fold_frames_step buf off len ~stride ~init], which are [fold] and
+    [fold_step_frames buf off len ~stride ~init], which are [fold] and
     [fold_frames] with [init] as the accumulator, calling that module's
-    functions by name, and [fold_index_step buf ~offs ~lens ~init], which folds
+    functions by name, and [fold_step_index buf ~offs ~lens ~init], which folds
     [fold_step] over the frames of [lens.(i)] bytes at [offs.(i)], reading the
     length of [buf] once; it raises [Invalid_argument] if [offs] and [lens]
     differ in length. OCaml without flambda never inlines a function passed as
@@ -367,6 +470,10 @@ and view_member =
       (** A named field of bytes, which no fold hands out: a
           [Bytesrw.Bytes.Slice.t] when [slice], a [string] otherwise. *)
 
+val views : 'r Wire.Codec.t -> view
+(** [views c] is the views the module of [c] has. Raises [Invalid_argument] for
+    a codec no fold covers. *)
+
 val scanner_views : 'r Wire.Codec.t -> view
 (** [scanner_views c] is the views {!scanner} writes for [c]. Raises
     [Invalid_argument] as {!scanner} does. *)
@@ -386,7 +493,7 @@ val fstar :
     [fold_is_3d]: on a window inside the buffer,
     [fold buf off len ~invalid ~valid] is [valid] applied to the outputs of the
     value the parser reads from the window's bytes, or [invalid ()] where it
-    reads none. [<codec>.Step.fst] is [step_within] and [fold_step] of
+    reads none. [<codec>.Step.fst] is [fold_step_within] and [fold_step] of
     [scanner ~step:"S"], values held as [int64], calling the module
     [<codec>.Visitor], which [<codec>.Visitor.fsti] declares and leaves
     abstract; [<codec>.StepProof.fst] proves [fold_step_is_3d], the same
@@ -396,7 +503,7 @@ val fstar :
     of [scanner ~target:`OxCaml], each [int64_u] written as its 64-bit pattern.
     [<codec>.Frames] and [<codec>.Index] (and [<codec>.OxFrames],
     [<codec>.OxIndex]) are the walks of a frame of the loops of
-    [fold_frames_step] and [fold_index_step], each a function whose parameters
+    [fold_step_frames] and [fold_step_index], each a function whose parameters
     are typed with what the loop ensures of them, and their [Proof] modules
     prove [frame_is_3d]: such a walk answers what the parser answers on the
     frame's bytes.

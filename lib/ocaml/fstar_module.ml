@@ -1018,9 +1018,9 @@ let step_theorem walk =
     "(* The step walk rejects a bad window, and on a good one answers what\n\
     \   3d.exe's parser answers on the window's bytes, each output as its\n\
     \   int64. *)\n\
-     val step_within_is_3d (buf:P.buf) (length:%s{length == %s})\n\
+     val fold_step_within_is_3d (buf:P.buf) (length:%s{length == %s})\n\
     \    (off len:P.int) (init:S.t)\n\
-    \  : Lemma (step_within buf length off len init ==\n\
+    \  : Lemma (fold_step_within buf length off len init ==\n\
     \           %s)\n\n\
      val fold_step_is_3d (buf:P.buf) (off len:P.int) (init:S.t)\n\
     \  : Lemma (fold_step buf off len init ==\n\
@@ -1048,29 +1048,29 @@ let step_proof_interface ?(walk = stock) ~codec ~m scan =
       pp_visit ppf scan)
     () (step_theorem walk)
 
-(* [step_within] on the buffer's length is [flat] on the window's bytes,
-   then [step_within_is_3d] and [fold_step_is_3d]. *)
+(* [fold_step_within] on the buffer's length is [flat] on the window's bytes,
+   then [fold_step_within_is_3d] and [fold_step_is_3d]. *)
 let pp_step_theorem ppf ~walk ~m =
   let flat = step_statement ~within:true and length = step_length walk in
   Fmt.pf ppf
     "#push-options \"--z3rlimit 200 --fuel 1 --ifuel 1\"@\n\
      let step_is_flat (buf:P.buf) (off len:P.int) (init:S.t)@\n\
-    \  : Lemma (step_within buf %s off len init ==@\n\
+    \  : Lemma (fold_step_within buf %s off len init ==@\n\
     \           %s)@\n\
-    \  = assert (step_within buf %s off len init ==@\n\
+    \  = assert (fold_step_within buf %s off len init ==@\n\
     \           %s)@\n\
-    \      by (WireGen.Tac.unfold_step [`%%%s.%s.step_within; `%%%s.Flat.flat; \
-     `%%visit])@\n\
+    \      by (WireGen.Tac.unfold_step [`%%%s.%s.fold_step_within; \
+     `%%%s.Flat.flat; `%%visit])@\n\
      #pop-options@\n\
      @\n\
-     let step_within_is_3d buf length off len init =@\n\
+     let fold_step_within_is_3d buf length off len init =@\n\
     \  step_is_flat buf off len init;@\n\
     \  if off < 0 || len < 0 || off + len > P.length buf then ()@\n\
     \  else Flat.flat_is_3d (fun () -> S.invalid init) (visit init)@\n\
     \         (Seq.slice buf off (off + len))@\n\
      @\n\
      let fold_step_is_3d buf off len init =@\n\
-    \  step_within_is_3d buf %s off len init@\n"
+    \  fold_step_within_is_3d buf %s off len init@\n"
     length flat length flat m (step_name walk) m length
 
 let step_proof_implementation ?(walk = stock) ~codec ~m scan =
@@ -1112,7 +1112,7 @@ let walk_modules ~walk ~codec ~scan ~stepped =
 (* {2 The walks of the frame loops}
 
    [<M>.Frames] and [<M>.Index] are the walk of a frame of the loops of
-   [fold_frames_step] and [fold_index_step], as the emitter writes it for
+   [fold_step_frames] and [fold_step_index], as the emitter writes it for
    a frame the loop knows to hold the bytes it tests, and [<M>.FramesProof]
    and [<M>.IndexProof] prove each equal to 3d.exe's parser on the frame's
    bytes. *)
@@ -1169,7 +1169,7 @@ let frame_module ~walk ~index ~codec ~m (scan : Scan_module.fstar) =
       header ppf ~codec
         ~m:(m ^ "." ^ frame_name ~index walk)
         (Fmt.str "the walk of a frame of the loop of %s in its %s, as F*"
-           (if index then "fold_index_step" else "fold_frames_step")
+           (if index then "fold_step_index" else "fold_step_frames")
            (scanner_name walk));
       Fmt.pf ppf "module P = WireGen.OCaml@\nmodule %s = %s.Visitor@\n@\n" step
         m)
@@ -1183,7 +1183,7 @@ let frame_proof_interface ~walk ~index ~need ~codec ~m scan =
         (Fmt.str
            "that the walk of a frame of the loop of %s in its %s is the parser \
             3d.exe writes"
-           (if index then "fold_index_step" else "fold_frames_step")
+           (if index then "fold_step_index" else "fold_step_frames")
            (scanner_name walk));
       Fmt.pf ppf
         "open %s.%s@\n\
@@ -1212,7 +1212,7 @@ let frame_proof_implementation ~walk ~index ~need ~codec ~m scan =
         (Fmt.str
            "that the walk of a frame of the loop of %s in its %s is the parser \
             3d.exe writes"
-           (if index then "fold_index_step" else "fold_frames_step")
+           (if index then "fold_step_index" else "fold_step_frames")
            (scanner_name walk));
       Fmt.pf ppf
         "open WireGen.Lib@\n\

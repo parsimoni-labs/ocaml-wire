@@ -1850,21 +1850,21 @@ module Gen = struct
         | Some o -> K.valid init o
         | None -> K.invalid init
 
-    let fold_frames_step buf off len ~stride ~init =
+    let fold_step_frames buf off len ~stride ~init =
       if
         stride <= 0 || off < 0 || len < 0
         || off > Bytes.length buf
         || len > Bytes.length buf - off
-      then invalid_arg "fold_frames_step: invalid frame bounds or stride";
+      then invalid_arg "fold_step_frames: invalid frame bounds or stride";
       let rec go acc i =
         if i = len / stride then acc
         else go (fold_step buf (off + (i * stride)) stride ~init:acc) (i + 1)
       in
       go init 0
 
-    let fold_index_step buf ~offs ~lens ~init =
+    let fold_step_index buf ~offs ~lens ~init =
       if Array.length offs <> Array.length lens then
-        invalid_arg "fold_index_step: offs and lens differ in length";
+        invalid_arg "fold_step_index: offs and lens differ in length";
       let rec go acc i =
         if i = Array.length offs then acc
         else go (fold_step buf offs.(i) lens.(i) ~init:acc) (i + 1)

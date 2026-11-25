@@ -217,11 +217,11 @@ let global_ml ~target ~core =
          @\n\
         \  let fold_step buf off len ~init = %s.fold_step buf off len ~init@\n\
          @\n\
-        \  let fold_frames_step buf off len ~stride ~init =@\n\
-        \    %s.fold_frames_step buf off len ~stride ~init@\n\
+        \  let fold_step_frames buf off len ~stride ~init =@\n\
+        \    %s.fold_step_frames buf off len ~stride ~init@\n\
          @\n\
-        \  let fold_index_step buf ~offs ~lens ~init =@\n\
-        \    %s.fold_index_step buf ~offs ~lens ~init@\n\
+        \  let fold_step_index buf ~offs ~lens ~init =@\n\
+        \    %s.fold_step_index buf ~offs ~lens ~init@\n\
          end@\n"
         core core core core
 

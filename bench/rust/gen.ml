@@ -105,7 +105,7 @@ let reader_wrappers ~wide ~batch =
   (first, inside, last)
 
 (* The checksum consumer the scanner calls by name in [fold_step] and
-   [fold_frames_step]: OCaml without flambda never inlines a function passed
+   [fold_step_frames]: OCaml without flambda never inlines a function passed
    as an argument. It takes the outputs as [int64] and folds them as such, as
    the unboxed rows of OxCaml fold [int64_u]. *)
 let step ~fields =
@@ -140,7 +140,7 @@ let checksum_reader target ~core ~fields name =
     let call =
       core
       ^
-      if batch then ".fold_frames_step buf off len ~stride"
+      if batch then ".fold_step_frames buf off len ~stride"
       else ".fold_step buf off len"
     in
     "Int64.to_int (" ^ call ^ " ~init:(Int64.of_int base))\n"
@@ -224,7 +224,7 @@ let key6 =
    ipv6_udp_present ipv6_udp_src_port ipv6_udp_dst_port)\n\
    ~bytes:(ip6_bytes ipv6_payload_length)"
 
-(* The consumer [name] the scanner calls by name in [fold_index_step], whose
+(* The consumer [name] the scanner calls by name in [fold_step_index], whose
    accumulator has type [typ] and is [base] in [valid]: [v4 args] and [v6 args]
    are its next value for an IPv4 and an IPv6 packet whose key [args] gives,
    [other] for a packet with no key. With [wide], the key is the [int64]
@@ -327,7 +327,7 @@ let () =
          ^ "\nend = struct\n"
          ^ Wire_ocaml.scanner ~target ~fields ~step ~codec c
          ^ "\nend\n\nlet " ^ entry ^ " buf offs lens =\n"
-         ^ body (core ^ ".fold_index_step buf ~offs ~lens")
+         ^ body (core ^ ".fold_step_index buf ~offs ~lens")
          ^ "\n\n"
        in
        let consumer, parse = parse_step target in

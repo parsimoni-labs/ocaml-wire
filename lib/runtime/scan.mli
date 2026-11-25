@@ -18,15 +18,15 @@ module type S = sig
       the outputs of the record at [off] in the [len] bytes there, or its
       [invalid init] when the record or the bounds are bad. *)
 
-  val fold_frames_step : bytes -> int -> int -> stride:int -> init:step -> step
-  (** [fold_frames_step buf off len ~stride ~init] folds {!fold_step} over the
+  val fold_step_frames : bytes -> int -> int -> stride:int -> init:step -> step
+  (** [fold_step_frames buf off len ~stride ~init] folds {!fold_step} over the
       [len / stride] frames of [stride] bytes at [off], in order, from [init].
       Raises [Invalid_argument] if [stride] is not positive or the bounds are
       bad. *)
 
-  val fold_index_step :
+  val fold_step_index :
     bytes -> offs:int array -> lens:int array -> init:step -> step
-  (** [fold_index_step buf ~offs ~lens ~init] folds {!fold_step} over the frames
+  (** [fold_step_index buf ~offs ~lens ~init] folds {!fold_step} over the frames
       of [lens.(i)] bytes at [offs.(i)], in order, from [init]. Raises
       [Invalid_argument] if [offs] and [lens] differ in length. *)
 end

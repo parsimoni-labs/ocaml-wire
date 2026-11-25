@@ -282,7 +282,7 @@ let pp_case ppf (label, c, (src, intf)) =
 (* {1 Scanners}
 
    Each scanner is handed to [Diff_ocaml] as its [fold] and [fold_frames],
-   as its [fold_step] and [fold_frames_step], and on OxCaml also as the
+   as its [fold_step] and [fold_step_frames], and on OxCaml also as the
    unboxed forms of the first two. A structured case gets the scanner
    of every output, one of every other output, one of none, and on OxCaml one
    for the default target too; a sampled shape the first two. *)
@@ -344,7 +344,7 @@ let pp_backend ppf ~m ~unboxed fields =
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
     fields (pp_fold ~m ~unboxed) fields batch ()
 
-(* The module [fold_step] and [fold_frames_step] call by name: it conses each
+(* The module [fold_step] and [fold_step_frames] call by name: it conses each
    frame's snapshot onto the accumulator. It takes the integer outputs as
    [int64]. *)
 let pp_step ppf fields =
@@ -361,15 +361,15 @@ let pp_step ppf fields =
         fields)
     ()
 
-(* [fold_step], [fold_frames_step] and [fold_index_step], as the [fold],
+(* [fold_step], [fold_step_frames] and [fold_step_index], as the [fold],
    [fold_frames] and fold over an index of one more backend. *)
 let pp_step_backend ppf ~m fields =
   Fmt.pf ppf
     "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> \
      match %s.fold_step b o n ~init:[] with [ v ] -> v | _ -> failwith \
      \"fold_step\"); scan_batch = Some (fun b o n stride -> try Some (List.rev \
-     (%s.fold_frames_step b o n ~stride ~init:[])) with Invalid_argument _ -> \
-     None); scan_index = Some (fun b offs lens -> List.rev (%s.fold_index_step \
+     (%s.fold_step_frames b o n ~stride ~init:[])) with Invalid_argument _ -> \
+     None); scan_index = Some (fun b offs lens -> List.rev (%s.fold_step_index \
      b ~offs ~lens ~init:[])) };@\n"
     (m ^ " step")
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
