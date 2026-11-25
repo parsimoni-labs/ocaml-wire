@@ -232,6 +232,11 @@
   Ethernet/IPv4/TCP-or-UDP scan takes about 8% fewer cycles on OxCaml, as
   many as wire.rust's, and about 6% fewer on OCaml (#516, #520, @samoht)
 
+- The scanner's `fold_index_step` loads the next frame's offset, length
+  and dispatch fields before it walks the current one. On the MAWI trace
+  the parse takes about 28% fewer cycles on OxCaml, fewer than
+  `pnet_packet`, and 18 to 29% fewer on OCaml (#558, @samoht)
+
 - `Wire.Codec.get` and `set` of an integer or bitfield are faster: `set`
   writes a space packet header field in a third of the instructions (#496,
   @samoht)
