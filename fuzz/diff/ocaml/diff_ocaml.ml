@@ -22,6 +22,7 @@ let big b =
     (Bytes.get b)
 
 let blit_back bb b = Bytes.iteri (fun i _ -> Bytes.set b i bb.{i}) b
+let string_of_big bb = String.init (Bigarray.Array1.dim bb) (fun i -> bb.{i})
 
 (* {1 Rendering}
 

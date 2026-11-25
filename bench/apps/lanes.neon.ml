@@ -34,19 +34,21 @@ let clcw buf =
   let anomalies = ref (!i - V.sum !good) in
   let expected = ref ((V.get !prev 3 + 1) land 0xFF) in
   while (not !stopped) && !i < words do
-    C.View.with_ b len (!i * C.size)
-      ~ok:(fun v ->
-        let w = C.view_lockout_word b v in
-        let report = C.reportvalue_of_word w in
-        if
-          C.lockout_of_word w <> 0
-          || C.wait_of_word w <> 0
-          || C.retransmit_of_word w <> 0
-          || report <> !expected
-        then incr anomalies;
-        expected := (report + 1) land 0xFF;
-        incr i)
-      ~fail:(fun () -> stopped := true)
+    let off = !i * C.size in
+    let c = C.check b len ~off ~len:(Bytes.length buf - off) in
+    if C.ok c then begin
+      let w = C.view_lockout_word b (C.get c) in
+      let report = C.reportvalue_of_word w in
+      if
+        C.lockout_of_word w <> 0
+        || C.wait_of_word w <> 0
+        || C.retransmit_of_word w <> 0
+        || report <> !expected
+      then incr anomalies;
+      expected := (report + 1) land 0xFF;
+      incr i
+    end
+    else stopped := true
   done;
   !anomalies
 

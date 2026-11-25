@@ -15,7 +15,9 @@ let target =
 type field = {
   name : string;
   ident : string;
-  show : string;
+  carrier : string option;  (** The type [M.Value.<field>] coerces to. *)
+  plain : string;  (** The show of the carrier's value. *)
+  acc : string;  (** Its accessor in the module's views. *)
   views : Diff_ocaml.view list;
 }
 
@@ -28,21 +30,54 @@ let rec carrier : type a. a T.typ -> string option = function
   | T.Enum { base; _ } -> carrier base
   | _ -> None
 
+(* The accessor of the field [ident] in the views of [c]: its name, or that
+   name escaped where the module defines it. *)
+let accessor c =
+  let members =
+    match Wire_ocaml.scanner_views c with
+    | v -> v.members
+    | exception Invalid_argument _ -> []
+  in
+  fun ident ->
+    List.find_map
+      (function
+        | Wire_ocaml.Int { name; output; _ } when output = ident -> Some name
+        | Bytes { name; _ }
+          when List.mem name [ ident; ident ^ "_"; ident ^ "__" ] ->
+            Some name
+        | _ -> None)
+      members
+    |> Option.value ~default:ident
+
 let fields c =
+  let acc = accessor c in
   List.map
     (fun (T.Field f) ->
       let name = Option.get f.field_name in
       let ident = Wire_ocaml.ident name in
-      let show =
-        match (Diff_ocaml.show_code f.field_typ, carrier f.field_typ) with
-        | Some s, None -> s
-        | Some s, Some plain ->
-            Fmt.str "(fun v -> %s (v : M.Value.%s :> %s))" s ident plain
-        | None, _ ->
+      let plain =
+        match Diff_ocaml.show_code f.field_typ with
+        | Some s -> s
+        | None ->
             Fmt.failwith "gen: field %s has a type the backend cannot show" name
       in
-      { name; ident; show; views = Diff_ocaml.views f.field_typ })
+      {
+        name;
+        ident;
+        carrier = carrier f.field_typ;
+        plain;
+        acc = acc ident;
+        views = Diff_ocaml.views f.field_typ;
+      })
     (Gen.to_struct c).fields
+
+(* The show of a value of [f] that [m] reads, its carrier coerced to what it
+   holds. *)
+let show ~m f =
+  match f.carrier with
+  | None -> f.plain
+  | Some t ->
+      Fmt.str "(fun v -> %s (v : %s.Value.%s :> %s))" f.plain m f.ident t
 
 let view = function
   | Diff_ocaml.Get -> "Diff_ocaml.Get"
@@ -55,7 +90,8 @@ let pp_gets ~m ~buf ppf f =
     (fun v ->
       let read =
         match v with
-        | Diff_ocaml.Get -> Fmt.str "%s (%s.Get.%s (%s) o)" f.show m f.ident buf
+        | Diff_ocaml.Get ->
+            Fmt.str "%s (%s.Get.%s (%s) o)" (show ~m f) m f.ident buf
         | Get_int ->
             Fmt.str "string_of_int (%s.Get.%s_int (%s) o)" m f.ident buf
         | Of_word ->
@@ -83,10 +119,11 @@ let reads fields =
 let pp_read ?(prefix = "read") ?b ~m ppf (f, v) =
   let args = match b with None -> "v" | Some b -> b ^ " v" in
   match v with
-  | Diff_ocaml.Get -> Fmt.pf ppf "%s (%s.%s_%s %s)" f.show m prefix f.ident args
+  | Diff_ocaml.Get ->
+      Fmt.pf ppf "%s (%s.%s_%s %s)" (show ~m f) m prefix f.ident args
   | _ -> Fmt.pf ppf "string_of_int (%s.%s_%s_int %s)" m prefix f.ident args
 
-(* The glue over [m] ("M" or "M.Bigstring"), whose buffer [buf] makes from
+(* The glue over [m], whose buffer [buf] makes from
    the bytes [b] and [brand] names; [back] wraps a write so its bytes land in
    [b]. *)
 let pp_ops ppf ~m ~buf ~brand ~back fields =
@@ -95,13 +132,13 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     "{@\n\
     \      Diff_ocaml.decode =@\n\
     \        (fun b o ->@\n\
-    \          let out = Bytes.create M.size in@\n\
-    \          M.encode (%s.decode_exn (%s) o) out 0;@\n\
-    \          Bytes.to_string out);@\n\
+    \          let out = Diff_ocaml.big (Bytes.create %s.size) in@\n\
+    \          %s.encode (%s.decode_exn (%s) o) out 0;@\n\
+    \          Diff_ocaml.string_of_big out);@\n\
     \      validate = (fun b o -> %s.validate_exn (%s) o);@\n\
     \      encode =@\n\
     \        (fun s b o ->@\n\
-    \          let r = M.decode_exn (Bytes.of_string s) 0 in@\n\
+    \          let r = %s.decode_exn (Diff_ocaml.big (Bytes.of_string s)) 0 in@\n\
     \          %a);@\n\
     \      gets = [@\n\
      %a      ];@\n\
@@ -124,7 +161,7 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     \                (true, [ %a ])@\n\
     \              else (false, []));@\n\
     \    }"
-    m buf m buf back (Fmt.str "%s.encode r" m)
+    m m m buf m buf m back (Fmt.str "%s.encode r" m)
     Fmt.(list ~sep:nop (pp_gets ~m ~buf))
     fields
     Fmt.(
@@ -137,8 +174,74 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
     reads
 
-(* The module generated from [c] under its interface, and its bridge, which
-   checks it against the codec. *)
+(* A read of the view [v] of [bb] through the module's accessors: a
+   32-bit field's [int] through [view_<f>_int], which has no accessor. *)
+let pp_access ppf (f, v) =
+  match v with
+  | Diff_ocaml.Get -> Fmt.pf ppf "%s (M.%s bb v)" f.plain f.acc
+  | _ -> Fmt.pf ppf "string_of_int (M.view_%s_int bb v)" f.ident
+
+(* The glue over [M] whose views are the module's: [check], [ok], [get] and
+   an accessor per field, where [Valid.v] and [View.at] were. *)
+let pp_ops_views ppf fields =
+  let reads = reads fields in
+  Fmt.pf ppf
+    "{@\n\
+    \      Diff_ocaml.decode =@\n\
+    \        (fun b o ->@\n\
+    \          let out = Bytes.create M.size in@\n\
+    \          M.encode (M.decode_exn b o) out 0;@\n\
+    \          Bytes.to_string out);@\n\
+    \      validate = (fun b o -> M.validate_exn b o);@\n\
+    \      encode =@\n\
+    \        (fun s b o ->@\n\
+    \          let r = M.decode_exn (Bytes.of_string s) 0 in@\n\
+    \          M.encode r b o);@\n\
+    \      gets = [@\n\
+     %a      ];@\n\
+    \      reads = [ %a ];@\n\
+    \      valid =@\n\
+    \        (fun b ->@\n\
+    \          M.validate_exn b 0;@\n\
+    \          match Wire_runtime.Buf.v b with@\n\
+    \          | Wire_runtime.Buf.Any bb ->@\n\
+    \              let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
+     ~off:0 ~len:(Bytes.length b)) in@\n\
+    \              [ %a ]);@\n\
+    \      is_valid = (fun b o -> M.is_valid b o);@\n\
+    \      view =@\n\
+    \        (fun b o ->@\n\
+    \          M.validate_exn b o;@\n\
+    \          match Wire_runtime.Buf.v b with@\n\
+    \          | Wire_runtime.Buf.Any bb ->@\n\
+    \              let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
+     ~off:o ~len:(Bytes.length b - o)) in@\n\
+    \              [ %a ]);@\n\
+    \      checked =@\n\
+    \        (fun b o ->@\n\
+    \          match Wire_runtime.Buf.v b with@\n\
+    \          | Wire_runtime.Buf.Any bb ->@\n\
+    \              let c = M.check bb (Wire_runtime.Buf.length bb) ~off:o \
+     ~len:(Bytes.length b - o) in@\n\
+    \              if M.ok c then@\n\
+    \                let v = M.get c in@\n\
+    \                (true, [ %a ])@\n\
+    \              else (false, []));@\n\
+    \    }"
+    Fmt.(list ~sep:nop (pp_gets ~m:"M" ~buf:"b"))
+    fields
+    Fmt.(
+      list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
+    reads
+    Fmt.(list ~sep:(any "; ") pp_access)
+    reads
+    Fmt.(list ~sep:(any "; ") pp_access)
+    reads
+    Fmt.(list ~sep:(any "; ") pp_access)
+    reads
+
+(* The module generated from [c] under its interface, its bridge, which
+   checks it against the codec, and the module of [c] on a bigarray. *)
 let pp_case ppf (label, c, (src, intf)) =
   let fields = fields c in
   Fmt.pf ppf
@@ -146,6 +249,11 @@ let pp_case ppf (label, c, (src, intf)) =
     \  | Fuzz_gen.Pack g ->@\n\
     \  let codec = Fuzz_gen.codec g in@\n\
     \  let module M : sig@\n\
+     %s@\n\
+    \  end = struct@\n\
+     %s@\n\
+    \  end in@\n\
+    \  let module MB : sig@\n\
      %s@\n\
     \  end = struct@\n\
      %s@\n\
@@ -163,13 +271,13 @@ let pp_case ppf (label, c, (src, intf)) =
     \  }@\n\
      @\n"
     label intf src
+    (Wire_ocaml.mli ~target ~buffer:`Bigstring ~codec:"codec" c)
+    (Wire_ocaml.ml ~target ~buffer:`Bigstring ~codec:"codec" c)
     (Wire_ocaml.bridge_mli ~codec:"codec" ~core:"M" c)
     (Wire_ocaml.bridge ~codec:"codec" ~core:"M" c)
-    (pp_ops ~m:"M" ~buf:"b" ~brand:"Wire_runtime.Buf" ~back:(fun ppf w ->
-         Fmt.pf ppf "%s b o" w))
-    fields
-    (pp_ops ~m:"M.Bigstring" ~buf:"Diff_ocaml.big b"
-       ~brand:"Wire_runtime.Buf.Bigstring" ~back:(fun ppf w ->
+    pp_ops_views fields
+    (pp_ops ~m:"MB" ~buf:"Diff_ocaml.big b" ~brand:"Wire_runtime.Buf.Bigstring"
+       ~back:(fun ppf w ->
          Fmt.pf ppf
            "let bb = Diff_ocaml.big b in %s bb o; Diff_ocaml.blit_back bb b" w))
     fields
@@ -344,7 +452,7 @@ let pp_view_backend ppf ~m ~codec c =
 (* Whether the module holds a fixed record's members, which the record
    glue reads; without them its values go through the walk. *)
 let has_record src =
-  let sub = "module Valid" in
+  let sub = "module Get" in
   let n = String.length sub in
   let rec go i =
     i + n <= String.length src

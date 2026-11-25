@@ -127,8 +127,12 @@ the codec's error for a fixed record, and `fold`, `fold_frames` and
 `fold_index_step`) for a codec of any shape in scope. One writer
 (`Writer`) puts them in one module per codec, whatever its shape: the walks,
 the check and the views of every codec the walk covers, and the members of a
-fixed record of named scalars (its record, decoder, writes, `Get`, `Valid`,
-`View`, `Field`, `Global`, `Bigstring`) where the codec is one;
+fixed record of named scalars (its record, decoder, writes, `Get`, `Field`,
+`Global`) where the codec is one. The views read the fields: a fixed record
+has no second check (`Valid`, `View`) nor second reads (`read_<field>`,
+`view_<field>`) beside them. A module reads one buffer, chosen when it is
+generated: `~buffer:`Bigstring` writes a fixed record's members on a
+bigarray, with no walk, where `Valid` and `View` remain its views.
 `Wire_ocaml.ml` and `Wire_ocaml.scanner` write the same module, with the
 folds their arguments select. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`

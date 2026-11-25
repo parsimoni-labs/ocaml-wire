@@ -46,32 +46,34 @@
 
     The generated module has [Get.<field> buf off] for each field, which reads
     it as {!Wire.Codec.get} does with one bounds-checked load at a constant
-    offset, and [Get.<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
-    validates the record at offset 0, as {!Wire.Codec.View.val-check} does, and
-    [read_<field>] on what it returns is one load with no check of its own. As
-    for {!Wire.Codec.View}, the promise is memory safety only: a buffer's length
-    never changes, so a read never leaves the buffer, but if its bytes change
-    after [Valid.v], a read may return a value that breaks a constraint.
-    [(v :> bytes)] is the buffer itself, not a copy. For a bitfield,
-    [Get.<field>_word] loads the word that holds it and [<field>_of_word] takes
-    the field out, so fields packed in one word share one load.
+    offset, and [Get.<field>_int] for a 32-bit field's [int] view. For a
+    bitfield, [Get.<field>_word] loads the word that holds it and
+    [<field>_of_word] takes the field out, so fields packed in one word share
+    one load.
 
     [is_valid buf off] checks the record at [off] without raising, loading only
     the fields its constraints read; [validate] answers the codec's error where
-    it is false, and [validate_exn] raises it. A view reads a buffer named once
-    with [Wire_runtime.Buf.v], as ['b Buf.t], and whose length is read once:
-    [View.check b len off] checks the record at [off] without raising,
-    [View.ok c] tells whether it passed and [View.get c] turns an answer that
-    passed into a ['b View.t], with the same promise as [Valid]: each
-    [view_<field> b v] (and [view_<field>_int], [view_<field>_word]) is one load
-    with no bounds check, and only the buffer named ['b] is accepted. A view is
-    an [int], so it allocates nothing. [View.at] raises the codec's error where
-    the check fails, and [View.with_ b len off ~ok ~fail] hands the view to [ok]
-    or calls [fail]. A [Bigstring] submodule has the same functions, [Valid] and
-    [View] included, on a bigarray of bytes. It has [size], [decode], [validate]
-    and [write buf off v1 ... vn], which stores field values in order. Without
-    [~make] it also defines a record [t] of the field values, its constructor
-    [v], its printer [pp] and [encode]. *)
+    it is false, and [validate_exn] raises it. The module's views ({!scanner})
+    read a buffer named once with [Wire_runtime.Buf.v], as ['b Buf.t], and whose
+    length is read once: [check b len ~off ~len] checks the record, [ok c] tells
+    whether it passed and [get c] turns an answer that passed into a ['b view],
+    and each accessor [<field> b v] (and [view_<field>_int], [view_<field>_word]
+    for a 32-bit field and a bitfield's word) is one load with no bounds check,
+    and only the buffer named ['b] is accepted. The promise is memory safety
+    only: a buffer's length never changes, so a read never leaves the buffer,
+    but if its bytes change after the check, a read may return a value that
+    breaks a constraint. A view is an [int], so it allocates nothing. The module
+    has [size], [decode], [validate] and [write buf off v1 ... vn], which stores
+    field values in order. Without [~make] it also defines a record [t] of the
+    field values, its constructor [v], its printer [pp] and [encode].
+
+    With [~buffer:`Bigstring] the module reads and writes a bigarray of bytes
+    instead, with the same functions and the same errors, and no walk:
+    [Valid.v buf] validates the record at offset 0 and [read_<field>] on what it
+    returns is one load with no check of its own; [View.check b len off],
+    [View.ok], [View.get] and [view_<field> b v] are its views, [View.at] raises
+    the codec's error where the check fails, and
+    [View.with_ b len off ~ok ~fail] hands the view to [ok] or calls [fail]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
@@ -80,14 +82,19 @@ type target = [ `OCaml | `OxCaml ]
     fields reads only those, under one frame check; and, for the generated
     record, [decode_local], which builds it on the stack. *)
 
+type buffer = [ `Bytes | `Bigstring ]
+(** The buffer a generated module reads and writes: [bytes], or a bigarray of
+    bytes ([Wire_runtime.Unchecked.Bigstring.t]). The buffer is chosen when the
+    module is generated; a program that reads both generates two modules. *)
+
 val ident : string -> string
 (** [ident name] is the OCaml name a generated module derives from the field
-    [name], for either target: its getter is [Get.<ident name>], its read
-    [read_<ident name>] and its record field [ident name]. It is [name]
-    lower-cased, any character other than a letter, a digit or ['_'] turned into
-    ['_'], prefixed with ["f_"] when that is empty or starts with a digit, and
-    suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the code
-    for the default target compiles on an OxCaml compiler too. *)
+    [name], for either target: its getter is [Get.<ident name>] and its record
+    field [ident name]. It is [name] lower-cased, any character other than a
+    letter, a digit or ['_'] turned into ['_'], prefixed with ["f_"] when that
+    is empty or starts with a digit, and suffixed with ['_'] when it is a
+    keyword of OCaml or of OxCaml, so the code for the default target compiles
+    on an OxCaml compiler too. *)
 
 type map
 (** The type for a {!Wire.map} the generated code calls by its OCaml path. *)
@@ -99,28 +106,29 @@ val map : string -> typ:string -> 'a Wire.typ -> map
 
 val ml :
   ?target:target ->
+  ?buffer:buffer ->
   ?simd:bool ->
   ?make:string * string ->
   ?maps:map list ->
   codec:string ->
   'r Wire.Codec.t ->
   string
-(** [ml ?target ?simd ?make ?maps ~codec c] is the source of a module
-    specialised to [c], for [target] (default [`OCaml]). [codec], the OCaml path
-    of [c], names it in the module's header; the module itself never refers to
-    [c]. [make] is [(f, t)]: [f] the path of a function taking the field values
-    in order, which builds the decoded value, and [t] the path of the type it
-    returns. It defaults to a generated record, which a codec with a map field
-    cannot use.
+(** [ml ?target ?buffer ?simd ?make ?maps ~codec c] is the source of a module
+    specialised to [c], for [target] (default [`OCaml]), on [buffer] (default
+    [`Bytes]). [codec], the OCaml path of [c], names it in the module's header;
+    the module itself never refers to [c]. [make] is [(f, t)]: [f] the path of a
+    function taking the field values in order, which builds the decoded value,
+    and [t] the path of the type it returns. It defaults to a generated record,
+    which a codec with a map field cannot use.
 
-    It is the one module of [c], whatever its shape: without [maps], it also
-    holds the folds, the check and the views {!scanner} writes, with every
-    output. A codec that is not a record of named scalars at constant offsets (a
-    field of variable size, an optional field, a record a field holds, a sized
-    region, an anonymous field) has no members of a fixed record; its module
-    holds, beside the views, a record type [t] for each record of the codec (an
-    optional field an option, a field of bytes a slice of the buffer or a
-    string, a record a field holds its module's [t]), [min_size],
+    It is the one module of [c], whatever its shape: on [bytes] without [maps],
+    it also holds the folds, the check and the views {!scanner} writes, with
+    every output. A codec that is not a record of named scalars at constant
+    offsets (a field of variable size, an optional field, a record a field
+    holds, a sized region, an anonymous field) has no members of a fixed record;
+    its module holds, beside the views, a record type [t] for each record of the
+    codec (an optional field an option, a field of bytes a slice of the buffer
+    or a string, a record a field holds its module's [t]), [min_size],
     [decode buf off] and [decode_exn], which check the record to the end of
     [buf] as {!scanner}'s [check] does and then read each field through its
     accessor, [validate], [validate_exn] and [is_valid], [encode r buf off],
@@ -151,21 +159,22 @@ val ml :
     part of the module covers: parameters, actions, a field of a type the walk
     does not read (an integer of more than 32 bits, a repetition, a tagged
     union), or a map [maps] does not name; for a codec of variable size with
-    [~make] or [~maps], which only a fixed record takes; for [~simd:true] with
-    the [`OCaml] target; and naming both fields when two of them would define
-    the same OCaml name ({!ident}), or one of them a getter that would shadow a
-    name the getters call, such as [Get.cast]. *)
+    [~make], [~maps] or [~buffer:`Bigstring], which only a fixed record takes;
+    for [~simd:true] with the [`OCaml] target; and naming both fields when two
+    of them would define the same OCaml name ({!ident}), or one of them a getter
+    that would shadow a name the getters call, such as [Get.cast]. *)
 
 val mli :
   ?target:target ->
+  ?buffer:buffer ->
   ?simd:bool ->
   ?make:string * string ->
   ?maps:map list ->
   codec:string ->
   'r Wire.Codec.t ->
   string
-(** [mli ?target ?simd ?make ?maps ~codec c] is the interface of
-    [ml ?target ?simd ?make ?maps ~codec c]: its types and values, each
+(** [mli ?target ?buffer ?simd ?make ?maps ~codec c] is the interface of
+    [ml ?target ?buffer ?simd ?make ?maps ~codec c]: its types and values, each
     documented, the fields of [c] with their place, width and constraints in the
     preamble. The interface for [`OCaml] is OCaml, so js_of_ocaml and
     wasm_of_ocaml read it too; the one for [`OxCaml] takes buffers [local] and

@@ -11,6 +11,7 @@ open Record_module
 
 type target = [ `OCaml | `OxCaml ]
 type require = [ `Record | `Walk | `Any ]
+type buffer = [ `Bytes | `Bigstring ]
 
 type walk = {
   plan : plan;
@@ -24,6 +25,7 @@ type t = {
   name : string;
   digest : string;
   target : target;
+  buffer : buffer;
   simd : bool;
   make : (string * string) option;
   maps : (string * string * typ) list;
@@ -124,11 +126,16 @@ let checked_walk ~codec ~record ?fields ?step c = function
       clash ~codec (accessors @ fields);
       Some { plan; selected; step; views }
 
-let v ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ?fields ?step
-    ~require ~codec c =
+let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?make ?(maps = [])
+    ?fields ?step ~require ~codec c =
   let typs = List.map (fun (path, _, typ) -> (path, typ)) maps in
   let record = record_part ~maps:typs c in
-  let walk = walk_part ~maps c in
+  (* The walk reads [bytes]: a module on a bigarray is a fixed record's. *)
+  let require, walk =
+    match buffer with
+    | `Bytes -> (require, walk_part ~maps c)
+    | `Bigstring -> (`Record, Error "the walk reads bytes")
+  in
   (match (require, record, walk) with
   | `Record, Error reason, _ | `Walk, _, Error reason -> refuse ~codec reason
   | `Any, Error _, Error reason -> refuse ~codec reason
@@ -155,6 +162,7 @@ let v ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ?fields ?step
     name = plan.record;
     digest = Gen.digest c;
     target;
+    buffer;
     simd;
     make;
     maps;
@@ -177,15 +185,44 @@ let text f =
 
 (* The record's members, then the walks and the views. The walks' functions
    are named apart from every name the record defines. *)
+(* The accessor of each field of a fixed record in the module's views, found
+   by the field's name: the views plan the record apart, under variables of
+   their own. *)
+let accessor t =
+  Option.map
+    (fun w (f : field) ->
+      let found =
+        List.find_map
+          (function
+            | View_module.Scalar { name; field } when field.name = f.name ->
+                Some name
+            | View_module.Bytes { name; label; _ } when label = f.label ->
+                Some name
+            | _ -> None)
+          w.views.root.members
+      in
+      match found with
+      | Some n -> n
+      | None -> Fmt.invalid_arg "Writer: no accessor for %s" f.name)
+    t.walk
+
 let body ?decide t =
-  let record =
+  let accessor = accessor t in
+  let record, after =
     match t.record with
-    | None -> ""
-    | Some (plan, size) ->
-        text (fun ppf ->
-            pp_maps ppf (all_fields plan);
-            pp_body ~simd:t.simd ppf ~target:t.target
-              ~make:(Option.map fst t.make) ~plan ~size)
+    | None -> ("", "")
+    | Some (plan, size) -> (
+        let make = Option.map fst t.make in
+        ( text (fun ppf ->
+              pp_maps ppf (all_fields plan);
+              pp_body ~simd:t.simd ?accessor ~buffer:t.buffer ppf
+                ~target:t.target ~make ~plan ~size),
+          match accessor with
+          | None -> ""
+          | Some accessor ->
+              text (fun ppf ->
+                  pp_after_views ppf ~target:t.target ~make ~accessor ~plan
+                    ~size) ))
   in
   let walk, views, views_mask32 =
     match t.walk with
@@ -222,7 +259,7 @@ let body ?decide t =
         in
         (walk, Scan_module.without_dead_bindings views, mask32)
   in
-  (record ^ walk, views, views_mask32)
+  (record ^ walk, views ^ after, views_mask32)
 
 let ml ?decide t =
   let code, views, _ = body ?decide t in
@@ -266,10 +303,11 @@ let mli t =
             ~selected:w.selected
       | None, None -> ());
       Interface.pp_digest t.target ppf;
+      let views = Option.is_some t.walk in
       Option.iter
         (fun (plan, size) ->
-          Interface.record_members ppf ~target:t.target ~simd:t.simd
-            ~make:t.make ~maps:t.maps ~codec:t.codec ~plan ~size)
+          Interface.record_members ~views ~buffer:t.buffer ppf ~target:t.target
+            ~simd:t.simd ~make:t.make ~maps:t.maps ~codec:t.codec ~plan ~size)
         t.record;
       Option.iter
         (fun w ->
@@ -284,7 +322,12 @@ let mli t =
                     Value_module.mli_root ppf ~target:t.target w.views r
                   else Value_module.mli_record ppf ~target:t.target w.views r)
           in
-          View_module.mli ?values ppf ~target:t.target w.views)
+          View_module.mli ?values ppf ~target:t.target w.views;
+          Option.iter
+            (fun (plan, size) ->
+              Interface.record_after_views ppf ~target:t.target ~simd:t.simd
+                ~make:t.make ~maps:t.maps ~codec:t.codec ~plan ~size)
+            t.record)
         t.walk)
 
 let views t = Option.map (fun w -> w.views) t.walk

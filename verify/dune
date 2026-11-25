@@ -31,7 +31,7 @@
  (action
   (run ./gen.exe .)))
 
-; The record modules: is_valid, View.check and the accessors behind it, each
+; The record modules: is_valid, check and the accessors behind it, each
 ; window of up to 16 bytes compared with the specification.
 
 (rule

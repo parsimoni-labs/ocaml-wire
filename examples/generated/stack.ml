@@ -701,7 +701,7 @@ let[@inline always] check (b : 'b Wire_runtime.Buf.t)
     (length : 'b Wire_runtime.Buf.length) ~off ~len : 'b check =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
   let length = (length : _ Wire_runtime.Buf.length :> int) in
-  if off < 0 || len > length - off then -1
+  if off < 0 || off > length - len then -1
   else
     let base = off in
     let stop = len in
@@ -721,6 +721,20 @@ let[@inline] field_unless c at field v =
     fail at field
       (Wire_runtime.Errors.Constraint_failed
          { which = Wire_runtime.Errors.Field; value = Some (Int64.of_int v) })
+
+let[@inline] set_bits'u8 (b : _ Wire_runtime.Buf.t) at ~mask ~shift x msg =
+  if x land lnot mask <> 0 then invalid_arg msg;
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  let w = Wire_runtime.Unchecked.u8 buf at in
+  Wire_runtime.Unchecked.set_u8 buf at
+    (w land lnot (mask lsl shift) lor (x lsl shift))
+
+let[@inline] set_bits'u16be (b : _ Wire_runtime.Buf.t) at ~mask ~shift x msg =
+  if x land lnot mask <> 0 then invalid_arg msg;
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  let w = Wire_runtime.Unchecked.u16be buf at in
+  Wire_runtime.Unchecked.set_u16be buf at
+    (w land lnot (mask lsl shift) lor (x lsl shift) land 0xffff)
 
 module Stack_tcp = struct
   type 'b view = int
@@ -819,28 +833,16 @@ module Stack_tcp = struct
       (Wire_runtime.UInt32.to_int32 x)
 
   let[@inline] set_data_offset (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 4 <> 0 then
-      invalid_arg "set_data_offset: the value does not fit in 4 bits";
-    let w = Wire_runtime.Unchecked.u16be buf (v + 12) in
-    Wire_runtime.Unchecked.set_u16be buf (v + 12)
-      (w land lnot (0xf lsl 12) lor (x lsl 12) land 0xffff)
+    set_bits'u16be b (v + 12) ~mask:0xf ~shift:12 x
+      "set_data_offset: the value does not fit in 4 bits"
 
   let[@inline] set_reserved (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 3 <> 0 then
-      invalid_arg "set_reserved: the value does not fit in 3 bits";
-    let w = Wire_runtime.Unchecked.u16be buf (v + 12) in
-    Wire_runtime.Unchecked.set_u16be buf (v + 12)
-      (w land lnot (0x7 lsl 9) lor (x lsl 9) land 0xffff)
+    set_bits'u16be b (v + 12) ~mask:0x7 ~shift:9 x
+      "set_reserved: the value does not fit in 3 bits"
 
   let[@inline] set_flags (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 9 <> 0 then
-      invalid_arg "set_flags: the value does not fit in 9 bits";
-    let w = Wire_runtime.Unchecked.u16be buf (v + 12) in
-    Wire_runtime.Unchecked.set_u16be buf (v + 12)
-      (w land lnot (0x1ff lsl 0) lor (x lsl 0) land 0xffff)
+    set_bits'u16be b (v + 12) ~mask:0x1ff ~shift:0 x
+      "set_flags: the value does not fit in 9 bits"
 
   let[@inline] set_window (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
@@ -1315,34 +1317,20 @@ module Stack_ipv4 = struct
           Bytesrw.Bytes.Slice.make_or_eod buf ~first:p4 ~length:(p6 - p4)
 
   let[@inline] set_version (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 4 <> 0 then
-      invalid_arg "set_version: the value does not fit in 4 bits";
-    let w = Wire_runtime.Unchecked.u8 buf (v + 0) in
-    Wire_runtime.Unchecked.set_u8 buf (v + 0)
-      (w land lnot (0xf lsl 4) lor (x lsl 4))
+    set_bits'u8 b (v + 0) ~mask:0xf ~shift:4 x
+      "set_version: the value does not fit in 4 bits"
 
   let[@inline] set_ihl (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 4 <> 0 then invalid_arg "set_ihl: the value does not fit in 4 bits";
-    let w = Wire_runtime.Unchecked.u8 buf (v + 0) in
-    Wire_runtime.Unchecked.set_u8 buf (v + 0)
-      (w land lnot (0xf lsl 0) lor (x lsl 0))
+    set_bits'u8 b (v + 0) ~mask:0xf ~shift:0 x
+      "set_ihl: the value does not fit in 4 bits"
 
   let[@inline] set_dscp (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 6 <> 0 then
-      invalid_arg "set_dscp: the value does not fit in 6 bits";
-    let w = Wire_runtime.Unchecked.u8 buf (v + 1) in
-    Wire_runtime.Unchecked.set_u8 buf (v + 1)
-      (w land lnot (0x3f lsl 2) lor (x lsl 2))
+    set_bits'u8 b (v + 1) ~mask:0x3f ~shift:2 x
+      "set_dscp: the value does not fit in 6 bits"
 
   let[@inline] set_ecn (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 2 <> 0 then invalid_arg "set_ecn: the value does not fit in 2 bits";
-    let w = Wire_runtime.Unchecked.u8 buf (v + 1) in
-    Wire_runtime.Unchecked.set_u8 buf (v + 1)
-      (w land lnot (0x3 lsl 0) lor (x lsl 0))
+    set_bits'u8 b (v + 1) ~mask:0x3 ~shift:0 x
+      "set_ecn: the value does not fit in 2 bits"
 
   let[@inline] set_total_length (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
@@ -1355,20 +1343,12 @@ module Stack_ipv4 = struct
       ((x : Wire_runtime.UInt16.t :> int) land 0xffff)
 
   let[@inline] set_flags (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 3 <> 0 then
-      invalid_arg "set_flags: the value does not fit in 3 bits";
-    let w = Wire_runtime.Unchecked.u16be buf (v + 6) in
-    Wire_runtime.Unchecked.set_u16be buf (v + 6)
-      (w land lnot (0x7 lsl 13) lor (x lsl 13) land 0xffff)
+    set_bits'u16be b (v + 6) ~mask:0x7 ~shift:13 x
+      "set_flags: the value does not fit in 3 bits"
 
   let[@inline] set_fragment_offset (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
-    let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    if x lsr 13 <> 0 then
-      invalid_arg "set_fragment_offset: the value does not fit in 13 bits";
-    let w = Wire_runtime.Unchecked.u16be buf (v + 6) in
-    Wire_runtime.Unchecked.set_u16be buf (v + 6)
-      (w land lnot (0x1fff lsl 0) lor (x lsl 0) land 0xffff)
+    set_bits'u16be b (v + 6) ~mask:0x1fff ~shift:0 x
+      "set_fragment_offset: the value does not fit in 13 bits"
 
   let[@inline] set_ttl (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in

@@ -851,14 +851,14 @@ let typed f x =
   | Some (m, _), _ -> Fmt.str "(%s.unsafe_of_int %s)" m x
   | None, _ -> x
 
-(* The accessor of a field of bytes: a slice of the buffer, or a copy. A
-   slice keeps the buffer, and a copy reads it with the stdlib's [Bytes], so
-   both take it global. *)
+(* The accessor of a field of bytes: a slice of the buffer, which keeps the
+   buffer and so takes it global, or a copy, read as the mode reads a
+   buffer. *)
 let bytes_accessor ppf ~target ~run ~name ~at ~slice =
   let make pos n =
     if slice then
       Fmt.str "Bytesrw.Bytes.Slice.make_or_eod buf ~first:%s ~length:%s" pos n
-    else Fmt.str "Bytes.sub_string buf %s %s" pos n
+    else Fmt.str "%s.sub_string buf %s %s" (mode target).src.checked pos n
   in
   let absent = if slice then "Bytesrw.Bytes.Slice.eod" else "\"\"" in
   (match at with
@@ -881,7 +881,7 @@ let bytes_accessor ppf ~target ~run ~name ~at ~slice =
                 let q = skip w ~bad:bad_raise ~ahead:None size p in
                 emit w "%s"
                   (make (ptext p) (Fmt.str "(%s - %s)" (ptext q) (ptext p)))))
-  |> pp_function ~global:true ppf ~target ~with_len:false ~name
+  |> pp_function ~global:slice ppf ~target ~with_len:false ~name
        ~ret:(if slice then " : Bytesrw.Bytes.Slice.t" else " : string")
 
 let accessor ppf ~target ~t ~ends (r : record) member =
@@ -983,59 +983,95 @@ let settable (r : record) =
 
 let setter_name name = "set_" ^ name
 
+(* The word of a bitfield a setter loads and stores, as [Unchecked] names
+   its load. *)
+let bits_word = function
+  | T.U8 -> "u8"
+  | T.U16 e -> "u16" ^ endian_suffix e
+  | T.U32 e -> "i32" ^ endian_suffix e
+
+let set_bits base = "set_bits'" ^ bits_word base
+
+(* [set_bits'<word> b at ~mask ~shift x msg] stores the bits [x] under
+   [mask lsl shift] of the word at [at], keeping its other bits, or raises
+   [Invalid_argument msg] if [x] has a bit outside [mask]: the one body of
+   every setter of a bitfield of that word, which inlines it with [mask],
+   [shift] and [msg] constants. *)
+let pp_set_bits ppf base =
+  let u = "Wire_runtime.Unchecked" in
+  let word = bits_word base in
+  Fmt.pf ppf
+    "let[@inline] %s (b : _ Wire_runtime.Buf.t) at ~mask ~shift x msg =@\n\
+     if x land lnot mask <> 0 then invalid_arg msg;@\n\
+     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n\
+     let w = %s.%s buf at in@\n"
+    (set_bits base) u word;
+  match base with
+  | T.U8 ->
+      Fmt.pf ppf
+        "%s.set_%s buf at (w land lnot (mask lsl shift) lor (x lsl shift))@\n\
+         @\n"
+        u word
+  | T.U16 _ ->
+      Fmt.pf ppf
+        "%s.set_%s buf at@\n\
+         (w land lnot (mask lsl shift) lor (x lsl shift) land 0xffff)@\n\
+         @\n"
+        u word
+  | T.U32 _ ->
+      Fmt.pf ppf
+        "%s.set_%s buf at@\n\
+         (Int32.logor@\n\
+         (Int32.logand w (Int32.lognot (Int32.shift_left (Int32.of_int mask) \
+         shift)))@\n\
+         (Int32.shift_left (Int32.of_int x) shift))@\n\
+         @\n"
+        u word
+
 (* [set_<f> b v x] stores [x] as the field [f] of the record [v], in place:
-   one store for an integer, a load and a store of its word for a bitfield,
-   which keeps the word's other bits. A bitfield's [int] is tested against
-   its width first; any other carrier holds its range by construction. *)
+   one store for an integer, and for a bitfield its word's [set_bits'], which
+   tests [x] against its width and keeps the word's other bits. Any other
+   carrier holds its range by construction. *)
 let setter ppf (name, (f : field)) =
   let u = "Wire_runtime.Unchecked" in
   let at = Fmt.str "(v + %d)" f.offset in
   let sfx e = endian_suffix e in
-  Fmt.pf ppf
-    "let[@inline] %s (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =@\n\
-     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n"
+  Fmt.pf ppf "let[@inline] %s (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =@\n"
     (setter_name name);
+  let named () =
+    Fmt.pf ppf "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n"
+  in
   match f.store with
   | Int { width = 8; _ } ->
+      named ();
       Fmt.pf ppf "%s.set_u8 buf %s ((x : %s :> int) land 0xff)@\n@\n" u at
         (carrier_type f)
   | Int { width = 16; endian; _ } ->
+      named ();
       Fmt.pf ppf "%s.set_u16%s buf %s ((x : %s :> int) land 0xffff)@\n@\n" u
         (sfx endian) at (carrier_type f)
   | Int { endian; _ } ->
+      named ();
       Fmt.pf ppf "%s.set_i32%s buf %s (%s.to_int32 x)@\n@\n" u (sfx endian) at
         (fst (Option.get (carrier f)))
-  | Bits { base; shift; width } -> (
-      Fmt.pf ppf
-        "if x lsr %d <> 0 then@\n\
-         invalid_arg \"%s: the value does not fit in %d bits\";@\n"
-        width (setter_name name) width;
-      let mask = mask width in
-      match base with
-      | T.U8 ->
-          Fmt.pf ppf
-            "let w = %s.u8 buf %s in@\n\
-             %s.set_u8 buf %s (w land lnot (%s lsl %d) lor (x lsl %d))@\n\
-             @\n"
-            u at u at mask shift shift
-      | T.U16 e ->
-          Fmt.pf ppf
-            "let w = %s.u16%s buf %s in@\n\
-             %s.set_u16%s buf %s@\n\
-             (w land lnot (%s lsl %d) lor (x lsl %d) land 0xffff)@\n\
-             @\n"
-            u (sfx e) at u (sfx e) at mask shift shift
-      | T.U32 e ->
-          Fmt.pf ppf
-            "let w = %s.i32%s buf %s in@\n\
-             %s.set_i32%s buf %s@\n\
-             (Int32.logor@\n\
-             (Int32.logand w (Int32.lognot (Int32.shift_left (Int32.of_int %s) \
-             %d)))@\n\
-             (Int32.shift_left (Int32.of_int x) %d))@\n\
-             @\n"
-            u (sfx e) at u (sfx e) at mask shift shift)
+  | Bits { base; shift; width } ->
+      Fmt.pf ppf "%s b %s ~mask:%s ~shift:%d x@\n%S@\n@\n" (set_bits base) at
+        (mask width) shift
+        (Fmt.str "%s: the value does not fit in %d bits" (setter_name name)
+           width)
   | Bytes _ -> ()
+
+(* The words of the bitfields the setters of [t] write, once each. *)
+let bits_words t =
+  List.concat_map
+    (fun (r : record) ->
+      List.filter_map
+        (function
+          | _, ({ store = Bits { base; _ }; _ } : field) -> Some base
+          | _ -> None)
+        (settable r))
+    (t.root :: t.records)
+  |> List.sort_uniq compare
 
 let pp_members ppf ~target ~t ~ends (r : record) =
   let late, early =
@@ -1078,7 +1114,8 @@ let ml ?(values = fun _ -> "") ~target t =
             Fmt.pf ppf "%send\n\n" (values r)))
       (List.rev t.records)
   in
-  let text = String.concat "" (modules @ [ root ]) in
+  let helpers = text (fun ppf -> List.iter (pp_set_bits ppf) (bits_words t)) in
+  let text = String.concat "" ((helpers :: modules) @ [ root ]) in
   let reads_mask32 =
     List.exists
       (fun l ->
@@ -1155,7 +1192,7 @@ let pp_member_val ~target ~t ppf (r : record) = function
       pp_val ~portable:(not slice) ~target ppf name
         (String.concat " -> "
            [
-             "'b Wire_runtime.Buf.t";
+             (if slice then "'b Wire_runtime.Buf.t" else named target);
              "'b view";
              (if slice then "Bytesrw.Bytes.Slice.t" else "string");
            ])

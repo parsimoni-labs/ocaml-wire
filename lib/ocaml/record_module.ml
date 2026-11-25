@@ -1205,20 +1205,25 @@ let pp_view_module ~src ppf ~target ~plan ~size =
      @\n"
     attr b src.brand src.typ attr attr
 
-let pp_view ?(src = bytes_src) ppf ~target ~plan ~size =
+(* The reads of a view. Beside the views of the module of the codec ([views]),
+   which read each field with its accessor, only those with no such
+   accessor remain, on the module's ['b view]: a 32-bit field's [int] and a
+   bitfield's word. *)
+let pp_view ?(src = bytes_src) ?(views = false) ppf ~target ~plan ~size =
   let fields = all_fields plan in
   let ox = target = `OxCaml in
-  pp_view_module ~src ppf ~target ~plan ~size;
+  if not views then pp_view_module ~src ppf ~target ~plan ~size;
   let b =
     match target with
     | `OxCaml -> Fmt.str "((b : 'b %s.t) @@ local)" src.brand
     | `OCaml -> Fmt.str "(b : 'b %s.t)" src.brand
   in
+  let view_t = if views then "view" else "View.t" in
   let head attr name =
     Fmt.pf ppf
-      "let%s %s %s (v : 'b View.t) =@\n\
-      \  let buf = (b : _ %s.t :> %s) and off = (v : _ View.t :> int) in@\n"
-      attr name b src.brand src.typ
+      "let%s %s %s (v : 'b %s) =@\n\
+      \  let buf = (b : _ %s.t :> %s) and off = (v : _ %s :> int) in@\n"
+      attr name b view_t src.brand src.typ view_t
   in
   List.iter
     (fun f ->
@@ -1228,7 +1233,7 @@ let pp_view ?(src = bytes_src) ppf ~target ~plan ~size =
         pp_read ~src ~ox ~size ppf f;
         Fmt.pf ppf "  %s@\n@\n" result
       in
-      view ~suffix:"" ~result:(typed_value ~src f);
+      if not views then view ~suffix:"" ~result:(typed_value ~src f);
       match f.store with
       | Int { width = 32; _ } -> view ~suffix:"_int" ~result:(int_view ~src f)
       | Bits { base; _ } ->
@@ -1318,8 +1323,9 @@ let field_fields fields =
       Option.is_none f.map && not (String.starts_with ~prefix:"_" f.label))
     fields
 
-let pp_field_module ~src ppf ~target fields =
+let pp_field_module ?accessor ~src ppf ~target fields =
   let fields = field_fields fields in
+  let view_t = if Option.is_some accessor then "view" else "View.t" in
   let b =
     match target with
     | `OxCaml -> Fmt.str "'b %s.t @@ local" src.brand
@@ -1332,10 +1338,10 @@ let pp_field_module ~src ppf ~target fields =
     "module Field = struct@\n\
     \  type 'a t = {@\n\
     \    get : bytes -> int -> 'a;@\n\
-    \    view : 'b. %s -> 'b View.t -> 'a;@\n\
+    \    view : 'b. %s -> 'b %s -> 'a;@\n\
     \  }@\n\
      @\n"
-    b;
+    b view_t;
   (* On OxCaml [Get.<field>] takes its buffer [local], a mode a handle's
      [get] does not state, so it is eta-expanded there. *)
   List.iter
@@ -1352,6 +1358,7 @@ let pp_field_module ~src ppf ~target fields =
                 "view_" ^ f.label )
           | `OCaml -> ("Get." ^ f.label, "view_" ^ f.label)
       in
+      let view = match accessor with None -> view | Some acc -> acc f in
       Fmt.pf ppf "  let %s : %s t = { get = %s; view = %s }@\n@\n" f.label
         (schema_type f) get view)
     fields;
@@ -1372,36 +1379,50 @@ let pp_global_handles ppf fields =
    [Wire.Codec.Make] by one line. On OCaml it is the module's own functions; on
    OxCaml, whose functions take their buffers [local], which an interpreted
    codec cannot, it states them for buffers on the heap. *)
-let pp_global ~src ppf ~target fields =
-  let fields = field_fields fields in
+(* [Global.View] over the module's own check, for a module whose views are
+   its codec's. *)
+let pp_global_view_of_check ppf =
   Fmt.pf ppf
-    "module Global = struct@\n\
-    \  type nonrec t = t@\n\
+    "  module View = struct@\n\
+    \    type 'b t = 'b view@\n\
+    \    type nonrec 'b check = 'b check@\n\
      @\n\
-    \  let min_size = min_size@\n";
-  match target with
-  | `OCaml ->
+    \    let[@inline] check b len off = check b len ~off ~len:size@\n\
+     @\n\
+    \    let ok = ok@\n\
+    \    let get = get@\n\
+     @\n\
+    \    let[@inline] at b len off =@\n\
+    \      let c = check b len off in@\n\
+    \      if ok c then get c else fail (b : _ Wire_runtime.Buf.t :> bytes) off@\n\
+    \  end@\n\
+     @\n"
+
+(* [Global]'s values: the module's own on OCaml, eta-expanded on OxCaml,
+   where the module's take their buffers [local]. *)
+let pp_global_values ppf ~target =
+  List.iter
+    (fun (name, args) ->
+      match target with
+      | `OCaml -> Fmt.pf ppf "  let %s = %s@\n" name name
+      | `OxCaml -> Fmt.pf ppf "  let %s %s = %s %s@\n" name args name args)
+    [
+      ("decode", "buf off");
+      ("decode_exn", "buf off");
+      ("encode", "t buf off");
+      ("validate", "buf off");
+      ("validate_exn", "buf off");
+      ("is_valid", "buf off");
+    ];
+  Fmt.pf ppf "@\n"
+
+let pp_global_view ~views ppf ~target =
+  match (views, target) with
+  | true, _ -> pp_global_view_of_check ppf
+  | false, `OCaml -> Fmt.pf ppf "  module View = View@\n"
+  | false, `OxCaml ->
       Fmt.pf ppf
-        "  let decode = decode@\n\
-        \  let decode_exn = decode_exn@\n\
-        \  let encode = encode@\n\
-        \  let validate = validate@\n\
-        \  let validate_exn = validate_exn@\n\
-        \  let is_valid = is_valid@\n\
-        \  module View = View@\n\
-        \  module Field = Field@\n\
-         end@\n\
-         @\n"
-  | `OxCaml ->
-      Fmt.pf ppf
-        "  let decode buf off = decode buf off@\n\
-        \  let decode_exn buf off = decode_exn buf off@\n\
-        \  let encode t buf off = encode t buf off@\n\
-        \  let validate buf off = validate buf off@\n\
-        \  let validate_exn buf off = validate_exn buf off@\n\
-        \  let is_valid buf off = is_valid buf off@\n\
-         @\n\
-        \  module View = struct@\n\
+        "  module View = struct@\n\
         \    type 'b t = 'b View.t@\n\
         \    type 'b check = 'b View.check@\n\
          @\n\
@@ -1410,40 +1431,33 @@ let pp_global ~src ppf ~target fields =
         \    let ok = View.ok@\n\
         \    let get = View.get@\n\
         \  end@\n\
-         @\n\
-        \  module Field = struct@\n\
+         @\n"
+
+let pp_global_field ~views ~src ppf ~target fields =
+  match target with
+  | `OCaml -> Fmt.pf ppf "  module Field = Field@\n"
+  | `OxCaml ->
+      Fmt.pf ppf
+        "  module Field = struct@\n\
         \    type 'a t = {@\n\
         \      get : bytes -> int -> 'a;@\n\
-        \      view : 'b. 'b %s.t -> 'b View.t -> 'a;@\n\
+        \      view : 'b. 'b %s.t -> 'b %s -> 'a;@\n\
         \    }@\n\
          @\n"
-        src.brand;
+        src.brand
+        (if views then "view" else "View.t");
       pp_global_handles ppf fields;
-      Fmt.pf ppf "  end@\nend@\n@\n"
+      Fmt.pf ppf "  end@\n"
 
-(* The same reads and writes on a bigarray of bytes, with the same errors. *)
-let pp_bigstring ppf ~target ~make ~record ~plan ~size =
-  let src =
-    match target with `OxCaml -> local_bigstring_src | `OCaml -> bigstring_src
-  in
-  let fields = all_fields plan in
-  Fmt.pf ppf "module Bigstring = struct@\n";
-  pp_cold ~src ppf ~target ~plan ~size;
-  pp_validate ~src ppf ~target ~plan ~size;
-  if has_checks plan then pp_validate_written ~src ppf ~target;
-  let value = if record then typed_value else plain_typed_value in
-  pp_decode ~src ~value ppf ~plan ~size
-    ~head:(Fmt.str "let decode_exn %s off" src.buf) ~call:(fun args ->
-      Fmt.str "%s %a" make pp_list args);
-  pp_decode_result ~src ppf;
-  pp_write_int ~src ppf ~target ~plan;
-  pp_write ~src ppf ~target ~plan;
-  pp_write_at ~src ~ints:true ppf ~target ~plan;
-  pp_write_at ~src ~ints:false ppf ~target ~plan;
-  pp_getters ~src ppf ~target fields;
-  pp_valid ~src ppf ~target ~plan;
-  pp_view ~src ppf ~target ~plan ~size;
-  if record then pp_encode ~src ppf fields;
+let pp_global ?(views = false) ~src ppf ~target fields =
+  Fmt.pf ppf
+    "module Global = struct@\n\
+    \  type nonrec t = t@\n\
+     @\n\
+    \  let min_size = min_size@\n";
+  pp_global_values ppf ~target;
+  pp_global_view ~views ppf ~target;
+  pp_global_field ~views ~src ppf ~target (field_fields fields);
   Fmt.pf ppf "end@\n@\n"
 
 (* The bits of a 4-byte record a field occupies in a NEON lane, which holds the
@@ -1681,18 +1695,19 @@ let pp_x4 ~src ppf ~plan ~size =
       pp_x4_store ~src ppf fields;
       pp_x4_write ~src ppf fields
 
-let pp_body ?(simd = false) ppf ~target ~make ~plan ~size =
-  let fields = all_fields plan in
-  Fmt.pf ppf "let size = %d@\nlet min_size = size@\n@\n" size;
-  pp_values ppf fields;
+(* The buffer a module reads, [bytes] or a bigarray of bytes, held [local]
+   on OxCaml. *)
+let src_of ~target = function
+  | `Bytes -> (
+      match target with `OxCaml -> local_bytes_src | `OCaml -> bytes_src)
+  | `Bigstring -> (
+      match target with
+      | `OxCaml -> local_bigstring_src
+      | `OCaml -> bigstring_src)
+
+(* The checks, decoders, writes and reads of a fixed record on [src]. *)
+let pp_codec ~src ~bytes ppf ~target ~make ~plan ~size =
   let record = Option.is_none make in
-  if record then begin
-    pp_record ppf fields;
-    pp_printer ppf fields
-  end;
-  let src =
-    match target with `OxCaml -> local_bytes_src | `OCaml -> bytes_src
-  in
   pp_cold ~src ppf ~target ~plan ~size;
   pp_validate ~src ppf ~target ~plan ~size;
   if has_checks plan then pp_validate_written ~src ppf ~target;
@@ -1702,27 +1717,55 @@ let pp_body ?(simd = false) ppf ~target ~make ~plan ~size =
     ~head:(Fmt.str "let decode_exn %s off" src.buf) ~call:(fun args ->
       Fmt.str "%s %a" make pp_list args);
   pp_decode_result ~src ppf;
-  if target = `OxCaml then pp_oxcaml ~src ppf ~record ~plan ~size;
+  if target = `OxCaml && bytes then pp_oxcaml ~src ppf ~record ~plan ~size;
   pp_write_int ~src ppf ~target ~plan;
   pp_write ~src ppf ~target ~plan;
   pp_write_at ~src ~ints:true ppf ~target ~plan;
   pp_write_at ~src ~ints:false ppf ~target ~plan;
-  pp_getters ~src ppf ~target fields;
-  pp_valid ~src ppf ~target ~plan;
-  pp_view ~src ppf ~target ~plan ~size;
-  if simd then pp_x4 ~src ppf ~plan ~size;
-  pp_field_module ~src ppf ~target fields;
+  pp_getters ~src ppf ~target (all_fields plan)
+
+let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ppf ~target ~make ~plan
+    ~size =
+  let views = Option.is_some accessor in
+  let fields = all_fields plan in
+  Fmt.pf ppf "let size = %d@\nlet min_size = size@\n@\n" size;
+  pp_values ppf fields;
+  let record = Option.is_none make in
   if record then begin
-    pp_encode ~src ppf fields;
-    pp_global ~src ppf ~target fields
+    pp_record ppf fields;
+    pp_printer ppf fields
   end;
-  pp_bigstring ppf ~target ~make ~record ~plan ~size
+  let src = src_of ~target buffer in
+  let bytes = buffer = `Bytes in
+  pp_codec ~src ~bytes ppf ~target ~make ~plan ~size;
+  (* Beside the module's views, [Valid] and [View] would be second checks,
+     and [read_<field>] and [view_<field>] second reads of each field. *)
+  if not views then begin
+    pp_valid ~src ppf ~target ~plan;
+    pp_view ~src ppf ~target ~plan ~size
+  end;
+  if simd then pp_x4 ~src ppf ~plan ~size;
+  (* The field handles and [Global] read [bytes] on the heap. *)
+  let handles = bytes && not views in
+  if handles then pp_field_module ~src ppf ~target fields;
+  if record then pp_encode ~src ppf fields;
+  if handles && record then pp_global ~src ppf ~target fields
+
+(* The members that read through the module's views, written after them: the
+   reads with no accessor of their own, the field handles and [Global]. *)
+let pp_after_views ppf ~target ~make ~accessor ~plan ~size =
+  let fields = all_fields plan in
+  let src =
+    match target with `OxCaml -> local_bytes_src | `OCaml -> bytes_src
+  in
+  pp_view ~src ~views:true ppf ~target ~plan ~size;
+  pp_field_module ~accessor ~src ppf ~target fields;
+  if Option.is_none make then pp_global ~views:true ~src ppf ~target fields
 
 let refuse ~codec reason =
   Fmt.invalid_arg "Wire_ocaml: cannot specialise %s: %s" codec reason
 
-(* The names the generated module defines for itself, at top level or in
-   [Bigstring]. *)
+(* The names the generated module defines for itself. *)
 let own_names =
   [
     "digest";
@@ -1757,7 +1800,6 @@ let own_names =
     "Value";
     "Field";
     "Global";
-    "Bigstring";
     "mask32";
     "pp";
   ]
@@ -1807,8 +1849,9 @@ let record_scope (s : T.struct_) =
       | Some name -> (
           if not (scalar f.field_typ) then
             match f.field_typ with
-            | T.Optional _ ->
+            | T.Optional _ | T.Optional_or _ ->
                 fail_unsupported "field %s: an optional field" name
+            | T.Repeat _ -> fail_unsupported "field %s: a repeated field" name
             | T.Codec _ -> fail_unsupported "field %s: a nested record" name
             | T.Single_elem _ ->
                 fail_unsupported "field %s: a sized region" name

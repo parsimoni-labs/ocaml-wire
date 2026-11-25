@@ -25,14 +25,21 @@ val round_trip :
   size:int ->
   decode:(bytes -> int -> 'r) ->
   encode:('r -> bytes -> int -> unit) ->
-  big_decode:(Wire_runtime.Unchecked.Bigstring.t -> int -> 'b) ->
-  big_encode:('b -> Wire_runtime.Unchecked.Bigstring.t -> int -> unit) ->
   int list ->
   unit
-(** [round_trip what ~size ~decode ~encode ~big_decode ~big_encode good] checks
-    that the record [good] holds decodes and encodes back to [good] on bytes and
-    on a bigarray, and that a buffer one byte short or a negative offset is
-    refused. *)
+(** [round_trip what ~size ~decode ~encode good] checks that the record [good]
+    holds decodes and encodes back to [good], and that a buffer one byte short
+    or a negative offset is refused. *)
+
+val big_round_trip :
+  string ->
+  size:int ->
+  decode:(Wire_runtime.Unchecked.Bigstring.t -> int -> 'r) ->
+  encode:('r -> Wire_runtime.Unchecked.Bigstring.t -> int -> unit) ->
+  int list ->
+  unit
+(** [big_round_trip what ~size ~decode ~encode good] checks that the record
+    [good] holds decodes and encodes back to [good] on a bigarray. *)
 
 val sources : unit -> unit
 (** [sources ()] checks that no generated source in the current directory

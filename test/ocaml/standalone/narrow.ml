@@ -9,8 +9,10 @@ let checked () =
   round_trip "checked" ~size:S_checked.size
     ~decode:(fun b o -> S_checked.decode_exn b o)
     ~encode:(fun t b o -> S_checked.encode t b o)
-    ~big_decode:(fun b o -> S_checked.Bigstring.decode_exn b o)
-    ~big_encode:(fun t b o -> S_checked.Bigstring.encode t b o)
+    [ 0x45; 0; 20; 64; 6 ];
+  big_round_trip "checked" ~size:S_checked_big.size
+    ~decode:(fun b o -> S_checked_big.decode_exn b o)
+    ~encode:(fun t b o -> S_checked_big.encode t b o)
     [ 0x45; 0; 20; 64; 6 ];
   parse_error "checked: version" ~field:[ "Version" ] ~at:0
     (Constraint_failed { which = Field; value = Some 5L })
@@ -21,24 +23,28 @@ let checked () =
   parse_error "checked: where" ~at:0
     (Constraint_failed { which = Where; value = None })
     (fun () -> S_checked.validate_exn (bytes_of [ 0x45; 0; 3; 64; 6 ]) 0);
-  let v = S_checked.Valid.v (bytes_of [ 0x45; 0; 20; 64; 17 ]) in
-  check "checked: valid read"
-    ((S_checked.read_proto v :> int) = 17 && (S_checked.read_ihl v :> int) = 5)
+  let buf = bytes_of [ 0x45; 0; 20; 64; 17 ] in
+  match Wire_runtime.Buf.v buf with
+  | Wire_runtime.Buf.Any b ->
+      let c =
+        S_checked.check b
+          (Wire_runtime.Buf.length b)
+          ~off:0 ~len:(Bytes.length buf)
+      in
+      let v = S_checked.get c in
+      check "checked: valid read"
+        ((S_checked.proto b v :> int) = 17 && S_checked.ihl b v = 5)
 
 let eth () =
   round_trip "eth" ~size:S_eth.size
     ~decode:(fun b o -> S_eth.decode_exn b o)
     ~encode:(fun t b o -> S_eth.encode t b o)
-    ~big_decode:(fun b o -> S_eth.Bigstring.decode_exn b o)
-    ~big_encode:(fun t b o -> S_eth.Bigstring.encode t b o)
     (List.init 14 (fun i -> i * 17))
 
 let signed () =
   round_trip "signed" ~size:S_signed.size
     ~decode:(fun b o -> S_signed.decode_exn b o)
     ~encode:(fun t b o -> S_signed.encode t b o)
-    ~big_decode:(fun b o -> S_signed.Bigstring.decode_exn b o)
-    ~big_encode:(fun t b o -> S_signed.Bigstring.encode t b o)
     [ 0xfe; 0x80; 0 ];
   parse_error "signed: S" ~field:[ "S" ] ~at:0
     (Constraint_failed { which = Field; value = Some (-6L) })
@@ -48,8 +54,6 @@ let refined () =
   round_trip "refined" ~size:S_refined.size
     ~decode:(fun b o -> S_refined.decode_exn b o)
     ~encode:(fun t b o -> S_refined.encode t b o)
-    ~big_decode:(fun b o -> S_refined.Bigstring.decode_exn b o)
-    ~big_encode:(fun t b o -> S_refined.Bigstring.encode t b o)
     [ 0x13; 2; 20 ];
   parse_error "refined: Lo at its word" ~field:[ "Lo" ] ~at:0
     (Constraint_failed { which = Field; value = Some 0L })

@@ -17,6 +17,7 @@ type t
 
 val v :
   ?target:target ->
+  ?buffer:[ `Bytes | `Bigstring ] ->
   ?simd:bool ->
   ?make:string * string ->
   ?maps:(string * string * typ) list ->
@@ -26,11 +27,12 @@ val v :
   codec:string ->
   'a Wire.Codec.t ->
   t
-(** [v ?target ?simd ?make ?maps ?fields ?step ~require ~codec c] is the module
-    of [c]; see {!Wire_ocaml.ml} and {!Wire_ocaml.scanner}. Raises
-    [Invalid_argument] naming the field and the reason when [c] has no part
-    [require] names, or when two of the names the module defines would be one.
-*)
+(** [v ?target ?buffer ?simd ?make ?maps ?fields ?step ~require ~codec c] is the
+    module of [c] on [buffer] (default [`Bytes]); see {!Wire_ocaml.ml} and
+    {!Wire_ocaml.scanner}. A module on a bigarray is a fixed record's, with no
+    walk. Raises [Invalid_argument] naming the field and the reason when [c] has
+    no part [require] names, or when two of the names the module defines would
+    be one. *)
 
 val ml : ?decide:(Decision.t -> unit) -> t -> string
 (** [ml ?decide t] is the source of [t]. [decide] is given each decision its

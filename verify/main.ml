@@ -61,33 +61,54 @@ let entry ?(pre = "true") ?spec ?(misuse = false) ?(contracts = []) ~bound
     ~inputs ~window name expr =
   { Check.name; inputs; pre; expr; window; spec; bound; misuse; contracts }
 
-(* A record module: [is_valid buf off], [View.check b len off] and every
-   [view_*] accessor behind a check. *)
+(* The parameters of the top-level function [name]; none when the module
+   has no such function, whose entry then fails as it is walked. *)
+let function_params ctx name =
+  match Hashtbl.find_opt ctx.globals name with
+  | Some (Unevaluated ({ pexp_desc = Pexp_function (params, _, _); _ }, _)) ->
+      params
+  | _ -> []
+
+(* The name a parameter binds, under its type constraint. *)
+let param_var (p : Parsetree.function_param) =
+  match p.pparam_desc with
+  | Pparam_val (Nolabel, None, pat) -> (
+      match pat.ppat_desc with
+      | Ppat_var { txt; _ }
+      | Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, _) ->
+          Some txt
+      | _ -> None)
+  | _ -> None
+
+(* The accessors of the views of a record module: its top-level functions of
+   a buffer [b] and a view [v], but its setters. *)
+let accessors ctx =
+  Hashtbl.fold
+    (fun k _ acc ->
+      if String.contains k '.' || String.starts_with ~prefix:"set_" k then acc
+      else
+        match List.map param_var (function_params ctx k) with
+        | [ Some "b"; Some "v" ] -> k :: acc
+        | _ -> acc)
+    ctx.globals []
+  |> List.sort_uniq String.compare
+
+(* A record module: [is_valid buf off], [check b len ~off ~len] and every
+   accessor behind a check. *)
 let record ~spec ~bound ctx =
-  let view_names =
-    Hashtbl.fold
-      (fun k _ acc ->
-        if String.starts_with ~prefix:"view_" k && not (String.contains k '.')
-        then k :: acc
-        else acc)
-      ctx.globals []
-    |> List.sort String.compare
-  in
   let viewed = [ b; Int_input "len"; Int_input "off" ] in
   let pre = "len = Bytes.length b" and window = ("off", "len - off") in
+  let checked = "check b len ~off ~len:(len - off)" in
   entry ~spec ~bound ~inputs:[ buf; Int_input "off" ]
     ~window:("off", "Bytes.length buf - off")
     "is_valid" "is_valid buf off"
-  :: entry ~pre ~spec ~bound ~inputs:viewed ~window "View.check"
-       "View.ok (View.check b len off)"
+  :: entry ~pre ~spec ~bound ~inputs:viewed ~window "check"
+       (Fmt.str "ok (%s)" checked)
   :: List.map
        (fun v ->
-         entry ~pre ~bound ~inputs:viewed ~window (v ^ " after View.check")
-           (Fmt.str
-              "let c = View.check b len off in if View.ok c then %s b \
-               (View.get c) else 0"
-              v))
-       view_names
+         entry ~pre ~bound ~inputs:viewed ~window (v ^ " after check")
+           (Fmt.str "let c = %s in if ok c then %s b (get c) else 0" checked v))
+       (accessors ctx)
 
 (* What fold_frames must establish of each frame it hands frames_record,
    which is proved as an entry of its own from it. *)
@@ -101,14 +122,6 @@ let frame_pre_ox min_stride =
     "stop >= %dL && base >= 0L && base <= Int64.sub (Int64.of_int \
      (Bytes.length buf)) stop"
     min_stride
-
-(* The parameters of the top-level function [name]; none when the module
-   has no such function, whose entry then fails as it is walked. *)
-let function_params ctx name =
-  match Hashtbl.find_opt ctx.globals name with
-  | Some (Unevaluated ({ pexp_desc = Pexp_function (params, _, _); _ }, _)) ->
-      params
-  | _ -> []
 
 (* The arguments the frame loop loads ahead of [record]'s walk, each with
    the expression of the frame start [base] that the loop binds it to for a

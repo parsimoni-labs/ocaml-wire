@@ -398,55 +398,61 @@ let codec_packet ~avail acc b len o =
 (* {2 wire.ocaml: the generated view, then a read per field}
 
    The buffer is named once ([Buf.v]) and its length read once; then
-   [View.check b len off] checks a header at [off] once and [View.get] turns
-   the answer into a proof that only [b]'s reads accept, as wire.rust's
-   [Valid::at] does; each [view_<field> b v] is then one load with no bounds
-   check, and the proof is an [int], so nothing is allocated. *)
+   [check b len ~off ~len] checks a header at [off] once and [get] turns the
+   answer into a proof that only [b]'s accessors accept, as wire.rust's
+   [Valid::at] does; each accessor [<field> b v] is then one load with no
+   bounds check, and the proof is an [int], so nothing is allocated. *)
 
 let view_tcp base acc b len o ~payload =
-  let c = G_tcp.View.check b len o in
-  if not (G_tcp.View.ok c) then base
+  let c =
+    G_tcp.check b len ~off:o ~len:((len : _ Wire_runtime.Buf.length :> int) - o)
+  in
+  if not (G_tcp.ok c) then base
   else
-    let t = G_tcp.View.get c in
+    let t = G_tcp.get c in
     let w = G_tcp.view_data_offset_word b t in
     let off = G_tcp.data_offset_of_word w in
     if off * 4 > payload then base
     else
       tcp_fields acc
-        ~sp:(UInt16.to_int (G_tcp.view_src_port b t))
-        ~dp:(UInt16.to_int (G_tcp.view_dst_port b t))
+        ~sp:(UInt16.to_int (G_tcp.src_port b t))
+        ~dp:(UInt16.to_int (G_tcp.dst_port b t))
         ~seq:(G_tcp.view_seq_int b t) ~ack:(G_tcp.view_ack_int b t)
-        ~win:(UInt16.to_int (G_tcp.view_window b t))
+        ~win:(UInt16.to_int (G_tcp.window b t))
         ~flags:(G_tcp.flags_of_word w) ~off
 
 let view_udp base acc b len o ~payload =
-  let c = G_udp.View.check b len o in
-  if not (G_udp.View.ok c) then base
+  let c =
+    G_udp.check b len ~off:o ~len:((len : _ Wire_runtime.Buf.length :> int) - o)
+  in
+  if not (G_udp.ok c) then base
   else
-    let u = G_udp.View.get c in
-    let ulen = UInt16.to_int (G_udp.view_length b u) in
+    let u = G_udp.get c in
+    let ulen = UInt16.to_int (G_udp.length b u) in
     if ulen > payload then base
     else
       udp_fields acc
-        ~sp:(UInt16.to_int (G_udp.view_src_port b u))
-        ~dp:(UInt16.to_int (G_udp.view_dst_port b u))
+        ~sp:(UInt16.to_int (G_udp.src_port b u))
+        ~dp:(UInt16.to_int (G_udp.dst_port b u))
         ~len:ulen
 
 let view_ipv4 base acc b len o ~avail =
-  let c = G_ipv4.View.check b len o in
-  if not (G_ipv4.View.ok c) then base
+  let c =
+    G_ipv4.check b len ~off:o ~len:((len : _ Wire_runtime.Buf.length :> int) - o)
+  in
+  if not (G_ipv4.ok c) then base
   else
-    let ip = G_ipv4.View.get c in
-    let hlen = (G_ipv4.view_ihl b ip :> int) * 4
-    and tlen = UInt16.to_int (G_ipv4.view_total_length b ip) in
+    let ip = G_ipv4.get c in
+    let hlen = (G_ipv4.ihl b ip :> int) * 4
+    and tlen = UInt16.to_int (G_ipv4.total_length b ip) in
     if tlen < hlen || tlen > avail then base
     else
-      let proto = UInt8.to_int (G_ipv4.view_protocol b ip) in
+      let proto = UInt8.to_int (G_ipv4.protocol b ip) in
       let acc =
         ip_fields acc
           ~src:(G_ipv4.view_src_addr_int b ip)
           ~dst:(G_ipv4.view_dst_addr_int b ip)
-          ~ttl:(UInt8.to_int (G_ipv4.view_ttl b ip))
+          ~ttl:(UInt8.to_int (G_ipv4.ttl b ip))
           ~proto ~len:tlen
       in
       let w = G_ipv4.view_flags_word b ip in
@@ -462,11 +468,13 @@ let view_ipv4 base acc b len o ~avail =
         | _ -> acc
 
 let view_packet ~avail acc b len o =
-  let c = G_eth.View.check b len o in
-  if not (G_eth.View.ok c) then acc
+  let c =
+    G_eth.check b len ~off:o ~len:((len : _ Wire_runtime.Buf.length :> int) - o)
+  in
+  if not (G_eth.ok c) then acc
   else
-    let e = G_eth.View.get c in
-    let ty = UInt16.to_int (G_eth.view_ether_type b e) in
+    let e = G_eth.get c in
+    let ty = UInt16.to_int (G_eth.ether_type b e) in
     if ty = ipv4 then view_ipv4 acc (acc + ty) b len (o + 14) ~avail
     else acc + ty
 

@@ -86,14 +86,34 @@ val pp_maps : Format.formatter -> field list -> unit
 
 val pp_body :
   ?simd:bool ->
+  ?accessor:(field -> string) ->
+  ?buffer:[ `Bytes | `Bigstring ] ->
   Format.formatter ->
   target:[ `OCaml | `OxCaml ] ->
   make:string option ->
   plan:plan ->
   size:int ->
   unit
-(** [pp_body ?simd ppf ~target ~make ~plan ~size] writes the record's members
-    for a record of [size] bytes; see {!Wire_ocaml.ml}. *)
+(** [pp_body ?simd ?accessor ?buffer ppf ~target ~make ~plan ~size] writes the
+    record's members for a record of [size] bytes, reading [buffer] (default
+    [`Bytes]); see {!Wire_ocaml.ml}. A module on a bigarray has no field handles
+    and no [Global], which read [bytes]. With [accessor], the name of each
+    field's accessor in the module's views, it writes neither [Valid] and
+    [read_<field>] nor [View] and [view_<field>], which the views make, and
+    leaves to {!pp_after_views} what reads through them. *)
+
+val pp_after_views :
+  Format.formatter ->
+  target:[ `OCaml | `OxCaml ] ->
+  make:string option ->
+  accessor:(field -> string) ->
+  plan:plan ->
+  size:int ->
+  unit
+(** [pp_after_views ppf ~target ~make ~accessor ~plan ~size] writes, after the
+    module's views, the reads with no accessor of their own ([view_<field>_int],
+    [view_<field>_word]) on its ['b view], the field handles, which read through
+    the accessors, and [Global], whose [View] is the module's check. *)
 
 val ident : string -> string
 (** [ident name] is the OCaml label of the field [name]. *)

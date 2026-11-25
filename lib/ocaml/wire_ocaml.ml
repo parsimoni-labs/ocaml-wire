@@ -22,7 +22,9 @@ let typs_of = List.map (fun m -> (m.path, m.typ))
 let typs = Option.map typs_of
 let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
 
-let record ?target ?simd ?make ?maps ~codec c =
+type buffer = [ `Bytes | `Bigstring ]
+
+let record ?target ?buffer ?simd ?make ?maps ~codec c =
   (* A constructor, SIMD lanes or maps are the record's; without them, the
      module of a codec of any shape the walk covers. *)
   let require =
@@ -30,13 +32,13 @@ let record ?target ?simd ?make ?maps ~codec c =
       `Record
     else `Any
   in
-  Writer.v ?target ?simd ?make ?maps:(named maps) ~require ~codec c
+  Writer.v ?target ?buffer ?simd ?make ?maps:(named maps) ~require ~codec c
 
-let ml ?target ?simd ?make ?maps ~codec c =
-  Writer.ml (record ?target ?simd ?make ?maps ~codec c)
+let ml ?target ?buffer ?simd ?make ?maps ~codec c =
+  Writer.ml (record ?target ?buffer ?simd ?make ?maps ~codec c)
 
-let mli ?target ?simd ?make ?maps ~codec c =
-  Writer.mli (record ?target ?simd ?make ?maps ~codec c)
+let mli ?target ?buffer ?simd ?make ?maps ~codec c =
+  Writer.mli (record ?target ?buffer ?simd ?make ?maps ~codec c)
 
 let bridge ?maps ?record ~codec ~core c =
   let maps = typs maps in

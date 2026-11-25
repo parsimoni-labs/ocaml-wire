@@ -46,6 +46,9 @@ val big : bytes -> Wire.Private.Unchecked.Bigstring.t
 val blit_back : Wire.Private.Unchecked.Bigstring.t -> bytes -> unit
 (** [blit_back bb b] copies [bb] over [b], of the same length. *)
 
+val string_of_big : Wire.Private.Unchecked.Bigstring.t -> string
+(** [string_of_big bb] is the bytes of [bb]. *)
+
 val show_code : 'a Wire.Private.Types.typ -> string option
 (** [show_code t] is the source of the function that shows a value of type [t]
     as a generated getter returns it: an integer in decimal, a byte array

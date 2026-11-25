@@ -9,18 +9,16 @@ let run () =
   round_trip "ipv4" ~size:S_ipv4.size
     ~decode:(fun b o -> S_ipv4.decode_exn b o)
     ~encode:(fun t b o -> S_ipv4.encode t b o)
-    ~big_decode:(fun b o -> S_ipv4.Bigstring.decode_exn b o)
-    ~big_encode:(fun t b o -> S_ipv4.Bigstring.encode t b o)
+    (List.init 20 (fun i -> 255 - (i * 11)));
+  big_round_trip "ipv4" ~size:S_ipv4_big.size
+    ~decode:(fun b o -> S_ipv4_big.decode_exn b o)
+    ~encode:(fun t b o -> S_ipv4_big.encode t b o)
     (List.init 20 (fun i -> 255 - (i * 11)));
   round_trip "mixed" ~size:S_mixed.size
     ~decode:(fun b o -> S_mixed.decode_exn b o)
     ~encode:(fun t b o -> S_mixed.encode t b o)
-    ~big_decode:(fun b o -> S_mixed.Bigstring.decode_exn b o)
-    ~big_encode:(fun t b o -> S_mixed.Bigstring.encode t b o)
     (List.init S_mixed.size (fun i -> i * 29 land 0xff));
   round_trip "wide" ~size:S_wide.size
     ~decode:(fun b o -> S_wide.decode_exn b o)
     ~encode:(fun t b o -> S_wide.encode t b o)
-    ~big_decode:(fun b o -> S_wide.Bigstring.decode_exn b o)
-    ~big_encode:(fun t b o -> S_wide.Bigstring.encode t b o)
     (List.init S_wide.size (fun i -> 0xff - i))

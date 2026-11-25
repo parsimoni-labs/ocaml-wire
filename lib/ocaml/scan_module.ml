@@ -188,33 +188,64 @@ let rec fixed_need = function
 let checks_len plan =
   match plan.nodes with Prefix (_, n) :: _ -> n > 0 | _ -> false
 
+(* The bounds of an entry on [int64_u] positions, as the sign of one
+   [logor]. *)
+let pp_unboxed_guard s ~check ~off_tested ~length ~reject =
+  let rest =
+    if check then Fmt.str "(U.sub (U.sub %s stop) base)" length
+    else Fmt.str "(U.sub (U.sub %s base) stop)" length
+  in
+  Fmt.pf s.ppf
+    "let base = U.of_int off in@\n\
+     let stop = U.of_int len in@\n\
+     if U.compare %s #0L < 0 then %s else@\n"
+    (if not off_tested then rest
+     else
+       Fmt.str "(U.logor %s %s)"
+         (if checks_len s.plan then "base" else "(U.logor base stop)")
+         rest)
+    reject
+
+(* The bounds of an entry on [int]s, or through [P] on [P.length buf] for an
+   F* walk. *)
+let pp_int_guard s ~check ~off_tested ~length ~reject =
+  let past =
+    if check then Fmt.str "off > %s - len" length
+    else Fmt.str "len > %s - off" length
+  in
+  Fmt.pf s.ppf "if %s then %s else@\n"
+    (match (s.m.num, checks_len s.plan) with
+    | Fstar, true -> "P.lt off 0 || P.gt len (P.sub (P.length buf) off)"
+    | Fstar, false ->
+        "P.lt off 0 || P.lt len 0 || P.gt len (P.sub (P.length buf) off)"
+    | _, _ when not off_tested -> past
+    | _, true -> "off < 0 || " ^ past
+    | _, false -> Fmt.str "off < 0 || len < 0 || %s" past)
+    reject
+
 (* The entry tests [len < 0] unless {!checks_len} holds, when the walk's
    first check rejects a negative [len]. With [len] not negative,
    [len > length - off] rejects an [off] past the buffer. [length] is the
    length of [buf], an [int64_u] with [unboxed_length]: the bounds are then
    tested on the [int64_u] position and length, as the sign of one [logor],
-   where an [int] holds no 64-bit difference of them that could wrap. An F*
-   walk tests them through [P] on [P.length buf]. *)
-let pp_entry ?cuts ?(length = "Bytes.length buf") ?(unboxed_length = false)
-    ~name ~scope s ~reject ~accept =
+   where an [int] holds no 64-bit difference of them that could wrap. Without
+   [loads], a walk that reads nothing and answers [off] with {!checks_len},
+   a negative [off] needs no test of its own: the answer is negative, which
+   [ok] refuses. [check], whose callers pass a constant [len], tests
+   [off > length - len], which folds that constant into one subtraction:
+   without [loads] on [int]s, [int_length] the length as an [int], as
+   nothing reads at a position computed from them. *)
+let pp_entry ?cuts ?(length = "Bytes.length buf") ?int_length
+    ?(unboxed_length = false) ?(loads = true) ?(check = false) ~name ~scope s
+    ~reject ~accept =
   let unboxed = s.m.num = Unboxed in
-  if unboxed && unboxed_length then
-    Fmt.pf s.ppf
-      "let base = U.of_int off in@\n\
-       let stop = U.of_int len in@\n\
-       if U.compare (U.logor %s (U.sub (U.sub %s base) stop)) #0L < 0 then %s \
-       else@\n"
-      (if checks_len s.plan then "base" else "(U.logor base stop)")
-      length reject
+  let off_tested = loads || not (checks_len s.plan) in
+  let on_ints = check && (not off_tested) && Option.is_some int_length in
+  let length = if on_ints then Option.get int_length else length in
+  if unboxed && unboxed_length && not on_ints then
+    pp_unboxed_guard s ~check ~off_tested ~length ~reject
   else begin
-    Fmt.pf s.ppf "if %s then %s else@\n"
-      (match (s.m.num, checks_len s.plan) with
-      | Fstar, true -> "P.lt off 0 || P.gt len (P.sub (P.length buf) off)"
-      | Fstar, false ->
-          "P.lt off 0 || P.lt len 0 || P.gt len (P.sub (P.length buf) off)"
-      | _, true -> Fmt.str "off < 0 || len > %s - off" length
-      | _, false -> Fmt.str "off < 0 || len < 0 || len > %s - off" length)
-      reject;
+    pp_int_guard s ~check ~off_tested ~length ~reject;
     Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
       (if unboxed then "U.of_int off" else "off")
       (if unboxed then "U.of_int len" else "len")
@@ -833,28 +864,38 @@ let pp_check s =
       m = scan_mode ~decide:s.m.decide s.plan ~num:s.m.num [];
     }
   in
-  with_cuts s "check" (fun s cuts ->
-      let body = Buffer.create 4096 in
-      let ppf = Format.formatter_of_buffer body in
-      pp_entry ?cuts
-        ~length:(if unboxed then "(U.of_int length)" else "length")
-        ~unboxed_length:true ~name:"check"
-        ~scope:(scope s [ ("off", None) ])
-        { s with ppf } ~reject:"(-1)"
-        ~accept:(fun w -> pf w "off@\n");
-      Format.pp_print_flush ppf ();
-      let body = Buffer.contents body in
-      let b = if mentions "buf" body then "b" else "_b" in
-      Fmt.pf s.ppf
-        "let[@inline always] check (%s : 'b Wire_runtime.Buf.t%s) (length : 'b \
-         Wire_runtime.Buf.length) ~off ~len : 'b check =@\n"
-        b
-        (if unboxed then " @ local" else "");
-      if b = "b" then
-        Fmt.pf s.ppf "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n";
-      Fmt.pf s.ppf
-        "let length = (length : _ Wire_runtime.Buf.length :> int) in@\n%s@\n"
-        body)
+  let pp ~loads s cuts =
+    let body = Buffer.create 4096 in
+    let ppf = Format.formatter_of_buffer body in
+    pp_entry ?cuts
+      ~length:(if unboxed then "(U.of_int length)" else "length")
+      ~int_length:"length" ~unboxed_length:true ~loads ~check:true ~name:"check"
+      ~scope:(scope s [ ("off", None) ])
+      { s with ppf } ~reject:"(-1)"
+      ~accept:(fun w -> pf w "off@\n");
+    Format.pp_print_flush ppf ();
+    let body = Buffer.contents body in
+    let b = if mentions "buf" body then "b" else "_b" in
+    Fmt.pf s.ppf
+      "let[@inline always] check (%s : 'b Wire_runtime.Buf.t%s) (length : 'b \
+       Wire_runtime.Buf.length) ~off ~len : 'b check =@\n"
+      b
+      (if unboxed then " @ local" else "");
+    if b = "b" then
+      Fmt.pf s.ppf "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n";
+    Fmt.pf s.ppf
+      "let length = (length : _ Wire_runtime.Buf.length :> int) in@\n%s@\n" body
+  in
+  (* A walk that reads nothing answers a negative [off] itself: whether it
+     reads is found by writing it once aside. *)
+  let probe = Buffer.create 4096 in
+  let ppf = Format.formatter_of_buffer probe in
+  with_cuts
+    { s with ppf; taken = Hashtbl.copy s.taken }
+    "check" (pp ~loads:true);
+  Format.pp_print_flush ppf ();
+  let loads = mentions "buf" (Buffer.contents probe) in
+  with_cuts s "check" (pp ~loads)
 
 let selected (plan : plan) = function
   | None -> plan.outputs

@@ -501,6 +501,16 @@ let conversion_prims =
     unary "Wire_runtime.Target.offset" (fun loc a ->
         Int (Smt.extract 62 0 (i64 loc a)));
   ]
+  (* A narrow carrier's [unsafe_of_int] is the identity on the [int] its
+     accessor loaded. *)
+  @ List.map
+      (fun m -> unary (m ^ ".unsafe_of_int") (fun loc a -> Int (int loc a)))
+      [
+        "Wire_runtime.UInt8";
+        "Wire_runtime.UInt16";
+        "Wire_runtime.SInt8";
+        "Wire_runtime.SInt16";
+      ]
 
 let prims =
   let l =

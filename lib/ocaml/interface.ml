@@ -524,9 +524,10 @@ let pp_view_module ppf r b =
      otherwise.";
   Fmt.pf ppf "end@\n@\n"
 
-let pp_view ppf r b =
+let pp_view ?(views = false) ppf r b =
   let target = r.target in
-  pp_view_module ppf r b;
+  if not views then pp_view_module ppf r b;
+  let view_t = if views then "'b view" else "'b View.t" in
   List.iter
     (fun f ->
       let l = f.label in
@@ -534,11 +535,13 @@ let pp_view ppf r b =
       let view ?(portable = true) suffix typ doc =
         pp_val ~zero_alloc ~portable target ppf
           ("view_" ^ l ^ suffix)
-          (arrows [ named b; "'b View.t"; typ ])
+          (arrows [ named b; view_t; typ ])
           doc
       in
-      view ~portable:(Option.is_none f.map) "" (typed ~maps:r.maps f)
-        (Fmt.str "[view_%s b v] is %s of the record [v] in [b]." l (read_what f));
+      if not views then
+        view ~portable:(Option.is_none f.map) "" (typed ~maps:r.maps f)
+          (Fmt.str "[view_%s b v] is %s of the record [v] in [b]." l
+             (read_what f));
       match f.store with
       | Int { width = 32; _ } ->
           view "_int" "int"
@@ -554,46 +557,54 @@ let pp_view ppf r b =
       | _ -> ())
     r.fields
 
-let field_type b =
+let field_type ?(views = false) b =
   Fmt.str
     "type 'a t = private {@\n\
      get : bytes -> int -> 'a;@\n\
-     view : 'b. 'b %s.t%s -> 'b View.t -> 'a;@\n\
+     view : 'b. 'b %s.t%s -> 'b %s -> 'a;@\n\
      }@\n"
     b.brand (local_mode b.local)
+    (if views then "view" else "View.t")
 
-let pp_handles ppf r =
+let pp_handles ?(views = false) ppf r =
   List.iter
     (fun f ->
       pp_val r.target ppf f.label
         (schema_type f ^ " t")
-        (Fmt.str "[%s] reads with {!Get.%s} and {!view_%s}." f.label f.label
-           f.label))
+        (if views then
+           Fmt.str "[%s] reads with {!Get.%s} and the accessor of its field."
+             f.label f.label
+         else
+           Fmt.str "[%s] reads with {!Get.%s} and {!view_%s}." f.label f.label
+             f.label))
     (field_fields r.fields)
 
-let pp_field ppf r b =
+let pp_field ?(views = false) ppf r b =
   pp_section ppf "handles" "Field handles";
   pp_doc ppf
     "Fields as values, as [Wire_runtime.Record.S] names them: [f.get buf off] \
      reads the field [f] of the record at [off] in [buf], and [f.view b r] \
      that of the record [r] viewed in [b].";
-  Fmt.pf ppf "module Field : sig@\n%s" (field_type b);
+  Fmt.pf ppf "module Field : sig@\n%s" (field_type ~views b);
   pp_doc ppf "The type for fields holding an ['a].";
   Fmt.pf ppf "@\n";
-  pp_handles ppf r;
+  pp_handles ~views ppf r;
   Fmt.pf ppf "end@\n@\n"
 
-let pp_global_view ppf r b =
+let pp_global_view ?(views = false) ppf r b =
   let target = r.target in
   pp_doc ppf "Views, on buffers on the heap.";
   Fmt.pf ppf
     "module View : sig@\n\
-     type 'b t = 'b View.t@\n\
+     type 'b t = 'b %s@\n\
      (** The type for records that passed their checks in the buffer ['b]. *)@\n\
      @\n\
-     type 'b check = 'b View.check@\n\
+     type %s'b check = 'b %s@\n\
      (** The type for the answers of {!val-check}. *)@\n\
-     @\n";
+     @\n"
+    (if views then "view" else "View.t")
+    (if views then "nonrec " else "")
+    (if views then "check" else "View.check");
   pp_val target ppf "at"
     (arrows [ named b; length b; "int"; "'b t" ])
     "[at b len off] is the record at [off] in [b].";
@@ -610,7 +621,7 @@ let pp_global_view ppf r b =
 
 (* [Global] takes its buffers on the heap, as [Wire_runtime.Record.S] does,
    on either target. *)
-let pp_global ppf r =
+let pp_global ?(views = false) ppf r =
   let target = r.target in
   let b = bytes_buf `OCaml in
   pp_doc ppf
@@ -640,12 +651,12 @@ let pp_global ppf r =
     (arrows [ buf b; "int"; "bool" ])
     "[is_valid buf off] is [true] iff {!validate} accepts the record at [off] \
      in [buf].";
-  pp_global_view ppf r b;
+  pp_global_view ~views ppf r b;
   pp_doc ppf "Field handles, on buffers on the heap.";
-  Fmt.pf ppf "module Field : sig@\n%s" (field_type b);
+  Fmt.pf ppf "module Field : sig@\n%s" (field_type ~views b);
   pp_doc ppf "The type for fields holding an ['a].";
   Fmt.pf ppf "@\n";
-  pp_handles ppf r;
+  pp_handles ~views ppf r;
   Fmt.pf ppf "end@\nend@\n@\n"
 
 let pp_x4_writes ppf r lanes =
@@ -724,7 +735,7 @@ let pp_x4 ppf r lanes =
   pp_x4_writes ppf r lanes;
   Fmt.pf ppf "end@\n@\n"
 
-let pp_buffer ppf r b =
+let pp_buffer ?(views = false) ppf r b =
   pp_section ppf "checks" "Validating and decoding";
   pp_checks ppf r b;
   if b.typ = "bytes" && r.target = `OxCaml then pp_oxcaml_decoders ppf r;
@@ -733,16 +744,11 @@ let pp_buffer ppf r b =
   pp_section ppf "reads" "Reading fields";
   pp_get ppf r b;
   pp_of_words ppf r;
-  pp_valid ppf r b;
-  pp_section ppf "views" "Views";
-  pp_view ppf r b
-
-let pp_bigstring ppf r =
-  pp_section ppf "bigstring" "Bigarrays";
-  pp_doc ppf "The same reads and writes on a bigarray of bytes.";
-  Fmt.pf ppf "module Bigstring : sig@\n";
-  pp_buffer ppf r (bigstring_buf r.target);
-  Fmt.pf ppf "end@\n"
+  if not views then begin
+    pp_valid ppf r b;
+    pp_section ppf "views" "Views";
+    pp_view ppf r b
+  end
 
 let pp_preamble ppf r =
   let bits =
@@ -789,19 +795,32 @@ let pp_digest target ppf =
 
 (* The members of a fixed record: its size, values, record, checks,
    decoders, writes, reads and views, on [bytes] and on a bigarray. *)
-let pp_record ppf r =
+let pp_record ?(views = false) ?(buffer = `Bytes) ppf r =
   pp_val r.target ppf "size" "int"
     (Fmt.str "[size] is the size of a record in bytes, [%d]." r.size);
   pp_val r.target ppf "min_size" "int" "[min_size] is {!val-size}.";
   pp_values ppf r;
   let record = Option.is_none r.make in
   if record then pp_record_type ppf r;
-  pp_buffer ppf r (bytes_buf r.target);
-  (if r.simd then
-     match lanes r.plan ~size:r.size with Some l -> pp_x4 ppf r l | None -> ());
-  pp_field ppf r (bytes_buf r.target);
-  if record then pp_global ppf r;
-  pp_bigstring ppf r
+  match buffer with
+  | `Bigstring -> pp_buffer ppf r (bigstring_buf r.target)
+  | `Bytes ->
+      pp_buffer ~views ppf r (bytes_buf r.target);
+      (if r.simd then
+         match lanes r.plan ~size:r.size with
+         | Some l -> pp_x4 ppf r l
+         | None -> ());
+      if not views then begin
+        pp_field ppf r (bytes_buf r.target);
+        if record then pp_global ppf r
+      end
+
+(* What reads through the module's views, after them. *)
+let pp_after_views ppf r =
+  pp_section ppf "words" "Words of a view";
+  pp_view ~views:true ppf r (bytes_buf r.target);
+  pp_field ~views:true ppf r (bytes_buf r.target);
+  if Option.is_none r.make then pp_global ~views:true ppf r
 
 let record ~target ~simd ~make ~maps ~codec ~plan ~size =
   let fields = all_fields plan in
@@ -820,8 +839,13 @@ let record ~target ~simd ~make ~maps ~codec ~plan ~size =
 let record_preamble ppf ~target ~simd ~make ~maps ~codec ~plan ~size =
   pp_preamble ppf (record ~target ~simd ~make ~maps ~codec ~plan ~size)
 
-let record_members ppf ~target ~simd ~make ~maps ~codec ~plan ~size =
-  pp_record ppf (record ~target ~simd ~make ~maps ~codec ~plan ~size)
+let record_members ?views ?buffer ppf ~target ~simd ~make ~maps ~codec ~plan
+    ~size =
+  pp_record ?views ?buffer ppf
+    (record ~target ~simd ~make ~maps ~codec ~plan ~size)
+
+let record_after_views ppf ~target ~simd ~make ~maps ~codec ~plan ~size =
+  pp_after_views ppf (record ~target ~simd ~make ~maps ~codec ~plan ~size)
 
 (* {2 The scanner} *)
 

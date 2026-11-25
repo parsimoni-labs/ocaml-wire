@@ -259,98 +259,98 @@ val encode : t -> bytes -> int -> unit
 val write :
   bytes ->
   int ->
-  Value.controlwordtype ->
-  Value.clcwversion ->
-  Value.statusfield ->
-  Value.copineffect ->
-  Value.vcid ->
-  Value.spare ->
-  Value.norf ->
-  Value.nobitlock ->
-  Value.lockout ->
-  Value.wait ->
-  Value.retransmit ->
-  Value.farmbcounter ->
-  Value.spare2 ->
-  Value.reportvalue ->
+  controlwordtype:Value.controlwordtype ->
+  clcwversion:Value.clcwversion ->
+  statusfield:Value.statusfield ->
+  copineffect:Value.copineffect ->
+  vcid:Value.vcid ->
+  spare:Value.spare ->
+  norf:Value.norf ->
+  nobitlock:Value.nobitlock ->
+  lockout:Value.lockout ->
+  wait:Value.wait ->
+  retransmit:Value.retransmit ->
+  farmbcounter:Value.farmbcounter ->
+  spare2:Value.spare2 ->
+  reportvalue:Value.reportvalue ->
   unit
-(** [write buf off controlwordtype clcwversion statusfield copineffect vcid
-     spare norf nobitlock lockout wait retransmit farmbcounter spare2
-     reportvalue] writes the record of these fields at [off] in [buf]. Raises
+(** [write buf off ~controlwordtype ~clcwversion ~statusfield ~copineffect ~vcid
+     ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit ~farmbcounter ~spare2
+     ~reportvalue] writes the record of these fields at [off] in [buf]. Raises
     [Invalid_argument] if it does not fit. *)
 
 val write_int :
   bytes ->
   int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
+  controlwordtype:int ->
+  clcwversion:int ->
+  statusfield:int ->
+  copineffect:int ->
+  vcid:int ->
+  spare:int ->
+  norf:int ->
+  nobitlock:int ->
+  lockout:int ->
+  wait:int ->
+  retransmit:int ->
+  farmbcounter:int ->
+  spare2:int ->
+  reportvalue:int ->
   unit
-(** [write_int buf off controlwordtype clcwversion statusfield copineffect vcid
-     spare norf nobitlock lockout wait retransmit farmbcounter spare2
-     reportvalue] is like {!write} but takes plain values: an [int] for an
-    integer of up to 16 bits or a bitfield, an [int32] for a 32-bit integer and
-    a [string] for a byte array. It also raises [Invalid_argument] if a value
-    does not fit its field. *)
+(** [write_int buf off ~controlwordtype ~clcwversion ~statusfield ~copineffect
+     ~vcid ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit ~farmbcounter
+     ~spare2 ~reportvalue] is like {!write} but takes plain values: an [int] for
+    an integer of up to 16 bits or a bitfield, an [int32] for a 32-bit integer
+    and a [string] for a byte array. It also raises [Invalid_argument] if a
+    value does not fit its field. *)
 
 val write_at :
   'b Wire_runtime.Buf.t ->
   'b Wire_runtime.Buf.length ->
   int ->
-  Value.controlwordtype ->
-  Value.clcwversion ->
-  Value.statusfield ->
-  Value.copineffect ->
-  Value.vcid ->
-  Value.spare ->
-  Value.norf ->
-  Value.nobitlock ->
-  Value.lockout ->
-  Value.wait ->
-  Value.retransmit ->
-  Value.farmbcounter ->
-  Value.spare2 ->
-  Value.reportvalue ->
+  controlwordtype:Value.controlwordtype ->
+  clcwversion:Value.clcwversion ->
+  statusfield:Value.statusfield ->
+  copineffect:Value.copineffect ->
+  vcid:Value.vcid ->
+  spare:Value.spare ->
+  norf:Value.norf ->
+  nobitlock:Value.nobitlock ->
+  lockout:Value.lockout ->
+  wait:Value.wait ->
+  retransmit:Value.retransmit ->
+  farmbcounter:Value.farmbcounter ->
+  spare2:Value.spare2 ->
+  reportvalue:Value.reportvalue ->
   unit
-(** [write_at b len off controlwordtype clcwversion statusfield copineffect vcid
-     spare norf nobitlock lockout wait retransmit farmbcounter spare2
-     reportvalue] is like {!write} but writes into the buffer [b] of length
-    [len]. *)
+(** [write_at b len off ~controlwordtype ~clcwversion ~statusfield ~copineffect
+     ~vcid ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit ~farmbcounter
+     ~spare2 ~reportvalue] is like {!write} but writes into the buffer [b] of
+    length [len]. *)
 
 val write_int_at :
   'b Wire_runtime.Buf.t ->
   'b Wire_runtime.Buf.length ->
   int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
+  controlwordtype:int ->
+  clcwversion:int ->
+  statusfield:int ->
+  copineffect:int ->
+  vcid:int ->
+  spare:int ->
+  norf:int ->
+  nobitlock:int ->
+  lockout:int ->
+  wait:int ->
+  retransmit:int ->
+  farmbcounter:int ->
+  spare2:int ->
+  reportvalue:int ->
   unit
-(** [write_int_at b len off controlwordtype clcwversion statusfield copineffect
-     vcid spare norf nobitlock lockout wait retransmit farmbcounter spare2
-     reportvalue] is like {!write_int} but writes into the buffer [b] of length
-    [len]. *)
+(** [write_int_at b len off ~controlwordtype ~clcwversion ~statusfield
+     ~copineffect ~vcid ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit
+     ~farmbcounter ~spare2 ~reportvalue] is like {!write_int} but writes into
+    the buffer [b] of length [len]. *)
 
 (** {1:reads Reading fields} *)
 
@@ -522,225 +522,272 @@ val reportvalue_of_word : int -> int
 (** [reportvalue_of_word w] is bits 0 to 7 of [w], a word
     {!Get.reportvalue_word} reads. *)
 
-(** Buffers whose record at offset 0 passed its checks. A read of one is one
-    load with no check: the buffer's length cannot change, so a read stays in
-    it, but if its bytes change after the check a read may return a value that
-    breaks a constraint. *)
-module Valid : sig
-  type t = private bytes
-  (** The type for buffers whose record at offset 0 passed its checks. *)
+(** {1:scans Scans} *)
 
-  val v : bytes -> t
-  (** [v buf] is [buf], once its record at offset 0 passed its checks. Raises as
-      {!validate_exn} does otherwise. *)
-end
+val fold :
+  bytes ->
+  int ->
+  int ->
+  invalid:(unit -> 'a) ->
+  valid:
+    (controlwordtype:int ->
+    clcwversion:int ->
+    statusfield:int ->
+    copineffect:int ->
+    vcid:int ->
+    spare:int ->
+    norf:int ->
+    nobitlock:int ->
+    lockout:int ->
+    wait:int ->
+    retransmit:int ->
+    farmbcounter:int ->
+    spare2:int ->
+    reportvalue:int ->
+    'a) ->
+  'a
+(** [fold buf off len ~invalid ~valid] is [valid] applied to the outputs of the
+    record at [off] in the [len] bytes there, or [invalid ()] if the record or
+    the bounds are bad. *)
 
-val read_controlwordtype : Valid.t -> Value.controlwordtype
-(** [read_controlwordtype v] is bit 31 of the big-endian 32-bit word at offset 0
-    of the record in [v]. *)
-
-val read_clcwversion : Valid.t -> Value.clcwversion
-(** [read_clcwversion v] is bits 29 to 30 of the big-endian 32-bit word at
-    offset 0 of the record in [v]. *)
-
-val read_statusfield : Valid.t -> Value.statusfield
-(** [read_statusfield v] is bits 26 to 28 of the big-endian 32-bit word at
-    offset 0 of the record in [v]. *)
-
-val read_copineffect : Valid.t -> Value.copineffect
-(** [read_copineffect v] is bits 24 to 25 of the big-endian 32-bit word at
-    offset 0 of the record in [v]. *)
-
-val read_vcid : Valid.t -> Value.vcid
-(** [read_vcid v] is bits 18 to 23 of the big-endian 32-bit word at offset 0 of
-    the record in [v]. *)
-
-val read_spare : Valid.t -> Value.spare
-(** [read_spare v] is bits 16 to 17 of the big-endian 32-bit word at offset 0 of
-    the record in [v]. *)
-
-val read_norf : Valid.t -> Value.norf
-(** [read_norf v] is bit 15 of the big-endian 32-bit word at offset 0 of the
-    record in [v]. *)
-
-val read_nobitlock : Valid.t -> Value.nobitlock
-(** [read_nobitlock v] is bit 14 of the big-endian 32-bit word at offset 0 of
-    the record in [v]. *)
-
-val read_lockout : Valid.t -> Value.lockout
-(** [read_lockout v] is bit 13 of the big-endian 32-bit word at offset 0 of the
-    record in [v]. *)
-
-val read_wait : Valid.t -> Value.wait
-(** [read_wait v] is bit 12 of the big-endian 32-bit word at offset 0 of the
-    record in [v]. *)
-
-val read_retransmit : Valid.t -> Value.retransmit
-(** [read_retransmit v] is bit 11 of the big-endian 32-bit word at offset 0 of
-    the record in [v]. *)
-
-val read_farmbcounter : Valid.t -> Value.farmbcounter
-(** [read_farmbcounter v] is bits 9 to 10 of the big-endian 32-bit word at
-    offset 0 of the record in [v]. *)
-
-val read_spare2 : Valid.t -> Value.spare2
-(** [read_spare2 v] is bit 8 of the big-endian 32-bit word at offset 0 of the
-    record in [v]. *)
-
-val read_reportvalue : Valid.t -> Value.reportvalue
-(** [read_reportvalue v] is bits 0 to 7 of the big-endian 32-bit word at offset
-    0 of the record in [v]. *)
+val fold_frames :
+  bytes ->
+  int ->
+  int ->
+  stride:int ->
+  init:'a ->
+  invalid:('a -> 'a) ->
+  valid:
+    ('a ->
+    controlwordtype:int ->
+    clcwversion:int ->
+    statusfield:int ->
+    copineffect:int ->
+    vcid:int ->
+    spare:int ->
+    norf:int ->
+    nobitlock:int ->
+    lockout:int ->
+    wait:int ->
+    retransmit:int ->
+    farmbcounter:int ->
+    spare2:int ->
+    reportvalue:int ->
+    'a) ->
+  'a
+(** [fold_frames buf off len ~stride ~init ~invalid ~valid] folds [valid] with
+    the outputs of each record, or [invalid], over the [len / stride] frames of
+    [stride] bytes at [off], each checked on its own, from [init]. Raises
+    [Invalid_argument] if [stride] is not positive or the bounds are bad. *)
 
 (** {1:views Views} *)
 
-(** Records checked once in a buffer named by [Wire_runtime.Buf.v], whose length
-    is read once. A view is an [int], so it allocates nothing, and a read of one
-    is one load with no check, with the promise of {!Valid}. *)
-module View : sig
-  type 'b t = private int
-  (** The type for records that passed their checks in the buffer ['b]. *)
+type 'b view = private int
+(** The type for the records of [CLCW] that passed a check in the buffer named
+    ['b]. *)
 
-  type 'b check = private int
-  (** The type for the answers of {!val-check}. *)
+type 'b check = private int
+(** The type for the answers of a check of a record of [CLCW] in the buffer
+    named ['b]. *)
 
-  val at : 'b Wire_runtime.Buf.t -> 'b Wire_runtime.Buf.length -> int -> 'b t
-  (** [at b len off] is the record at [off] in the buffer [b] of length [len].
-      Raises as {!validate_exn} does where its checks fail. *)
+val check :
+  'b Wire_runtime.Buf.t ->
+  'b Wire_runtime.Buf.length ->
+  off:int ->
+  len:int ->
+  'b check
+(** [check b length ~off ~len] is the answer of the checks {!val-fold} makes on
+    the record at [off] in the [len] bytes there, in [b] of length [length]. It
+    never raises: bad bounds or a bad record give an answer {!ok} refuses. *)
 
-  val check :
-    'b Wire_runtime.Buf.t -> 'b Wire_runtime.Buf.length -> int -> 'b check
-  (** [check b len off] checks the record at [off] in the buffer [b] of length
-      [len], without raising. *)
+val ok : 'b check -> bool
+(** [ok c] is [true] iff the check [c] passed. *)
 
-  val ok : 'b check -> bool
-  (** [ok c] is [true] iff the check [c] passed. *)
+val get : 'b check -> 'b view
+(** [get c] is the record of the check [c]. Raises [Invalid_argument] if [ok c]
+    is [false]: test {!ok} first, a refused record is input, not misuse. *)
 
-  val get : 'b check -> 'b t
-  (** [get c] is the record the check [c] passed. Raises [Invalid_argument] if
-      [c] failed. *)
+val controlwordtype : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [controlwordtype b v] is the field [controlwordtype] of the record [v]. *)
 
-  val with_ :
-    'b Wire_runtime.Buf.t ->
-    'b Wire_runtime.Buf.length ->
-    int ->
-    ok:('b t -> 'a) ->
-    fail:(unit -> 'a) ->
-    'a
-  (** [with_ b len off ~ok ~fail] is [ok r] for the record [r] at [off] in the
-      buffer [b] of length [len] if it passes its checks, and [fail ()]
-      otherwise. *)
-end
+val clcwversion : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [clcwversion b v] is the field [clcwversion] of the record [v]. *)
 
-val view_controlwordtype :
-  'b Wire_runtime.Buf.t -> 'b View.t -> Value.controlwordtype
-(** [view_controlwordtype b v] is bit 31 of the big-endian 32-bit word at offset
-    0 of the record [v] in [b]. *)
+val statusfield : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [statusfield b v] is the field [statusfield] of the record [v]. *)
 
-val view_controlwordtype_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val copineffect : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [copineffect b v] is the field [copineffect] of the record [v]. *)
+
+val vcid : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [vcid b v] is the field [vcid] of the record [v]. *)
+
+val spare : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [spare b v] is the field [spare] of the record [v]. *)
+
+val norf : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [norf b v] is the field [norf] of the record [v]. *)
+
+val nobitlock : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [nobitlock b v] is the field [nobitlock] of the record [v]. *)
+
+val lockout : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [lockout b v] is the field [lockout] of the record [v]. *)
+
+val wait : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [wait b v] is the field [wait] of the record [v]. *)
+
+val retransmit : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [retransmit b v] is the field [retransmit] of the record [v]. *)
+
+val farmbcounter : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [farmbcounter b v] is the field [farmbcounter] of the record [v]. *)
+
+val spare2 : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [spare2 b v] is the field [spare2] of the record [v]. *)
+
+val reportvalue : 'b Wire_runtime.Buf.t -> 'b view -> int
+(** [reportvalue b v] is the field [reportvalue] of the record [v]. *)
+
+val set_controlwordtype : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_controlwordtype b v x] writes [x] in place as the field
+    {!val-controlwordtype} reads in the record [v]. It checks none of the
+    record's constraints: check the record again after a batch of writes. Raises
+    [Invalid_argument] if [x] does not fit in 1 bit. *)
+
+val set_clcwversion : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_clcwversion b v x] writes [x] in place as the field {!val-clcwversion}
+    reads in the record [v]. It checks none of the record's constraints: check
+    the record again after a batch of writes. Raises [Invalid_argument] if [x]
+    does not fit in 2 bits. *)
+
+val set_statusfield : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_statusfield b v x] writes [x] in place as the field {!val-statusfield}
+    reads in the record [v]. It checks none of the record's constraints: check
+    the record again after a batch of writes. Raises [Invalid_argument] if [x]
+    does not fit in 3 bits. *)
+
+val set_copineffect : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_copineffect b v x] writes [x] in place as the field {!val-copineffect}
+    reads in the record [v]. It checks none of the record's constraints: check
+    the record again after a batch of writes. Raises [Invalid_argument] if [x]
+    does not fit in 2 bits. *)
+
+val set_vcid : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_vcid b v x] writes [x] in place as the field {!val-vcid} reads in the
+    record [v]. It checks none of the record's constraints: check the record
+    again after a batch of writes. Raises [Invalid_argument] if [x] does not fit
+    in 6 bits. *)
+
+val set_spare : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_spare b v x] writes [x] in place as the field {!val-spare} reads in the
+    record [v]. It checks none of the record's constraints: check the record
+    again after a batch of writes. Raises [Invalid_argument] if [x] does not fit
+    in 2 bits. *)
+
+val set_norf : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_norf b v x] writes [x] in place as the field {!val-norf} reads in the
+    record [v]. It checks none of the record's constraints: check the record
+    again after a batch of writes. Raises [Invalid_argument] if [x] does not fit
+    in 1 bit. *)
+
+val set_nobitlock : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_nobitlock b v x] writes [x] in place as the field {!val-nobitlock}
+    reads in the record [v]. It checks none of the record's constraints: check
+    the record again after a batch of writes. Raises [Invalid_argument] if [x]
+    does not fit in 1 bit. *)
+
+val set_lockout : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_lockout b v x] writes [x] in place as the field {!val-lockout} reads in
+    the record [v]. It checks none of the record's constraints: check the record
+    again after a batch of writes. Raises [Invalid_argument] if [x] does not fit
+    in 1 bit. *)
+
+val set_wait : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_wait b v x] writes [x] in place as the field {!val-wait} reads in the
+    record [v]. It checks none of the record's constraints: check the record
+    again after a batch of writes. Raises [Invalid_argument] if [x] does not fit
+    in 1 bit. *)
+
+val set_retransmit : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_retransmit b v x] writes [x] in place as the field {!val-retransmit}
+    reads in the record [v]. It checks none of the record's constraints: check
+    the record again after a batch of writes. Raises [Invalid_argument] if [x]
+    does not fit in 1 bit. *)
+
+val set_farmbcounter : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_farmbcounter b v x] writes [x] in place as the field
+    {!val-farmbcounter} reads in the record [v]. It checks none of the record's
+    constraints: check the record again after a batch of writes. Raises
+    [Invalid_argument] if [x] does not fit in 2 bits. *)
+
+val set_spare2 : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_spare2 b v x] writes [x] in place as the field {!val-spare2} reads in
+    the record [v]. It checks none of the record's constraints: check the record
+    again after a batch of writes. Raises [Invalid_argument] if [x] does not fit
+    in 1 bit. *)
+
+val set_reportvalue : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
+(** [set_reportvalue b v x] writes [x] in place as the field {!val-reportvalue}
+    reads in the record [v]. It checks none of the record's constraints: check
+    the record again after a batch of writes. Raises [Invalid_argument] if [x]
+    does not fit in 8 bits. *)
+
+(** {1:words Words of a view} *)
+
+val view_controlwordtype_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_controlwordtype_word b v] is the big-endian 32-bit word at offset 0 of
     the record [v] in [b], for {!controlwordtype_of_word}. *)
 
-val view_clcwversion : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.clcwversion
-(** [view_clcwversion b v] is bits 29 to 30 of the big-endian 32-bit word at
-    offset 0 of the record [v] in [b]. *)
-
-val view_clcwversion_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_clcwversion_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_clcwversion_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!clcwversion_of_word}. *)
 
-val view_statusfield : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.statusfield
-(** [view_statusfield b v] is bits 26 to 28 of the big-endian 32-bit word at
-    offset 0 of the record [v] in [b]. *)
-
-val view_statusfield_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_statusfield_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_statusfield_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!statusfield_of_word}. *)
 
-val view_copineffect : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.copineffect
-(** [view_copineffect b v] is bits 24 to 25 of the big-endian 32-bit word at
-    offset 0 of the record [v] in [b]. *)
-
-val view_copineffect_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_copineffect_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_copineffect_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!copineffect_of_word}. *)
 
-val view_vcid : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.vcid
-(** [view_vcid b v] is bits 18 to 23 of the big-endian 32-bit word at offset 0
-    of the record [v] in [b]. *)
-
-val view_vcid_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_vcid_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_vcid_word b v] is the big-endian 32-bit word at offset 0 of the record
     [v] in [b], for {!vcid_of_word}. *)
 
-val view_spare : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.spare
-(** [view_spare b v] is bits 16 to 17 of the big-endian 32-bit word at offset 0
-    of the record [v] in [b]. *)
-
-val view_spare_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_spare_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_spare_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!spare_of_word}. *)
 
-val view_norf : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.norf
-(** [view_norf b v] is bit 15 of the big-endian 32-bit word at offset 0 of the
-    record [v] in [b]. *)
-
-val view_norf_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_norf_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_norf_word b v] is the big-endian 32-bit word at offset 0 of the record
     [v] in [b], for {!norf_of_word}. *)
 
-val view_nobitlock : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.nobitlock
-(** [view_nobitlock b v] is bit 14 of the big-endian 32-bit word at offset 0 of
-    the record [v] in [b]. *)
-
-val view_nobitlock_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_nobitlock_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_nobitlock_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!nobitlock_of_word}. *)
 
-val view_lockout : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.lockout
-(** [view_lockout b v] is bit 13 of the big-endian 32-bit word at offset 0 of
-    the record [v] in [b]. *)
-
-val view_lockout_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_lockout_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_lockout_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!lockout_of_word}. *)
 
-val view_wait : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.wait
-(** [view_wait b v] is bit 12 of the big-endian 32-bit word at offset 0 of the
-    record [v] in [b]. *)
-
-val view_wait_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_wait_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_wait_word b v] is the big-endian 32-bit word at offset 0 of the record
     [v] in [b], for {!wait_of_word}. *)
 
-val view_retransmit : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.retransmit
-(** [view_retransmit b v] is bit 11 of the big-endian 32-bit word at offset 0 of
-    the record [v] in [b]. *)
-
-val view_retransmit_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_retransmit_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_retransmit_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!retransmit_of_word}. *)
 
-val view_farmbcounter : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.farmbcounter
-(** [view_farmbcounter b v] is bits 9 to 10 of the big-endian 32-bit word at
-    offset 0 of the record [v] in [b]. *)
-
-val view_farmbcounter_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_farmbcounter_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_farmbcounter_word b v] is the big-endian 32-bit word at offset 0 of
     the record [v] in [b], for {!farmbcounter_of_word}. *)
 
-val view_spare2 : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.spare2
-(** [view_spare2 b v] is bit 8 of the big-endian 32-bit word at offset 0 of the
-    record [v] in [b]. *)
-
-val view_spare2_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_spare2_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_spare2_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!spare2_of_word}. *)
 
-val view_reportvalue : 'b Wire_runtime.Buf.t -> 'b View.t -> Value.reportvalue
-(** [view_reportvalue b v] is bits 0 to 7 of the big-endian 32-bit word at
-    offset 0 of the record [v] in [b]. *)
-
-val view_reportvalue_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
+val view_reportvalue_word : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [view_reportvalue_word b v] is the big-endian 32-bit word at offset 0 of the
     record [v] in [b], for {!reportvalue_of_word}. *)
 
@@ -752,52 +799,58 @@ val view_reportvalue_word : 'b Wire_runtime.Buf.t -> 'b View.t -> int
 module Field : sig
   type 'a t = private {
     get : bytes -> int -> 'a;
-    view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
+    view : 'b. 'b Wire_runtime.Buf.t -> 'b view -> 'a;
   }
   (** The type for fields holding an ['a]. *)
 
   val controlwordtype : int t
-  (** [controlwordtype] reads with {!Get.controlwordtype} and
-      {!view_controlwordtype}. *)
+  (** [controlwordtype] reads with {!Get.controlwordtype} and the accessor of
+      its field. *)
 
   val clcwversion : int t
-  (** [clcwversion] reads with {!Get.clcwversion} and {!view_clcwversion}. *)
+  (** [clcwversion] reads with {!Get.clcwversion} and the accessor of its field.
+  *)
 
   val statusfield : int t
-  (** [statusfield] reads with {!Get.statusfield} and {!view_statusfield}. *)
+  (** [statusfield] reads with {!Get.statusfield} and the accessor of its field.
+  *)
 
   val copineffect : int t
-  (** [copineffect] reads with {!Get.copineffect} and {!view_copineffect}. *)
+  (** [copineffect] reads with {!Get.copineffect} and the accessor of its field.
+  *)
 
   val vcid : int t
-  (** [vcid] reads with {!Get.vcid} and {!view_vcid}. *)
+  (** [vcid] reads with {!Get.vcid} and the accessor of its field. *)
 
   val spare : int t
-  (** [spare] reads with {!Get.spare} and {!view_spare}. *)
+  (** [spare] reads with {!Get.spare} and the accessor of its field. *)
 
   val norf : int t
-  (** [norf] reads with {!Get.norf} and {!view_norf}. *)
+  (** [norf] reads with {!Get.norf} and the accessor of its field. *)
 
   val nobitlock : int t
-  (** [nobitlock] reads with {!Get.nobitlock} and {!view_nobitlock}. *)
+  (** [nobitlock] reads with {!Get.nobitlock} and the accessor of its field. *)
 
   val lockout : int t
-  (** [lockout] reads with {!Get.lockout} and {!view_lockout}. *)
+  (** [lockout] reads with {!Get.lockout} and the accessor of its field. *)
 
   val wait : int t
-  (** [wait] reads with {!Get.wait} and {!view_wait}. *)
+  (** [wait] reads with {!Get.wait} and the accessor of its field. *)
 
   val retransmit : int t
-  (** [retransmit] reads with {!Get.retransmit} and {!view_retransmit}. *)
+  (** [retransmit] reads with {!Get.retransmit} and the accessor of its field.
+  *)
 
   val farmbcounter : int t
-  (** [farmbcounter] reads with {!Get.farmbcounter} and {!view_farmbcounter}. *)
+  (** [farmbcounter] reads with {!Get.farmbcounter} and the accessor of its
+      field. *)
 
   val spare2 : int t
-  (** [spare2] reads with {!Get.spare2} and {!view_spare2}. *)
+  (** [spare2] reads with {!Get.spare2} and the accessor of its field. *)
 
   val reportvalue : int t
-  (** [reportvalue] reads with {!Get.reportvalue} and {!view_reportvalue}. *)
+  (** [reportvalue] reads with {!Get.reportvalue} and the accessor of its field.
+  *)
 end
 
 (** The module as a [Wire_runtime.Record.S], which [Wire.Codec.Make] also gives:
@@ -832,10 +885,10 @@ module Global : sig
 
   (** Views, on buffers on the heap. *)
   module View : sig
-    type 'b t = 'b View.t
+    type 'b t = 'b view
     (** The type for records that passed their checks in the buffer ['b]. *)
 
-    type 'b check = 'b View.check
+    type nonrec 'b check = 'b check
     (** The type for the answers of {!val-check}. *)
 
     val at : 'b Wire_runtime.Buf.t -> 'b Wire_runtime.Buf.length -> int -> 'b t
@@ -856,609 +909,58 @@ module Global : sig
   module Field : sig
     type 'a t = private {
       get : bytes -> int -> 'a;
-      view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
+      view : 'b. 'b Wire_runtime.Buf.t -> 'b view -> 'a;
     }
     (** The type for fields holding an ['a]. *)
 
     val controlwordtype : int t
-    (** [controlwordtype] reads with {!Get.controlwordtype} and
-        {!view_controlwordtype}. *)
+    (** [controlwordtype] reads with {!Get.controlwordtype} and the accessor of
+        its field. *)
 
     val clcwversion : int t
-    (** [clcwversion] reads with {!Get.clcwversion} and {!view_clcwversion}. *)
+    (** [clcwversion] reads with {!Get.clcwversion} and the accessor of its
+        field. *)
 
     val statusfield : int t
-    (** [statusfield] reads with {!Get.statusfield} and {!view_statusfield}. *)
+    (** [statusfield] reads with {!Get.statusfield} and the accessor of its
+        field. *)
 
     val copineffect : int t
-    (** [copineffect] reads with {!Get.copineffect} and {!view_copineffect}. *)
+    (** [copineffect] reads with {!Get.copineffect} and the accessor of its
+        field. *)
 
     val vcid : int t
-    (** [vcid] reads with {!Get.vcid} and {!view_vcid}. *)
+    (** [vcid] reads with {!Get.vcid} and the accessor of its field. *)
 
     val spare : int t
-    (** [spare] reads with {!Get.spare} and {!view_spare}. *)
+    (** [spare] reads with {!Get.spare} and the accessor of its field. *)
 
     val norf : int t
-    (** [norf] reads with {!Get.norf} and {!view_norf}. *)
+    (** [norf] reads with {!Get.norf} and the accessor of its field. *)
 
     val nobitlock : int t
-    (** [nobitlock] reads with {!Get.nobitlock} and {!view_nobitlock}. *)
-
-    val lockout : int t
-    (** [lockout] reads with {!Get.lockout} and {!view_lockout}. *)
-
-    val wait : int t
-    (** [wait] reads with {!Get.wait} and {!view_wait}. *)
-
-    val retransmit : int t
-    (** [retransmit] reads with {!Get.retransmit} and {!view_retransmit}. *)
-
-    val farmbcounter : int t
-    (** [farmbcounter] reads with {!Get.farmbcounter} and {!view_farmbcounter}.
+    (** [nobitlock] reads with {!Get.nobitlock} and the accessor of its field.
     *)
 
+    val lockout : int t
+    (** [lockout] reads with {!Get.lockout} and the accessor of its field. *)
+
+    val wait : int t
+    (** [wait] reads with {!Get.wait} and the accessor of its field. *)
+
+    val retransmit : int t
+    (** [retransmit] reads with {!Get.retransmit} and the accessor of its field.
+    *)
+
+    val farmbcounter : int t
+    (** [farmbcounter] reads with {!Get.farmbcounter} and the accessor of its
+        field. *)
+
     val spare2 : int t
-    (** [spare2] reads with {!Get.spare2} and {!view_spare2}. *)
+    (** [spare2] reads with {!Get.spare2} and the accessor of its field. *)
 
     val reportvalue : int t
-    (** [reportvalue] reads with {!Get.reportvalue} and {!view_reportvalue}. *)
+    (** [reportvalue] reads with {!Get.reportvalue} and the accessor of its
+        field. *)
   end
-end
-
-(** {1:bigstring Bigarrays} *)
-
-(** The same reads and writes on a bigarray of bytes. *)
-module Bigstring : sig
-  (** {1:checks Validating and decoding} *)
-
-  val is_valid : Wire_runtime.Unchecked.Bigstring.t -> int -> bool
-  (** [is_valid buf off] is [true] iff the record at [off] in [buf] fits and
-      passes its checks. *)
-
-  val validate :
-    Wire_runtime.Unchecked.Bigstring.t ->
-    int ->
-    (unit, Wire_runtime.Errors.parse_error) result
-  (** [validate buf off] is [Ok ()] if the record at [off] in [buf] fits and
-      passes its checks, and the codec's error otherwise. Raises
-      [Invalid_argument] if [off] is negative. *)
-
-  val validate_exn : Wire_runtime.Unchecked.Bigstring.t -> int -> unit
-  (** [validate_exn buf off] is like {!validate} but raises
-      [Wire_runtime.Errors.Parse_error]. *)
-
-  val decode :
-    Wire_runtime.Unchecked.Bigstring.t ->
-    int ->
-    (t, Wire_runtime.Errors.parse_error) result
-  (** [decode buf off] is the record at [off] in [buf], or the codec's error.
-      Raises [Invalid_argument] if [off] is negative. *)
-
-  val decode_exn : Wire_runtime.Unchecked.Bigstring.t -> int -> t
-  (** [decode_exn buf off] is like {!decode} but raises
-      [Wire_runtime.Errors.Parse_error]. *)
-
-  (** {1:writes Writing} *)
-
-  val encode : t -> Wire_runtime.Unchecked.Bigstring.t -> int -> unit
-  (** [encode r buf off] writes the record [r] at [off] in [buf]. Raises as
-      {!write} does. *)
-
-  val write :
-    Wire_runtime.Unchecked.Bigstring.t ->
-    int ->
-    Value.controlwordtype ->
-    Value.clcwversion ->
-    Value.statusfield ->
-    Value.copineffect ->
-    Value.vcid ->
-    Value.spare ->
-    Value.norf ->
-    Value.nobitlock ->
-    Value.lockout ->
-    Value.wait ->
-    Value.retransmit ->
-    Value.farmbcounter ->
-    Value.spare2 ->
-    Value.reportvalue ->
-    unit
-  (** [write buf off controlwordtype clcwversion statusfield copineffect vcid
-       spare norf nobitlock lockout wait retransmit farmbcounter spare2
-       reportvalue] writes the record of these fields at [off] in [buf]. Raises
-      [Invalid_argument] if it does not fit. *)
-
-  val write_int :
-    Wire_runtime.Unchecked.Bigstring.t ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    unit
-  (** [write_int buf off controlwordtype clcwversion statusfield copineffect
-       vcid spare norf nobitlock lockout wait retransmit farmbcounter spare2
-       reportvalue] is like {!write} but takes plain values: an [int] for an
-      integer of up to 16 bits or a bitfield, an [int32] for a 32-bit integer
-      and a [string] for a byte array. It also raises [Invalid_argument] if a
-      value does not fit its field. *)
-
-  val write_at :
-    'b Wire_runtime.Buf.Bigstring.t ->
-    'b Wire_runtime.Buf.Bigstring.length ->
-    int ->
-    Value.controlwordtype ->
-    Value.clcwversion ->
-    Value.statusfield ->
-    Value.copineffect ->
-    Value.vcid ->
-    Value.spare ->
-    Value.norf ->
-    Value.nobitlock ->
-    Value.lockout ->
-    Value.wait ->
-    Value.retransmit ->
-    Value.farmbcounter ->
-    Value.spare2 ->
-    Value.reportvalue ->
-    unit
-  (** [write_at b len off controlwordtype clcwversion statusfield copineffect
-       vcid spare norf nobitlock lockout wait retransmit farmbcounter spare2
-       reportvalue] is like {!write} but writes into the buffer [b] of length
-      [len]. *)
-
-  val write_int_at :
-    'b Wire_runtime.Buf.Bigstring.t ->
-    'b Wire_runtime.Buf.Bigstring.length ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    int ->
-    unit
-  (** [write_int_at b len off controlwordtype clcwversion statusfield
-       copineffect vcid spare norf nobitlock lockout wait retransmit
-       farmbcounter spare2 reportvalue] is like {!write_int} but writes into the
-      buffer [b] of length [len]. *)
-
-  (** {1:reads Reading fields} *)
-
-  (** Reads of one field of the record at [off] in [buf], each one load that
-      checks its bounds and raises [Invalid_argument] outside them. A read
-      checks none of the record's constraints. *)
-  module Get : sig
-    val controlwordtype :
-      Wire_runtime.Unchecked.Bigstring.t -> int -> Value.controlwordtype
-    (** [controlwordtype buf off] is bit 31 of the big-endian 32-bit word at
-        offset 0 of the record at [off]. *)
-
-    val clcwversion :
-      Wire_runtime.Unchecked.Bigstring.t -> int -> Value.clcwversion
-    (** [clcwversion buf off] is bits 29 to 30 of the big-endian 32-bit word at
-        offset 0 of the record at [off]. *)
-
-    val statusfield :
-      Wire_runtime.Unchecked.Bigstring.t -> int -> Value.statusfield
-    (** [statusfield buf off] is bits 26 to 28 of the big-endian 32-bit word at
-        offset 0 of the record at [off]. *)
-
-    val copineffect :
-      Wire_runtime.Unchecked.Bigstring.t -> int -> Value.copineffect
-    (** [copineffect buf off] is bits 24 to 25 of the big-endian 32-bit word at
-        offset 0 of the record at [off]. *)
-
-    val vcid : Wire_runtime.Unchecked.Bigstring.t -> int -> Value.vcid
-    (** [vcid buf off] is bits 18 to 23 of the big-endian 32-bit word at offset
-        0 of the record at [off]. *)
-
-    val spare : Wire_runtime.Unchecked.Bigstring.t -> int -> Value.spare
-    (** [spare buf off] is bits 16 to 17 of the big-endian 32-bit word at offset
-        0 of the record at [off]. *)
-
-    val norf : Wire_runtime.Unchecked.Bigstring.t -> int -> Value.norf
-    (** [norf buf off] is bit 15 of the big-endian 32-bit word at offset 0 of
-        the record at [off]. *)
-
-    val nobitlock : Wire_runtime.Unchecked.Bigstring.t -> int -> Value.nobitlock
-    (** [nobitlock buf off] is bit 14 of the big-endian 32-bit word at offset 0
-        of the record at [off]. *)
-
-    val lockout : Wire_runtime.Unchecked.Bigstring.t -> int -> Value.lockout
-    (** [lockout buf off] is bit 13 of the big-endian 32-bit word at offset 0 of
-        the record at [off]. *)
-
-    val wait : Wire_runtime.Unchecked.Bigstring.t -> int -> Value.wait
-    (** [wait buf off] is bit 12 of the big-endian 32-bit word at offset 0 of
-        the record at [off]. *)
-
-    val retransmit :
-      Wire_runtime.Unchecked.Bigstring.t -> int -> Value.retransmit
-    (** [retransmit buf off] is bit 11 of the big-endian 32-bit word at offset 0
-        of the record at [off]. *)
-
-    val farmbcounter :
-      Wire_runtime.Unchecked.Bigstring.t -> int -> Value.farmbcounter
-    (** [farmbcounter buf off] is bits 9 to 10 of the big-endian 32-bit word at
-        offset 0 of the record at [off]. *)
-
-    val spare2 : Wire_runtime.Unchecked.Bigstring.t -> int -> Value.spare2
-    (** [spare2 buf off] is bit 8 of the big-endian 32-bit word at offset 0 of
-        the record at [off]. *)
-
-    val reportvalue :
-      Wire_runtime.Unchecked.Bigstring.t -> int -> Value.reportvalue
-    (** [reportvalue buf off] is bits 0 to 7 of the big-endian 32-bit word at
-        offset 0 of the record at [off]. *)
-
-    val controlwordtype_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [controlwordtype_word buf off] is the big-endian 32-bit word at offset 0
-        of the record at [off], for {!controlwordtype_of_word}. *)
-
-    val clcwversion_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [clcwversion_word buf off] is the big-endian 32-bit word at offset 0 of
-        the record at [off], for {!clcwversion_of_word}. *)
-
-    val statusfield_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [statusfield_word buf off] is the big-endian 32-bit word at offset 0 of
-        the record at [off], for {!statusfield_of_word}. *)
-
-    val copineffect_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [copineffect_word buf off] is the big-endian 32-bit word at offset 0 of
-        the record at [off], for {!copineffect_of_word}. *)
-
-    val vcid_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [vcid_word buf off] is the big-endian 32-bit word at offset 0 of the
-        record at [off], for {!vcid_of_word}. *)
-
-    val spare_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [spare_word buf off] is the big-endian 32-bit word at offset 0 of the
-        record at [off], for {!spare_of_word}. *)
-
-    val norf_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [norf_word buf off] is the big-endian 32-bit word at offset 0 of the
-        record at [off], for {!norf_of_word}. *)
-
-    val nobitlock_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [nobitlock_word buf off] is the big-endian 32-bit word at offset 0 of
-        the record at [off], for {!nobitlock_of_word}. *)
-
-    val lockout_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [lockout_word buf off] is the big-endian 32-bit word at offset 0 of the
-        record at [off], for {!lockout_of_word}. *)
-
-    val wait_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [wait_word buf off] is the big-endian 32-bit word at offset 0 of the
-        record at [off], for {!wait_of_word}. *)
-
-    val retransmit_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [retransmit_word buf off] is the big-endian 32-bit word at offset 0 of
-        the record at [off], for {!retransmit_of_word}. *)
-
-    val farmbcounter_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [farmbcounter_word buf off] is the big-endian 32-bit word at offset 0 of
-        the record at [off], for {!farmbcounter_of_word}. *)
-
-    val spare2_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [spare2_word buf off] is the big-endian 32-bit word at offset 0 of the
-        record at [off], for {!spare2_of_word}. *)
-
-    val reportvalue_word : Wire_runtime.Unchecked.Bigstring.t -> int -> int
-    (** [reportvalue_word buf off] is the big-endian 32-bit word at offset 0 of
-        the record at [off], for {!reportvalue_of_word}. *)
-  end
-
-  val controlwordtype_of_word : int -> int
-  (** [controlwordtype_of_word w] is bit 31 of [w], a word
-      {!Get.controlwordtype_word} reads. *)
-
-  val clcwversion_of_word : int -> int
-  (** [clcwversion_of_word w] is bits 29 to 30 of [w], a word
-      {!Get.clcwversion_word} reads. *)
-
-  val statusfield_of_word : int -> int
-  (** [statusfield_of_word w] is bits 26 to 28 of [w], a word
-      {!Get.statusfield_word} reads. *)
-
-  val copineffect_of_word : int -> int
-  (** [copineffect_of_word w] is bits 24 to 25 of [w], a word
-      {!Get.copineffect_word} reads. *)
-
-  val vcid_of_word : int -> int
-  (** [vcid_of_word w] is bits 18 to 23 of [w], a word {!Get.vcid_word} reads.
-  *)
-
-  val spare_of_word : int -> int
-  (** [spare_of_word w] is bits 16 to 17 of [w], a word {!Get.spare_word} reads.
-  *)
-
-  val norf_of_word : int -> int
-  (** [norf_of_word w] is bit 15 of [w], a word {!Get.norf_word} reads. *)
-
-  val nobitlock_of_word : int -> int
-  (** [nobitlock_of_word w] is bit 14 of [w], a word {!Get.nobitlock_word}
-      reads. *)
-
-  val lockout_of_word : int -> int
-  (** [lockout_of_word w] is bit 13 of [w], a word {!Get.lockout_word} reads. *)
-
-  val wait_of_word : int -> int
-  (** [wait_of_word w] is bit 12 of [w], a word {!Get.wait_word} reads. *)
-
-  val retransmit_of_word : int -> int
-  (** [retransmit_of_word w] is bit 11 of [w], a word {!Get.retransmit_word}
-      reads. *)
-
-  val farmbcounter_of_word : int -> int
-  (** [farmbcounter_of_word w] is bits 9 to 10 of [w], a word
-      {!Get.farmbcounter_word} reads. *)
-
-  val spare2_of_word : int -> int
-  (** [spare2_of_word w] is bit 8 of [w], a word {!Get.spare2_word} reads. *)
-
-  val reportvalue_of_word : int -> int
-  (** [reportvalue_of_word w] is bits 0 to 7 of [w], a word
-      {!Get.reportvalue_word} reads. *)
-
-  (** Buffers whose record at offset 0 passed its checks. A read of one is one
-      load with no check: the buffer's length cannot change, so a read stays in
-      it, but if its bytes change after the check a read may return a value that
-      breaks a constraint. *)
-  module Valid : sig
-    type t = private Wire_runtime.Unchecked.Bigstring.t
-    (** The type for buffers whose record at offset 0 passed its checks. *)
-
-    val v : Wire_runtime.Unchecked.Bigstring.t -> t
-    (** [v buf] is [buf], once its record at offset 0 passed its checks. Raises
-        as {!validate_exn} does otherwise. *)
-  end
-
-  val read_controlwordtype : Valid.t -> Value.controlwordtype
-  (** [read_controlwordtype v] is bit 31 of the big-endian 32-bit word at offset
-      0 of the record in [v]. *)
-
-  val read_clcwversion : Valid.t -> Value.clcwversion
-  (** [read_clcwversion v] is bits 29 to 30 of the big-endian 32-bit word at
-      offset 0 of the record in [v]. *)
-
-  val read_statusfield : Valid.t -> Value.statusfield
-  (** [read_statusfield v] is bits 26 to 28 of the big-endian 32-bit word at
-      offset 0 of the record in [v]. *)
-
-  val read_copineffect : Valid.t -> Value.copineffect
-  (** [read_copineffect v] is bits 24 to 25 of the big-endian 32-bit word at
-      offset 0 of the record in [v]. *)
-
-  val read_vcid : Valid.t -> Value.vcid
-  (** [read_vcid v] is bits 18 to 23 of the big-endian 32-bit word at offset 0
-      of the record in [v]. *)
-
-  val read_spare : Valid.t -> Value.spare
-  (** [read_spare v] is bits 16 to 17 of the big-endian 32-bit word at offset 0
-      of the record in [v]. *)
-
-  val read_norf : Valid.t -> Value.norf
-  (** [read_norf v] is bit 15 of the big-endian 32-bit word at offset 0 of the
-      record in [v]. *)
-
-  val read_nobitlock : Valid.t -> Value.nobitlock
-  (** [read_nobitlock v] is bit 14 of the big-endian 32-bit word at offset 0 of
-      the record in [v]. *)
-
-  val read_lockout : Valid.t -> Value.lockout
-  (** [read_lockout v] is bit 13 of the big-endian 32-bit word at offset 0 of
-      the record in [v]. *)
-
-  val read_wait : Valid.t -> Value.wait
-  (** [read_wait v] is bit 12 of the big-endian 32-bit word at offset 0 of the
-      record in [v]. *)
-
-  val read_retransmit : Valid.t -> Value.retransmit
-  (** [read_retransmit v] is bit 11 of the big-endian 32-bit word at offset 0 of
-      the record in [v]. *)
-
-  val read_farmbcounter : Valid.t -> Value.farmbcounter
-  (** [read_farmbcounter v] is bits 9 to 10 of the big-endian 32-bit word at
-      offset 0 of the record in [v]. *)
-
-  val read_spare2 : Valid.t -> Value.spare2
-  (** [read_spare2 v] is bit 8 of the big-endian 32-bit word at offset 0 of the
-      record in [v]. *)
-
-  val read_reportvalue : Valid.t -> Value.reportvalue
-  (** [read_reportvalue v] is bits 0 to 7 of the big-endian 32-bit word at
-      offset 0 of the record in [v]. *)
-
-  (** {1:views Views} *)
-
-  (** Records checked once in a buffer named by [Wire_runtime.Buf.v], whose
-      length is read once. A view is an [int], so it allocates nothing, and a
-      read of one is one load with no check, with the promise of {!Valid}. *)
-  module View : sig
-    type 'b t = private int
-    (** The type for records that passed their checks in the buffer ['b]. *)
-
-    type 'b check = private int
-    (** The type for the answers of {!val-check}. *)
-
-    val at :
-      'b Wire_runtime.Buf.Bigstring.t ->
-      'b Wire_runtime.Buf.Bigstring.length ->
-      int ->
-      'b t
-    (** [at b len off] is the record at [off] in the buffer [b] of length [len].
-        Raises as {!validate_exn} does where its checks fail. *)
-
-    val check :
-      'b Wire_runtime.Buf.Bigstring.t ->
-      'b Wire_runtime.Buf.Bigstring.length ->
-      int ->
-      'b check
-    (** [check b len off] checks the record at [off] in the buffer [b] of length
-        [len], without raising. *)
-
-    val ok : 'b check -> bool
-    (** [ok c] is [true] iff the check [c] passed. *)
-
-    val get : 'b check -> 'b t
-    (** [get c] is the record the check [c] passed. Raises [Invalid_argument] if
-        [c] failed. *)
-
-    val with_ :
-      'b Wire_runtime.Buf.Bigstring.t ->
-      'b Wire_runtime.Buf.Bigstring.length ->
-      int ->
-      ok:('b t -> 'a) ->
-      fail:(unit -> 'a) ->
-      'a
-    (** [with_ b len off ~ok ~fail] is [ok r] for the record [r] at [off] in the
-        buffer [b] of length [len] if it passes its checks, and [fail ()]
-        otherwise. *)
-  end
-
-  val view_controlwordtype :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.controlwordtype
-  (** [view_controlwordtype b v] is bit 31 of the big-endian 32-bit word at
-      offset 0 of the record [v] in [b]. *)
-
-  val view_controlwordtype_word :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_controlwordtype_word b v] is the big-endian 32-bit word at offset 0
-      of the record [v] in [b], for {!controlwordtype_of_word}. *)
-
-  val view_clcwversion :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.clcwversion
-  (** [view_clcwversion b v] is bits 29 to 30 of the big-endian 32-bit word at
-      offset 0 of the record [v] in [b]. *)
-
-  val view_clcwversion_word :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_clcwversion_word b v] is the big-endian 32-bit word at offset 0 of
-      the record [v] in [b], for {!clcwversion_of_word}. *)
-
-  val view_statusfield :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.statusfield
-  (** [view_statusfield b v] is bits 26 to 28 of the big-endian 32-bit word at
-      offset 0 of the record [v] in [b]. *)
-
-  val view_statusfield_word :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_statusfield_word b v] is the big-endian 32-bit word at offset 0 of
-      the record [v] in [b], for {!statusfield_of_word}. *)
-
-  val view_copineffect :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.copineffect
-  (** [view_copineffect b v] is bits 24 to 25 of the big-endian 32-bit word at
-      offset 0 of the record [v] in [b]. *)
-
-  val view_copineffect_word :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_copineffect_word b v] is the big-endian 32-bit word at offset 0 of
-      the record [v] in [b], for {!copineffect_of_word}. *)
-
-  val view_vcid : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.vcid
-  (** [view_vcid b v] is bits 18 to 23 of the big-endian 32-bit word at offset 0
-      of the record [v] in [b]. *)
-
-  val view_vcid_word : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_vcid_word b v] is the big-endian 32-bit word at offset 0 of the
-      record [v] in [b], for {!vcid_of_word}. *)
-
-  val view_spare : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.spare
-  (** [view_spare b v] is bits 16 to 17 of the big-endian 32-bit word at offset
-      0 of the record [v] in [b]. *)
-
-  val view_spare_word : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_spare_word b v] is the big-endian 32-bit word at offset 0 of the
-      record [v] in [b], for {!spare_of_word}. *)
-
-  val view_norf : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.norf
-  (** [view_norf b v] is bit 15 of the big-endian 32-bit word at offset 0 of the
-      record [v] in [b]. *)
-
-  val view_norf_word : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_norf_word b v] is the big-endian 32-bit word at offset 0 of the
-      record [v] in [b], for {!norf_of_word}. *)
-
-  val view_nobitlock :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.nobitlock
-  (** [view_nobitlock b v] is bit 14 of the big-endian 32-bit word at offset 0
-      of the record [v] in [b]. *)
-
-  val view_nobitlock_word : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_nobitlock_word b v] is the big-endian 32-bit word at offset 0 of the
-      record [v] in [b], for {!nobitlock_of_word}. *)
-
-  val view_lockout :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.lockout
-  (** [view_lockout b v] is bit 13 of the big-endian 32-bit word at offset 0 of
-      the record [v] in [b]. *)
-
-  val view_lockout_word : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_lockout_word b v] is the big-endian 32-bit word at offset 0 of the
-      record [v] in [b], for {!lockout_of_word}. *)
-
-  val view_wait : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.wait
-  (** [view_wait b v] is bit 12 of the big-endian 32-bit word at offset 0 of the
-      record [v] in [b]. *)
-
-  val view_wait_word : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_wait_word b v] is the big-endian 32-bit word at offset 0 of the
-      record [v] in [b], for {!wait_of_word}. *)
-
-  val view_retransmit :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.retransmit
-  (** [view_retransmit b v] is bit 11 of the big-endian 32-bit word at offset 0
-      of the record [v] in [b]. *)
-
-  val view_retransmit_word : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_retransmit_word b v] is the big-endian 32-bit word at offset 0 of
-      the record [v] in [b], for {!retransmit_of_word}. *)
-
-  val view_farmbcounter :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.farmbcounter
-  (** [view_farmbcounter b v] is bits 9 to 10 of the big-endian 32-bit word at
-      offset 0 of the record [v] in [b]. *)
-
-  val view_farmbcounter_word :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_farmbcounter_word b v] is the big-endian 32-bit word at offset 0 of
-      the record [v] in [b], for {!farmbcounter_of_word}. *)
-
-  val view_spare2 : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.spare2
-  (** [view_spare2 b v] is bit 8 of the big-endian 32-bit word at offset 0 of
-      the record [v] in [b]. *)
-
-  val view_spare2_word : 'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_spare2_word b v] is the big-endian 32-bit word at offset 0 of the
-      record [v] in [b], for {!spare2_of_word}. *)
-
-  val view_reportvalue :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> Value.reportvalue
-  (** [view_reportvalue b v] is bits 0 to 7 of the big-endian 32-bit word at
-      offset 0 of the record [v] in [b]. *)
-
-  val view_reportvalue_word :
-    'b Wire_runtime.Buf.Bigstring.t -> 'b View.t -> int
-  (** [view_reportvalue_word b v] is the big-endian 32-bit word at offset 0 of
-      the record [v] in [b], for {!reportvalue_of_word}. *)
 end

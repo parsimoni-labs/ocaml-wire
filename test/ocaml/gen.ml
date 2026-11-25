@@ -51,6 +51,14 @@ let () =
       (base name ^ "_wire.mli")
       (Wire_ocaml.bridge_mli ?maps ?record ~codec ~core c)
   in
+  (* The same module on a bigarray, under the same constructor. *)
+  let big name codec c =
+    let make = ("Schemas." ^ codec ^ "_make", "Schemas." ^ codec)
+    and codec = "Schemas." ^ codec in
+    write name (Wire_ocaml.ml ~target ~buffer:`Bigstring ~make ~codec c);
+    write (name ^ "i")
+      (Wire_ocaml.mli ~target ~buffer:`Bigstring ~make ~codec c)
+  in
   let s name ?(step = false) ?(path = "Schemas.") codec c =
     let codec = path ^ codec in
     let ml = Wire_ocaml.scanner ~target ~codec c
@@ -80,6 +88,11 @@ let () =
   g "g_refined.ml" "refined" Schemas.refined;
   g "g_overflow.ml" "overflow" Schemas.overflow;
   g "g_lanes.ml" "lanes" Schemas.lanes;
+  big "g_ipv4_big.ml" "ipv4" Schemas.ipv4;
+  big "g_checked_big.ml" "checked" Schemas.checked;
+  big "g_mixed_big.ml" "mixed" Schemas.mixed;
+  big "g_eth_big.ml" "eth" Schemas.eth;
+  big "g_wide_big.ml" "wide" Schemas.wide;
   s "s_sized.ml" "sized" Schemas.sized;
   s "s_overflow.ml" "overflow" Schemas.overflow;
   s "s_skipped.ml" "skipped" Schemas.skipped;

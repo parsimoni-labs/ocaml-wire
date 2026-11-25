@@ -360,9 +360,12 @@ let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
   Wire_runtime.Errors.check_unsigned ~bits:8 f14_reportvalue;
   no_error ()
 
-let[@inline] write_int buf off f1_controlwordtype f2_clcwversion f3_statusfield
-    f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait
-    f11_retransmit f12_farmbcounter f13_spare2 f14_reportvalue =
+let[@inline] write_int buf off ~controlwordtype:f1_controlwordtype
+    ~clcwversion:f2_clcwversion ~statusfield:f3_statusfield
+    ~copineffect:f4_copineffect ~vcid:f5_vcid ~spare:f6_spare ~norf:f7_norf
+    ~nobitlock:f8_nobitlock ~lockout:f9_lockout ~wait:f10_wait
+    ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter ~spare2:f13_spare2
+    ~reportvalue:f14_reportvalue =
   if
     f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout lor f10_wait
     lor f11_retransmit lor f13_spare2 land lnot 0x1
@@ -390,9 +393,12 @@ let[@inline] write_int buf off f1_controlwordtype f2_clcwversion f3_statusfield
     ()
   end
 
-let[@inline] write buf off f1_controlwordtype f2_clcwversion f3_statusfield
-    f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait
-    f11_retransmit f12_farmbcounter f13_spare2 f14_reportvalue =
+let[@inline] write buf off ~controlwordtype:f1_controlwordtype
+    ~clcwversion:f2_clcwversion ~statusfield:f3_statusfield
+    ~copineffect:f4_copineffect ~vcid:f5_vcid ~spare:f6_spare ~norf:f7_norf
+    ~nobitlock:f8_nobitlock ~lockout:f9_lockout ~wait:f10_wait
+    ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter ~spare2:f13_spare2
+    ~reportvalue:f14_reportvalue =
   let f1_controlwordtype =
     (f1_controlwordtype : Value.controlwordtype :> int)
   in
@@ -424,10 +430,12 @@ let[@inline] write buf off f1_controlwordtype f2_clcwversion f3_statusfield
   end
 
 let[@inline] write_int_at (b : 'b Wire_runtime.Buf.t)
-    (len : 'b Wire_runtime.Buf.length) off f1_controlwordtype f2_clcwversion
-    f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock
-    f9_lockout f10_wait f11_retransmit f12_farmbcounter f13_spare2
-    f14_reportvalue =
+    (len : 'b Wire_runtime.Buf.length) off ~controlwordtype:f1_controlwordtype
+    ~clcwversion:f2_clcwversion ~statusfield:f3_statusfield
+    ~copineffect:f4_copineffect ~vcid:f5_vcid ~spare:f6_spare ~norf:f7_norf
+    ~nobitlock:f8_nobitlock ~lockout:f9_lockout ~wait:f10_wait
+    ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter ~spare2:f13_spare2
+    ~reportvalue:f14_reportvalue =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and len = (len : _ Wire_runtime.Buf.length :> int) in
   if
@@ -458,10 +466,12 @@ let[@inline] write_int_at (b : 'b Wire_runtime.Buf.t)
   end
 
 let[@inline] write_at (b : 'b Wire_runtime.Buf.t)
-    (len : 'b Wire_runtime.Buf.length) off f1_controlwordtype f2_clcwversion
-    f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock
-    f9_lockout f10_wait f11_retransmit f12_farmbcounter f13_spare2
-    f14_reportvalue =
+    (len : 'b Wire_runtime.Buf.length) off ~controlwordtype:f1_controlwordtype
+    ~clcwversion:f2_clcwversion ~statusfield:f3_statusfield
+    ~copineffect:f4_copineffect ~vcid:f5_vcid ~spare:f6_spare ~norf:f7_norf
+    ~nobitlock:f8_nobitlock ~lockout:f9_lockout ~wait:f10_wait
+    ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter ~spare2:f13_spare2
+    ~reportvalue:f14_reportvalue =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes)
   and len = (len : _ Wire_runtime.Buf.length :> int) in
   let f1_controlwordtype =
@@ -637,439 +647,402 @@ let[@inline] farmbcounter_of_word w = (w lsr 9) land 0x3
 let[@inline] spare2_of_word w = (w lsr 8) land 0x1
 let[@inline] reportvalue_of_word w = (w lsr 0) land 0xff
 
-module Valid : sig
-  type t = private bytes
+let encode t buf off =
+  write buf off ~controlwordtype:t.controlwordtype ~clcwversion:t.clcwversion
+    ~statusfield:t.statusfield ~copineffect:t.copineffect ~vcid:t.vcid
+    ~spare:t.spare ~norf:t.norf ~nobitlock:t.nobitlock ~lockout:t.lockout
+    ~wait:t.wait ~retransmit:t.retransmit ~farmbcounter:t.farmbcounter
+    ~spare2:t.spare2 ~reportvalue:t.reportvalue
 
-  val v : bytes -> t
-end = struct
-  type t = bytes
+let[@inline always] fold_record ~buf ~base ~stop ~invalid ~valid =
+  if (stop : int) < 4 then invalid ()
+  else
+    let bw1 =
+      Int32.to_int (Wire_runtime.Unchecked.i32be buf base) land mask32
+    in
+    let f1_controlwordtype = bw1 lsr 31 in
+    let f2_clcwversion = (bw1 lsr 29) land 0x3 in
+    let f3_statusfield = (bw1 lsr 26) land 0x7 in
+    let f4_copineffect = (bw1 lsr 24) land 0x3 in
+    let f5_vcid = (bw1 lsr 18) land 0x3f in
+    let f6_spare = (bw1 lsr 16) land 0x3 in
+    let f7_norf = (bw1 lsr 15) land 0x1 in
+    let f8_nobitlock = (bw1 lsr 14) land 0x1 in
+    let f9_lockout = (bw1 lsr 13) land 0x1 in
+    let f10_wait = (bw1 lsr 12) land 0x1 in
+    let f11_retransmit = (bw1 lsr 11) land 0x1 in
+    let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
+    let f13_spare2 = (bw1 lsr 8) land 0x1 in
+    let f14_reportvalue = bw1 land 0xff in
+    valid ~controlwordtype:f1_controlwordtype ~clcwversion:f2_clcwversion
+      ~statusfield:f3_statusfield ~copineffect:f4_copineffect ~vcid:f5_vcid
+      ~spare:f6_spare ~norf:f7_norf ~nobitlock:f8_nobitlock ~lockout:f9_lockout
+      ~wait:f10_wait ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter
+      ~spare2:f13_spare2 ~reportvalue:f14_reportvalue
 
-  let[@inline] v buf =
-    if Bytes.length buf < size then fail buf 0
-    else begin
-      buf
-    end
-end
+let[@inline always] fold buf off len ~invalid ~valid =
+  if off < 0 || len > Bytes.length buf - off then invalid ()
+  else
+    let base = off in
+    let stop = len in
+    fold_record ~buf ~base ~stop ~invalid ~valid
 
-let[@inline] read_controlwordtype (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f1_controlwordtype =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 31
-  in
-  cast Value.controlwordtype_eq f1_controlwordtype
+let[@inline never] fold_frames_short buf ~stride ~last ~off ~init ~invalid
+    ~valid =
+  let acc = ref init in
+  let cursor = ref off in
+  while !cursor <= last do
+    let base = !cursor in
+    let current = !acc in
+    acc :=
+      fold buf base stride
+        ~invalid:(fun () -> invalid current)
+        ~valid:(valid current);
+    cursor := base + stride
+  done;
+  !acc
 
-let[@inline] read_clcwversion (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f2_clcwversion =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 29) land 0x3
-  in
-  cast Value.clcwversion_eq f2_clcwversion
+let[@inline always] frames_record ~buf ~base ~current ~valid =
+  let bw1 = Int32.to_int (Wire_runtime.Unchecked.i32be buf base) land mask32 in
+  let f1_controlwordtype = bw1 lsr 31 in
+  let f2_clcwversion = (bw1 lsr 29) land 0x3 in
+  let f3_statusfield = (bw1 lsr 26) land 0x7 in
+  let f4_copineffect = (bw1 lsr 24) land 0x3 in
+  let f5_vcid = (bw1 lsr 18) land 0x3f in
+  let f6_spare = (bw1 lsr 16) land 0x3 in
+  let f7_norf = (bw1 lsr 15) land 0x1 in
+  let f8_nobitlock = (bw1 lsr 14) land 0x1 in
+  let f9_lockout = (bw1 lsr 13) land 0x1 in
+  let f10_wait = (bw1 lsr 12) land 0x1 in
+  let f11_retransmit = (bw1 lsr 11) land 0x1 in
+  let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
+  let f13_spare2 = (bw1 lsr 8) land 0x1 in
+  let f14_reportvalue = bw1 land 0xff in
+  valid current ~controlwordtype:f1_controlwordtype ~clcwversion:f2_clcwversion
+    ~statusfield:f3_statusfield ~copineffect:f4_copineffect ~vcid:f5_vcid
+    ~spare:f6_spare ~norf:f7_norf ~nobitlock:f8_nobitlock ~lockout:f9_lockout
+    ~wait:f10_wait ~retransmit:f11_retransmit ~farmbcounter:f12_farmbcounter
+    ~spare2:f13_spare2 ~reportvalue:f14_reportvalue
 
-let[@inline] read_statusfield (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f3_statusfield =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 26) land 0x7
-  in
-  cast Value.statusfield_eq f3_statusfield
+let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
+  if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then
+    invalid_arg "fold_frames: invalid frame bounds or stride";
+  let acc = ref init in
+  let cursor = ref off in
+  let last = off + len - stride in
+  if stride < 4 then
+    acc := fold_frames_short buf ~stride ~last ~off ~init:!acc ~invalid ~valid
+  else (
+    (if stride <= len / 4 then
+       let last_4 = off + len - (4 * stride) in
+       let stride_2 = 2 * stride in
+       let stride_3 = 3 * stride in
+       let stride_4 = 4 * stride in
+       while !cursor <= last_4 do
+         let base_1 = !cursor + stride in
+         let base_2 = !cursor + stride_2 in
+         let base_3 = !cursor + stride_3 in
+         let base = !cursor in
+         let current = !acc in
+         let next = frames_record ~buf ~base ~current ~valid in
+         acc := next;
+         let base = base_1 in
+         let current = !acc in
+         let next = frames_record ~buf ~base ~current ~valid in
+         acc := next;
+         let base = base_2 in
+         let current = !acc in
+         let next = frames_record ~buf ~base ~current ~valid in
+         acc := next;
+         let base = base_3 in
+         let current = !acc in
+         let next = frames_record ~buf ~base ~current ~valid in
+         acc := next;
+         cursor := !cursor + stride_4
+       done);
+    while !cursor <= last do
+      let base = !cursor in
+      let current = !acc in
+      let next = frames_record ~buf ~base ~current ~valid in
+      acc := next;
+      cursor := !cursor + stride
+    done);
+  !acc
 
-let[@inline] read_copineffect (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f4_copineffect =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 24) land 0x3
-  in
-  cast Value.copineffect_eq f4_copineffect
+type 'b view = int
+type 'b check = int
 
-let[@inline] read_vcid (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f5_vcid =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 18) land 0x3f
-  in
-  cast Value.vcid_eq f5_vcid
+let[@inline always] check_record ~stop ~off =
+  if (stop : int) < 4 then -1 else off
 
-let[@inline] read_spare (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f6_spare =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 16) land 0x3
-  in
-  cast Value.spare_eq f6_spare
+let[@inline always] check (_b : 'b Wire_runtime.Buf.t)
+    (length : 'b Wire_runtime.Buf.length) ~off ~len : 'b check =
+  let length = (length : _ Wire_runtime.Buf.length :> int) in
+  if off > length - len then -1
+  else
+    let stop = len in
+    check_record ~stop ~off
 
-let[@inline] read_norf (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f7_norf =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 15) land 0x1
-  in
-  cast Value.norf_eq f7_norf
+let[@inline] set_bits'i32be (b : _ Wire_runtime.Buf.t) at ~mask ~shift x msg =
+  if x land lnot mask <> 0 then invalid_arg msg;
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  let w = Wire_runtime.Unchecked.i32be buf at in
+  Wire_runtime.Unchecked.set_i32be buf at
+    (Int32.logor
+       (Int32.logand w
+          (Int32.lognot (Int32.shift_left (Int32.of_int mask) shift)))
+       (Int32.shift_left (Int32.of_int x) shift))
 
-let[@inline] read_nobitlock (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f8_nobitlock =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 14) land 0x1
-  in
-  cast Value.nobitlock_eq f8_nobitlock
+let failed = Invalid_argument "CLCW.get: the check failed"
+let[@inline always] ok (c : 'b check) = c >= 0
 
-let[@inline] read_lockout (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f9_lockout =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 13) land 0x1
-  in
-  cast Value.lockout_eq f9_lockout
+let[@inline always] get (c : 'b check) : 'b view =
+  if c >= 0 then c else raise failed
 
-let[@inline] read_wait (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f10_wait =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 12) land 0x1
-  in
-  cast Value.wait_eq f10_wait
+let[@inline always] controlwordtype (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
+    int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) land mask32) lsr 31
 
-let[@inline] read_retransmit (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f11_retransmit =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 11) land 0x1
-  in
-  cast Value.retransmit_eq f11_retransmit
-
-let[@inline] read_farmbcounter (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f12_farmbcounter =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 9) land 0x3
-  in
-  cast Value.farmbcounter_eq f12_farmbcounter
-
-let[@inline] read_spare2 (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f13_spare2 =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 8) land 0x1
-  in
-  cast Value.spare2_eq f13_spare2
-
-let[@inline] read_reportvalue (v : Valid.t) =
-  let buf = (v :> bytes) and off = 0 in
-  let f14_reportvalue =
-    Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land 0xff
-  in
-  cast Value.reportvalue_eq f14_reportvalue
-
-module View : sig
-  type 'b t = private int
-  type 'b check = private int
-
-  val at : 'b Wire_runtime.Buf.t -> 'b Wire_runtime.Buf.length -> int -> 'b t
-
-  val check :
-    'b Wire_runtime.Buf.t -> 'b Wire_runtime.Buf.length -> int -> 'b check
-
-  val ok : 'b check -> bool
-  val get : 'b check -> 'b t
-
-  val with_ :
-    'b Wire_runtime.Buf.t ->
-    'b Wire_runtime.Buf.length ->
-    int ->
-    ok:('b t -> 'a) ->
-    fail:(unit -> 'a) ->
-    'a
-end = struct
-  type 'b t = int
-  type 'b check = int
-
-  let refused = -1
-
-  let[@inline] check _b len off =
-    let len = (len : _ Wire_runtime.Buf.length :> int) in
-    if off > len - size then refused else off
-
-  let[@inline] with_ _b len off ~ok ~fail =
-    let len = (len : _ Wire_runtime.Buf.length :> int) in
-    if off < 0 || off > len - size then fail () else ok off
-
-  let[@inline] at b len off =
-    let c = check b len off in
-    if c < 0 then fail (b : _ Wire_runtime.Buf.t :> bytes) off else c
-
-  let[@inline] ok c = c >= 0
-  let failed = Invalid_argument (codec_name ^ ".View.get: the check failed")
-  let[@inline] get c = if c >= 0 then c else raise failed
-end
-
-let[@inline] view_controlwordtype (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f1_controlwordtype =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32) lsr 31
-  in
-  cast Value.controlwordtype_eq f1_controlwordtype
-
-let[@inline] view_controlwordtype_word (b : 'b Wire_runtime.Buf.t)
-    (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_clcwversion (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f2_clcwversion =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 29) land 0x3
-  in
-  cast Value.clcwversion_eq f2_clcwversion
-
-let[@inline] view_clcwversion_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_statusfield (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f3_statusfield =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 26) land 0x7
-  in
-  cast Value.statusfield_eq f3_statusfield
-
-let[@inline] view_statusfield_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_copineffect (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f4_copineffect =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 24) land 0x3
-  in
-  cast Value.copineffect_eq f4_copineffect
-
-let[@inline] view_copineffect_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_vcid (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f5_vcid =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 18) land 0x3f
-  in
-  cast Value.vcid_eq f5_vcid
-
-let[@inline] view_vcid_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_spare (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f6_spare =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 16) land 0x3
-  in
-  cast Value.spare_eq f6_spare
-
-let[@inline] view_spare_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_norf (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f7_norf =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 15) land 0x1
-  in
-  cast Value.norf_eq f7_norf
-
-let[@inline] view_norf_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_nobitlock (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f8_nobitlock =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 14) land 0x1
-  in
-  cast Value.nobitlock_eq f8_nobitlock
-
-let[@inline] view_nobitlock_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_lockout (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f9_lockout =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 13) land 0x1
-  in
-  cast Value.lockout_eq f9_lockout
-
-let[@inline] view_lockout_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_wait (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f10_wait =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 12) land 0x1
-  in
-  cast Value.wait_eq f10_wait
-
-let[@inline] view_wait_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_retransmit (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f11_retransmit =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 11) land 0x1
-  in
-  cast Value.retransmit_eq f11_retransmit
-
-let[@inline] view_retransmit_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
-
-let[@inline] view_farmbcounter (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f12_farmbcounter =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 9) land 0x3
-  in
-  cast Value.farmbcounter_eq f12_farmbcounter
-
-let[@inline] view_farmbcounter_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t)
+let[@inline always] clcwversion (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int
     =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 29) land 0x3
+
+let[@inline always] statusfield (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int
+    =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 26) land 0x7
+
+let[@inline always] copineffect (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int
+    =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 24) land 0x3
+
+let[@inline always] vcid (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 18) land 0x3f
+
+let[@inline always] spare (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 16) land 0x3
+
+let[@inline always] norf (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 15) land 0x1
+
+let[@inline always] nobitlock (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 14) land 0x1
+
+let[@inline always] lockout (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 13) land 0x1
+
+let[@inline always] wait (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 12) land 0x1
+
+let[@inline always] retransmit (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 11) land 0x1
+
+let[@inline always] farmbcounter (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int
+    =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 9) land 0x3
+
+let[@inline always] spare2 (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  (Int32.to_int (Wire_runtime.Unchecked.i32be buf v) lsr 8) land 0x1
+
+let[@inline always] reportvalue (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int
+    =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf v) land 0xff
+
+let[@inline] set_controlwordtype (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x1 ~shift:31 x
+    "set_controlwordtype: the value does not fit in 1 bits"
+
+let[@inline] set_clcwversion (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x3 ~shift:29 x
+    "set_clcwversion: the value does not fit in 2 bits"
+
+let[@inline] set_statusfield (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x7 ~shift:26 x
+    "set_statusfield: the value does not fit in 3 bits"
+
+let[@inline] set_copineffect (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x3 ~shift:24 x
+    "set_copineffect: the value does not fit in 2 bits"
+
+let[@inline] set_vcid (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x3f ~shift:18 x
+    "set_vcid: the value does not fit in 6 bits"
+
+let[@inline] set_spare (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x3 ~shift:16 x
+    "set_spare: the value does not fit in 2 bits"
+
+let[@inline] set_norf (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x1 ~shift:15 x
+    "set_norf: the value does not fit in 1 bits"
+
+let[@inline] set_nobitlock (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x1 ~shift:14 x
+    "set_nobitlock: the value does not fit in 1 bits"
+
+let[@inline] set_lockout (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x1 ~shift:13 x
+    "set_lockout: the value does not fit in 1 bits"
+
+let[@inline] set_wait (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x1 ~shift:12 x
+    "set_wait: the value does not fit in 1 bits"
+
+let[@inline] set_retransmit (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x1 ~shift:11 x
+    "set_retransmit: the value does not fit in 1 bits"
+
+let[@inline] set_farmbcounter (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x3 ~shift:9 x
+    "set_farmbcounter: the value does not fit in 2 bits"
+
+let[@inline] set_spare2 (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0x1 ~shift:8 x
+    "set_spare2: the value does not fit in 1 bits"
+
+let[@inline] set_reportvalue (b : 'b Wire_runtime.Buf.t) (v : 'b view) x =
+  set_bits'i32be b (v + 0) ~mask:0xff ~shift:0 x
+    "set_reportvalue: the value does not fit in 8 bits"
+
+let[@inline] view_controlwordtype_word (b : 'b Wire_runtime.Buf.t) (v : 'b view)
+    =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
   Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
 
-let[@inline] view_spare2 (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f13_spare2 =
-    (Int32.to_int (Wire_runtime.Unchecked.i32be buf off) lsr 8) land 0x1
-  in
-  cast Value.spare2_eq f13_spare2
-
-let[@inline] view_spare2_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
+let[@inline] view_clcwversion_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
   Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
 
-let[@inline] view_reportvalue (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
-  let f14_reportvalue =
-    Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land 0xff
-  in
-  cast Value.reportvalue_eq f14_reportvalue
+let[@inline] view_statusfield_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
 
-let[@inline] view_reportvalue_word (b : 'b Wire_runtime.Buf.t) (v : 'b View.t) =
-  let buf = (b : _ Wire_runtime.Buf.t :> bytes)
-  and off = (v : _ View.t :> int) in
+let[@inline] view_copineffect_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_vcid_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_spare_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_norf_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_nobitlock_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_lockout_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_wait_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_retransmit_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_farmbcounter_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_spare2_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
+  Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
+
+let[@inline] view_reportvalue_word (b : 'b Wire_runtime.Buf.t) (v : 'b view) =
+  let buf = (b : _ Wire_runtime.Buf.t :> bytes) and off = (v : _ view :> int) in
   Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32
 
 module Field = struct
   type 'a t = {
     get : bytes -> int -> 'a;
-    view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
+    view : 'b. 'b Wire_runtime.Buf.t -> 'b view -> 'a;
   }
 
   let controlwordtype : int t =
     {
       get = (fun buf off -> (Get.controlwordtype buf off :> int));
-      view = (fun b v -> (view_controlwordtype b v :> int));
+      view = controlwordtype;
     }
 
   let clcwversion : int t =
     {
       get = (fun buf off -> (Get.clcwversion buf off :> int));
-      view = (fun b v -> (view_clcwversion b v :> int));
+      view = clcwversion;
     }
 
   let statusfield : int t =
     {
       get = (fun buf off -> (Get.statusfield buf off :> int));
-      view = (fun b v -> (view_statusfield b v :> int));
+      view = statusfield;
     }
 
   let copineffect : int t =
     {
       get = (fun buf off -> (Get.copineffect buf off :> int));
-      view = (fun b v -> (view_copineffect b v :> int));
+      view = copineffect;
     }
 
   let vcid : int t =
-    {
-      get = (fun buf off -> (Get.vcid buf off :> int));
-      view = (fun b v -> (view_vcid b v :> int));
-    }
+    { get = (fun buf off -> (Get.vcid buf off :> int)); view = vcid }
 
   let spare : int t =
-    {
-      get = (fun buf off -> (Get.spare buf off :> int));
-      view = (fun b v -> (view_spare b v :> int));
-    }
+    { get = (fun buf off -> (Get.spare buf off :> int)); view = spare }
 
   let norf : int t =
-    {
-      get = (fun buf off -> (Get.norf buf off :> int));
-      view = (fun b v -> (view_norf b v :> int));
-    }
+    { get = (fun buf off -> (Get.norf buf off :> int)); view = norf }
 
   let nobitlock : int t =
-    {
-      get = (fun buf off -> (Get.nobitlock buf off :> int));
-      view = (fun b v -> (view_nobitlock b v :> int));
-    }
+    { get = (fun buf off -> (Get.nobitlock buf off :> int)); view = nobitlock }
 
   let lockout : int t =
-    {
-      get = (fun buf off -> (Get.lockout buf off :> int));
-      view = (fun b v -> (view_lockout b v :> int));
-    }
+    { get = (fun buf off -> (Get.lockout buf off :> int)); view = lockout }
 
   let wait : int t =
-    {
-      get = (fun buf off -> (Get.wait buf off :> int));
-      view = (fun b v -> (view_wait b v :> int));
-    }
+    { get = (fun buf off -> (Get.wait buf off :> int)); view = wait }
 
   let retransmit : int t =
     {
       get = (fun buf off -> (Get.retransmit buf off :> int));
-      view = (fun b v -> (view_retransmit b v :> int));
+      view = retransmit;
     }
 
   let farmbcounter : int t =
     {
       get = (fun buf off -> (Get.farmbcounter buf off :> int));
-      view = (fun b v -> (view_farmbcounter b v :> int));
+      view = farmbcounter;
     }
 
   let spare2 : int t =
-    {
-      get = (fun buf off -> (Get.spare2 buf off :> int));
-      view = (fun b v -> (view_spare2 b v :> int));
-    }
+    { get = (fun buf off -> (Get.spare2 buf off :> int)); view = spare2 }
 
   let reportvalue : int t =
     {
       get = (fun buf off -> (Get.reportvalue buf off :> int));
-      view = (fun b v -> (view_reportvalue b v :> int));
+      view = reportvalue;
     }
 end
-
-let encode t buf off =
-  write buf off t.controlwordtype t.clcwversion t.statusfield t.copineffect
-    t.vcid t.spare t.norf t.nobitlock t.lockout t.wait t.retransmit
-    t.farmbcounter t.spare2 t.reportvalue
 
 module Global = struct
   type nonrec t = t
@@ -1082,872 +1055,18 @@ module Global = struct
   let validate_exn = validate_exn
   let is_valid = is_valid
 
-  module View = View
-  module Field = Field
-end
-
-module Bigstring = struct
-  let[@inline never] short buf off =
-    Wire_runtime.Errors.frame ~size
-      ~len:(Wire_runtime.Unchecked.Bigstring.length buf)
-      off
-
-  let[@inline never] fail buf off =
-    if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
-      short buf off;
-    no_error ()
-
-  let[@inline never] too_short buf off =
-    Wire_runtime.Errors.encode_too_short ~name:codec_name ~size
-      ~len:(Wire_runtime.Unchecked.Bigstring.length buf)
-      off
-
-  let[@inline] is_valid buf off =
-    if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
-      false
-    else true
-
-  let[@inline] validate_exn buf off =
-    if not (is_valid buf off) then fail buf off
-
-  let validate buf off =
-    match validate_exn buf off with
-    | () -> Ok ()
-    | exception Wire_runtime.Errors.Parse_error e -> Error e
-
-  let decode_exn buf off =
-    if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
-      fail buf off
-    else
-      let bw1 =
-        Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off)
-        land mask32
-      in
-      let f1_controlwordtype = bw1 lsr 31 in
-      let f2_clcwversion = (bw1 lsr 29) land 0x3 in
-      let f3_statusfield = (bw1 lsr 26) land 0x7 in
-      let f4_copineffect = (bw1 lsr 24) land 0x3 in
-      let f5_vcid = (bw1 lsr 18) land 0x3f in
-      let f6_spare = (bw1 lsr 16) land 0x3 in
-      let f7_norf = (bw1 lsr 15) land 0x1 in
-      let f8_nobitlock = (bw1 lsr 14) land 0x1 in
-      let f9_lockout = (bw1 lsr 13) land 0x1 in
-      let f10_wait = (bw1 lsr 12) land 0x1 in
-      let f11_retransmit = (bw1 lsr 11) land 0x1 in
-      let f12_farmbcounter = (bw1 lsr 9) land 0x3 in
-      let f13_spare2 = (bw1 lsr 8) land 0x1 in
-      let f14_reportvalue = bw1 land 0xff in
-      v
-        (cast Value.controlwordtype_eq f1_controlwordtype)
-        (cast Value.clcwversion_eq f2_clcwversion)
-        (cast Value.statusfield_eq f3_statusfield)
-        (cast Value.copineffect_eq f4_copineffect)
-        (cast Value.vcid_eq f5_vcid)
-        (cast Value.spare_eq f6_spare)
-        (cast Value.norf_eq f7_norf)
-        (cast Value.nobitlock_eq f8_nobitlock)
-        (cast Value.lockout_eq f9_lockout)
-        (cast Value.wait_eq f10_wait)
-        (cast Value.retransmit_eq f11_retransmit)
-        (cast Value.farmbcounter_eq f12_farmbcounter)
-        (cast Value.spare2_eq f13_spare2)
-        (cast Value.reportvalue_eq f14_reportvalue)
-
-  let decode buf off =
-    match decode_exn buf off with
-    | v -> Ok v
-    | exception Wire_runtime.Errors.Parse_error e -> Error e
-
-  let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
-      f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock
-      f9_lockout f10_wait f11_retransmit f12_farmbcounter f13_spare2
-      f14_reportvalue =
-    if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
-      too_short buf off;
-    Wire_runtime.Errors.check_unsigned ~bits:1 f1_controlwordtype;
-    Wire_runtime.Errors.check_unsigned ~bits:2 f2_clcwversion;
-    Wire_runtime.Errors.check_unsigned ~bits:3 f3_statusfield;
-    Wire_runtime.Errors.check_unsigned ~bits:2 f4_copineffect;
-    Wire_runtime.Errors.check_unsigned ~bits:6 f5_vcid;
-    Wire_runtime.Errors.check_unsigned ~bits:2 f6_spare;
-    Wire_runtime.Errors.check_unsigned ~bits:1 f7_norf;
-    Wire_runtime.Errors.check_unsigned ~bits:1 f8_nobitlock;
-    Wire_runtime.Errors.check_unsigned ~bits:1 f9_lockout;
-    Wire_runtime.Errors.check_unsigned ~bits:1 f10_wait;
-    Wire_runtime.Errors.check_unsigned ~bits:1 f11_retransmit;
-    Wire_runtime.Errors.check_unsigned ~bits:2 f12_farmbcounter;
-    Wire_runtime.Errors.check_unsigned ~bits:1 f13_spare2;
-    Wire_runtime.Errors.check_unsigned ~bits:8 f14_reportvalue;
-    no_error ()
-
-  let[@inline] write_int buf off f1_controlwordtype f2_clcwversion
-      f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock
-      f9_lockout f10_wait f11_retransmit f12_farmbcounter f13_spare2
-      f14_reportvalue =
-    if
-      f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout
-      lor f10_wait lor f11_retransmit lor f13_spare2 land lnot 0x1
-      lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter
-         land lnot 0x3)
-      lor (f3_statusfield land lnot 0x7)
-      lor (f5_vcid land lnot 0x3f)
-      lor (f14_reportvalue land lnot 0xff)
-      <> 0
-    then
-      first_error buf off f1_controlwordtype f2_clcwversion f3_statusfield
-        f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait
-        f11_retransmit f12_farmbcounter f13_spare2 f14_reportvalue
-    else if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size
-    then too_short buf off
-    else begin
-      Wire_runtime.Unchecked.Bigstring.set_i32be buf (off + 0)
-        (Int32.of_int
-           ((f1_controlwordtype lsl 31)
-           lor (f2_clcwversion lsl 29) lor (f3_statusfield lsl 26)
-           lor (f4_copineffect lsl 24) lor (f5_vcid lsl 18)
-           lor (f6_spare lsl 16) lor (f7_norf lsl 15) lor (f8_nobitlock lsl 14)
-           lor (f9_lockout lsl 13) lor (f10_wait lsl 12)
-           lor (f11_retransmit lsl 11) lor (f12_farmbcounter lsl 9)
-           lor (f13_spare2 lsl 8) lor (f14_reportvalue lsl 0)));
-      ()
-    end
-
-  let[@inline] write buf off f1_controlwordtype f2_clcwversion f3_statusfield
-      f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait
-      f11_retransmit f12_farmbcounter f13_spare2 f14_reportvalue =
-    let f1_controlwordtype =
-      (f1_controlwordtype : Value.controlwordtype :> int)
-    in
-    let f2_clcwversion = (f2_clcwversion : Value.clcwversion :> int) in
-    let f3_statusfield = (f3_statusfield : Value.statusfield :> int) in
-    let f4_copineffect = (f4_copineffect : Value.copineffect :> int) in
-    let f5_vcid = (f5_vcid : Value.vcid :> int) in
-    let f6_spare = (f6_spare : Value.spare :> int) in
-    let f7_norf = (f7_norf : Value.norf :> int) in
-    let f8_nobitlock = (f8_nobitlock : Value.nobitlock :> int) in
-    let f9_lockout = (f9_lockout : Value.lockout :> int) in
-    let f10_wait = (f10_wait : Value.wait :> int) in
-    let f11_retransmit = (f11_retransmit : Value.retransmit :> int) in
-    let f12_farmbcounter = (f12_farmbcounter : Value.farmbcounter :> int) in
-    let f13_spare2 = (f13_spare2 : Value.spare2 :> int) in
-    let f14_reportvalue = (f14_reportvalue : Value.reportvalue :> int) in
-    if off < 0 || off > Wire_runtime.Unchecked.Bigstring.length buf - size then
-      too_short buf off
-    else begin
-      Wire_runtime.Unchecked.Bigstring.set_i32be buf (off + 0)
-        (Int32.of_int
-           ((f1_controlwordtype lsl 31)
-           lor (f2_clcwversion lsl 29) lor (f3_statusfield lsl 26)
-           lor (f4_copineffect lsl 24) lor (f5_vcid lsl 18)
-           lor (f6_spare lsl 16) lor (f7_norf lsl 15) lor (f8_nobitlock lsl 14)
-           lor (f9_lockout lsl 13) lor (f10_wait lsl 12)
-           lor (f11_retransmit lsl 11) lor (f12_farmbcounter lsl 9)
-           lor (f13_spare2 lsl 8) lor (f14_reportvalue lsl 0)));
-      ()
-    end
-
-  let[@inline] write_int_at (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (len : 'b Wire_runtime.Buf.Bigstring.length) off f1_controlwordtype
-      f2_clcwversion f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf
-      f8_nobitlock f9_lockout f10_wait f11_retransmit f12_farmbcounter
-      f13_spare2 f14_reportvalue =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
-    if
-      f1_controlwordtype lor f7_norf lor f8_nobitlock lor f9_lockout
-      lor f10_wait lor f11_retransmit lor f13_spare2 land lnot 0x1
-      lor (f2_clcwversion lor f4_copineffect lor f6_spare lor f12_farmbcounter
-         land lnot 0x3)
-      lor (f3_statusfield land lnot 0x7)
-      lor (f5_vcid land lnot 0x3f)
-      lor (f14_reportvalue land lnot 0xff)
-      <> 0
-    then
-      first_error buf off f1_controlwordtype f2_clcwversion f3_statusfield
-        f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait
-        f11_retransmit f12_farmbcounter f13_spare2 f14_reportvalue
-    else if off < 0 || off > len - size then too_short buf off
-    else begin
-      Wire_runtime.Unchecked.Bigstring.set_i32be buf (off + 0)
-        (Int32.of_int
-           ((f1_controlwordtype lsl 31)
-           lor (f2_clcwversion lsl 29) lor (f3_statusfield lsl 26)
-           lor (f4_copineffect lsl 24) lor (f5_vcid lsl 18)
-           lor (f6_spare lsl 16) lor (f7_norf lsl 15) lor (f8_nobitlock lsl 14)
-           lor (f9_lockout lsl 13) lor (f10_wait lsl 12)
-           lor (f11_retransmit lsl 11) lor (f12_farmbcounter lsl 9)
-           lor (f13_spare2 lsl 8) lor (f14_reportvalue lsl 0)));
-      ()
-    end
-
-  let[@inline] write_at (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (len : 'b Wire_runtime.Buf.Bigstring.length) off f1_controlwordtype
-      f2_clcwversion f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf
-      f8_nobitlock f9_lockout f10_wait f11_retransmit f12_farmbcounter
-      f13_spare2 f14_reportvalue =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
-    let f1_controlwordtype =
-      (f1_controlwordtype : Value.controlwordtype :> int)
-    in
-    let f2_clcwversion = (f2_clcwversion : Value.clcwversion :> int) in
-    let f3_statusfield = (f3_statusfield : Value.statusfield :> int) in
-    let f4_copineffect = (f4_copineffect : Value.copineffect :> int) in
-    let f5_vcid = (f5_vcid : Value.vcid :> int) in
-    let f6_spare = (f6_spare : Value.spare :> int) in
-    let f7_norf = (f7_norf : Value.norf :> int) in
-    let f8_nobitlock = (f8_nobitlock : Value.nobitlock :> int) in
-    let f9_lockout = (f9_lockout : Value.lockout :> int) in
-    let f10_wait = (f10_wait : Value.wait :> int) in
-    let f11_retransmit = (f11_retransmit : Value.retransmit :> int) in
-    let f12_farmbcounter = (f12_farmbcounter : Value.farmbcounter :> int) in
-    let f13_spare2 = (f13_spare2 : Value.spare2 :> int) in
-    let f14_reportvalue = (f14_reportvalue : Value.reportvalue :> int) in
-    if off < 0 || off > len - size then too_short buf off
-    else begin
-      Wire_runtime.Unchecked.Bigstring.set_i32be buf (off + 0)
-        (Int32.of_int
-           ((f1_controlwordtype lsl 31)
-           lor (f2_clcwversion lsl 29) lor (f3_statusfield lsl 26)
-           lor (f4_copineffect lsl 24) lor (f5_vcid lsl 18)
-           lor (f6_spare lsl 16) lor (f7_norf lsl 15) lor (f8_nobitlock lsl 14)
-           lor (f9_lockout lsl 13) lor (f10_wait lsl 12)
-           lor (f11_retransmit lsl 11) lor (f12_farmbcounter lsl 9)
-           lor (f13_spare2 lsl 8) lor (f14_reportvalue lsl 0)));
-      ()
-    end
-
-  module Get = struct
-    let[@inline] controlwordtype buf off =
-      let f1_controlwordtype =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 31
-        land 0x1
-      in
-      cast Value.controlwordtype_eq f1_controlwordtype
-
-    let[@inline] clcwversion buf off =
-      let f2_clcwversion =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 29
-        land 0x3
-      in
-      cast Value.clcwversion_eq f2_clcwversion
-
-    let[@inline] statusfield buf off =
-      let f3_statusfield =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 26
-        land 0x7
-      in
-      cast Value.statusfield_eq f3_statusfield
-
-    let[@inline] copineffect buf off =
-      let f4_copineffect =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 24
-        land 0x3
-      in
-      cast Value.copineffect_eq f4_copineffect
-
-    let[@inline] vcid buf off =
-      let f5_vcid =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 18
-        land 0x3f
-      in
-      cast Value.vcid_eq f5_vcid
-
-    let[@inline] spare buf off =
-      let f6_spare =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 16
-        land 0x3
-      in
-      cast Value.spare_eq f6_spare
-
-    let[@inline] norf buf off =
-      let f7_norf =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 15
-        land 0x1
-      in
-      cast Value.norf_eq f7_norf
-
-    let[@inline] nobitlock buf off =
-      let f8_nobitlock =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 14
-        land 0x1
-      in
-      cast Value.nobitlock_eq f8_nobitlock
-
-    let[@inline] lockout buf off =
-      let f9_lockout =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 13
-        land 0x1
-      in
-      cast Value.lockout_eq f9_lockout
-
-    let[@inline] wait buf off =
-      let f10_wait =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 12
-        land 0x1
-      in
-      cast Value.wait_eq f10_wait
-
-    let[@inline] retransmit buf off =
-      let f11_retransmit =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 11
-        land 0x1
-      in
-      cast Value.retransmit_eq f11_retransmit
-
-    let[@inline] farmbcounter buf off =
-      let f12_farmbcounter =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 9
-        land 0x3
-      in
-      cast Value.farmbcounter_eq f12_farmbcounter
-
-    let[@inline] spare2 buf off =
-      let f13_spare2 =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 8
-        land 0x1
-      in
-      cast Value.spare2_eq f13_spare2
-
-    let[@inline] reportvalue buf off =
-      let f14_reportvalue =
-        Int32.to_int
-          (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-        lsr 0
-        land 0xff
-      in
-      cast Value.reportvalue_eq f14_reportvalue
-
-    let[@inline] controlwordtype_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] clcwversion_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] statusfield_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] copineffect_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] vcid_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] spare_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] norf_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] nobitlock_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] lockout_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] wait_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] retransmit_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] farmbcounter_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] spare2_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-
-    let[@inline] reportvalue_word buf off =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.get_int32_be buf (off + 0))
-      land mask32
-  end
-
-  let[@inline] controlwordtype_of_word w = (w lsr 31) land 0x1
-  let[@inline] clcwversion_of_word w = (w lsr 29) land 0x3
-  let[@inline] statusfield_of_word w = (w lsr 26) land 0x7
-  let[@inline] copineffect_of_word w = (w lsr 24) land 0x3
-  let[@inline] vcid_of_word w = (w lsr 18) land 0x3f
-  let[@inline] spare_of_word w = (w lsr 16) land 0x3
-  let[@inline] norf_of_word w = (w lsr 15) land 0x1
-  let[@inline] nobitlock_of_word w = (w lsr 14) land 0x1
-  let[@inline] lockout_of_word w = (w lsr 13) land 0x1
-  let[@inline] wait_of_word w = (w lsr 12) land 0x1
-  let[@inline] retransmit_of_word w = (w lsr 11) land 0x1
-  let[@inline] farmbcounter_of_word w = (w lsr 9) land 0x3
-  let[@inline] spare2_of_word w = (w lsr 8) land 0x1
-  let[@inline] reportvalue_of_word w = (w lsr 0) land 0xff
-
-  module Valid : sig
-    type t = private Wire_runtime.Unchecked.Bigstring.t
-
-    val v : Wire_runtime.Unchecked.Bigstring.t -> t
-  end = struct
-    type t = Wire_runtime.Unchecked.Bigstring.t
-
-    let[@inline] v buf =
-      if Wire_runtime.Unchecked.Bigstring.length buf < size then fail buf 0
-      else begin
-        buf
-      end
-  end
-
-  let[@inline] read_controlwordtype (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f1_controlwordtype =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 31
-    in
-    cast Value.controlwordtype_eq f1_controlwordtype
-
-  let[@inline] read_clcwversion (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f2_clcwversion =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 29)
-      land 0x3
-    in
-    cast Value.clcwversion_eq f2_clcwversion
-
-  let[@inline] read_statusfield (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f3_statusfield =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 26)
-      land 0x7
-    in
-    cast Value.statusfield_eq f3_statusfield
-
-  let[@inline] read_copineffect (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f4_copineffect =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 24)
-      land 0x3
-    in
-    cast Value.copineffect_eq f4_copineffect
-
-  let[@inline] read_vcid (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f5_vcid =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 18)
-      land 0x3f
-    in
-    cast Value.vcid_eq f5_vcid
-
-  let[@inline] read_spare (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f6_spare =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 16)
-      land 0x3
-    in
-    cast Value.spare_eq f6_spare
-
-  let[@inline] read_norf (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f7_norf =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 15)
-      land 0x1
-    in
-    cast Value.norf_eq f7_norf
-
-  let[@inline] read_nobitlock (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f8_nobitlock =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 14)
-      land 0x1
-    in
-    cast Value.nobitlock_eq f8_nobitlock
-
-  let[@inline] read_lockout (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f9_lockout =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 13)
-      land 0x1
-    in
-    cast Value.lockout_eq f9_lockout
-
-  let[@inline] read_wait (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f10_wait =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 12)
-      land 0x1
-    in
-    cast Value.wait_eq f10_wait
-
-  let[@inline] read_retransmit (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f11_retransmit =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 11)
-      land 0x1
-    in
-    cast Value.retransmit_eq f11_retransmit
-
-  let[@inline] read_farmbcounter (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f12_farmbcounter =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 9)
-      land 0x3
-    in
-    cast Value.farmbcounter_eq f12_farmbcounter
-
-  let[@inline] read_spare2 (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f13_spare2 =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 8)
-      land 0x1
-    in
-    cast Value.spare2_eq f13_spare2
-
-  let[@inline] read_reportvalue (v : Valid.t) =
-    let buf = (v :> Wire_runtime.Unchecked.Bigstring.t) and off = 0 in
-    let f14_reportvalue =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land 0xff
-    in
-    cast Value.reportvalue_eq f14_reportvalue
-
-  module View : sig
-    type 'b t = private int
-    type 'b check = private int
-
-    val at :
-      'b Wire_runtime.Buf.Bigstring.t ->
-      'b Wire_runtime.Buf.Bigstring.length ->
-      int ->
-      'b t
-
-    val check :
-      'b Wire_runtime.Buf.Bigstring.t ->
-      'b Wire_runtime.Buf.Bigstring.length ->
-      int ->
-      'b check
-
-    val ok : 'b check -> bool
-    val get : 'b check -> 'b t
-
-    val with_ :
-      'b Wire_runtime.Buf.Bigstring.t ->
-      'b Wire_runtime.Buf.Bigstring.length ->
-      int ->
-      ok:('b t -> 'a) ->
-      fail:(unit -> 'a) ->
-      'a
-  end = struct
-    type 'b t = int
-    type 'b check = int
-
-    let refused = -1
-
-    let[@inline] check _b len off =
-      let len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
-      if off > len - size then refused else off
-
-    let[@inline] with_ _b len off ~ok ~fail =
-      let len = (len : _ Wire_runtime.Buf.Bigstring.length :> int) in
-      if off < 0 || off > len - size then fail () else ok off
+  module View = struct
+    type 'b t = 'b view
+    type nonrec 'b check = 'b check
+
+    let[@inline] check b len off = check b len ~off ~len:size
+    let ok = ok
+    let get = get
 
     let[@inline] at b len off =
       let c = check b len off in
-      if c < 0 then
-        fail
-          (b
-            : _ Wire_runtime.Buf.Bigstring.t
-            :> Wire_runtime.Unchecked.Bigstring.t)
-          off
-      else c
-
-    let[@inline] ok c = c >= 0
-    let failed = Invalid_argument (codec_name ^ ".View.get: the check failed")
-    let[@inline] get c = if c >= 0 then c else raise failed
+      if ok c then get c else fail (b : _ Wire_runtime.Buf.t :> bytes) off
   end
 
-  let[@inline] view_controlwordtype (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f1_controlwordtype =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32)
-      lsr 31
-    in
-    cast Value.controlwordtype_eq f1_controlwordtype
-
-  let[@inline] view_controlwordtype_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_clcwversion (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f2_clcwversion =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 29)
-      land 0x3
-    in
-    cast Value.clcwversion_eq f2_clcwversion
-
-  let[@inline] view_clcwversion_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_statusfield (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f3_statusfield =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 26)
-      land 0x7
-    in
-    cast Value.statusfield_eq f3_statusfield
-
-  let[@inline] view_statusfield_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_copineffect (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f4_copineffect =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 24)
-      land 0x3
-    in
-    cast Value.copineffect_eq f4_copineffect
-
-  let[@inline] view_copineffect_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_vcid (b : 'b Wire_runtime.Buf.Bigstring.t) (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f5_vcid =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 18)
-      land 0x3f
-    in
-    cast Value.vcid_eq f5_vcid
-
-  let[@inline] view_vcid_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_spare (b : 'b Wire_runtime.Buf.Bigstring.t) (v : 'b View.t)
-      =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f6_spare =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 16)
-      land 0x3
-    in
-    cast Value.spare_eq f6_spare
-
-  let[@inline] view_spare_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_norf (b : 'b Wire_runtime.Buf.Bigstring.t) (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f7_norf =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 15)
-      land 0x1
-    in
-    cast Value.norf_eq f7_norf
-
-  let[@inline] view_norf_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_nobitlock (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f8_nobitlock =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 14)
-      land 0x1
-    in
-    cast Value.nobitlock_eq f8_nobitlock
-
-  let[@inline] view_nobitlock_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_lockout (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f9_lockout =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 13)
-      land 0x1
-    in
-    cast Value.lockout_eq f9_lockout
-
-  let[@inline] view_lockout_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_wait (b : 'b Wire_runtime.Buf.Bigstring.t) (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f10_wait =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 12)
-      land 0x1
-    in
-    cast Value.wait_eq f10_wait
-
-  let[@inline] view_wait_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_retransmit (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f11_retransmit =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 11)
-      land 0x1
-    in
-    cast Value.retransmit_eq f11_retransmit
-
-  let[@inline] view_retransmit_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_farmbcounter (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f12_farmbcounter =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 9)
-      land 0x3
-    in
-    cast Value.farmbcounter_eq f12_farmbcounter
-
-  let[@inline] view_farmbcounter_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_spare2 (b : 'b Wire_runtime.Buf.Bigstring.t) (v : 'b View.t)
-      =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f13_spare2 =
-      (Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) lsr 8)
-      land 0x1
-    in
-    cast Value.spare2_eq f13_spare2
-
-  let[@inline] view_spare2_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let[@inline] view_reportvalue (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    let f14_reportvalue =
-      Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land 0xff
-    in
-    cast Value.reportvalue_eq f14_reportvalue
-
-  let[@inline] view_reportvalue_word (b : 'b Wire_runtime.Buf.Bigstring.t)
-      (v : 'b View.t) =
-    let buf =
-      (b : _ Wire_runtime.Buf.Bigstring.t :> Wire_runtime.Unchecked.Bigstring.t)
-    and off = (v : _ View.t :> int) in
-    Int32.to_int (Wire_runtime.Unchecked.Bigstring.i32be buf off) land mask32
-
-  let encode t buf off =
-    write buf off t.controlwordtype t.clcwversion t.statusfield t.copineffect
-      t.vcid t.spare t.norf t.nobitlock t.lockout t.wait t.retransmit
-      t.farmbcounter t.spare2 t.reportvalue
+  module Field = Field
 end

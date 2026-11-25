@@ -50,7 +50,6 @@ let test_fixed () =
         Alcotest.(check bool) "fold" valid (Option.is_some folded);
         if valid then begin
           let v = G_checked.get c in
-          let r = G_checked.View.at b length off in
           let read =
             [
               G_checked.version b v;
@@ -59,19 +58,113 @@ let test_fixed () =
               UInt8.to_int (G_checked.ttl b v);
               UInt8.to_int (G_checked.proto b v);
             ]
-          and view =
+          and get =
             [
-              (G_checked.view_version b r :> int);
-              (G_checked.view_ihl b r :> int);
-              UInt16.to_int (G_checked.view_length b r);
-              UInt8.to_int (G_checked.view_ttl b r);
-              UInt8.to_int (G_checked.view_proto b r);
+              (G_checked.Get.version buf off :> int);
+              (G_checked.Get.ihl buf off :> int);
+              UInt16.to_int (G_checked.Get.length buf off);
+              UInt8.to_int (G_checked.Get.ttl buf off);
+              UInt8.to_int (G_checked.Get.proto buf off);
             ]
           in
-          Alcotest.(check (list int)) "accessors" view read;
-          Alcotest.(check (option (list int))) "fold" (Some view) folded
+          Alcotest.(check (list int)) "accessors" get read;
+          Alcotest.(check (option (list int))) "fold" (Some get) folded
         end
   done
+
+let outcome f =
+  match f () with
+  | s -> "ok " ^ s
+  | exception Parse_error e -> Fmt.str "parse error %a" pp_parse_error e
+  | exception Invalid_argument m -> "invalid " ^ m
+
+let byte () = Char.chr (Random.State.int rand 256)
+
+(* A record of [Schemas.checked] that passes its constraints. *)
+let fix_checked buf off =
+  Bytes.set_uint8 buf off 0x45;
+  Bytes.set_uint8 buf (off + 3) (1 + Random.State.int rand 255);
+  Bytes.set_uint8 buf (off + 4)
+    (List.nth [ 1; 6; 17 ] (Random.State.int rand 3))
+
+(* The accessors of a record checked at offset 0 read what [Codec.get]
+   reads, where [Codec.validate_exn] accepts the record; [read buf] raises
+   the codec's error otherwise. *)
+let viewed ?(fix = fun _ _ -> ()) codec ~read ~gets =
+  let size = Codec.min_wire_size codec in
+  for _ = 1 to 2000 do
+    let len = size + Random.State.int rand 4 - 1 in
+    let buf = Bytes.init (max 0 len) (fun _ -> byte ()) in
+    if Random.State.bool rand && len >= size then fix buf 0;
+    let expected =
+      outcome (fun () ->
+          Codec.validate_exn codec buf 0;
+          String.concat "," (List.map (fun get -> get buf) gets))
+    in
+    let got = outcome (fun () -> String.concat "," (read buf)) in
+    Alcotest.(check string) "view" expected got
+  done
+
+let test_accessors () =
+  let get codec field show =
+    let read = Staged.unstage (Codec.get codec field) in
+    fun buf -> show (read buf 0)
+  in
+  let i32 v = string_of_int (SInt32.to_int v) in
+  let u32 v = string_of_int (UInt32.to_int v) in
+  let all = Bytes.length in
+  viewed Schemas.ipv4
+    ~gets:
+      [
+        get Schemas.ipv4 Schemas.ipv4_frag (fun v ->
+            string_of_int (UInt16.to_int v));
+        get Schemas.ipv4 Schemas.ipv4_src i32;
+        get Schemas.ipv4 Schemas.ipv4_dst u32;
+      ]
+    ~read:(fun buf ->
+      G_ipv4.validate_exn buf 0;
+      let (Buf.Any b) = Buf.v buf in
+      let v =
+        G_ipv4.get (G_ipv4.check b (Buf.length b) ~off:0 ~len:(all buf))
+      in
+      [
+        string_of_int (UInt16.to_int (G_ipv4.frag b v));
+        string_of_int (G_ipv4.view_src_int b v);
+        u32 (G_ipv4.dst b v);
+      ]);
+  viewed ~fix:fix_checked Schemas.checked
+    ~gets:
+      [
+        get Schemas.checked Schemas.checked_proto (fun v ->
+            string_of_int (UInt8.to_int v));
+      ]
+    ~read:(fun buf ->
+      G_checked.validate_exn buf 0;
+      let (Buf.Any b) = Buf.v buf in
+      let v =
+        G_checked.get (G_checked.check b (Buf.length b) ~off:0 ~len:(all buf))
+      in
+      [ string_of_int (UInt8.to_int (G_checked.proto b v)) ]);
+  viewed Schemas.mixed
+    ~gets:
+      [
+        get Schemas.mixed Schemas.mixed_f i32;
+        get Schemas.mixed Schemas.mixed_h string_of_int;
+      ]
+    ~read:(fun buf ->
+      G_mixed.validate_exn buf 0;
+      let (Buf.Any b) = Buf.v buf in
+      let v =
+        G_mixed.get (G_mixed.check b (Buf.length b) ~off:0 ~len:(all buf))
+      in
+      [ i32 (G_mixed.f b v); string_of_int (G_mixed.h b v) ]);
+  viewed Schemas.eth
+    ~gets:[ get Schemas.eth Schemas.eth_src Fun.id ]
+    ~read:(fun buf ->
+      G_eth.validate_exn buf 0;
+      let (Buf.Any b) = Buf.v buf in
+      let v = G_eth.get (G_eth.check b (Buf.length b) ~off:0 ~len:(all buf)) in
+      [ G_eth.src b v ])
 
 type codec = Codec : 'r Codec.t -> codec
 
@@ -178,6 +271,7 @@ let suite =
     [
       Alcotest.test_case "setters" `Quick test_setters;
       Alcotest.test_case "a fixed record's views and folds" `Quick test_fixed;
+      Alcotest.test_case "accessors" `Quick test_accessors;
       Alcotest.test_case "one module for ml and scanner" `Quick test_one_module;
       Alcotest.test_case "accessors named apart" `Quick test_escaped;
       Alcotest.test_case "a record's clashing names" `Quick test_record_clash;

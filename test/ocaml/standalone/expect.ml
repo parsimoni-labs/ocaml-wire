@@ -27,25 +27,29 @@ let invalid what f =
   | _ -> check (what ^ ": no error") false
   | exception Invalid_argument _ -> ()
 
-(* A record decoded from [good] and encoded again gives back [good], on bytes
-   and on a bigarray; a buffer one byte short is refused. *)
-let round_trip what ~size ~decode ~encode ~big_decode ~big_encode good =
+(* A record decoded from [good] and encoded again gives back [good]; a buffer
+   one byte short is refused. *)
+let round_trip what ~size ~decode ~encode good =
   let buf = bytes_of good in
   let out = Bytes.make size '\000' in
   encode (decode buf 0) out 0;
   check (what ^ ": round trip") (Bytes.equal buf out);
-  let big =
-    Bigarray.Array1.init Bigarray.char Bigarray.c_layout size (Bytes.get buf)
-  in
-  let big_out = Bigarray.Array1.create Bigarray.char Bigarray.c_layout size in
-  big_encode (big_decode big 0) big_out 0;
-  check
-    (what ^ ": bigarray round trip")
-    (Bytes.equal buf (Bytes.init size (fun i -> big_out.{i})));
   parse_error (what ^ ": short") ~at:0
     (Unexpected_eof { expected = size; got = size - 1 })
     (fun () -> decode (Bytes.sub buf 0 (size - 1)) 0);
   invalid (what ^ ": negative offset") (fun () -> decode buf (-1))
+
+(* The same on a bigarray. *)
+let big_round_trip what ~size ~decode ~encode good =
+  let buf = bytes_of good in
+  let big =
+    Bigarray.Array1.init Bigarray.char Bigarray.c_layout size (Bytes.get buf)
+  in
+  let big_out = Bigarray.Array1.create Bigarray.char Bigarray.c_layout size in
+  encode (decode big 0) big_out 0;
+  check
+    (what ^ ": bigarray round trip")
+    (Bytes.equal buf (Bytes.init size (fun i -> big_out.{i})))
 
 (* The generated sources in the current directory name nothing of wire's but
    wire.runtime. *)

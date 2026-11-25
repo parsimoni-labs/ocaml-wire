@@ -37,10 +37,10 @@ let stack_view () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
-  let c = G_ipv4.View.check n (Wire_runtime.Buf.length n) 0 in
-  if G_ipv4.View.ok c then
-    let v = G_ipv4.View.get c in
-    (G_ipv4.view_ttl n v :> int) + G_ipv4.view_src_int n v
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) ~off:0 ~len:size in
+  if G_ipv4.ok c then
+    let v = G_ipv4.get c in
+    Wire_runtime.UInt8.to_int (G_ipv4.ttl n v) + G_ipv4.view_src_int n v
   else -1
 
 let test_stack_view () =
@@ -89,7 +89,7 @@ let stack_write () =
 
 let test_stack_write () = Alcotest.(check bool) "written" true (stack_write ())
 
-(* The bigarray variant takes its buffer [local] too. *)
+(* The module on a bigarray takes its buffer [local] too. *)
 let test_bigstring () =
   let heap = Bigarray.(Array1.create char c_layout size) in
   String.iteri (fun i c -> heap.{i} <- c) packet;
@@ -97,7 +97,7 @@ let test_bigstring () =
   Alcotest.(check int)
     "src"
     (G_ipv4.Get.src_int (Bytes.of_string packet) 0)
-    (G_ipv4.Bigstring.Get.src_int b 0)
+    (G_ipv4_big.Get.src_int b 0)
 
 (* A portable function may call the generated code, as a parallel task does. *)
 let (portable_read @ portable) =
