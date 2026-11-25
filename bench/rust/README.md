@@ -134,14 +134,14 @@ none, and zeroes a struct of the 19 members it reads: the 513 instructions
 per packet between the two rows are the visitor, and the inline-visitor row's 165
 are the validator's own work.
 
-The `fold` and `batch` rows call the scanner's `fold_step` and
-`fold_frames_step`, which call the checksum module `Step` by name. Stock
-OCaml cannot inline a function passed as an argument. When `fold_step` was
-added, on the `fixed64-random` corpus of that time, the stock batch through
+The `fold` and `batch` rows call the module's folds `checksum` and
+`checksum_frames`, which call the checksum visitor (`stack_step.ml`,
+`selected_step.ml`) by name. Stock OCaml cannot inline a function passed
+as an argument. When the fold by name was added, on the `fixed64-random` corpus of that time, the stock batch through
 `fold_frames` and a closure called `valid` through `caml_apply20`,
 allocated a five-word closure per frame and took 31.30 (full outputs) and
 20.18 (selected) ns/packet, against 15.38 and 14.86 by name, with no
 allocation and no call per frame. The stock `decode` row still builds its
-record through `fold`'s closures. `Step` takes the outputs as `int64` and
+record through `fold`'s closures. The visitor takes the outputs as `int64` and
 folds them as `int64`, as the unboxed OxCaml rows fold `int64_u` and the
 Rust rows `u64`.

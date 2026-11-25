@@ -1,29 +1,33 @@
-(* Writes the code generated for the benchmark.
+(* Writes the code generated for the benchmark, for the compiler that builds
+   this generator.
 
-   With [--ocaml] (or [--oxcaml], for the OxCaml target), in the current
-   directory: stack_read.ml, the checksum module [Step] the scanner of
-   [Packet_stack.codec] calls by name, the scanner as the submodule [G_stack]
-   under its interface, then its checksum consumers;
-   selected_read.ml, the same with the scanner handing out only the fields the
-   checksum reads, as [G_selected]; flow_read.ml, the scanner of
-   [Packet_stack.capture] handing out the flow classifier's fields to the
-   consumer [Flow_step], as [G_flow], and the same scanner handing them to
-   [Flow_parse], which folds them into [Flow_sum], as [G_flow_parse];
-   g_capture.ml, the scanner of [Packet_stack.capture] with every output, whose
-   views the check/view row reads; and the record modules of the fixed
-   header codecs of [Headers], g_eth.ml, g_ipv4.ml, g_ipv6.ml, g_tcp.ml and
-   g_udp.ml, with their interfaces and their bridges, g_eth_wire.ml and so
-   on, whose [Global] and [Interpreted] the swap rows read. A scanner shares its consumers' module so that the compiler
-   sees the fold and the consumer it inlines in one unit in every profile, and
-   so checks the batch consumers' [@zero_alloc] where the dev profile hides
-   other modules' code. The batch consumers take the corpus stride, which the
-   harness passes as a literal so it stays a constant after inlining.
+   With [--harness FILE...], the harness around the generated modules, each
+   FILE in the current directory: stack_step.ml and selected_step.ml, the
+   checksum visitors the folds [checksum] of g_stack and g_selected call by
+   name, the first over every output of [Packet_stack.codec], the second over
+   those the checksum reads; stack_read.ml and selected_read.ml, the checksum
+   readers over them; flow_step.ml and flow_parse.ml, the visitors of the
+   folds [classify] and [parse] of g_flow, which hand the flow classifier's
+   fields of [Packet_stack.capture] to [Flow_table], and on OxCaml fold them
+   into [Flow_sum]; flow_read.ml, the entries [classify] and [parse] over
+   them; and g_eth_wire.ml and so on, with their interfaces, the bridges of
+   the modules of the fixed header codecs of [Headers], whose [Global] and
+   [Interpreted] the swap rows read. The batch readers take the corpus
+   stride, which the harness passes as a literal so it stays a constant after
+   inlining.
 
    With [--rust DIR], in [DIR]: the Wire_rust modules of the fixed header
    codecs, eth.rs, ipv4.rs, ipv6.rs, tcp.rs and udp.rs; the scanner Wire_rust
    writes from [Packet_stack.codec], stack.rs; the same scanner handing out
    only the fields the checksum reads, stack_selected.rs; and the scanner of
-   [Packet_stack.capture] handing out the flow classifier's fields, flow.rs. *)
+   [Packet_stack.capture] handing out the flow classifier's fields, flow.rs.
+
+   Otherwise the modules Wire_ocaml writes, as {!Wire_ocaml.main} reads its
+   command line: g_stack and g_selected, the modules of [Packet_stack.codec]
+   with every output and with those the checksum reads; g_flow, that of
+   [Packet_stack.capture] with the flow classifier's; g_capture, that of
+   [Packet_stack.capture] with every output, whose views the check/view row
+   reads; and g_eth, g_ipv4, g_ipv6, g_tcp and g_udp, those of [Headers]. *)
 
 let write file s =
   let oc = open_out_bin file in
@@ -104,10 +108,10 @@ let reader_wrappers ~wide ~batch =
   in
   (first, inside, last)
 
-(* The checksum consumer the scanner calls by name in [fold_step] and
-   [fold_step_frames]: OCaml without flambda never inlines a function passed
-   as an argument. It takes the outputs as [int64] and folds them as such, as
-   the unboxed rows of OxCaml fold [int64_u]. *)
+(* The checksum visitor the fold [checksum] calls by name: OCaml without
+   flambda never inlines a function passed as an argument. It takes the
+   outputs as [int64] and folds them as such, as the unboxed rows of OxCaml
+   fold [int64_u]. *)
 let step ~fields =
   let args =
     List.map
@@ -115,22 +119,25 @@ let step ~fields =
         "~" ^ name ^ if List.mem name checksum_fields then "" else ":_")
       fields
   in
-  "module Step = struct\n\
-   type t = int64\n\n\
+  "type t = int64\n\n\
    external ( + ) : int64 -> int64 -> int64 = \"%int64_add\"\n\
    external ( lxor ) : int64 -> int64 -> int64 = \"%int64_xor\"\n\
    external ( lor ) : int64 -> int64 -> int64 = \"%int64_or\"\n\
    external ( lsl ) : int64 -> int -> int64 = \"%int64_lsl\"\n\n\
-   let[@inline always] invalid base = base\n\
+   let[@inline always] invalid (base : t) = base\n\
    let[@inline always] valid base " ^ String.concat " " args
   ^ " =\nlet contribution = "
   ^ checksum_contribution ~zero:"0L" Fun.id
-  ^ " in\nbase + contribution\nend\n\n"
+  ^ " in\nbase + contribution\n"
 
 let checksum_reader target ~core ~fields name =
   let batch, wide = reader_modes name in
   let first, inside, last = reader_wrappers ~wide ~batch in
-  let annotation = if batch && target = `OxCaml then "[@zero_alloc]" else "" in
+  (* Checked where the fold is inlined, under the bench profile: the dev
+     profile compiles g_stack opaque, so the reader calls it. *)
+  let annotation =
+    if batch && target = `OxCaml then "[@zero_alloc opt]" else ""
+  in
   let base = if wide && not batch then "U.of_int base" else "base" in
   "let[@inline always]" ^ annotation ^ " " ^ name
   ^ (if batch then " ~stride" else "")
@@ -140,8 +147,8 @@ let checksum_reader target ~core ~fields name =
     let call =
       core
       ^
-      if batch then ".fold_step_frames buf off len ~stride"
-      else ".fold_step buf off len"
+      if batch then ".checksum_frames buf off len ~stride"
+      else ".checksum buf off len"
     in
     "Int64.to_int (" ^ call ^ " ~init:(Int64.of_int base))\n"
   else
@@ -224,15 +231,14 @@ let key6 =
    ipv6_udp_present ipv6_udp_src_port ipv6_udp_dst_port)\n\
    ~bytes:(ip6_bytes ipv6_payload_length)"
 
-(* The consumer [name] the scanner calls by name in [fold_step_index], whose
-   accumulator has type [typ] and is [base] in [valid]: [v4 args] and [v6 args]
+(* The visitor of a fold of g_flow, whose accumulator has type [typ] and is [base] in [valid]: [v4 args] and [v6 args]
    are its next value for an IPv4 and an IPv6 packet whose key [args] gives,
    [other] for a packet with no key. With [wide], the key is the [int64]
    values the scanner hands out, as [Flow_sum] folds it; otherwise [int]s, as
    [Flow_table] takes them. [i] and [ip6_bytes] are defined beside [valid],
    not in it: OCaml without flambda inlines no function whose body defines
    one, and an out-of-line [valid] boxes each [int64] it is passed. *)
-let flow_step ?(wide = false) ~name ~typ ~v4 ~v6 ~other () =
+let flow_step ?(wide = false) ~typ ~v4 ~v6 ~other () =
   let ports =
     if wide then
       "if tcp then Int64.logor (Int64.shift_left tsp 16) tdp\n\
@@ -246,25 +252,25 @@ let flow_step ?(wide = false) ~name ~typ ~v4 ~v6 ~other () =
     if wide then "let i x = x\nlet ip6_bytes l = Int64.add 40L l"
     else "let i = Int64.to_int\nlet ip6_bytes l = 40 + Int64.to_int l"
   in
-  "module " ^ name ^ " = struct\ntype t = " ^ typ ^ "\n\n" ^ conversions
+  "type t = " ^ typ ^ "\n\n" ^ conversions
   ^ "\n\n\
-     let[@inline always] invalid base = base\n\n\
+     let[@inline always] invalid (base : t) = base\n\n\
      let[@inline always] ports tcp tsp tdp udp usp udp_ =\n" ^ ports
   ^ "\n\nlet[@inline always] valid base "
   ^ String.concat " " (List.map (fun n -> "~" ^ n) flow_fields)
   ^ " =\nif ipv4_present then " ^ v4 key4 ^ "\nelse if ipv6_present then "
-  ^ v6 key6 ^ "\nelse " ^ other ^ "\nend\n\n"
+  ^ v6 key6 ^ "\nelse " ^ other ^ "\n"
 
-(* The consumer [name] that hands each key to [sink]. *)
-let sink_step ~name sink =
-  flow_step ~name ~typ:"int"
+(* The visitor that hands each key to [sink]. *)
+let sink_step sink =
+  flow_step ~typ:"int"
     ~v4:(fun k -> "(" ^ sink ^ ".add4 " ^ k ^ ";\nbase)")
     ~v6:(fun k -> "(" ^ sink ^ ".add6 " ^ k ^ ";\nbase)")
     ~other:"base" ()
 
-let table_step = sink_step ~name:"Flow_step" "Flow_table"
+let table_step = sink_step "Flow_table"
 
-(* The consumer of the rows that time the parse alone and its entry, which
+(* The visitor of the rows that time the parse alone and its entry, which
    calls the fold [fold]. On OxCaml it computes each key on the [int64] values
    the scanner hands out, with [Flow_sum]'s key functions, and folds the keys
    in its accumulator, an unboxed pair of the number of keys and their sum,
@@ -277,14 +283,12 @@ let parse_step target =
       "let #(keys, sum) = base in\n#(keys + 1, sum + Int64.to_int (Flow_sum."
       ^ f ^ " " ^ k ^ "))"
     in
-    ( flow_step ~wide:true ~name:"Flow_parse" ~typ:"#(int * int)"
-        ~v4:(next "key4") ~v6:(next "key6") ~other:"base" (),
+    ( flow_step ~wide:true ~typ:"#(int * int)" ~v4:(next "key4")
+        ~v6:(next "key6") ~other:"base" (),
       fun fold ->
         "let #(keys, sum) = " ^ fold
         ^ " ~init:#(0, 0) in\nFlow_sum.add_pass ~keys ~sum" )
-  else
-    ( sink_step ~name:"Flow_parse" "Flow_sum",
-      fun fold -> "ignore (" ^ fold ^ " ~init:0 : int)" )
+  else (sink_step "Flow_sum", fun fold -> "ignore (" ^ fold ^ " ~init:0 : int)")
 
 (* The fixed header codecs, each written by [g name codec]. *)
 type g = { g : 'r. string -> 'r Wire.Codec.t -> unit }
@@ -296,65 +300,45 @@ let headers { g } =
   g "tcp" Headers.tcp;
   g "udp" Headers.udp
 
+let target : Wire_ocaml.target =
+  match Sys.ocaml_release.extra with Some (_, "ox") -> `OxCaml | _ -> `OCaml
+
+(* The harness file [file]. *)
+let harness file =
+  let all = Wire_ocaml.outputs Packet_stack.codec in
+  let selected = List.filter (fun (n, _) -> List.mem n checksum_fields) all in
+  let entry name body = "let " ^ name ^ " buf offs lens =\n" ^ body ^ "\n\n" in
+  let parse_visitor, parse = parse_step target in
+  let bridge name c =
+    let codec = "Headers." ^ name and core = "G_" ^ name in
+    if Filename.check_suffix file ".mli" then
+      Wire_ocaml.bridge_mli ~record:codec ~codec ~core c
+    else Wire_ocaml.bridge ~record:codec ~codec ~core c
+  in
+  let text =
+    match Filename.remove_extension (Filename.basename file) with
+    | "stack_step" -> step ~fields:all
+    | "selected_step" -> step ~fields:selected
+    | "stack_read" -> stack_reader target ~core:"G_stack" ~fields:all
+    | "selected_read" -> stack_reader target ~core:"G_selected" ~fields:selected
+    | "flow_step" -> table_step
+    | "flow_parse" -> parse_visitor
+    | "flow_read" ->
+        entry "classify"
+          "ignore (G_flow.classify_index buf ~offs ~lens ~init:0 : int)"
+        ^ entry "parse" (parse "G_flow.parse_index buf ~offs ~lens")
+    | "g_eth_wire" -> bridge "eth" Headers.eth
+    | "g_ipv4_wire" -> bridge "ipv4" Headers.ipv4
+    | "g_ipv6_wire" -> bridge "ipv6" Headers.ipv6
+    | "g_tcp_wire" -> bridge "tcp" Headers.tcp
+    | "g_udp_wire" -> bridge "udp" Headers.udp
+    | _ -> failwith ("no harness file " ^ file)
+  in
+  write file text
+
 let () =
   match Array.to_list Sys.argv with
-  | [ _; (("--ocaml" | "--oxcaml") as t) ] ->
-      let target = if t = "--oxcaml" then `OxCaml else `OCaml in
-      let all = Wire_ocaml.scanner_fields Packet_stack.codec in
-      let selected =
-        List.filter (fun (n, _) -> List.mem n checksum_fields) all
-      in
-      let read file ~core ~fields ?selected () =
-        let codec = "Packet_stack.codec" and c = Packet_stack.codec in
-        let ml =
-          Wire_ocaml.scanner ~target ?fields:selected ~step:"Step" ~codec c
-        and mli =
-          Wire_ocaml.scanner_mli ~target ?fields:selected ~step:"Step" ~codec c
-        in
-        write file
-          (step ~fields ^ "module " ^ core ^ " : sig\n" ^ mli
-         ^ "\nend = struct\n" ^ ml ^ "\nend\n\n"
-          ^ stack_reader target ~core ~fields)
-      in
-      read "stack_read.ml" ~core:"G_stack" ~fields:all ();
-      read "selected_read.ml" ~core:"G_selected" ~fields:selected
-        ~selected:checksum_fields ();
-      (let codec = "Packet_stack.capture" and c = Packet_stack.capture in
-       let fields = flow_fields in
-       let scanner ~core ~step ~consumer ~entry body =
-         consumer ^ "module " ^ core ^ " : sig\n"
-         ^ Wire_ocaml.scanner_mli ~target ~fields ~step ~codec c
-         ^ "\nend = struct\n"
-         ^ Wire_ocaml.scanner ~target ~fields ~step ~codec c
-         ^ "\nend\n\nlet " ^ entry ^ " buf offs lens =\n"
-         ^ body (core ^ ".fold_step_index buf ~offs ~lens")
-         ^ "\n\n"
-       in
-       let consumer, parse = parse_step target in
-       write "flow_read.ml"
-         (scanner ~core:"G_flow" ~step:"Flow_step" ~consumer:table_step
-            ~entry:"classify" (fun fold ->
-              "ignore (" ^ fold ^ " ~init:0 : int)")
-         ^ scanner ~core:"G_flow_parse" ~step:"Flow_parse" ~consumer
-             ~entry:"parse" parse));
-      (let codec = "Packet_stack.capture" and c = Packet_stack.capture in
-       write "g_capture.ml" (Wire_ocaml.scanner ~target ~codec c);
-       write "g_capture.mli" (Wire_ocaml.scanner_mli ~target ~codec c));
-      headers
-        {
-          g =
-            (fun name c ->
-              let codec = "Headers." ^ name in
-              write ("g_" ^ name ^ ".ml") (Wire_ocaml.ml ~target ~codec c);
-              write ("g_" ^ name ^ ".mli") (Wire_ocaml.mli ~target ~codec c);
-              let core = "G_" ^ name and record = codec in
-              write
-                ("g_" ^ name ^ "_wire.ml")
-                (Wire_ocaml.bridge ~record ~codec ~core c);
-              write
-                ("g_" ^ name ^ "_wire.mli")
-                (Wire_ocaml.bridge_mli ~record ~codec ~core c));
-        }
+  | _ :: "--harness" :: files -> List.iter harness files
   | [ _; "--rust"; dir ] ->
       let codec = "Packet_stack.codec" in
       write
@@ -376,5 +360,27 @@ let () =
                 (Wire_rust.rs ~codec:("Headers." ^ name) c));
         }
   | _ ->
-      prerr_endline "usage: gen.exe (--ocaml | --oxcaml | --rust DIR)";
-      exit 2
+      let checksum o =
+        Wire_ocaml.[ fold ?outputs:o "fold"; fold ?outputs:o "checksum" ]
+      and flow =
+        Wire_ocaml.
+          [
+            fold ~outputs:flow_fields "classify";
+            fold ~outputs:flow_fields "parse";
+          ]
+      in
+      Wire_ocaml.(
+        main
+          [
+            v ~name:"g_stack" ~folds:(checksum None) Packet_stack.codec;
+            v ~name:"g_selected"
+              ~folds:(checksum (Some checksum_fields))
+              Packet_stack.codec;
+            v ~name:"g_flow" ~folds:flow Packet_stack.capture;
+            v ~name:"g_capture" Packet_stack.capture;
+            v ~name:"g_eth" Headers.eth;
+            v ~name:"g_ipv4" Headers.ipv4;
+            v ~name:"g_ipv6" Headers.ipv6;
+            v ~name:"g_tcp" Headers.tcp;
+            v ~name:"g_udp" Headers.udp;
+          ])

@@ -15,69 +15,83 @@
  (modules gen)
  (libraries headers net wire wire.ocaml wire.rust))
 
-(rule
- (enabled_if
-  (<> %{ocaml-config:ox} true))
- (targets
-  stack_read.ml
-  selected_read.ml
-  flow_read.ml
-  g_capture.ml
-  g_capture.mli
-  g_eth.ml
-  g_eth.mli
-  g_eth_wire.ml
-  g_eth_wire.mli
-  g_ipv4.ml
-  g_ipv4.mli
-  g_ipv4_wire.ml
-  g_ipv4_wire.mli
-  g_ipv6.ml
-  g_ipv6.mli
-  g_ipv6_wire.ml
-  g_ipv6_wire.mli
-  g_tcp.ml
-  g_tcp.mli
-  g_tcp_wire.ml
-  g_tcp_wire.mli
-  g_udp.ml
-  g_udp.mli
-  g_udp_wire.ml
-  g_udp_wire.mli)
- (action
-  (run ./gen.exe --ocaml)))
+; The harness around the generated modules: the visitors their folds call by
+; name, the readers over those folds and the bridges of the header modules.
 
 (rule
- (enabled_if
-  (= %{ocaml-config:ox} true))
  (targets
+  stack_step.ml
+  selected_step.ml
   stack_read.ml
   selected_read.ml
+  flow_step.ml
+  flow_parse.ml
   flow_read.ml
-  g_capture.ml
-  g_capture.mli
-  g_eth.ml
-  g_eth.mli
   g_eth_wire.ml
   g_eth_wire.mli
-  g_ipv4.ml
-  g_ipv4.mli
   g_ipv4_wire.ml
   g_ipv4_wire.mli
-  g_ipv6.ml
-  g_ipv6.mli
   g_ipv6_wire.ml
   g_ipv6_wire.mli
-  g_tcp.ml
-  g_tcp.mli
   g_tcp_wire.ml
   g_tcp_wire.mli
-  g_udp.ml
-  g_udp.mli
   g_udp_wire.ml
   g_udp_wire.mli)
  (action
-  (run ./gen.exe --oxcaml)))
+  (run ./gen.exe --harness %{targets})))
+
+; The generated modules, one rule each, for the compiler that builds them.
+
+(rule
+ (targets g_stack.ml g_stack.mli)
+ (action
+  (run ./gen.exe %{targets} --visitor checksum=%{dep:stack_step.ml})))
+
+(rule
+ (targets g_selected.ml g_selected.mli)
+ (action
+  (run ./gen.exe %{targets} --visitor checksum=%{dep:selected_step.ml})))
+
+(rule
+ (targets g_flow.ml g_flow.mli)
+ (action
+  (run
+   ./gen.exe
+   %{targets}
+   --visitor
+   classify=%{dep:flow_step.ml}
+   --visitor
+   parse=%{dep:flow_parse.ml})))
+
+(rule
+ (targets g_capture.ml g_capture.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_eth.ml g_eth.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_ipv4.ml g_ipv4.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_ipv6.ml g_ipv6.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_tcp.ml g_tcp.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_udp.ml g_udp.mli)
+ (action
+  (run ./gen.exe %{targets})))
 
 ;; The integers Flow_sum computes the flow key on: int64 on OxCaml, which keeps
 ;; it unboxed as Rust keeps its u64, and int on OCaml, where an int64 handed
@@ -170,6 +184,10 @@
  (name bench)
  (modules
   bench
+  stack_step
+  selected_step
+  g_stack
+  g_selected
   stack_read
   selected_read
   flow_table
@@ -179,6 +197,9 @@
   flow_rows
   flow_rows_parse
   flow_rows_keys
+  flow_step
+  flow_parse
+  g_flow
   flow_read
   flow_mix
   swap

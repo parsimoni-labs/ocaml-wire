@@ -7,7 +7,10 @@
 
 ; The flags the [bench] profile of dune-workspace adds to every unit, for the
 ; compiler that builds: what bench/flags-sweep.sh picks for OCaml, OCaml with
-; flambda and OxCaml (bench/README.md, Compiler flags).
+; flambda and OxCaml (bench/README.md, Compiler flags). On OxCaml the profile
+; also checks [@zero_alloc opt], which the readers of bench/rust carry: they
+; allocate nothing where the folds they call are inlined, which the dev
+; profile, compiling each unit opaque, does not do.
 
 (rule
  (enabled_if
@@ -33,7 +36,7 @@
  (action
   (with-stdout-to
    flags.sexp
-   (echo "(-O4)\n"))))
+   (echo "(-O4 -zero-alloc-check all)\n"))))
 
 ; [Ox.v] tells the rows measured in their own process which compiler built
 ; them, and [Ox.flambda] whether an OCaml compiler has flambda.

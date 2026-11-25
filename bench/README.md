@@ -590,7 +590,7 @@ passes and not timed; the report fails unless every row agrees. The default pack
 |---|---|---|
 | `Wire.Codec capture decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of the pcap record around the frame, its `incl_len` bounding `Packet_stack.capture`, then the nested values |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of `headers.ml`, IPv6 included | `check b len off`/`ok`/`get` per fixed header, an accessor `<field> b v` per field; the harness links the layers and checks each header ends inside the capture |
-| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_index_step` over the frames, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
+| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `classify_index` over the frames, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
 | `wire.ocaml check/view, accessors` | the views the generated OCaml scanner of `Packet_stack.capture` writes | `check` per frame, then the accessor of each field, each sub-record (`ipv4`, `ipv6`, `tcp`, `udp`) entered through the accessor of its field, which tests its presence and places it again |
 | `wire.rust scanner, selected outputs` | generated Rust scanner of `Packet_stack.capture` | `scan` per frame |
 | `wire.rust, linked headers` | generated Rust of `headers.ml` | `Valid::at` per header, then a read per field; the harness links the layers |
