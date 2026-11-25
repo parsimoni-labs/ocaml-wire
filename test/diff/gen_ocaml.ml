@@ -278,6 +278,7 @@ let rec view_zeros ~fill (view : Wire_ocaml.view) =
           (function
             | Wire_ocaml.Int { output; _ } | Bool { output; _ } ->
                 Fmt.str "[ (%S, %s) ]" output fill
+            | Bytes _ -> "[]"
             | Record { presence; view; _ } ->
                 (match presence with
                   | Some p -> Fmt.str "[ (%S, %s) ]" p fill ^ " @ "
@@ -298,6 +299,7 @@ and view_member ~m ~path = function
       Fmt.str "[ (%S, %s (%s.%s bb v)) ]" output
         (match carrier with Some m -> m ^ ".to_int" | None -> "Fun.id")
         path name
+  | Bytes _ -> "[]"
   | Bool { name; output } ->
       Fmt.str "[ (%S, Bool.to_int (%s.%s bb v)) ]" output path name
   | Record { name; presence; view } ->
@@ -330,9 +332,44 @@ let pp_view_backend ppf ~m ~codec c =
     fields
     (pp_fold ~m ~unboxed:false)
     fields m m
-    (if (Wire_ocaml.scanner_views c).members = [] then "_" else "v")
+    (if
+       List.for_all
+         (function Wire_ocaml.Bytes _ -> true | _ -> false)
+         (Wire_ocaml.scanner_views c).members
+     then "_"
+     else "v")
     m
     (view_outputs ~m ~path:m (Wire_ocaml.scanner_views c))
+
+(* Whether the module holds a fixed record's members, which the record
+   glue reads; without them its values go through the walk. *)
+let has_record src =
+  let sub = "module Valid" in
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length src
+    && (String.equal (String.sub src i n) sub || go (i + 1))
+  in
+  go 0
+
+(* The backend of the values of the module [m], when its codec's record holds
+   more than named scalars at constant offsets. *)
+let pp_values_backend ppf ~m ~codec c =
+  if not (has_record (Wire_ocaml.scanner ~codec:"c" c)) then begin
+    let fields = Wire_ocaml.scanner_fields c in
+    let wrap, codec = codec in
+    Fmt.pf ppf
+      "%s Diff_ocaml.values_scan ~name:%S ~codec:%s ~fields:[%a] ~full:%a { \
+       Diff_ocaml.decode = (fun b o -> match %s.decode b o with Error e -> \
+       Error e | Ok r -> let out = Bytes.create (%s.size r) in %s.encode r out \
+       0; Ok (Bytes.to_string out)); validate = %s.validate; is_valid = \
+       %s.is_valid });@\n"
+      wrap (m ^ " values") codec
+      Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
+      fields
+      (pp_fold ~m ~unboxed:false)
+      fields m m m m m
+  end
 
 (* The backends over [c]: each module [(name, target, selected)], generated
    inside the function under its interface, after the [Step] it calls, and
@@ -365,7 +402,10 @@ let pp_scanners ppf ~label ~codec c modules =
       pp_backend ppf ~m ~unboxed:false fields;
       pp_step_backend ppf ~m fields;
       if t = `OxCaml then pp_backend ppf ~m ~unboxed:true fields;
-      if selected = None then pp_view_backend ppf ~m ~codec c)
+      if selected = None then begin
+        pp_view_backend ppf ~m ~codec c;
+        pp_values_backend ppf ~m ~codec c
+      end)
     modules;
   Fmt.pf ppf "]@\n"
 
@@ -451,9 +491,13 @@ let cases () =
       (fun (label, Fuzz_gen.Pack g) ->
         let c = Fuzz_gen.codec g in
         match Wire_ocaml.ml ~target ~codec:"codec" c with
-        | src ->
+        | src when has_record src ->
             let intf = Wire_ocaml.mli ~target ~codec:"codec" c in
             Left (label, Fuzz_gen.Pack g, (src, intf))
+        | _ when Diff_ocaml.specialisable c ->
+            Right
+              (label, "a fixed record whose members would define a name twice")
+        | _ -> Right (label, "no fixed record: its values go through the walk")
         | exception Invalid_argument msg -> Right (label, msg))
       Diff_ocaml.codecs
   in

@@ -20,4 +20,12 @@
  (modules test stack_read)
  (enabled_if
   (= %{env:BUILD_HARDCAML=} "1"))
- (libraries hw_bench hardcaml wire wire.runtime net hardware_test_io fmt))
+ (libraries
+  hw_bench
+  hardcaml
+  wire
+  wire.runtime
+  bytesrw
+  net
+  hardware_test_io
+  fmt))

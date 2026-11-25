@@ -364,7 +364,9 @@ let report name refused =
         (k, c + 1) :: List.remove_assoc k acc)
       [] sampled_refused
   in
-  Fmt.epr "%s: %d of the %d sampled codecs specialised, %d refused (%d%%)@."
+  Fmt.epr
+    "%s: %d of the %d sampled codecs have a fixed record's members, %d not \
+     (%d%%)@."
     name (total - n) total n
     (if total = 0 then 0 else 100 * n / total);
   List.iter (fun (k, c) -> Fmt.epr "%s:   %d %s@." name c k) (List.rev tally);
@@ -467,6 +469,84 @@ let scan_frame buf off len =
   let n = Bytes.length buf in
   if off < 0 || len < 0 || off > n || len > n - off then None
   else Some (Bytes.sub buf off len)
+
+type values = {
+  decode : bytes -> int -> (string, Wire.parse_error) result;
+  validate : bytes -> int -> (unit, Wire.parse_error) result;
+  is_valid : bytes -> int -> bool;
+}
+
+let pp_result pp_ok =
+  Fmt.result ~ok:pp_ok ~error:(fun ppf e ->
+      Fmt.pf ppf "error %a" Wire.pp_parse_error e)
+
+(* The value of a frame as the codec decodes it, written back by its
+   encoder, or its error. *)
+let codec_value codec frame =
+  match Wire.Codec.decode codec frame 0 with
+  | Error e -> Error e
+  | Ok x ->
+      (* [Codec.size_of_value] takes no size a field gives a region, so the
+         codec's record is measured where it encoded it. *)
+      let out = Bytes.make (Bytes.length frame) '\000' in
+      Wire.Codec.encode codec x out 0;
+      Ok (Bytes.sub_string out 0 (Wire.Codec.wire_size_at codec out 0))
+
+let same_result ok a b = Result.equal ~ok ~error:Wire.equal_parse_error a b
+
+(* The module's record of a frame against the codec's: the same bytes written
+   back, or the same error. The codec cannot encode a record whose region a
+   field sizes ([Codec.size_of_value] asks for an env): the module's bytes
+   must then decode with the codec, to as many bytes as the frame's. *)
+let check_decoded ~name codec frame got =
+  match (codec_value codec frame, got) with
+  | exception Invalid_argument _ -> (
+      match got with
+      | Error _ ->
+          Alcobar.failf "%s: the module refuses %S" name (Bytes.to_string frame)
+      | Ok s ->
+          let n = Wire.Codec.wire_size_at codec frame 0 in
+          if
+            String.length s <> n
+            || Result.is_error (Wire.Codec.decode codec (Bytes.of_string s) 0)
+          then
+            Alcobar.failf "%s: on %S the module writes back %S" name
+              (Bytes.to_string frame) s)
+  | want, got ->
+      if not (same_result String.equal want got) then
+        Alcobar.failf "%s: on %S the codec decodes %a, the module %a" name
+          (Bytes.to_string frame)
+          (pp_result Fmt.Dump.string)
+          want
+          (pp_result Fmt.Dump.string)
+          got
+
+(* The values of a module on a frame's bytes alone, against the codec's:
+   [decode] gives the record the codec gives, written back by the module's
+   encoder in the bytes it measures, or the codec's error; [validate] and
+   [is_valid] agree with the codec's [validate]. *)
+let check_values ~name codec v frame =
+  check_decoded ~name codec frame (v.decode frame 0);
+  let want = Wire.Codec.validate codec frame 0 and got = v.validate frame 0 in
+  if not (same_result (fun () () -> true) want got) then
+    Alcobar.failf "%s: on %S the codec validates %a, the module %a" name
+      (Bytes.to_string frame) (pp_result Fmt.nop) want (pp_result Fmt.nop) got;
+  if v.is_valid frame 0 <> Result.is_ok want then
+    Alcobar.failf "%s: is_valid disagrees with validate on %S" name
+      (Bytes.to_string frame)
+
+let values_scan ~name ~codec ~fields ~full v =
+  let scan buf off len =
+    Option.iter (check_values ~name codec v) (scan_frame buf off len);
+    full buf off len
+  in
+  {
+    scan_name = name;
+    scan_fields = fields;
+    scan;
+    scan_batch = None;
+    scan_index = None;
+  }
 
 (* The views, checked on each frame against [Codec.View.check] on the frame's
    bytes alone and against the scanner's own outputs, every one of them. *)

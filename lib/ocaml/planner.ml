@@ -331,6 +331,7 @@ type st = {
   mutable outs : output list;
   mutable ranges : (int * int) Smap.t;
   mutable subs : sub list option;
+  mutable spans : (string list * node) list;
 }
 
 let fresh st prefix name =
@@ -515,8 +516,13 @@ and composite : type a.
         | [] -> acc
       in
       [ Gate (present, p, added [] st.outs, body) ]
-  | T.Byte_slice { size } -> [ Span (bind env size) ]
-  | T.Byte_array { size } -> [ Span (bind env size) ]
+  | T.Byte_slice { size } | T.Byte_array { size } ->
+      let span = Span (bind env size) in
+      (* A plan that keeps records apart names the span of each field. *)
+      (match (st.subs, path) with
+      | Some _, Some p -> st.spans <- (p, span) :: st.spans
+      | _ -> ());
+      [ span ]
   | T.Unit -> []
   | T.Optional_or _ -> fail_unsupported "an optional field with a default"
   | T.Repeat _ -> fail_unsupported "a repeated field"
@@ -579,7 +585,9 @@ let rec plan_wide ranges nodes =
     nodes
 
 let plan_with ?(maps = no_maps) ~subs (s : T.struct_) =
-  let st = { maps; count = 0; outs = []; ranges = Smap.empty; subs } in
+  let st =
+    { maps; count = 0; outs = []; ranges = Smap.empty; subs; spans = [] }
+  in
   let nodes = fuse (record st (Some []) s) in
   let outputs = List.rev st.outs in
   ( {
@@ -589,9 +597,13 @@ let plan_with ?(maps = no_maps) ~subs (s : T.struct_) =
       ranges = st.ranges;
       wide = plan_wide st.ranges nodes;
     },
-    List.rev (Option.value ~default:[] st.subs) )
+    List.rev (Option.value ~default:[] st.subs),
+    List.rev st.spans )
 
-let plan_of ?maps s = fst (plan_with ?maps ~subs:None s)
+let plan_of ?maps s =
+  let plan, _, _ = plan_with ?maps ~subs:None s in
+  plan
+
 let plan_apart s = plan_with ~subs:(Some []) s
 
 let rec fields_of nodes =

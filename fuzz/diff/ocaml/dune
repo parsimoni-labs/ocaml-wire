@@ -35,7 +35,7 @@
   ocaml_index_13
   ocaml_index_14
   ocaml_index_15)
- (libraries wire wire.runtime fuzz_gen diff_codecs diff_ocaml fmt))
+ (libraries wire wire.runtime bytesrw fuzz_gen diff_codecs diff_ocaml fmt))
 
 (rule
  (targets

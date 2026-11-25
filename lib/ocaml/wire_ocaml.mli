@@ -14,11 +14,13 @@
     the like, which are {!Wire.UInt8.t} and the like where [wire] is linked, and
     it raises [Wire_runtime.Errors.Parse_error], which is {!Wire.Parse_error},
     with the value the codec raises, and the codec's [Invalid_argument]
-    messages. The one exception is a module generated with [~maps]: a map's
-    functions are a [Wire] value, so that module links [wire]. The module
-    carries the digest of its codec's shape; {!bridge} writes a module that
-    checks it against the codec when it loads, for a program that links [wire]
-    anyway.
+    messages. The exceptions are a module generated with [~maps]: a map's
+    functions are a [Wire] value, so that module links [wire]; and a module
+    whose codec holds a byte slice, which it hands out as a
+    [Bytesrw.Bytes.Slice.t], as the codec does, and so links [bytesrw]. The
+    module carries the digest of its codec's shape; {!bridge} writes a module
+    that checks it against the codec when it loads, for a program that links
+    [wire] anyway.
 
     An expression in a constraint or a [where] clause that can leave the native
     int is computed on 64 bits, as unsigned integers, as the codec and 3D
@@ -111,8 +113,23 @@ val ml :
     returns. It defaults to a generated record, which a codec with a map field
     cannot use.
 
-    It is the one module of [c]: without [maps], it also holds the folds, the
-    check and the views {!scanner} writes, with every output.
+    It is the one module of [c], whatever its shape: without [maps], it also
+    holds the folds, the check and the views {!scanner} writes, with every
+    output. A codec that is not a record of named scalars at constant offsets (a
+    field of variable size, an optional field, a record a field holds, a sized
+    region, an anonymous field) has no members of a fixed record; its module
+    holds, beside the views, a record type [t] for each record of the codec (an
+    optional field an option, a field of bytes a slice of the buffer or a
+    string, a record a field holds its module's [t]), [min_size],
+    [decode buf off] and [decode_exn], which check the record to the end of
+    [buf] as {!scanner}'s [check] does and then read each field through its
+    accessor, [validate], [validate_exn] and [is_valid], [encode r buf off],
+    which refuses with [Invalid_argument] a record whose values break a size, a
+    presence or a check, and [size r], the bytes [encode] writes. Where the
+    check fails, [decode] and [validate] answer the codec's error: they walk the
+    record as the codec does, its checks of the fields at constant offsets
+    first, then its fixed bytes, then each field in order, naming the field the
+    codec names. Bad input never makes them raise.
 
     A field under a {!Wire.map} is specialised when [maps] names the map. The
     generated module calls the map's functions by its path; {!bridge} checks
@@ -130,12 +147,14 @@ val ml :
     runtime's [Vec], which exists on OxCaml for arm64 (NEON) and amd64 (SSE)
     only.
 
-    Raises [Invalid_argument], naming the field and the reason, for a codec it
-    cannot specialise: a variable size, parameters, actions, or a map [maps]
-    does not name; for [~simd:true] with the [`OCaml] target; and naming both
-    fields when two of them would define the same OCaml name ({!ident}), or one
-    of them a getter that would shadow a name the getters call, such as
-    [Get.cast]. *)
+    Raises [Invalid_argument], naming the field and the reason, for a codec no
+    part of the module covers: parameters, actions, a field of a type the walk
+    does not read (an integer of more than 32 bits, a repetition, a tagged
+    union), or a map [maps] does not name; for a codec of variable size with
+    [~make] or [~maps], which only a fixed record takes; for [~simd:true] with
+    the [`OCaml] target; and naming both fields when two of them would define
+    the same OCaml name ({!ident}), or one of them a getter that would shadow a
+    name the getters call, such as [Get.cast]. *)
 
 val mli :
   ?target:target ->
@@ -326,6 +345,9 @@ and view_member =
   | Record of { name : string; presence : string option; view : view }
       (** A field that holds a record, with the output of its presence when it
           is optional. *)
+  | Bytes of { name : string; slice : bool }
+      (** A named field of bytes, which no fold hands out: a
+          [Bytesrw.Bytes.Slice.t] when [slice], a [string] otherwise. *)
 
 val scanner_views : 'r Wire.Codec.t -> view
 (** [scanner_views c] is the views {!scanner} writes for [c]. Raises

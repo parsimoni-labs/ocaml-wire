@@ -459,10 +459,13 @@ let test_refused () =
           true (contains m "Len")
   in
   refused ~maps:[] "an unnamed map";
-  (match Wire_ocaml.ml ~codec:"Schemas.variable" Schemas.variable with
-  | _ -> Alcotest.fail "a variable-size codec was generated"
-  | exception Invalid_argument m ->
-      Alcotest.(check bool) "names the field" true (contains m "Rest"));
+  (* A codec of variable size is written through the walk, its field of
+     bytes an accessor; a field no part of the module can read is refused,
+     naming it. *)
+  let src = Wire_ocaml.ml ~codec:"Schemas.variable" Schemas.variable in
+  Alcotest.(check bool)
+    "a variable-size codec: its field of bytes" true
+    (contains src "let[@inline always] rest ");
   let n = Field.v "n" uint8 in
   let decorated name field =
     let c =
@@ -479,7 +482,16 @@ let test_refused () =
   decorated "an optional field with a default"
     (Field.optional_or "xs"
        ~present:Expr.(Field.ref n <> int 0)
-       ~default:UInt8.zero uint8)
+       ~default:UInt8.zero uint8);
+  let wide =
+    Codec.v "Wide"
+      (fun n big -> (n, big))
+      Codec.[ Field.v "N" uint8 $ fst; Field.v "Big" uint64be $ snd ]
+  in
+  match Wire_ocaml.ml ~codec:"c" wide with
+  | _ -> Alcotest.fail "a 64-bit field was generated"
+  | exception Invalid_argument m ->
+      Alcotest.(check bool) "names the field" true (contains m "Big")
 
 (* Field names that spell one OCaml name twice, once lower-cased, escaped or
    suffixed, are refused naming both fields, as is a name the generated module
@@ -1323,10 +1335,13 @@ let nested_budget target n =
 
 (* The scanner's text before its views, and its views, which start with the
    type of a view. A level of [gated] or [nested] costs the views a module
-   of some 62 lines and 440 words, on either target: its types, [ok], [get],
+   of some 133 lines and 860 words, on either target: its types, [ok], [get],
    an accessor per field, each of which tests the presence again and places
    the field after the optional one, a setter per field at a constant offset,
-   and the function that finds where the record ends. *)
+   the function that finds where the record ends, and its values: the record
+   type and its printer, [of_view], [encode_at], [size], and the checks and
+   the walk that find the codec's error, some 70 lines and 420 words of
+   these. *)
 let scan_and_views src =
   let marker = "type 'b view = int" in
   let n = String.length marker in
@@ -1338,7 +1353,7 @@ let scan_and_views src =
   let i = find 0 in
   (String.sub src 0 i, String.sub src i (String.length src - i))
 
-let views_budget n = ((65 * n) + 40, (460 * n) + 300)
+let views_budget n = ((140 * n) + 60, (900 * n) + 400)
 
 let test_size () =
   List.iter
@@ -1453,8 +1468,10 @@ let test_scanner_refusals () =
       Wire_ocaml.scanner ~codec:"c" (pair "a_b" "a_B"));
   refused "an unknown output" (fun () ->
       Wire_ocaml.scanner ~fields:[ "c" ] ~codec:"c" (pair "a" "b"));
-  refused "a structured codec through the record module" (fun () ->
-      Wire_ocaml.ml ~codec:"c" Schemas.sized);
+  Alcotest.(check string)
+    "a structured codec through ml"
+    (Wire_ocaml.scanner ~codec:"c" Schemas.sized)
+    (Wire_ocaml.ml ~codec:"c" Schemas.sized);
   Alcotest.(check (list (pair string bool)))
     "outputs"
     [ ("n", false); ("body_present", true); ("tail", false) ]

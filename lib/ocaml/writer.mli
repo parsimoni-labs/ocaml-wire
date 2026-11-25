@@ -8,8 +8,9 @@ open Planner
 
 type target = [ `OCaml | `OxCaml ]
 
-type require = [ `Record | `Walk ]
-(** The part a caller needs: the fixed record's members, or the walk's folds. *)
+type require = [ `Record | `Walk | `Any ]
+(** The part a caller needs: the fixed record's members, the walk's folds, or
+    either. *)
 
 type t
 (** The module of a codec. *)

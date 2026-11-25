@@ -87,4 +87,4 @@
 (library
  (name stack)
  (modules stack)
- (libraries wire.runtime))
+ (libraries wire.runtime bytesrw))

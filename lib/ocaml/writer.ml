@@ -10,7 +10,7 @@ open Record_module
    members a fixed record of named scalars adds ([Record_module]). *)
 
 type target = [ `OCaml | `OxCaml ]
-type require = [ `Record | `Walk ]
+type require = [ `Record | `Walk | `Any ]
 
 type walk = {
   plan : plan;
@@ -74,11 +74,11 @@ let clash ~codec names =
 
 (* A record whose members would define a name twice has none, unless they
    are what the caller needs; a map needs a constructor the caller names. *)
-let checked_record ~codec ~require ~make record =
+let checked_record ~codec ~needed ~make record =
   let record =
     match record with
     | Error _ -> None
-    | Ok r when require = `Record ->
+    | Ok r when needed ->
         clash ~codec (record_names r);
         Some r
     | Ok r -> if Names.clash (record_names r) = None then Some r else None
@@ -131,8 +131,16 @@ let v ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ?fields ?step
   let walk = walk_part ~maps c in
   (match (require, record, walk) with
   | `Record, Error reason, _ | `Walk, _, Error reason -> refuse ~codec reason
+  | `Any, Error _, Error reason -> refuse ~codec reason
   | _ -> ());
-  let record = checked_record ~codec ~require ~make record in
+  (* The record's members are needed where the caller asks for them, and
+     for any module of a fixed record of named scalars but the walk's. *)
+  let needed =
+    match (require, record) with
+    | `Record, _ | `Any, Ok _ -> true
+    | `Walk, _ | `Any, Error _ -> false
+  in
+  let record = checked_record ~codec ~needed ~make record in
   if simd && target <> `OxCaml then
     refuse ~codec "~simd needs the OxCaml target";
   let walk = checked_walk ~codec ~record ?fields ?step c walk in
@@ -194,7 +202,24 @@ let body ?decide t =
           Scan_module.walks ?decide ~target:t.target ~selected:w.selected
             ?step:w.step ~taken w.plan
         in
-        let views, mask32 = View_module.ml ~target:t.target w.views in
+        (* Without a record's members, the module decodes and encodes the
+           codec's values through its views. *)
+        let values =
+          if Option.is_some t.record then None
+          else
+            Some
+              (fun (r : View_module.record) ->
+                text (fun ppf ->
+                    if r.module_name = None then
+                      Value_module.ml_root ppf w.views r
+                    else Value_module.ml_record ppf w.views r))
+        in
+        let views, mask32 = View_module.ml ?values ~target:t.target w.views in
+        let views =
+          if Option.is_some values then
+            Value_module.helpers ~uses:(uses views) ^ views
+          else views
+        in
         (walk, Scan_module.without_dead_bindings views, mask32)
   in
   (record ^ walk, views, views_mask32)
@@ -250,7 +275,16 @@ let mli t =
         (fun w ->
           Interface.scan_members ppf ~target:t.target ~selected:w.selected
             ~step:w.step;
-          View_module.mli ppf ~target:t.target w.views)
+          let values =
+            if Option.is_some t.record then None
+            else
+              Some
+                (fun ppf (r : View_module.record) ->
+                  if r.module_name = None then
+                    Value_module.mli_root ppf ~target:t.target w.views r
+                  else Value_module.mli_record ppf ~target:t.target w.views r)
+          in
+          View_module.mli ?values ppf ~target:t.target w.views)
         t.walk)
 
 let views t = Option.map (fun w -> w.views) t.walk

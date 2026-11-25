@@ -125,7 +125,7 @@ let test_record_clash () =
   | exception Invalid_argument _ -> ());
   let src = Wire_ocaml.scanner ~codec:"c" c in
   Alcotest.(check bool) "folds" true (contains src "fold ");
-  Alcotest.(check bool) "no record" false (contains src "decode_exn")
+  Alcotest.(check bool) "no record" false (contains src "module Get")
 
 (* The fields of the record at [off], read with no check of its
    constraints. *)

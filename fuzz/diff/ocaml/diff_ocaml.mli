@@ -125,6 +125,31 @@ val view_scan :
     and with [full], the scanner's own outputs, every one of them, those in
     records a field holds included. Fails with {!Alcobar.failf}. *)
 
+type values = {
+  decode : bytes -> int -> (string, Wire.parse_error) result;
+      (** The generated decoder, the record it returns written back by the
+          generated encoder in the bytes the generated size measures, or the
+          error. *)
+  validate : bytes -> int -> (unit, Wire.parse_error) result;
+      (** The generated [validate]. *)
+  is_valid : bytes -> int -> bool;  (** The generated [is_valid]. *)
+}
+(** The values of a generated module of any shape. *)
+
+val values_scan :
+  name:string ->
+  codec:'r Wire.Codec.t ->
+  fields:string list ->
+  full:(bytes -> int -> int -> (string * int) list option) ->
+  values ->
+  scan_ops
+(** [values_scan ~name ~codec ~fields ~full v] is the backend of the values of a
+    module of [codec]: on each frame, the bytes alone, [v]'s decode gives what
+    {!Wire.Codec.decode} gives, written back by the generated and the codec's
+    encoders alike, or the same error, and its validate and is_valid agree with
+    {!Wire.Codec.validate}; it then hands out [full], the module's own outputs.
+    Fails with {!Alcobar.failf}. *)
+
 (** What a scanner is compared with: the codec, and the outputs it states for a
     frame it decodes ([known], or all of them when [None]). *)
 type reference =

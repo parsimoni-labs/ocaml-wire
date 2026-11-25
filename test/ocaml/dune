@@ -125,6 +125,7 @@
   test_wire_ocaml
   test_view_module
   test_writer
+  test_value_module
   test_same
   test_scan
   s_capture_step

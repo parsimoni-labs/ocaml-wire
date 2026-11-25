@@ -17,11 +17,15 @@ type member =
   | Scalar of { name : string; field : field }
   | Present of { name : string; presence : output }
   | Sub of { name : string; sub : sub; presence : output option }
+  | Bytes of { name : string; label : string; at : bytes_at; slice : bool }
+
+and bytes_at = Fixed of field | Sized of node
 
 type record = {
   id : int;
   codec_name : string;
   module_name : string option;
+  struct_ : T.struct_;
   plan : plan;
   subs : sub list;
   fixed : int;
@@ -58,12 +62,30 @@ let root_names =
     "pp";
   ]
 
-let sub_names = [ "ok"; "get"; "end_at" ]
+let sub_names = [ "ok"; "get"; "end_at"; "size"; "pp" ]
 
 (* The helpers the module binds at its top level, which an accessor of that
    name would shadow for the code after it. *)
 let helper_names =
-  [ "cast"; "codec_name"; "no_error"; "mask32"; "uint32_eq"; "sint32_eq" ]
+  [
+    "cast";
+    "codec_name";
+    "no_error";
+    "mask32";
+    "uint32_eq";
+    "sint32_eq";
+    "of_view";
+    "encode_at";
+    "error_at";
+    "first_error";
+    "check_pass";
+    "refuse";
+    "refuse_if";
+    "fail";
+    "fail_unless";
+    "eof_if";
+    "field_unless";
+  ]
 
 (* The modules the walks define on OxCaml, and those of a fixed record's
    members. *)
@@ -122,17 +144,49 @@ let path_name = function
   | Some (_ :: _ as p) -> Some (String.concat "_" p)
   | _ -> None
 
-let rec members_of subs nodes =
+(* Whether the named field of bytes [label] of [s] is a slice, rather than a
+   string: the type of the field of that label, through an optional field or
+   a sized region. *)
+let rec bytes_slice : type a. a T.typ -> bool option = function
+  | T.Byte_slice _ -> Some true
+  | T.Byte_array _ -> Some false
+  | T.Optional { inner; _ } -> bytes_slice inner
+  | T.Single_elem { elem; _ } -> bytes_slice elem
+  | T.Where { inner; _ } -> bytes_slice inner
+  | _ -> None
+
+let slice_of (s : T.struct_) label =
+  List.find_map
+    (fun (T.Field f) ->
+      match f.field_name with
+      | Some n when Names.ocaml_label n = label -> bytes_slice f.field_typ
+      | _ -> None)
+    s.fields
+
+let bytes_member s label at =
+  Option.map
+    (fun slice -> Bytes { name = label; label; at; slice })
+    (slice_of s label)
+
+let rec members_of s subs spans nodes =
+  let members_of = members_of s subs spans in
   List.concat_map
     (function
       | Prefix (fields, _) ->
           List.filter_map
             (fun (f : field) ->
-              match f.output with
-              | Some o when o.name <> "" ->
+              match (f.output, f.store) with
+              | Some o, _ when o.name <> "" ->
                   Some (Scalar { name = o.name; field = f })
+              | None, Layout.Bytes _ when f.name <> "" && f.label <> "anon" ->
+                  bytes_member s f.label (Fixed f)
               | _ -> None)
             fields
+      | Span _ as span when List.exists (fun (_, n) -> n == span) spans -> (
+          match List.find (fun (_, n) -> n == span) spans with
+          | path, _ ->
+              Option.to_list
+                (bytes_member s (String.concat "_" path) (Sized span)))
       | Span (T.Ref (T.I, v)) -> (
           match List.find_opt (fun (s : sub) -> s.var = v) subs with
           | Some sub -> (
@@ -141,7 +195,7 @@ let rec members_of subs nodes =
               | None -> [])
           | None -> [])
       | Span _ | Test _ -> []
-      | Region (_, _, body) -> members_of subs body
+      | Region (_, _, body) -> members_of body
       | Gate (_, p, _, body) -> (
           match marker subs body with
           | Some sub -> (
@@ -151,11 +205,15 @@ let rec members_of subs nodes =
           | None ->
               (if p.name = "" then []
                else [ Present { name = p.name; presence = p } ])
-              @ members_of subs body))
+              @ members_of body))
     nodes
 
 let member_name = function
-  | Scalar { name; _ } | Present { name; _ } | Sub { name; _ } -> name
+  | Scalar { name; _ }
+  | Present { name; _ }
+  | Sub { name; _ }
+  | Bytes { name; _ } ->
+      name
 
 (* An accessor takes its field's name, suffixed with ['_'] where that is a
    name the module defines, as a keyword is: [size] is [size_] and [size_]
@@ -164,14 +222,17 @@ let escape reserved = function
   | Scalar s -> Scalar { s with name = Names.escape reserved s.name }
   | Present p -> Present { p with name = Names.escape reserved p.name }
   | Sub s -> Sub { s with name = Names.escape reserved s.name }
+  | Bytes b -> Bytes { b with name = Names.escape reserved b.name }
 
 let record_of ~reserved ~id ~codec_name ~module_name ~fixed_size s =
-  let plan, subs = plan_apart s in
+  let plan, subs, spans = plan_apart s in
   let reserved =
     helper_names
     @ if module_name = None then reserved @ root_names else sub_names
   in
-  let members = List.map (escape reserved) (members_of subs plan.nodes) in
+  let members =
+    List.map (escape reserved) (members_of s subs spans plan.nodes)
+  in
   (* A setter is named after its accessor: [set_x] for [x]. *)
   let names = List.map member_name members in
   List.iter
@@ -183,6 +244,7 @@ let record_of ~reserved ~id ~codec_name ~module_name ~fixed_size s =
     id;
     codec_name;
     module_name;
+    struct_ = s;
     plan;
     subs;
     fixed = fixed_of s;
@@ -243,13 +305,19 @@ let module_name t sub =
    reason. A sub-record is placed, then its own fixed bytes are tested
    against the buffer's length: its view then reads them with no check. *)
 
-type target = Field of string | Gate of string | Marker of string | End
+type target =
+  | Field of string
+  | Gate of string
+  | Marker of string
+  | Bytes_span of node
+  | End
 
 let rec contains target node =
   match (target, node) with
   | Field id, Prefix (fields, _) ->
       List.exists (fun (f : field) -> f.id = id) fields
   | Marker v, Span (T.Ref (T.I, x)) -> x = v
+  | Bytes_span n, (Span _ as m) -> n == m
   | Gate id, Gate (_, p, _, _) when p.id = id -> true
   | _, (Gate (_, _, _, body) | Region (_, _, body)) ->
       List.exists (contains target) body
@@ -701,7 +769,7 @@ let direct (r : record) (f : field) =
 (* The function [name] over the buffer [b], with its length [len] when
    [with_len], and the view [v], returning [ret], whose body is [code]; a
    parameter the body does not read is written [_]-prefixed. *)
-let pp_function ppf ~target ~with_len ~name ~ret code =
+let pp_function ?(global = false) ppf ~target ~with_len ~name ~ret code =
   let lines =
     "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in"
     :: (if with_len then "let len = (len : _ Wire_runtime.Buf.length :> int) in"
@@ -714,8 +782,9 @@ let pp_function ppf ~target ~with_len ~name ~ret code =
   let param x = if reads x then x else "_" ^ x in
   let b =
     match target with
-    | `OxCaml -> Fmt.str "(%s : 'b Wire_runtime.Buf.t @@ local)" (param "b")
-    | `OCaml -> Fmt.str "(%s : 'b Wire_runtime.Buf.t)" (param "b")
+    | `OxCaml when not global ->
+        Fmt.str "(%s : 'b Wire_runtime.Buf.t @@ local)" (param "b")
+    | `OxCaml | `OCaml -> Fmt.str "(%s : 'b Wire_runtime.Buf.t)" (param "b")
   in
   Fmt.pf ppf "let[@inline always] %s %s%s (%s : 'b view)%s =\n%s\n\n" name b
     (if with_len then Fmt.str " (%s : 'b Wire_runtime.Buf.length)" (param "len")
@@ -776,6 +845,39 @@ let carrier_type f =
 let typed f x =
   match carrier f with Some (_, eq) -> Fmt.str "(cast %s %s)" eq x | None -> x
 
+(* The accessor of a field of bytes: a slice of the buffer, or a copy. A
+   slice keeps the buffer, and a copy reads it with the stdlib's [Bytes], so
+   both take it global. *)
+let bytes_accessor ppf ~target ~run ~name ~at ~slice =
+  let make pos n =
+    if slice then
+      Fmt.str "Bytesrw.Bytes.Slice.make_or_eod buf ~first:%s ~length:%s" pos n
+    else Fmt.str "Bytes.sub_string buf %s %s" pos n
+  in
+  let absent = if slice then "Bytesrw.Bytes.Slice.eod" else "\"\"" in
+  (match at with
+    | Fixed f ->
+        let n = width_bytes f.store in
+        run ~absent ~bad:bad_raise ~target:(Field f.id) ~finish:(fun w _ p ->
+            ignore (room w ~bad:bad_raise p (f.offset + n));
+            emit w "%s"
+              (make (ptext { p with at = p.at + f.offset }) (string_of_int n)))
+    | Sized node ->
+        let size = match node with Span e -> e | _ -> assert false in
+        run ~absent ~bad:bad_raise ~target:(Bytes_span node)
+          ~finish:(fun w _ p ->
+            match size with
+            | T.Int k when k >= 0 ->
+                emit w "if %s > len - %d then %s else\n" (ptext p) k
+                  (bad_raise ~at:(ptext p) ~need:(string_of_int k));
+                emit w "%s" (make (ptext p) (string_of_int k))
+            | _ ->
+                let q = skip w ~bad:bad_raise ~ahead:None size p in
+                emit w "%s"
+                  (make (ptext p) (Fmt.str "(%s - %s)" (ptext q) (ptext p)))))
+  |> pp_function ~global:true ppf ~target ~with_len:false ~name
+       ~ret:(if slice then " : Bytesrw.Bytes.Slice.t" else " : string")
+
 let accessor ppf ~target ~t ~ends (r : record) member =
   let m = mode target in
   let run ~absent ~bad ~target:tg ~finish =
@@ -818,6 +920,8 @@ let accessor ppf ~target ~t ~ends (r : record) member =
               (ptext p))
       |> pp_function ppf ~target ~with_len:true ~name
            ~ret:(Fmt.str " : 'b %s.check" (module_name t sub))
+  | Bytes { name; at; slice; _ } ->
+      bytes_accessor ppf ~target ~run ~name ~at ~slice
 
 (* [end_at buf len v] is where the record at [v] ends, or [-1]. *)
 let end_at ppf ~target ~t ~ends (r : record) =
@@ -939,7 +1043,7 @@ let pp_members ppf ~target ~t ~ends (r : record) =
    the text reads them. A record's [end_at] is written when an accessor
    needs it, so the records are written to text parents first, then put
    children first. With the text, whether it reads [mask32]. *)
-let ml ~target t =
+let ml ?(values = fun _ -> "") ~target t =
   let ends = Hashtbl.create 8 in
   let text f =
     let b = Buffer.create 4096 in
@@ -951,7 +1055,8 @@ let ml ~target t =
   let root =
     text (fun ppf ->
         pp_ok_get ppf ~name:t.root.codec_name;
-        pp_members ppf ~target ~t ~ends t.root)
+        pp_members ppf ~target ~t ~ends t.root;
+        Fmt.pf ppf "%s" (values t.root))
   in
   let modules =
     List.rev_map
@@ -964,7 +1069,7 @@ let ml ~target t =
             pp_ok_get ppf ~name;
             if Hashtbl.mem ends r.id then end_at ppf ~target ~t ~ends r;
             pp_members ppf ~target ~t ~ends r;
-            Fmt.pf ppf "end\n\n"))
+            Fmt.pf ppf "%send\n\n" (values r)))
       (List.rev t.records)
   in
   let text = String.concat "" (modules @ [ root ]) in
@@ -979,9 +1084,9 @@ let ml ~target t =
 
 (* {1 The interface} *)
 
-let pp_val ~target ppf name typ doc =
+let pp_val ?(portable = true) ~target ppf name typ doc =
   Fmt.pf ppf "val %s : %s%s@\n(** %s *)@\n@\n" name typ
-    (if target = `OxCaml then " @@ portable" else "")
+    (if target = `OxCaml && portable then " @@ portable" else "")
     doc
 
 let named target =
@@ -1039,6 +1144,19 @@ let pp_member_val ~target ~t ppf (r : record) = function
             checks and none runs again: if bytes of [b] were written since, a \
             read may return a value they break, never a byte outside [b]."
            name name m)
+  | Bytes { name; slice; _ } ->
+      (* Bytesrw states no portability, so a slice's accessor has none. *)
+      pp_val ~portable:(not slice) ~target ppf name
+        (String.concat " -> "
+           [
+             "'b Wire_runtime.Buf.t";
+             "'b view";
+             (if slice then "Bytesrw.Bytes.Slice.t" else "string");
+           ])
+        (Fmt.str "[%s b v] is the field [%s] of the record [v], %s.%s" name name
+           (if slice then "a slice of [b], with no byte copied"
+            else "a copy of its bytes")
+           moved)
 
 let pp_setter_val ~target ppf (name, (f : field)) =
   pp_val ~target ppf (setter_name name)
@@ -1055,7 +1173,7 @@ let pp_setter_val ~target ppf (name, (f : field)) =
              (if width = 1 then "1 bit" else Fmt.str "%d bits" width)
        | Int _ | Bytes _ -> ""))
 
-let mli ppf ~target t =
+let mli ?(values = fun _ _ -> ()) ppf ~target t =
   Fmt.pf ppf "(** {1:views Views} *)@\n@\n";
   List.iter
     (fun (r : record) ->
@@ -1065,6 +1183,7 @@ let mli ppf ~target t =
       pp_ok_get_val ~target ppf;
       List.iter (pp_member_val ~target ~t ppf r) r.members;
       List.iter (pp_setter_val ~target ppf) (settable r);
+      values ppf r;
       Fmt.pf ppf "end@\n@\n")
     t.records;
   pp_types ppf ~codec:t.root.codec_name;
@@ -1077,7 +1196,8 @@ let mli ppf ~target t =
      {!ok} refuses.";
   pp_ok_get_val ~target ppf;
   List.iter (pp_member_val ~target ~t ppf t.root) t.root.members;
-  List.iter (pp_setter_val ~target ppf) (settable t.root)
+  List.iter (pp_setter_val ~target ppf) (settable t.root);
+  values ppf t.root
 
 let of_codec ?(reserved = []) c = v ~reserved (Gen.to_struct c)
 
@@ -1086,6 +1206,8 @@ let of_codec ?(reserved = []) c = v ~reserved (Gen.to_struct c)
 let pp_member ppf = function
   | Scalar { name; field } -> Fmt.pf ppf "%s (at %d)" name field.offset
   | Present { name; _ } -> Fmt.pf ppf "%s (presence)" name
+  | Bytes { name; slice; _ } ->
+      Fmt.pf ppf "%s (%s)" name (if slice then "slice" else "string")
   | Sub { name; sub; presence } ->
       Fmt.pf ppf "%s : %s%s" name sub.codec_name
         (if Option.is_some presence then " (optional)" else "")

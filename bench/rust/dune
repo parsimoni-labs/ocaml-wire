@@ -199,6 +199,7 @@
   g_udp_wire)
  (libraries
   bench_lib
+  bytesrw
   headers
   net
   wire

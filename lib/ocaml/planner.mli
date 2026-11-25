@@ -134,6 +134,7 @@ type st = {
   mutable outs : output list;
   mutable ranges : (int * int) Smap.t;
   mutable subs : sub list option;
+  mutable spans : (string list * node) list;
 }
 (** The state of a plan under construction: the maps, a counter for fresh
     variables, the outputs so far, the ranges of the variables bound and, in a
@@ -175,11 +176,13 @@ val plan_of : ?maps:maps -> T.struct_ -> plan
 (** [plan_of ?maps s] is the plan of the struct [s]. Raises {!Unsupported} on a
     shape the generator does not handle. *)
 
-val plan_apart : T.struct_ -> plan * sub list
+val plan_apart : T.struct_ -> plan * sub list * (string list * node) list
 (** [plan_apart s] is the plan of the struct [s] in which each record a field
     holds is a {!Span} of the variable {!sub.var}, ranging over [[0, beyond]],
-    and those records, in the order the plan reaches them. Its outputs are those
-    of [s]'s own fields. Raises {!Unsupported} as {!plan_of} does. *)
+    those records, in the order the plan reaches them, and the span of each
+    named field of bytes of variable size, with the field's path. Its outputs
+    are those of [s]'s own fields. Raises [Invalid_argument] as {!plan_of} does.
+*)
 
 val beyond : int
 (** [beyond] is [Sys.max_string_length + 1], the extent of any offset past the

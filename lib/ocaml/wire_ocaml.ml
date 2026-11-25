@@ -23,7 +23,14 @@ let typs = Option.map typs_of
 let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
 
 let record ?target ?simd ?make ?maps ~codec c =
-  Writer.v ?target ?simd ?make ?maps:(named maps) ~require:`Record ~codec c
+  (* A constructor, SIMD lanes or maps are the record's; without them, the
+     module of a codec of any shape the walk covers. *)
+  let require =
+    if Option.is_some make || simd = Some true || Option.is_some maps then
+      `Record
+    else `Any
+  in
+  Writer.v ?target ?simd ?make ?maps:(named maps) ~require ~codec c
 
 let ml ?target ?simd ?make ?maps ~codec c =
   Writer.ml (record ?target ?simd ?make ?maps ~codec c)
@@ -66,6 +73,7 @@ and view_member =
   | Int of { name : string; output : string; carrier : string option }
   | Bool of { name : string; output : string }
   | Record of { name : string; presence : string option; view : view }
+  | Bytes of { name : string; slice : bool }
 
 (* The outputs of a record reached by the path [prefix] are named after it,
    with the field's name as the folds hand it out, unescaped. *)
@@ -86,6 +94,7 @@ let scanner_views c =
                     output = global prefix o.name;
                     carrier = Option.map fst (View_module.carrier field);
                   }
+            | View_module.Bytes { name; slice; _ } -> Bytes { name; slice }
             | Present { name; presence } ->
                 Bool { name; output = global prefix presence.name }
             | Sub { name; sub; presence } ->
