@@ -43,8 +43,8 @@ let () =
     write (base name ^ "_wire.ml") (Wire_ocaml.bridge ?maps ~codec ~core c);
     write (base name ^ "_wire.mli") (Wire_ocaml.bridge_mli ?maps ~codec ~core c)
   in
-  let s name ?(step = false) codec c =
-    let codec = "Schemas." ^ codec in
+  let s name ?(step = false) ?(path = "Schemas.") codec c =
+    let codec = path ^ codec in
     let ml = Wire_ocaml.scanner ~target ~codec c
     and mli = Wire_ocaml.scanner_mli ~target ~codec c in
     if not step then begin
@@ -76,6 +76,7 @@ let () =
   s "s_skipped.ml" "skipped" Schemas.skipped;
   s "s_huge.ml" ~step:true "huge" Schemas.huge;
   s "s_nested.ml" ~step:true "nested 12" (Schemas.nested 12);
+  s "s_capture.ml" ~path:"Packet_stack." "capture" Packet_stack.capture;
   g "g_mapped.ml" "mapped" Schemas.mapped
     ~maps:
       Wire_ocaml.

@@ -110,6 +110,21 @@ type scan_ops = {
 (** A generated scanner, through its decoder and its frame fold, or their
     unboxed forms. *)
 
+val view_scan :
+  name:string ->
+  codec:'r Wire.Codec.t ->
+  fields:string list ->
+  full:(bytes -> int -> int -> (string * int) list option) ->
+  (bytes -> int -> int -> (string * int) list option) ->
+  scan_ops
+(** [view_scan ~name ~codec ~fields ~full view] is the backend of the views of a
+    scanner of [codec]: [view buf off len] checks the record at [off] in the
+    [len] bytes there and reads each of [fields] through the accessors, an
+    absent one as 0. Each answer is compared, before {!check_scan} compares it
+    with the reference, with [Wire.Codec.View.check] on the frame's bytes alone
+    and with [full], the scanner's own outputs, every one of them, those in
+    records a field holds included. Fails with {!Alcobar.failf}. *)
+
 (** What a scanner is compared with: the codec, and the outputs it states for a
     frame it decodes ([known], or all of them when [None]). *)
 type reference =

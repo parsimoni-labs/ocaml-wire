@@ -6,7 +6,7 @@
 (executable
  (name gen)
  (modules gen)
- (libraries schemas wire.ocaml))
+ (libraries schemas net wire.ocaml))
 
 (rule
  (targets
@@ -71,7 +71,9 @@
   s_huge.ml
   s_huge.mli
   s_nested.ml
-  s_nested.mli)
+  s_nested.mli
+  s_capture.ml
+  s_capture.mli)
  (action
   (run ./gen.exe)))
 
@@ -98,6 +100,7 @@
  (modules
   test
   test_wire_ocaml
+  test_view_module
   test_same
   g_ipv4
   g_ipv4_wire
@@ -130,6 +133,7 @@
   s_skipped
   s_huge
   s_nested
+  s_capture
   boxed_loads)
  (libraries
   schemas

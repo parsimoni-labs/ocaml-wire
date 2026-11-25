@@ -51,7 +51,7 @@
   ocaml_index_13
   ocaml_index_14
   ocaml_index_15)
- (libraries wire wire.runtime fuzz_gen diff_ocaml fmt))
+ (libraries wire wire.runtime fuzz_gen diff_codecs diff_ocaml fmt))
 
 ; An executable's enabled_if cannot read %{ocaml-config:ox}, so fuzz.exe
 ; selects the fuzzer on whether the index library is enabled.

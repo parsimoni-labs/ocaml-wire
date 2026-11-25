@@ -468,6 +468,44 @@ let scan_frame buf off len =
   if off < 0 || len < 0 || off > n || len > n - off then None
   else Some (Bytes.sub buf off len)
 
+(* The views, checked on each frame against [Codec.View.check] on the frame's
+   bytes alone and against the scanner's own outputs, every one of them. *)
+let view_scan (type r) ~name ~(codec : r Wire.Codec.t) ~fields ~full view =
+  let module V = (val Wire.Codec.View.codec codec) in
+  let scan buf off len =
+    let got = view buf off len in
+    let accepted =
+      match scan_frame buf off len with
+      | None -> false
+      | Some frame -> (
+          match Wire_runtime.Buf.v frame with
+          | Wire_runtime.Buf.Any b ->
+              Wire.Codec.View.ok
+                (Wire.Codec.View.check V.codec b (Wire_runtime.Buf.length b) 0))
+    in
+    if accepted <> Option.is_some got then
+      Alcobar.failf "%s: Codec.View.check %s the frame, the generated check %s"
+        name
+        (if accepted then "accepts" else "rejects")
+        (if accepted then "rejects" else "accepts");
+    let want = full buf off len in
+    let sorted = Option.map (List.sort compare) in
+    if sorted want <> sorted got then
+      Alcobar.failf "%s: the scanner hands out %a, the views %a" name
+        Fmt.(option ~none:(any "nothing") (list (pair string int)))
+        want
+        Fmt.(option ~none:(any "nothing") (list (pair string int)))
+        got;
+    got
+  in
+  {
+    scan_name = name;
+    scan_fields = fields;
+    scan;
+    scan_batch = None;
+    scan_index = None;
+  }
+
 let scan_same label what show a b =
   if a <> b then
     Alcobar.failf "%s: %s: Wire.Codec %s, but the generated code %s" label what

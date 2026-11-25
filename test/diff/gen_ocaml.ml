@@ -267,9 +267,73 @@ let pp_step_backend ppf ~m fields =
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
     fields m m m
 
+(* The outputs of [view], each [fill]. *)
+let rec view_zeros ~fill (view : Wire_ocaml.view) =
+  Fmt.str "List.concat [%s]"
+    (String.concat "; "
+       (List.map
+          (function
+            | Wire_ocaml.Int { output; _ } | Bool { output; _ } ->
+                Fmt.str "[ (%S, %s) ]" output fill
+            | Record { presence; view; _ } ->
+                (match presence with
+                  | Some p -> Fmt.str "[ (%S, %s) ]" p fill ^ " @ "
+                  | None -> "")
+                ^ view_zeros ~fill view)
+          view.members))
+
+(* The outputs the views of [view] hand out, in the module [path] of the
+   scanner [m], from the view [v] of [bb], whose length is [len]: a record
+   that is absent hands out 0 for each of its outputs, and a mandatory one
+   whose check fails [min_int], which no reference states. *)
+let rec view_outputs ~m ~path (view : Wire_ocaml.view) =
+  Fmt.str "(List.concat [%s])"
+    (String.concat "; " (List.map (view_member ~m ~path) view.members))
+
+and view_member ~m ~path = function
+  | Wire_ocaml.Int { name; output } ->
+      Fmt.str "[ (%S, %s.%s bb v) ]" output path name
+  | Bool { name; output } ->
+      Fmt.str "[ (%S, Bool.to_int (%s.%s bb v)) ]" output path name
+  | Record { name; presence; view } ->
+      let sub = m ^ "." ^ Option.get view.module_name in
+      let presence_is n =
+        match presence with
+        | Some p -> Fmt.str "[ (%S, %d) ]" p n ^ " @ "
+        | None -> ""
+      in
+      let fill = if Option.is_none presence then "min_int" else "0" in
+      Fmt.str
+        "(let k = %s.%s bb len v in if %s.ok k then (let v = %s.get k in %s%s) \
+         else %s%s)"
+        path name sub sub (presence_is 1)
+        (view_outputs ~m ~path:sub view)
+        (presence_is 0) (view_zeros ~fill view)
+
+(* The backend of the views of the scanner [m], which hands out every output,
+   checked against [m]'s [decode] and against the codec [codec]. *)
+let pp_view_backend ppf ~m ~codec c =
+  let fields = Wire_ocaml.scanner_fields c in
+  let wrap, codec = codec in
+  Fmt.pf ppf
+    "%s Diff_ocaml.view_scan ~name:%S ~codec:%s ~fields:[%a] ~full:(fun b o n \
+     -> let v = %s.decode b o n in if v.ok then Some %a else None) (fun b o n \
+     -> match Wire_runtime.Buf.v b with Wire_runtime.Buf.Any bb -> let len = \
+     Wire_runtime.Buf.length bb in let c = %s.check bb len ~off:o ~len:n in if \
+     %s.ok c then (let %s = %s.get c in Some %s) else None));@\n"
+    wrap (m ^ " views") codec
+    Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
+    fields m
+    (fun ppf () -> snapshot ppf ~unboxed:false ~var:(fun n -> "v." ^ n) fields)
+    () m m
+    (if (Wire_ocaml.scanner_views c).members = [] then "_" else "v")
+    m
+    (view_outputs ~m ~path:m (Wire_ocaml.scanner_views c))
+
 (* The backends over [c]: each module [(name, target, selected)], generated
-   inside the function under its interface, after the [Step] it calls. *)
-let pp_scanners ppf ~label c modules =
+   inside the function under its interface, after the [Step] it calls, and
+   the views of the one with every output. *)
+let pp_scanners ppf ~label ~codec c modules =
   let fields = Wire_ocaml.scanner_fields c in
   let selected_fields = function
     | None -> fields
@@ -296,7 +360,8 @@ let pp_scanners ppf ~label c modules =
       let fields = selected_fields selected in
       pp_backend ppf ~m ~unboxed:false fields;
       pp_step_backend ppf ~m fields;
-      if t = `OxCaml then pp_backend ppf ~m ~unboxed:true fields)
+      if t = `OxCaml then pp_backend ppf ~m ~unboxed:true fields;
+      if selected = None then pp_view_backend ppf ~m ~codec c)
     modules;
   Fmt.pf ppf "]@\n"
 
@@ -326,7 +391,15 @@ let scan_cases () =
       in
       let src =
         Fmt.str "let %s () : Diff_ocaml.scan_ops list =@\n%a@\n" name
-          (fun ppf () -> pp_scanners ppf ~label:c.label c.codec modules)
+          (fun ppf () ->
+            pp_scanners ppf ~label:c.label
+              ~codec:
+                ( Fmt.str
+                    "(match List.nth Diff_codecs.scan_cases %d with \
+                     Diff_codecs.Scan sc ->"
+                    i,
+                  "sc.codec" )
+              c.codec modules)
           ()
       in
       (c.label, { name; src }))
@@ -350,11 +423,13 @@ let sampled_scanners () =
         let src =
           Fmt.str
             "let %s : Fuzz_gen.packed -> Diff_ocaml.scan_ops list = function@\n\
-            \  | Fuzz_gen.Pack _ ->@\n\
+            \  | Fuzz_gen.Pack g ->@\n\
              %a@\n"
             name
             (fun ppf () ->
-              pp_scanners ppf ~label:"codec" c
+              pp_scanners ppf ~label:"codec"
+                ~codec:("(", "(Fuzz_gen.codec g)")
+                c
                 [
                   ("Full", target, None);
                   ("Selected", target, Some (every_other c));
