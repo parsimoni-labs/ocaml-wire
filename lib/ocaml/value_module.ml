@@ -888,6 +888,31 @@ let ml_record ppf t r =
   pp_encode ppf t r;
   pp_error_at ppf t r
 
+(* The check over the bytes from [off] to [stop], or over the record's own
+   bytes for a codec of constant size. *)
+let root_check t ?(len = "(Wire_runtime.Buf.length b)") ~stop () =
+  match t.V.size with
+  | Some _ -> Fmt.str "check b %s off" len
+  | None -> Fmt.str "check b %s ~off ~len:(%s - off)" len stop
+
+(* [encode], which checks what it wrote: to its end, or over the record's
+   own bytes for a codec of constant size, whose end is not bound. *)
+let pp_root_encode ppf t =
+  Fmt.pf ppf
+    "let encode (r : t) buf off =@\n\
+     if off < 0 then %s.negative_offset off;@\n\
+     %s@\n\
+     match Wire_runtime.Buf.v buf with@\n\
+     | Wire_runtime.Buf.Any b ->@\n\
+     if not (ok (%s)) then@\n\
+     invalid_arg (codec_name ^ \": the record does not pass its own checks\")@\n\
+     @\n"
+    errors
+    (if Option.is_some t.V.size then
+       "ignore (encode_at ~write:true r buf off : int);"
+     else "let stop = encode_at ~write:true r buf off in")
+    (root_check t ~stop:"stop" ())
+
 (* The codec's own: its record, then [decode], [validate] and [encode] over
    a buffer, from its offset to its end. *)
 let ml_root ppf t (r : V.record) =
@@ -902,16 +927,14 @@ let ml_root ppf t (r : V.record) =
      let is_valid buf off =@\n\
      off >= 0 &&@\n\
      match Wire_runtime.Buf.v buf with@\n\
-     | Wire_runtime.Buf.Any b ->@\n\
-     ok (check b (Wire_runtime.Buf.length b) ~off ~len:(Bytes.length buf - \
-     off))@\n\
+     | Wire_runtime.Buf.Any b -> ok (%s)@\n\
      @\n\
      let decode_exn buf off =@\n\
      if off < 0 then %s.negative_offset off;@\n\
      match Wire_runtime.Buf.v buf with@\n\
      | Wire_runtime.Buf.Any b ->@\n\
      let len = Wire_runtime.Buf.length b in@\n\
-     let c = check b len ~off ~len:(Bytes.length buf - off) in@\n\
+     let c = %s in@\n\
      if ok c then of_view b len (get c) else first_error buf off@\n\
      @\n\
      let decode buf off =@\n\
@@ -927,17 +950,13 @@ let ml_root ppf t (r : V.record) =
      match validate_exn buf off with@\n\
      | () -> Ok ()@\n\
      | exception %s.Parse_error e -> Error e@\n\
-     @\n\
-     let encode (r : t) buf off =@\n\
-     if off < 0 then %s.negative_offset off;@\n\
-     let stop = encode_at ~write:true r buf off in@\n\
-     match Wire_runtime.Buf.v buf with@\n\
-     | Wire_runtime.Buf.Any b ->@\n\
-     if not (ok (check b (Wire_runtime.Buf.length b) ~off ~len:(stop - off))) \
-     then@\n\
-     invalid_arg (codec_name ^ \": the record does not pass its own checks\")@\n\
      @\n"
-    (min_size r) errors errors errors errors errors
+    (min_size r)
+    (root_check t ~stop:"Bytes.length buf" ())
+    errors
+    (root_check t ~len:"len" ~stop:"Bytes.length buf" ())
+    errors errors errors;
+  pp_root_encode ppf t
 
 (* {1 The interface} *)
 

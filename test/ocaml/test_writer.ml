@@ -45,7 +45,7 @@ let test_fixed () =
     match Buf.v buf with
     | Buf.Any b ->
         let length = Buf.length b in
-        let c = G_checked.check b length ~off ~len in
+        let c = G_checked.check b length off in
         Alcotest.(check bool) "check" valid (G_checked.ok c);
         Alcotest.(check bool) "fold" valid (Option.is_some folded);
         if valid then begin
@@ -112,7 +112,6 @@ let test_accessors () =
   in
   let i32 v = string_of_int (SInt32.to_int v) in
   let u32 v = string_of_int (UInt32.to_int v) in
-  let all = Bytes.length in
   viewed Schemas.ipv4
     ~gets:
       [
@@ -124,9 +123,7 @@ let test_accessors () =
     ~read:(fun buf ->
       G_ipv4.validate_exn buf 0;
       let (Buf.Any b) = Buf.v buf in
-      let v =
-        G_ipv4.get (G_ipv4.check b (Buf.length b) ~off:0 ~len:(all buf))
-      in
+      let v = G_ipv4.get (G_ipv4.check b (Buf.length b) 0) in
       [
         string_of_int (UInt16.to_int (G_ipv4.frag b v));
         string_of_int (G_ipv4.view_src_int b v);
@@ -141,9 +138,7 @@ let test_accessors () =
     ~read:(fun buf ->
       G_checked.validate_exn buf 0;
       let (Buf.Any b) = Buf.v buf in
-      let v =
-        G_checked.get (G_checked.check b (Buf.length b) ~off:0 ~len:(all buf))
-      in
+      let v = G_checked.get (G_checked.check b (Buf.length b) 0) in
       [ string_of_int (UInt8.to_int (G_checked.proto b v)) ]);
   viewed Schemas.mixed
     ~gets:
@@ -154,16 +149,14 @@ let test_accessors () =
     ~read:(fun buf ->
       G_mixed.validate_exn buf 0;
       let (Buf.Any b) = Buf.v buf in
-      let v =
-        G_mixed.get (G_mixed.check b (Buf.length b) ~off:0 ~len:(all buf))
-      in
+      let v = G_mixed.get (G_mixed.check b (Buf.length b) 0) in
       [ i32 (G_mixed.f b v); string_of_int (G_mixed.h b v) ]);
   viewed Schemas.eth
     ~gets:[ get Schemas.eth Schemas.eth_src Fun.id ]
     ~read:(fun buf ->
       G_eth.validate_exn buf 0;
       let (Buf.Any b) = Buf.v buf in
-      let v = G_eth.get (G_eth.check b (Buf.length b) ~off:0 ~len:(all buf)) in
+      let v = G_eth.get (G_eth.check b (Buf.length b) 0) in
       [ G_eth.src b v ])
 
 type codec = Codec : 'r Codec.t -> codec
@@ -237,10 +230,9 @@ let fields buf off =
 let test_setters () =
   for _ = 1 to 2000 do
     let buf, off = input () in
-    let len = Bytes.length buf - off in
     match Buf.v buf with
     | Buf.Any b ->
-        let c = G_checked.check b (Buf.length b) ~off ~len in
+        let c = G_checked.check b (Buf.length b) off in
         if G_checked.ok c then begin
           let v = G_checked.get c in
           let before = fields buf off in

@@ -33,7 +33,7 @@ type record = {
   members : member list;
 }
 
-type t = { root : record; records : record list }
+type t = { root : record; records : record list; size : int option }
 
 (* The values the module of every codec exports at its top level, and a
    view module in its own: an accessor of that name would be a second value
@@ -284,7 +284,7 @@ let v ~reserved (s : T.struct_) =
       r.subs
   in
   visit root;
-  { root; records = List.rev !order }
+  { root; records = List.rev !order; size = None }
 
 let record_of_sub t (sub : sub) =
   List.find (fun r -> r.id = sub.codec_id) t.records
@@ -1230,19 +1230,31 @@ let mli ?(values = fun _ _ -> ()) ppf ~target t =
       Fmt.pf ppf "end@\n@\n")
     t.records;
   pp_types ppf ~codec:t.root.codec_name;
-  pp_val ~target ppf "check"
-    (String.concat " -> "
-       [ named target; length; "off:int"; "len:int"; "'b check" ])
-    "[check b length ~off ~len] is the answer of the checks {!val-fold} makes \
-     on the record at [off] in the [len] bytes there, in [b] of length \
-     [length]. It never raises: bad bounds or a bad record give an answer \
-     {!ok} refuses.";
+  (match t.size with
+  | None ->
+      pp_val ~target ppf "check"
+        (String.concat " -> "
+           [ named target; length; "off:int"; "len:int"; "'b check" ])
+        "[check b length ~off ~len] is the answer of the checks {!val-fold} \
+         makes on the record at [off] in the [len] bytes there, in [b] of \
+         length [length]. It never raises: bad bounds or a bad record give an \
+         answer {!ok} refuses."
+  | Some size ->
+      pp_val ~target ppf "check"
+        (String.concat " -> " [ named target; length; "int"; "'b check" ])
+        (Fmt.str
+           "[check b length off] is the answer of the checks {!val-fold} makes \
+            on the record at [off], whose %d bytes must lie in [b] of length \
+            [length], as [Wire.Codec.View.check] takes them. It never raises: \
+            bad bounds or a bad record give an answer {!ok} refuses."
+           size));
   pp_ok_get_val ~target ppf;
   List.iter (pp_member_val ~target ~t ppf t.root) t.root.members;
   List.iter (pp_setter_val ~target ppf) (settable t.root);
   values ppf t.root
 
-let of_codec ?(reserved = []) c = v ~reserved (Gen.to_struct c)
+let of_codec ?(reserved = []) c =
+  { (v ~reserved (Gen.to_struct c)) with size = Wire.Codec.wire_size_opt c }
 
 (* {1 The plan} *)
 
@@ -1263,4 +1275,8 @@ let pp_record ppf r =
     r.members
 
 let pp ppf t =
-  Fmt.pf ppf "@[<v>%a@]" Fmt.(list ~sep:cut pp_record) (t.records @ [ t.root ])
+  Fmt.pf ppf "@[<v>%a%a@]"
+    Fmt.(list ~sep:cut pp_record)
+    (t.records @ [ t.root ])
+    Fmt.(option (any "@,size " ++ int))
+    t.size

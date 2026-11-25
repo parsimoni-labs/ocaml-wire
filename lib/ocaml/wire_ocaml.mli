@@ -55,7 +55,7 @@
     the fields its constraints read; [validate] answers the codec's error where
     it is false, and [validate_exn] raises it. The module's views ({!scanner})
     read a buffer named once with [Wire_runtime.Buf.v], as ['b Buf.t], and whose
-    length is read once: [check b len ~off ~len] checks the record, [ok c] tells
+    length is read once: [check b len off] checks the record, [ok c] tells
     whether it passed and [get c] turns an answer that passed into a ['b view],
     and each accessor [<field> b v] (and [view_<field>_int], [view_<field>_word]
     for a 32-bit field and a bitfield's word) is one load with no bounds check,
@@ -323,29 +323,31 @@ val scanner_bridge_mli :
     A scanner also writes the views of its codec: [check b length ~off ~len]
     runs the checks of [fold] on the record at [off] in the [len] bytes there,
     in the buffer [b] of length [length] named by [Wire_runtime.Buf.v], and
-    answers a ['b check]; [ok] tests it and [get] makes it a ['b view], an [int]
-    that only the accessors of [b] take. Each named integer field of the record
-    is an accessor named after it, [name b v], returning its value as the codec
-    decodes it, a [Wire_runtime.UInt16.t] for a 16-bit integer and an [int] for
-    a bitfield (0 when it is absent), each optional field that holds no record a
-    presence [name_present b v], and each field that holds a record an accessor
-    [name b len v] returning a check of that record's module, which passes iff
-    the record is present and its fixed bytes lie in [b]. Each codec a field
-    holds has one module, named after it ([CapturedIPv4] is [Captured_ipv4]),
-    with the same accessors. A field at a constant offset inside the bytes the
-    check guarantees is one load; any other is placed again from the bytes that
-    place it, with a bound check, and a presence or a tag is tested again, so an
-    accessor reads no byte outside [b] even when bytes are written after the
-    check. A named field of bytes is an accessor too, answering a
-    [Bytesrw.Bytes.Slice.t] of [b] for a byte slice and a copy for a byte array,
-    as the codec decodes them. An integer or a bitfield at a constant offset
-    inside the bytes the check guarantees also has [set_<name> b v x], which
-    writes [x] there in place, one store or a load and a store of a bitfield's
-    word; it refuses a bitfield too wide for its field with [Invalid_argument]
-    and checks none of the record's constraints, as {!Wire.Codec.set} does. An
-    accessor named as a value the module defines ([size], [check], [decode],
-    ...) takes a trailing ['_'], as a keyword does: [size] is [size_] and
-    [size_] [size__]. *)
+    answers a ['b check]. A codec of constant size takes no window:
+    [check b length off] checks its record at [off] in [b], as
+    {!Wire.Codec.View.check} does; [ok] tests it and [get] makes it a ['b view],
+    an [int] that only the accessors of [b] take. Each named integer field of
+    the record is an accessor named after it, [name b v], returning its value as
+    the codec decodes it, a [Wire_runtime.UInt16.t] for a 16-bit integer and an
+    [int] for a bitfield (0 when it is absent), each optional field that holds
+    no record a presence [name_present b v], and each field that holds a record
+    an accessor [name b len v] returning a check of that record's module, which
+    passes iff the record is present and its fixed bytes lie in [b]. Each codec
+    a field holds has one module, named after it ([CapturedIPv4] is
+    [Captured_ipv4]), with the same accessors. A field at a constant offset
+    inside the bytes the check guarantees is one load; any other is placed again
+    from the bytes that place it, with a bound check, and a presence or a tag is
+    tested again, so an accessor reads no byte outside [b] even when bytes are
+    written after the check. A named field of bytes is an accessor too,
+    answering a [Bytesrw.Bytes.Slice.t] of [b] for a byte slice and a copy for a
+    byte array, as the codec decodes them. An integer or a bitfield at a
+    constant offset inside the bytes the check guarantees also has
+    [set_<name> b v x], which writes [x] there in place, one store or a load and
+    a store of a bitfield's word; it refuses a bitfield too wide for its field
+    with [Invalid_argument] and checks none of the record's constraints, as
+    {!Wire.Codec.set} does. An accessor named as a value the module defines
+    ([size], [check], [decode], ...) takes a trailing ['_'], as a keyword does:
+    [size] is [size_] and [size_] [size__]. *)
 
 type view = { module_name : string option; members : view_member list }
 (** The views of a record: its module, [None] for the codec's own, and its

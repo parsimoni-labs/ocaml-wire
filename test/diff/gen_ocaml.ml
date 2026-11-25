@@ -205,8 +205,7 @@ let pp_ops_views ppf fields =
     \          M.validate_exn b 0;@\n\
     \          match Wire_runtime.Buf.v b with@\n\
     \          | Wire_runtime.Buf.Any bb ->@\n\
-    \              let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
-     ~off:0 ~len:(Bytes.length b)) in@\n\
+    \              let v = M.get (M.check bb (Wire_runtime.Buf.length bb) 0) in@\n\
     \              [ %a ]);@\n\
     \      is_valid = (fun b o -> M.is_valid b o);@\n\
     \      view =@\n\
@@ -214,15 +213,13 @@ let pp_ops_views ppf fields =
     \          M.validate_exn b o;@\n\
     \          match Wire_runtime.Buf.v b with@\n\
     \          | Wire_runtime.Buf.Any bb ->@\n\
-    \              let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
-     ~off:o ~len:(Bytes.length b - o)) in@\n\
+    \              let v = M.get (M.check bb (Wire_runtime.Buf.length bb) o) in@\n\
     \              [ %a ]);@\n\
     \      checked =@\n\
     \        (fun b o ->@\n\
     \          match Wire_runtime.Buf.v b with@\n\
     \          | Wire_runtime.Buf.Any bb ->@\n\
-    \              let c = M.check bb (Wire_runtime.Buf.length bb) ~off:o \
-     ~len:(Bytes.length b - o) in@\n\
+    \              let c = M.check bb (Wire_runtime.Buf.length bb) o in@\n\
     \              if M.ok c then@\n\
     \                let v = M.get c in@\n\
     \                (true, [ %a ])@\n\
@@ -430,16 +427,26 @@ and view_member ~m ~path = function
 let pp_view_backend ppf ~m ~codec c =
   let fields = Wire_ocaml.scanner_fields c in
   let wrap, codec = codec in
+  (* A codec of constant size is checked at an offset, as Codec.View checks
+     it: on the frame's own bytes. *)
+  let frame, check =
+    match Wire.Codec.wire_size_opt c with
+    | None -> ("", Fmt.str "%s.check bb len ~off:o ~len:n" m)
+    | Some _ ->
+        ( "if o < 0 || n < 0 || n > Bytes.length b - o then None else let b = \
+           Bytes.sub b o n in ",
+          Fmt.str "%s.check bb len 0" m )
+  in
   Fmt.pf ppf
     "%s Diff_ocaml.view_scan ~name:%S ~codec:%s ~fields:[%a] ~full:%a (fun b o \
-     n -> match Wire_runtime.Buf.v b with Wire_runtime.Buf.Any bb -> let len = \
-     Wire_runtime.Buf.length bb in let c = %s.check bb len ~off:o ~len:n in if \
-     %s.ok c then (let %s = %s.get c in Some %s) else None));@\n"
+     n -> %smatch Wire_runtime.Buf.v b with Wire_runtime.Buf.Any bb -> let len \
+     = Wire_runtime.Buf.length bb in let c = %s in if %s.ok c then (let %s = \
+     %s.get c in Some %s) else None));@\n"
     wrap (m ^ " views") codec
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
     fields
     (pp_fold ~m ~unboxed:false)
-    fields m m
+    fields frame check m
     (if
        List.for_all
          (function Wire_ocaml.Bytes _ -> true | _ -> false)

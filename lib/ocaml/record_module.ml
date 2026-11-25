@@ -1380,15 +1380,14 @@ let pp_global_handles ppf fields =
    OxCaml, whose functions take their buffers [local], which an interpreted
    codec cannot, it states them for buffers on the heap. *)
 (* [Global.View] over the module's own check, for a module whose views are
-   its codec's. *)
+   its codec's: a fixed record's check has [Wire.Codec.View.check]'s form. *)
 let pp_global_view_of_check ppf =
   Fmt.pf ppf
     "  module View = struct@\n\
     \    type 'b t = 'b view@\n\
     \    type nonrec 'b check = 'b check@\n\
      @\n\
-    \    let[@inline] check b len off = check b len ~off ~len:size@\n\
-     @\n\
+    \    let[@inline] check b len off = check b len off@\n\
     \    let ok = ok@\n\
     \    let get = get@\n\
      @\n\

@@ -37,7 +37,7 @@ let stack_view () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
-  let c = G_ipv4.check n (Wire_runtime.Buf.length n) ~off:0 ~len:size in
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
   if G_ipv4.ok c then
     let v = G_ipv4.get c in
     Wire_runtime.UInt8.to_int (G_ipv4.ttl n v) + G_ipv4.view_src_int n v

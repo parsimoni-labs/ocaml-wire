@@ -854,8 +854,10 @@ let pp_fold_step s m =
   pp_fold_index_step s ~within ~m
 
 (* [check b length ~off ~len], the walk of [fold] with no output, which
-   answers [off] for a record it accepts and [-1] otherwise. *)
-let pp_check s =
+   answers [off] for a record it accepts and [-1] otherwise. A codec of
+   constant [size] takes no window: [check b length off] walks the record
+   over its [size] bytes, which the bounds fold into one test. *)
+let pp_check ?size s =
   let unboxed = s.m.num = Unboxed in
   let s =
     {
@@ -878,13 +880,16 @@ let pp_check s =
     let b = if mentions "buf" body then "b" else "_b" in
     Fmt.pf s.ppf
       "let[@inline always] check (%s : 'b Wire_runtime.Buf.t%s) (length : 'b \
-       Wire_runtime.Buf.length) ~off ~len : 'b check =@\n"
+       Wire_runtime.Buf.length) %s : 'b check =@\n"
       b
-      (if unboxed then " @ local" else "");
+      (if unboxed then " @ local" else "")
+      (if Option.is_some size then "off" else "~off ~len");
     if b = "b" then
       Fmt.pf s.ppf "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n";
     Fmt.pf s.ppf
-      "let length = (length : _ Wire_runtime.Buf.length :> int) in@\n%s@\n" body
+      "let length = (length : _ Wire_runtime.Buf.length :> int) in@\n";
+    Option.iter (Fmt.pf s.ppf "let len = %d in@\n") size;
+    Fmt.pf s.ppf "%s@\n" body
   in
   (* A walk that reads nothing answers a negative [off] itself: whether it
      reads is found by writing it once aside. *)
@@ -911,7 +916,7 @@ let without_dead_bindings text =
   String.concat "\n" (Lines.prune (String.split_on_char '\n' text))
 
 (* The walks of a scanner: its folds, then [check]. *)
-let pp_body ?step s =
+let pp_body ?step ?size s =
   let unboxed = s.m.num = Unboxed in
   if unboxed then
     Fmt.pf s.ppf
@@ -941,16 +946,16 @@ let pp_body ?step s =
     pp_frames s ~unboxed:true
   end;
   Fmt.pf s.ppf "type 'b view = int@\ntype 'b check = int@\n@\n";
-  pp_check s
+  pp_check ?size s
 
-let walks ?decide ~target ~selected ?step ~taken plan =
+let walks ?decide ~target ~selected ?step ?size ~taken plan =
   let num = if target = `OxCaml then Unboxed else Tagged in
   let b = Buffer.create 4096 in
   let ppf = Format.formatter_of_buffer b in
   let s =
     { plan; selected; m = scan_mode ?decide plan ~num selected; ppf; taken }
   in
-  pp_body ?step s;
+  pp_body ?step ?size s;
   Format.pp_print_flush ppf ();
   without_dead_bindings (Buffer.contents b)
 

@@ -237,7 +237,7 @@ let body ?decide t =
           w.views.root.members;
         let walk =
           Scan_module.walks ?decide ~target:t.target ~selected:w.selected
-            ?step:w.step ~taken w.plan
+            ?step:w.step ?size:w.views.size ~taken w.plan
         in
         (* Without a record's members, the module decodes and encodes the
            codec's values through its views. *)

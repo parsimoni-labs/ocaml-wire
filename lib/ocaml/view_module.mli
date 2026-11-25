@@ -33,9 +33,10 @@ type record = {
 }
 (** A record a scan reaches. *)
 
-type t = { root : record; records : record list }
+type t = { root : record; records : record list; size : int option }
 (** The views of a codec: its root, and every record it holds, each once, those
-    a record holds before it. *)
+    a record holds before it, and the codec's size when it is constant, which
+    takes [check]'s window away. *)
 
 val pp : t Fmt.t
 (** [pp] prints the plan of the views: each record, the records it holds first,

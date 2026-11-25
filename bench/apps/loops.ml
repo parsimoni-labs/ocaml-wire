@@ -1,7 +1,7 @@
 (* The application logic over the generated OCaml, as a user of the
    generated modules writes it, on OCaml and on OxCaml alike: each buffer is
-   named once, each record checked once ([check], over the bytes left from
-   its offset) and then read through its accessors, plain checked indexing, and
+   named once, each record checked once ([check], at its offset, as
+   [Codec.View.check] takes one) and then read through its accessors, plain checked indexing, and
    a record that fails its check ends the loop, as the Rust rows' [break]
    does. Writes of constant fields build
    their carriers once, outside the loop; a write whose values are computed in
@@ -24,7 +24,7 @@ let routing buf n =
   let off = ref 0 and i = ref 0 in
   while !i < n do
     if !off + hdr > total then off := 0;
-    let c = P.check b len ~off:!off ~len:(total - !off) in
+    let c = P.check b len !off in
     if P.ok c then begin
       let v = P.get c in
       let route = Routing_workload.route_of_apid (P.apid b v) in
@@ -49,13 +49,12 @@ let gateway buf =
   let len = Buf.length b in
   let hdr = F.size and pkt_size = P.size + 64 in
   let data_field_size = cadu_size - hdr in
-  let total = Bytes.length buf in
-  let frames = total / cadu_size in
+  let frames = Bytes.length buf / cadu_size in
   let checksum = ref checksum_init in
   let frame = ref 0 and ok = ref true in
   while !ok && !frame < frames do
     let base = !frame * cadu_size in
-    let c = F.check b len ~off:base ~len:(total - base) in
+    let c = F.check b len base in
     ok := F.ok c;
     if !ok then begin
       let f = F.get c in
@@ -64,7 +63,7 @@ let gateway buf =
       let data_end = base + hdr + data_field_size in
       let off = ref (base + hdr + fhp) in
       while !ok && !off + pkt_size <= data_end do
-        let c = P.check b len ~off:!off ~len:(data_end - !off) in
+        let c = P.check b len !off in
         ok := P.ok c;
         checksum := packet b !checksum c;
         off := !off + pkt_size
@@ -90,7 +89,7 @@ let restamp buf n out =
   let off = ref 0 and i = ref 0 in
   while !i < n do
     if !off + hdr > total then off := 0;
-    let c = P.check b len ~off:!off ~len:(total - !off) in
+    let c = P.check b len !off in
     if P.ok c then begin
       let v = P.get c in
       let apid = P.Value.apid_low (P.apid b v) in
@@ -155,12 +154,10 @@ let report n out =
 let clcw buf =
   let (Buf.Any b) = Buf.v buf in
   let len = Buf.length b in
-  let total = Bytes.length buf in
-  let words = total / C.size in
+  let words = Bytes.length buf / C.size in
   let anomalies = ref 0 and expected = ref 0 and i = ref 0 in
   while !i < words do
-    let off = !i * C.size in
-    let c = C.check b len ~off ~len:(total - off) in
+    let c = C.check b len (!i * C.size) in
     if C.ok c then begin
       let w = C.view_lockout_word b (C.get c) in
       let report = C.reportvalue_of_word w in

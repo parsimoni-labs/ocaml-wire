@@ -93,12 +93,12 @@ let accessors ctx =
     ctx.globals []
   |> List.sort_uniq String.compare
 
-(* A record module: [is_valid buf off], [check b len ~off ~len] and every
+(* A record module: [is_valid buf off], [check b len off] and every
    accessor behind a check. *)
 let record ~spec ~bound ctx =
   let viewed = [ b; Int_input "len"; Int_input "off" ] in
   let pre = "len = Bytes.length b" and window = ("off", "len - off") in
-  let checked = "check b len ~off ~len:(len - off)" in
+  let checked = "check b len off" in
   entry ~spec ~bound ~inputs:[ buf; Int_input "off" ]
     ~window:("off", "Bytes.length buf - off")
     "is_valid" "is_valid buf off"

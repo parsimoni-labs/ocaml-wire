@@ -591,14 +591,11 @@ type 'b check = private int
     named ['b]. *)
 
 val check :
-  'b Wire_runtime.Buf.t ->
-  'b Wire_runtime.Buf.length ->
-  off:int ->
-  len:int ->
-  'b check
-(** [check b length ~off ~len] is the answer of the checks {!val-fold} makes on
-    the record at [off] in the [len] bytes there, in [b] of length [length]. It
-    never raises: bad bounds or a bad record give an answer {!ok} refuses. *)
+  'b Wire_runtime.Buf.t -> 'b Wire_runtime.Buf.length -> int -> 'b check
+(** [check b length off] is the answer of the checks {!val-fold} makes on the
+    record at [off], whose 4 bytes must lie in [b] of length [length], as
+    [Wire.Codec.View.check] takes them. It never raises: bad bounds or a bad
+    record give an answer {!ok} refuses. *)
 
 val ok : 'b check -> bool
 (** [ok c] is [true] iff the check [c] passed. *)

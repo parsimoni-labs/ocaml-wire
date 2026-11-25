@@ -398,15 +398,13 @@ let codec_packet ~avail acc b len o =
 (* {2 wire.ocaml: the generated view, then a read per field}
 
    The buffer is named once ([Buf.v]) and its length read once; then
-   [check b len ~off ~len] checks a header at [off] once and [get] turns the
+   [check b len off] checks a header at [off] once and [get] turns the
    answer into a proof that only [b]'s accessors accept, as wire.rust's
    [Valid::at] does; each accessor [<field> b v] is then one load with no
    bounds check, and the proof is an [int], so nothing is allocated. *)
 
 let view_tcp base acc b len o ~payload =
-  let c =
-    G_tcp.check b len ~off:o ~len:((len : _ Wire_runtime.Buf.length :> int) - o)
-  in
+  let c = G_tcp.check b len o in
   if not (G_tcp.ok c) then base
   else
     let t = G_tcp.get c in
@@ -422,9 +420,7 @@ let view_tcp base acc b len o ~payload =
         ~flags:(G_tcp.flags_of_word w) ~off
 
 let view_udp base acc b len o ~payload =
-  let c =
-    G_udp.check b len ~off:o ~len:((len : _ Wire_runtime.Buf.length :> int) - o)
-  in
+  let c = G_udp.check b len o in
   if not (G_udp.ok c) then base
   else
     let u = G_udp.get c in
@@ -437,9 +433,7 @@ let view_udp base acc b len o ~payload =
         ~len:ulen
 
 let view_ipv4 base acc b len o ~avail =
-  let c =
-    G_ipv4.check b len ~off:o ~len:((len : _ Wire_runtime.Buf.length :> int) - o)
-  in
+  let c = G_ipv4.check b len o in
   if not (G_ipv4.ok c) then base
   else
     let ip = G_ipv4.get c in
@@ -468,9 +462,7 @@ let view_ipv4 base acc b len o ~avail =
         | _ -> acc
 
 let view_packet ~avail acc b len o =
-  let c =
-    G_eth.check b len ~off:o ~len:((len : _ Wire_runtime.Buf.length :> int) - o)
-  in
+  let c = G_eth.check b len o in
   if not (G_eth.ok c) then acc
   else
     let e = G_eth.get c in

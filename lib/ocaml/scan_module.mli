@@ -38,14 +38,16 @@ val walks :
   target:[ `OCaml | `OxCaml ] ->
   selected:output list ->
   ?step:string ->
+  ?size:int ->
   taken:(string, unit) Hashtbl.t ->
   plan ->
   string
-(** [walks ?decide ~target ~selected ?step ~taken plan] is the walks of a module
-    over [plan]: [fold], [fold_frames], with [step] the step folds, on OxCaml
-    the unboxed folds, then [check]. Each function it writes is named apart from
-    [taken], which it adds to. [decide] is given each decision the walks take,
-    in the order it writes them. *)
+(** [walks ?decide ~target ~selected ?step ?size ~taken plan] is the walks of a
+    module over [plan]: [fold], [fold_frames], with [step] the step folds, on
+    OxCaml the unboxed folds, then [check]: [check b length ~off ~len], or
+    [check b length off] for a codec of constant [size]. Each function it writes
+    is named apart from [taken], which it adds to. [decide] is given each
+    decision the walks take, in the order it writes them. *)
 
 val without_dead_bindings : string -> string
 (** [without_dead_bindings text] is [text] without the bindings it never reads.

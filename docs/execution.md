@@ -174,7 +174,10 @@ of the index or of the frame.
 A scanner also writes the views of its codec, beside the folds. `check b
 length ~off ~len` is the walk of `fold` with no output: it answers `off` for
 a record it accepts and a negative `int` otherwise, so it accepts exactly
-what `fold` accepts, and `Codec.View.check` on the frame's bytes; `ok` tests
+what `fold` accepts, and `Codec.View.check` on the frame's bytes. A codec of
+constant size takes no window, `check b length off`, the form of
+`Codec.View.check`, whose bounds fold into one test of `off` against
+`length - size`; `ok` tests
 the answer and `get` makes it a `'b view`, an `int` only the accessors of the
 buffer named `'b` take. Each named integer field is an accessor named after
 it, each optional field that holds no record a presence `<name>_present`,

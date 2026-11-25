@@ -70,7 +70,7 @@ let flow_codec buf (offs : int array) _ =
    capture ending at [cap] included. *)
 let view_ports b len ~cap o proto =
   if proto = 6 then
-    let c = G_tcp.check b len ~off:o ~len:(cap - o) in
+    let c = G_tcp.check b len o in
     if not (G_tcp.ok c) then -1
     else
       let t = G_tcp.get c in
@@ -82,7 +82,7 @@ let view_ports b len ~cap o proto =
   else if proto = 17 then
     if o + 8 > cap then -1
     else
-      let c = G_udp.check b len ~off:o ~len:(cap - o) in
+      let c = G_udp.check b len o in
       if not (G_udp.ok c) then -1
       else
         let u = G_udp.get c in
@@ -92,7 +92,7 @@ let view_ports b len ~cap o proto =
 
 let view_ipv4 b len ~cap o =
   if o + 20 <= cap then
-    let c = G_ipv4.check b len ~off:o ~len:(cap - o) in
+    let c = G_ipv4.check b len o in
     if G_ipv4.ok c then
       let ip = G_ipv4.get c in
       let hlen = (G_ipv4.ihl b ip :> int) * 4
@@ -115,7 +115,7 @@ let view_ipv4 b len ~cap o =
 
 let view_ipv6 b len ~cap o =
   if o + 40 <= cap then
-    let c = G_ipv6.check b len ~off:o ~len:(cap - o) in
+    let c = G_ipv6.check b len o in
     if G_ipv6.ok c then
       let ip = G_ipv6.get c in
       let proto = UInt8.to_int (G_ipv6.next_header b ip) in
@@ -136,7 +136,7 @@ let view_ipv6 b len ~cap o =
 let view_frame b len o caplen =
   let cap = o + caplen in
   if caplen >= 14 then
-    let c = G_eth.check b len ~off:o ~len:(cap - o) in
+    let c = G_eth.check b len o in
     if G_eth.ok c then
       let ty = UInt16.to_int (G_eth.ether_type b (G_eth.get c)) in
       if ty = 0x0800 then view_ipv4 b len ~cap (o + 14)

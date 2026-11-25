@@ -277,12 +277,7 @@ let test_words () =
     (* The same through a view, whose word reads have no check of their own. *)
     match Wire_runtime.Buf.v buf with
     | Wire_runtime.Buf.Any b ->
-        let c =
-          G_wide.check b
-            (Wire_runtime.Buf.length b)
-            ~off
-            ~len:(Bytes.length buf - off)
-        in
+        let c = G_wide.check b (Wire_runtime.Buf.length b) off in
         if G_wide.ok c then begin
           let v = G_wide.get c in
           let check name get of_view = Alcotest.(check int) name get of_view in
@@ -703,7 +698,7 @@ let test_getters () =
 
 (* [is_valid buf off] holds exactly when [Codec.validate_exn] accepts the
    record at [off]. In the buffer named [b] of length [len],
-   [check b len ~off ~len:(len - off)] passes exactly then, and each accessor
+   [check b len off] passes exactly then, and each accessor
    [<field> b v] of the view [get] makes then reads what [Codec.get] reads at
    [off]. *)
 let test_view () =
@@ -746,7 +741,7 @@ let test_view () =
       ^ ","
       ^ string_of_int (G_ipv4.view_src_int b v)
     in
-    let c = G_ipv4.check b len ~off ~len:(Bytes.length buf - off) in
+    let c = G_ipv4.check b len off in
     Alcotest.(check bool) "check" (G_ipv4.is_valid buf off) (G_ipv4.ok c);
     let got =
       outcome (fun () ->
@@ -781,9 +776,7 @@ let test_view () =
     let (Buf.Any b) = Buf.v buf in
     let got =
       outcome (fun () ->
-          let c =
-            G_checked.check b (Buf.length b) ~off ~len:(Bytes.length buf - off)
-          in
+          let c = G_checked.check b (Buf.length b) off in
           if G_checked.ok c then
             string_of_int (UInt8.to_int (G_checked.proto b (G_checked.get c)))
           else (
@@ -798,7 +791,7 @@ let test_view () =
 let test_failed_views () =
   let short = Bytes.make 3 '\xff' in
   let (Buf.Any b) = Buf.v short in
-  let c = G_ipv4.check b (Buf.length b) ~off:0 ~len:3 in
+  let c = G_ipv4.check b (Buf.length b) 0 in
   Alcotest.(check bool) "failed" false (G_ipv4.ok c);
   Alcotest.(check bool)
     "get refuses" true
@@ -827,7 +820,7 @@ let test_failed_views () =
   let off_end = Bytes.make 40 '\x45' in
   let (Buf.Any b) = Buf.v off_end in
   let len = Buf.length b in
-  let at off = G_ipv4.check b len ~off ~len:(40 - off) in
+  let at off = G_ipv4.check b len off in
   Alcotest.(check bool) "negative offset" false (G_ipv4.ok (at (-1)));
   Alcotest.(check bool) "past the end" false (G_ipv4.ok (at 21));
   (* A record with no check of its own (Eth, 14 bytes) tests no sign of its
@@ -837,7 +830,7 @@ let test_failed_views () =
       Alcotest.(check bool)
         (Fmt.str "no check, at %d" off)
         ok
-        (G_eth.ok (G_eth.check b len ~off ~len:(40 - off))))
+        (G_eth.ok (G_eth.check b len off)))
     [
       (min_int, false);
       (-14, false);
