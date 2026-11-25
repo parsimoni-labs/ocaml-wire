@@ -6,6 +6,7 @@
   decision
   dispatch_tree
   lines
+  num
   bit_tests
   wide_loads
   emitter

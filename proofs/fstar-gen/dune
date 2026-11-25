@@ -15,6 +15,12 @@
   Tiny.Step.fst
   Tiny.StepProof.fsti
   Tiny.StepProof.fst
+  Tiny.OxScan.fst
+  Tiny.OxProof.fsti
+  Tiny.OxProof.fst
+  Tiny.OxStep.fst
+  Tiny.OxStepProof.fsti
+  Tiny.OxStepProof.fst
   Ethernet.3d
   Ethernet.Scan.fst
   Ethernet.Flat.fsti
@@ -25,6 +31,12 @@
   Ethernet.Step.fst
   Ethernet.StepProof.fsti
   Ethernet.StepProof.fst
+  Ethernet.OxScan.fst
+  Ethernet.OxProof.fsti
+  Ethernet.OxProof.fst
+  Ethernet.OxStep.fst
+  Ethernet.OxStepProof.fsti
+  Ethernet.OxStepProof.fst
   IPv4.3d
   IPv4.Scan.fst
   IPv4.Flat.fsti
@@ -35,6 +47,12 @@
   IPv4.Step.fst
   IPv4.StepProof.fsti
   IPv4.StepProof.fst
+  IPv4.OxScan.fst
+  IPv4.OxProof.fsti
+  IPv4.OxProof.fst
+  IPv4.OxStep.fst
+  IPv4.OxStepProof.fsti
+  IPv4.OxStepProof.fst
   Clcw.3d
   Clcw.Scan.fst
   Clcw.Flat.fsti
@@ -45,6 +63,12 @@
   Clcw.Step.fst
   Clcw.StepProof.fsti
   Clcw.StepProof.fst
+  Clcw.OxScan.fst
+  Clcw.OxProof.fsti
+  Clcw.OxProof.fst
+  Clcw.OxStep.fst
+  Clcw.OxStepProof.fsti
+  Clcw.OxStepProof.fst
   Span.3d
   Span.Scan.fst
   Span.Flat.fsti
@@ -55,6 +79,12 @@
   Span.Step.fst
   Span.StepProof.fsti
   Span.StepProof.fst
+  Span.OxScan.fst
+  Span.OxProof.fsti
+  Span.OxProof.fst
+  Span.OxStep.fst
+  Span.OxStepProof.fsti
+  Span.OxStepProof.fst
   Gate.3d
   Gate.Scan.fst
   Gate.Flat.fsti
@@ -65,6 +95,12 @@
   Gate.Step.fst
   Gate.StepProof.fsti
   Gate.StepProof.fst
+  Gate.OxScan.fst
+  Gate.OxProof.fsti
+  Gate.OxProof.fst
+  Gate.OxStep.fst
+  Gate.OxStepProof.fsti
+  Gate.OxStepProof.fst
   Dispatch.3d
   Dispatch.Scan.fst
   Dispatch.Flat.fsti
@@ -75,6 +111,12 @@
   Dispatch.Step.fst
   Dispatch.StepProof.fsti
   Dispatch.StepProof.fst
+  Dispatch.OxScan.fst
+  Dispatch.OxProof.fsti
+  Dispatch.OxProof.fst
+  Dispatch.OxStep.fst
+  Dispatch.OxStepProof.fsti
+  Dispatch.OxStepProof.fst
   Region.3d
   Region.Scan.fst
   Region.Flat.fsti
@@ -85,6 +127,12 @@
   Region.Step.fst
   Region.StepProof.fsti
   Region.StepProof.fst
+  Region.OxScan.fst
+  Region.OxProof.fsti
+  Region.OxProof.fst
+  Region.OxStep.fst
+  Region.OxStepProof.fsti
+  Region.OxStepProof.fst
   IPv4Mutant.3d
   IPv4Mutant.Scan.fst
   IPv4Mutant.Flat.fsti
@@ -95,6 +143,12 @@
   IPv4Mutant.Step.fst
   IPv4Mutant.StepProof.fsti
   IPv4Mutant.StepProof.fst
+  IPv4Mutant.OxScan.fst
+  IPv4Mutant.OxProof.fsti
+  IPv4Mutant.OxProof.fst
+  IPv4Mutant.OxStep.fst
+  IPv4Mutant.OxStepProof.fsti
+  IPv4Mutant.OxStepProof.fst
   ClcwStepMutant.3d
   ClcwStepMutant.Scan.fst
   ClcwStepMutant.Flat.fsti
@@ -104,7 +158,29 @@
   ClcwStepMutant.Visitor.fsti
   ClcwStepMutant.Step.fst
   ClcwStepMutant.StepProof.fsti
-  ClcwStepMutant.StepProof.fst)
+  ClcwStepMutant.StepProof.fst
+  ClcwStepMutant.OxScan.fst
+  ClcwStepMutant.OxProof.fsti
+  ClcwStepMutant.OxProof.fst
+  ClcwStepMutant.OxStep.fst
+  ClcwStepMutant.OxStepProof.fsti
+  ClcwStepMutant.OxStepProof.fst
+  TinyOxMutant.3d
+  TinyOxMutant.Scan.fst
+  TinyOxMutant.Flat.fsti
+  TinyOxMutant.Flat.fst
+  TinyOxMutant.Proof.fsti
+  TinyOxMutant.Proof.fst
+  TinyOxMutant.Visitor.fsti
+  TinyOxMutant.Step.fst
+  TinyOxMutant.StepProof.fsti
+  TinyOxMutant.StepProof.fst
+  TinyOxMutant.OxScan.fst
+  TinyOxMutant.OxProof.fsti
+  TinyOxMutant.OxProof.fst
+  TinyOxMutant.OxStep.fst
+  TinyOxMutant.OxStepProof.fsti
+  TinyOxMutant.OxStepProof.fst)
  (action
   (run %{exe:../../scripts/fstar-gen/gen.exe} .)))
 
@@ -118,8 +194,31 @@
    WireGen.Vectors.fst
    (run %{exe:../../scripts/fstar-gen/vectors.exe}))))
 
+;; The OxCaml primitives the F* rendering of the OxCaml scanner reads as
+;; those of WireGen.OCaml, run on OxCaml: WireGen.VectorsOx.fst is committed,
+;; make prove checks it with F*, and on an OxCaml compiler runtest checks it
+;; is what OxCaml computes (dune promote writes it again).
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   VectorsOx.out
+   (run %{exe:../../scripts/fstar-gen/vectors_ox.exe}))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (diff WireGen.VectorsOx.fst VectorsOx.out)))
+
 ;; The rules that use the F* cache run in the build directory, where
-;; prove.sh finds the default cache, never in a sandbox.
+;; prove.sh finds the default cache, never in a sandbox. A codec's rule
+;; depends on the library's sources as well as on used.lib, which lists the
+;; library's cache entries by name: a change to the library alone checks
+;; each codec again.
 
 (rule
  (targets used.lib)
@@ -135,6 +234,7 @@
   ../fstar/Plan.Expr.fst
   ../fstar/Plan.Values.fst
   WireGen.Vectors.fst
+  WireGen.VectorsOx.fst
   (env_var EVERPARSE)
   (env_var WIRE_FSTAR_CACHE))
  (action
@@ -151,7 +251,8 @@
    lib/WireGen.Tables.fst
    lib/WireGen.Tac.fst
    lib/WireGen.Lib3d.fst
-   WireGen.Vectors.fst)))
+   WireGen.Vectors.fst
+   WireGen.VectorsOx.fst)))
 
 (rule
  (targets used.Tiny)
@@ -160,6 +261,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files Tiny.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -173,6 +278,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files Ethernet.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -186,6 +295,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files IPv4.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -199,6 +312,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files Clcw.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -212,6 +329,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files Span.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -225,6 +346,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files Gate.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -238,6 +363,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files Dispatch.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -251,6 +380,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files Region.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -266,6 +399,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files IPv4Mutant.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -282,6 +419,10 @@
  (deps
   (sandbox none)
   used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
   ../../scripts/fstar-gen/prove.exe
   (glob_files ClcwStepMutant.*)
   (env_var WIRE_PROVE_TIMEOUT))
@@ -293,6 +434,32 @@
    ClcwStepMutant
    "s/(P.shift_right_logical bw1 18) 63/(P.shift_right_logical bw1 17) 63/"
    Step)))
+
+;; The OxCaml fold of Tiny with [a] read from the low byte of the 16-bit
+;; load one byte on, the byte after [a]: the OxCaml proof must fail.
+
+(rule
+ (targets used.TinyOxMutant)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  (sandbox none)
+  used.lib
+  (glob_files lib/*.fst)
+  ../fstar/Plan.Word.fst
+  ../fstar/Plan.Expr.fst
+  ../fstar/Plan.Values.fst
+  ../../scripts/fstar-gen/prove.exe
+  (glob_files TinyOxMutant.*)
+  (env_var WIRE_PROVE_TIMEOUT))
+ (action
+  (run
+   sh
+   prove.sh
+   refused
+   TinyOxMutant
+   "s/(P.u16le_at buf base)) 255)/(P.u16le_at buf (P.int64_add base 1))) 255)/"
+   OxScan)))
 
 ;; Once every run has listed the cache entries it used, the rest of
 ;; WIRE_FSTAR_CACHE goes: other F* versions, the 3d.exe output of a .3d that
@@ -322,4 +489,5 @@
    %{dep:used.Dispatch}
    %{dep:used.Region}
    %{dep:used.IPv4Mutant}
-   %{dep:used.ClcwStepMutant})))
+   %{dep:used.ClcwStepMutant}
+   %{dep:used.TinyOxMutant})))

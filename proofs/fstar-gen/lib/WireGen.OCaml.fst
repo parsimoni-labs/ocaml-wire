@@ -161,6 +161,48 @@ let int64_ge (a b:int64) : bool = signed64 a >= signed64 b
 let int64_eq (a b:int64) : bool = a = b
 let int64_ne (a b:int64) : bool = a <> b
 
+(* {1 OxCaml} The OxCaml scanner holds values and positions as [int64_u],
+   whose operations are those of [Int64] on the same 64-bit pattern: F*
+   holds an [int64_u] as that pattern, an [int64], and reads [U.add] as
+   [int64_add] and so on. What OxCaml adds is below: [Int64_u.to_int64],
+   [Target.offset] (an [int64_u] position as an [int]), the loads at an
+   [int64_u] position of [Target.Local], [Target.unsigned_compare], and
+   [Int64_u.logor], whose sign is that of either operand, as the type
+   says. *)
+
+let to_int64 (x:int64) : int64 = x
+
+let offset (x:int64) : r:int{x < 4611686018427387904 ==> r == x} =
+  assert_norm (pow2 62 == 4611686018427387904);
+  reveal_opaque (`%to_int) (to_int x);
+  if x < pow2 62 then begin M.pow2_lt_compat 63 62; M.small_mod x (pow2 63) end;
+  to_int x
+
+let int64_unsigned_gt (a b:int64) : bool = a > b
+
+[@@"opaque_to_smt"]
+let int64_logor (a b:int64)
+  : r:int64{r >= 9223372036854775808 <==> (a >= 9223372036854775808 \/ b >= 9223372036854775808)} =
+  pow2_64 ();
+  U.lemma_msb_pow2 #64 a;
+  U.lemma_msb_pow2 #64 b;
+  U.lemma_msb_pow2 #64 (U.logor #64 a b);
+  U.logor_definition #64 a b 0;
+  U.logor #64 a b
+
+[@@"opaque_to_smt"]
+let u16le_at (b:buf) (o:int64{o + 2 <= length b}) : r:int{0 <= r /\ r <= 0xffff} =
+  assert_norm (pow2 16 == 0x10000); M.pow2_lt_compat 62 16; le b o 2
+[@@"opaque_to_smt"]
+let u16be_at (b:buf) (o:int64{o + 2 <= length b}) : r:int{0 <= r /\ r <= 0xffff} =
+  assert_norm (pow2 16 == 0x10000); M.pow2_lt_compat 62 16; be b o 2
+[@@"opaque_to_smt"]
+let i32be_at (b:buf) (o:int64{o + 4 <= length b}) : int32 = be b o 4
+[@@"opaque_to_smt"]
+let i32le_at (b:buf) (o:int64{o + 4 <= length b}) : int32 = le b o 4
+[@@"opaque_to_smt"]
+let i64be_at (b:buf) (o:int64{o + 8 <= length b}) : int64 = be b o 8
+
 (* {1 The meaning of the opaque primitives} which WireGen.Defs states as
    rewrite rules. *)
 
@@ -190,6 +232,12 @@ let int64_logand_def (a b:int64) : Lemma (int64_logand a b == U.logand #64 a b)
   = reveal_opaque (`%int64_logand) (int64_logand a b)
 let shift_left_def (w:int64) (k:nat{k < 64}) : Lemma (shift_left w k == (w * pow2 k) % pow2 64)
   = reveal_opaque (`%shift_left) (shift_left w k)
+let int64_logor_def (a b:int64) : Lemma (int64_logor a b == U.logor #64 a b)
+  = reveal_opaque (`%int64_logor) (int64_logor a b)
+let u16le_at_def (b:buf) (o:int64{o + 2 <= length b}) : Lemma (u16le_at b o == le b o 2)
+  = reveal_opaque (`%u16le_at) (u16le_at b o)
+let i32le_at_def (b:buf) (o:int64{o + 4 <= length b}) : Lemma (i32le_at b o == le b o 4)
+  = reveal_opaque (`%i32le_at) (i32le_at b o)
 
 (* {1 What the walk reads these as} once proved, as rewrite rules. *)
 
@@ -297,6 +345,47 @@ let int64_land_int32 (x:int32) (m:Prims.int)
     if x >= 2147483648 then M.lemma_mod_plus x 4294967295 4294967296;
     M.small_mod x (pow2 32)
 
+(* The two bytes of a little-endian 16-bit load, as the OxCaml scanner reads
+   a byte: the low one masked, the high one shifted down. *)
+let le2 (b:buf) (o:nat)
+  : Lemma (le b o 2 == be b o 1 + 256 * be b (o + 1) 1)
+  = assert (Plan.Word.le (byte b) o 2 == byte b o + 256 * Plan.Word.le (byte b) (o + 1) 1);
+    assert (Plan.Word.le (byte b) (o + 1) 1 == byte b (o + 1));
+    assert (Plan.Word.be (byte b) o 1 == byte b o);
+    assert (Plan.Word.be (byte b) (o + 1) 1 == byte b (o + 1))
+
+(* A field inside a 64-bit word, as the OxCaml scanner reads one: shifted
+   to the top, then down. *)
+let shift_pair (w:int64) (k m:nat)
+  : Lemma (requires 1 <= k /\ 1 <= m /\ k + m <= 8)
+          (ensures shift_right_logical (shift_left w (8 * k)) (64 - 8 * m) ==
+                   (w / pow2 (8 * (8 - k - m))) % pow2 (8 * m))
+  = let s = 8 * k in
+    let u = 8 * (8 - k - m) in
+    let t = 64 - 8 * m in
+    shift_left_def w s;
+    shift_right_logical_def (shift_left w s) t;
+    M.pow2_plus (64 - s) s;
+    M.lemma_div_mod w (pow2 (64 - s));
+    let r = w % pow2 (64 - s) in
+    let q = w / pow2 (64 - s) in
+    M.distributivity_add_left (q * pow2 (64 - s)) r (pow2 s);
+    M.paren_mul_right q (pow2 (64 - s)) (pow2 s);
+    M.lemma_mod_lt w (pow2 (64 - s));
+    M.lemma_mult_lt_right (pow2 s) r (pow2 (64 - s));
+    M.lemma_mod_plus (r * pow2 s) q (pow2 64);
+    M.small_mod (r * pow2 s) (pow2 64);
+    assert ((w * pow2 s) % pow2 64 == r * pow2 s);
+    M.pow2_plus s u;
+    assert (pow2 t == pow2 s * pow2 u);
+    M.division_multiplication_lemma (r * pow2 s) (pow2 s) (pow2 u);
+    M.cancel_mul_div r (pow2 s);
+    assert ((r * pow2 s) / pow2 t == r / pow2 u);
+    M.pow2_plus u (8 * m);
+    assert (pow2 (64 - s) == pow2 u * pow2 (8 * m));
+    M.modulo_division_lemma w (pow2 u) (pow2 (8 * m));
+    assert (r / pow2 u == (w / pow2 u) % pow2 (8 * m))
+
 (* The [m] bytes at [o + k] out of the big-endian word at [o]. *)
 let word_bytes (b:bytes) (o:nat) (k:nat) (m:nat)
   : Lemma (requires 1 <= m /\ m <= 7 /\ k + m <= 8)
@@ -343,6 +432,74 @@ let word_end (k:nat) (m:nat) (p:pos)
         word_bytes b o k m
       end in
     FStar.Classical.forall_intro_2 aux
+
+(* The [m] bytes at [o + k] of the big-endian word at [o], shifted to
+   the top of the word and down. *)
+let word_pair (k m sl sr:nat)
+  : Lemma (requires 1 <= k /\ 1 <= m /\ k + m <= 8 /\ sl == 8 * k /\ sr == 64 - 8 * m)
+          (ensures (forall (b:buf) (o:int). {:pattern (shift_right_logical (shift_left (i64be b o) sl) sr)}
+                     (0 <= o /\ o + 8 <= length b) ==>
+                     shift_right_logical (shift_left (i64be b o) sl) sr == be b (o + k) m))
+  = let aux (b:buf) (o:int) : Lemma ((0 <= o /\ o + 8 <= length b) ==>
+                     shift_right_logical (shift_left (i64be b o) sl) sr == be b (o + k) m) =
+      if 0 <= o && o + 8 <= length b then begin
+        i64be_def b o;
+        shift_pair (i64be b o) k m;
+        word_bytes b o k m
+      end in
+    FStar.Classical.forall_intro_2 aux
+
+(* {1 OxCaml loads} A big-endian load at an [int64_u] position is the load
+   at the [int] one, whose rules then apply; a little-endian one is read a
+   byte at a time, the low one masked, the high one shifted down; the low 16
+   bits of a 32-bit big-endian load sign-extended to 64 bits are its last two
+   bytes: where the OxCaml scanner is checked, they bound a size it reads through
+   such a load. *)
+
+let u16be_at_is (b:buf) (o:int64{o + 2 <= length b})
+  : Lemma (u16be_at b o == u16be b o) [SMTPat (u16be_at b o)]
+  = reveal_opaque (`%u16be_at) (u16be_at b o); u16be_def b o
+
+let i32be_at_is (b:buf) (o:int64{o + 4 <= length b})
+  : Lemma (i32be_at b o == i32be b o) [SMTPat (i32be_at b o)]
+  = reveal_opaque (`%i32be_at) (i32be_at b o); i32be_def b o
+
+let i64be_at_is (b:buf) (o:int64{o + 8 <= length b})
+  : Lemma (i64be_at b o == i64be b o) [SMTPat (i64be_at b o)]
+  = reveal_opaque (`%i64be_at) (i64be_at b o); i64be_def b o
+
+let u16le_low (b:buf) (o:int64{o + 2 <= length b})
+  : Lemma (int64_logand (int64_of_int (u16le_at b o)) 255 == be b o 1)
+          [SMTPat (int64_logand (int64_of_int (u16le_at b o)) 255)]
+  = u16le_at_def b o;
+    le2 b o;
+    assert_norm (pow2 8 == 256);
+    int64_mask (int64_of_int (u16le_at b o)) 8;
+    M.lemma_mod_plus (be b o 1) (be b (o + 1) 1) 256;
+    M.small_mod (be b o 1) 256
+
+let u16le_high (b:buf) (o:int64{o + 2 <= length b})
+  : Lemma (shift_right_logical (int64_of_int (u16le_at b o)) 8 == be b (o + 1) 1)
+          [SMTPat (shift_right_logical (int64_of_int (u16le_at b o)) 8)]
+  = u16le_at_def b o;
+    le2 b o;
+    assert_norm (pow2 8 == 256);
+    shift_right_logical_def (int64_of_int (u16le_at b o)) 8;
+    M.lemma_div_plus (be b o 1) (be b (o + 1) 1) 256;
+    M.small_div (be b o 1) 256
+
+let i32_low16 (b:buf) (o:int64{o + 4 <= length b})
+  : Lemma (int64_logand (int64_of_int32 (i32be_at b o)) 65535 == be b (o + 2) 2)
+          [SMTPat (int64_logand (int64_of_int32 (i32be_at b o)) 65535)]
+  = reveal_opaque (`%i32be_at) (i32be_at b o);
+    pow2_64 ();
+    assert_norm (pow2 16 == 65536 /\ pow2 32 == 4294967296);
+    let x = i32be_at b o in
+    int64_mask (int64_of_int32 x) 16;
+    if x >= 2147483648 then M.lemma_mod_plus x 281474976645120 65536;
+    Plan.Word.be_split (byte b) o 2 2;
+    M.lemma_mod_plus (be b (o + 2) 2) (be b o 2) 65536;
+    M.small_mod (be b (o + 2) 2) 65536
 
 (* {1 The 3D value as ints} for the statement: a scanner output is the
    value 3d.exe parses, or bits of it. *)

@@ -49,7 +49,7 @@ let scan_mode ?(decide = ignore) ?(note = ignore) (plan : plan) ~num selected =
          runtime's [Target.Local]. *)
       (match num with
       | Unboxed -> { local_bytes_src with u = "L"; checked = "L" }
-      | Fstar | Fstar64 -> fstar_src
+      | Fstar | Fstar64 | Fstar_u -> fstar_src
       | Tagged | Boxed -> bytes_src);
     ox = false;
     raw32 = false;
@@ -76,12 +76,13 @@ let pp_args ~fstar ~conv ppf outputs =
    converted for a [valid] that is not unboxed: to an [int64] with [step], to
    an [int] otherwise. *)
 let to_int (w : w) ~unboxed ~step (o : output) =
-  if w.m.num = Unboxed && (not unboxed) && not o.is_bool then
+  if rep w.m.num = Unboxed && (not unboxed) && not o.is_bool then
+    let u = if w.m.num = Fstar_u then "P" else "U" in
     match List.assoc_opt o.id w.settled with
-    | Some _ -> if step then "0L" else "0"
+    | Some _ -> if step && w.m.num = Unboxed then "0L" else "0"
     | None ->
-        Fmt.str
-          (if step then "(U.to_int64 %s)" else "(U.to_int %s)")
+        Fmt.str "(%s.%s %s)" u
+          (if step then "to_int64" else "to_int")
           (output_text w o)
   else output_text w o
 
@@ -138,6 +139,7 @@ let scope s names =
     match s.m.num with
     | Unboxed -> (Some "int64_u", Some "bytes @ local")
     | Fstar | Fstar64 -> (Some "P.int", Some "P.buf")
+    | Fstar_u -> (Some "P.int64", Some "P.buf")
     | Tagged | Boxed -> (None, None)
   in
   List.rev ([ ("buf", buf); ("base", num); ("stop", num) ] @ names)
@@ -191,19 +193,22 @@ let checks_len plan =
 (* The bounds of an entry on [int64_u] positions, as the sign of one
    [logor]. *)
 let pp_unboxed_guard s ~check ~off_tested ~length ~reject =
+  let num = s.m.num in
+  let sub a b = Num.binop num "-" a b and logor a b = Num.binop num "lor" a b in
   let rest =
-    if check then Fmt.str "(U.sub (U.sub %s stop) base)" length
-    else Fmt.str "(U.sub (U.sub %s base) stop)" length
+    if check then sub (sub length "stop") "base"
+    else sub (sub length "base") "stop"
   in
+  let sign =
+    if not off_tested then rest
+    else logor (if checks_len s.plan then "base" else logor "base" "stop") rest
+  in
+  let of_int = int64_of num "int" in
   Fmt.pf s.ppf
-    "let base = U.of_int off in@\n\
-     let stop = U.of_int len in@\n\
-     if U.compare %s #0L < 0 then %s else@\n"
-    (if not off_tested then rest
-     else
-       Fmt.str "(U.logor %s %s)"
-         (if checks_len s.plan then "base" else "(U.logor base stop)")
-         rest)
+    "let base = %s off in@\nlet stop = %s len in@\nif %s then %s else@\n" of_int
+    of_int
+    (if num = Fstar_u then Fmt.str "P.int64_lt %s 0" sign
+     else Fmt.str "U.compare %s #0L < 0" sign)
     reject
 
 (* The bounds of an entry on [int]s, or through [P] on [length] for an F*
@@ -242,7 +247,7 @@ let pp_int_guard s ~check ~off_tested ~length ~reject =
 let pp_entry ?cuts ?(length = "Bytes.length buf") ?int_length
     ?(unboxed_length = false) ?(loads = true) ?(check = false) ~name ~scope s
     ~reject ~accept =
-  let unboxed = s.m.num = Unboxed in
+  let unboxed = rep s.m.num = Unboxed in
   let off_tested = loads || not (checks_len s.plan) in
   let on_ints = check && (not off_tested) && Option.is_some int_length in
   let length = if on_ints then Option.get int_length else length in
@@ -250,9 +255,10 @@ let pp_entry ?cuts ?(length = "Bytes.length buf") ?int_length
     pp_unboxed_guard s ~check ~off_tested ~length ~reject
   else begin
     pp_int_guard s ~check ~off_tested ~length ~reject;
+    let of_int = int64_of s.m.num "int" in
     Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
-      (if unboxed then "U.of_int off" else "off")
-      (if unboxed then "U.of_int len" else "len")
+      (if unboxed then of_int ^ " off" else "off")
+      (if unboxed then of_int ^ " len" else "len")
   end;
   pp_scan ?cuts ~name ~scope s ~reject ~accept
 
@@ -591,7 +597,7 @@ let pp_fold ?trace s ~unboxed =
   let name = if unboxed then "fold_unboxed" else "fold" in
   with_cuts ?trace s name (fun s cuts ->
       let callbacks =
-        if s.m.num = Fstar then begin
+        if is_fstar s.m.num then begin
           Fmt.pf s.ppf
             "let %s (#r:Type) (buf:P.buf) (off:P.int) (len:P.int) \
              (invalid:unit -> r) (valid:valid_t r) : r =@\n"
@@ -826,11 +832,16 @@ let pp_fold_index_step s ~within ~m =
    [fold_index_step] call. *)
 let within = "step_within"
 
+(* {!length_of} in F*, of the buffer [buf]. *)
+let fstar_length_of s buf =
+  if rep s.m.num = Unboxed then Fmt.str "(P.int64_of_int (P.length %s))" buf
+  else Fmt.str "(P.length %s)" buf
+
 (* [step_within] and [fold_step], which calls it with the length of [buf]. In
    F*, each parameter is typed and the accumulator is [m]'s [t]. *)
 let pp_step_within ?trace s m =
   let buf = s.m.src.buf in
-  let unboxed = s.m.num = Unboxed in
+  let unboxed = rep s.m.num = Unboxed in
   with_cuts ?trace s "fold_step" (fun s cuts ->
       Hashtbl.replace s.taken within ();
       let body = Buffer.create 4096 in
@@ -851,10 +862,12 @@ let pp_step_within ?trace s m =
       (* Its callers pass the length of [buf], which F* requires. *)
       if is_fstar s.m.num then
         Fmt.pf s.ppf
-          "let %s (%s:P.buf) (length:P.int{length == P.length %s}) (off:P.int) \
-           (len:P.int) (init:%s.t) : %s.t =@\n\
+          "let %s (%s:P.buf) (length:%s{length == %s}) (off:P.int) (len:P.int) \
+           (init:%s.t) : %s.t =@\n\
            %s@\n"
-          within param param m m body
+          within param
+          (if unboxed then "P.int64" else "P.int")
+          (fstar_length_of s param) m m body
       else
         Fmt.pf s.ppf "let[@inline always] %s %s ~%s off len ~init =@\n%s@\n"
           within param
@@ -863,9 +876,9 @@ let pp_step_within ?trace s m =
   if is_fstar s.m.num then
     Fmt.pf s.ppf
       "let fold_step (buf:P.buf) (off:P.int) (len:P.int) (init:%s.t) : %s.t =@\n\
-       %s buf (P.length buf) off len init@\n\
+       %s buf %s off len init@\n\
        @\n"
-      m m within
+      m m within (fstar_length_of s "buf")
   else
     Fmt.pf s.ppf
       "let[@inline always] fold_step %s off len ~init =@\n\
@@ -1012,6 +1025,7 @@ let unlocal text =
 
 (* The F* rendering of the function [write] writes, a walk of [plan] held as
    [num] whose OCaml holds values as [rep num]. *)
+
 let rendered ?fields c ~num write =
   let plan = scan_plan c in
   no_slots plan;
@@ -1059,3 +1073,10 @@ let fstar ?fields c =
 
 let fstar_step ?fields ~step c =
   rendered ?fields c ~num:Fstar64 (fun ~trace s -> pp_step_within ~trace s step)
+
+let fstar_ox ?fields c =
+  rendered ?fields c ~num:Fstar_u (fun ~trace s ->
+      pp_fold ~trace s ~unboxed:false)
+
+let fstar_ox_step ?fields ~step c =
+  rendered ?fields c ~num:Fstar_u (fun ~trace s -> pp_step_within ~trace s step)

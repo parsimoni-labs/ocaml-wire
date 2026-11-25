@@ -9,18 +9,22 @@ open Planner
 (** How the code holds integers. [Tagged] is [int]. [Boxed] is [int64] for
     values and [int] for positions; the stock compiler keeps such an [int64]
     unboxed in a register. [Unboxed] is OxCaml's [int64_u]. [Fstar] is [Tagged]
-    written as F*, and [Fstar64] is [Boxed]: the walk takes the same decisions
-    and writes each operation and load as a call into the module [P] of the F*
-    primitives. *)
-type num = Tagged | Boxed | Unboxed | Fstar | Fstar64
+    written as F*, [Fstar64] is [Boxed] and [Fstar_u] is [Unboxed], an [int64_u]
+    as its 64-bit pattern: the walk takes the same decisions and writes each
+    operation and load as a call into the module [P] of the F* primitives. *)
+type num = Num.t = Tagged | Boxed | Unboxed | Fstar | Fstar64 | Fstar_u
 
 val rep : num -> num
 (** [rep num] is how [num] holds values: {!constructor-Tagged} for
-    {!constructor-Fstar}, {!constructor-Boxed} for {!constructor-Fstar64}, [num]
-    otherwise. *)
+    {!constructor-Fstar}, {!constructor-Boxed} for {!constructor-Fstar64},
+    {!constructor-Unboxed} for {!constructor-Fstar_u}, [num] otherwise. *)
 
 val is_fstar : num -> bool
 (** [is_fstar num] is [true] when [num] is written as F*. *)
+
+val int64_of : num -> string -> string
+(** [int64_of num from] is the function that makes the [int64] (or [int64_u])
+    [num] holds of a value of [from], ["int"] or ["int32"]. *)
 
 val pos_num : num -> num
 (** [pos_num num] is how code that holds integers as [num] holds positions,

@@ -71,9 +71,28 @@ once per frame, for the `length` its callers pass: the type of
 above hold of the step walk too, its `int64` operations included: an
 `int64` comparison is signed, as OCaml's on `int64` is.
 
+### The OxCaml scanner
+
+The scanner `Wire_ocaml.scanner ~target:`OxCaml` writes holds values and
+positions as `int64_u`. Its `fold` and its step functions are rendered by
+the same walk as `M.OxScan` and `M.OxStep`, each `int64_u` as its 64-bit
+pattern, an F* `int64`, and each OxCaml primitive as the primitive of
+`WireGen.OCaml` that means the same (`U.add` as `P.int64_add`,
+`L.u16le_at` as `P.u16le_at`, `B.offset` as `P.offset`, the literal `#5L`
+as `5`). `M.OxProof.fold_is_3d` and `M.OxStepProof.fold_step_is_3d` are the
+two theorems above, word for word, of the OxCaml code: its `fold` hands
+`valid` each output as an `int` (`U.to_int`), its step functions hand
+`S.valid` each as an `int64` (`U.to_int64`). So the OxCaml scanner too
+accepts exactly what 3d.exe's parser accepts, hands out the same values
+and loads nothing outside the buffer (its loads at an `int64_u` position
+require the bytes there); its `int64_u` arithmetic is modulo 2^64, so
+where it would wrap the answer would differ from the parser's, which the
+proof excludes. The sign of one `logor` that tests `off` and `len` in its
+`step_within` rejects exactly the windows that leave the buffer.
+
 ## What is generated
 
-`Wire_ocaml.fstar ~codec:M c` returns nine modules, which
+`Wire_ocaml.fstar ~codec:M c` returns fifteen modules, which
 `scripts/fstar-gen/gen.exe` writes with `M.3d` (`Wire.Everparse.write
 ~mode:`Standalone ~name:M`):
 
@@ -85,6 +104,8 @@ above hold of the step walk too, its `int64` operations included: an
 | `M.Visitor.fsti` | the module the step functions call by name: an abstract `t`, `invalid` and `valid` (an `int64` per output, a `bool` per presence), none defined, so the proof holds of every module |
 | `M.Step.fst` | `step_within` and `fold_step`, as the emitter writes them with `~step`, values held as `int64`, with in place each function the OCaml walk is cut into |
 | `M.StepProof.fsti`, `M.StepProof.fst` | `visit`; the lemmas of `M.Proof` for the step walk's values (`P.bits64` of a word); then `step_within == flat` on the buffer's length, `step_within_is_3d` and `fold_step_is_3d`, through the same `M.Flat` |
+| `M.OxScan.fst`, `M.OxProof.fsti`, `M.OxProof.fst` | the same as `M.Scan` and `M.Proof`, of the OxCaml scanner's `fold` |
+| `M.OxStep.fst`, `M.OxStepProof.fsti`, `M.OxStepProof.fst` | the same as `M.Step` and `M.StepProof`, of the OxCaml scanner's step functions, which call the same `M.Visitor` |
 
 The library in `lib/` is written once: `WireGen.OCaml` (the primitives,
 those whose meaning is more than linear arithmetic opaque to Z3, so that
@@ -110,7 +131,16 @@ of the step walk: `of_int`, `of_int32`, `add`, `sub`, `mul`, `shift_left`, `loga
 a mask, the comparisons on `int64`) on boundary and random operands and
 states each
 result of the primitive of `WireGen.OCaml`: F* checks the arithmetic by
-normalisation and the loads and masks by Z3.
+normalisation and the loads and masks by Z3. `WireGen.VectorsOx.fst` does
+the same for the OxCaml primitives the F* of the OxCaml scanner reads as
+those of `WireGen.OCaml` (`Int64_u`'s operations and comparisons,
+`Target.offset`, `Target.unsigned_compare`, the sign of `Int64_u.logor`,
+the loads at an `int64_u` position of `Target.Local`), on the same
+operands (`scripts/fstar-gen/operands.ml`): `vectors_ox.exe` runs them on
+an OxCaml compiler, and the file is committed, since `make prove` runs on
+the stock one. On an OxCaml compiler `dune runtest` (and `make
+test-oxcaml`) checks the committed file is what OxCaml computes; `dune
+promote` writes it again.
 
 ## What is trusted
 
@@ -125,10 +155,18 @@ normalisation and the loads and masks by Z3.
   `Int64.add`, `sub` and `mul` are modulo 2^64, a comparison of two
   `int64` is signed). `WireGen.Vectors` checks it on the operands it
   lists, not for all.
+- The OxCaml primitives' meaning, read as `WireGen.OCaml`'s on the 64-bit
+  pattern of an `int64_u`: that `Int64_u`'s operations, conversions and
+  comparisons are those of `Int64` on the same pattern, `Target.offset`
+  keeps its low 63 bits, `Target.unsigned_compare` compares two patterns
+  as unsigned, `Int64_u.logor` is negative exactly where an operand is,
+  and the loads of `Target.Local` at an `int64_u` position read the bytes
+  there, a 16-bit or 32-bit little-endian one included.
+  `WireGen.VectorsOx` checks it on its operands, as computed on OxCaml.
 - The token table: `M.Scan.fst` and the OCaml `fold`, `M.Step.fst` and the
-  OCaml `step_within` and `fold_step`, are one tree up to it, which
-  `test/fstar` checks (below), so of the printer only the table is
-  trusted.
+  OCaml `step_within` and `fold_step`, and the same two of the OxCaml
+  scanner, are one tree up to it, which `test/fstar` checks (below), so
+  of the printer only the table is trusted.
 
 - `answer`, which is part of the statement: it reads each output out of the
   3D value as the 3D language lays out a bitfield (from the least
@@ -140,7 +178,8 @@ normalisation and the loads and masks by Z3.
 `test/fstar` (part of `dune runtest`, no F* needed) reads the `fold` of
 `Wire_ocaml.scanner ~step:"S"` and the functions it calls, and
 `M.Scan.fst`, then its `fold_step` and the functions it calls, and
-`M.Step.fst`, with
+`M.Step.fst`, then the same of `Wire_ocaml.scanner ~target:`OxCaml
+~step:"S"` and `M.OxScan.fst` and `M.OxStep.fst`, with
 the OCaml parser: the bodies of the F* functions keep to the F* that is
 also OCaml (`let x = e in`, a local function `let f () = e in`,
 `if then else`, application, `&&`, `||`, `not`). It requires the same
@@ -159,6 +198,13 @@ body once the OCaml is read through this table, in
 | `Int64.shift_left` | `P.shift_left` |
 | `(a : int64) < b`, `<=`, `>`, `>=`, `=`, `<>` | `P.int64_lt a b`, `P.int64_le`, ... |
 | `S.invalid`, `S.valid` | `S.invalid`, `S.valid` |
+| `U.add`, `sub`, `mul`, `logand`, `logor`, `of_int`, `of_int32_u` | `P.int64_add`, ..., `P.int64_of_int32` |
+| `U.shift_right_logical`, `shift_left`, `to_int`, `to_int64` | `P.shift_right_logical`, ..., `P.to_int64` |
+| `U.compare a b < 0`, `<=`, `>`, `>=`, `=`, `<>` | `P.int64_lt a b`, ... |
+| `B.unsigned_compare a b > 0`, `B.offset` | `P.int64_unsigned_gt a b`, `P.offset` |
+| `L.f` | `P.f` |
+| `#5L`, `(-#5L)` | `5`, `18446744073709551611`: a literal is the decimal of its 64-bit pattern |
+| `e [@nontail]`, `(buf @ local)` | `e`, `buf` |
 | `Wire_runtime.Unchecked.f` | `P.f` |
 | an `int64` literal `0xFFFF_FFFFL` | `0xFFFFFFFF` |
 | `(e : int)` | `e` |
@@ -178,13 +224,19 @@ Headers differ and are not compared beyond the parameter names:
 `[@inline always]` against none, and the F* parameter types, which F*
 checks.
 
+The stock parser reads the OxCaml text once each unboxed literal `#5L`
+is `5L` and each `@ local` is dropped, one definition at a time: a
+definition it cannot read (an unboxed record, a frame loop's `let
+mutable`) is one `fold` and `fold_step` never reach.
+
 The test runs on every codec of the test corpora the F* rendering accepts:
 the proved ones, the packet stack of `examples/net`, the headers of
 `bench/rust` and `examples/space`, the schemas of `test/ocaml`, the
 fuzzers' registry and the codecs the differential fuzzer samples. Three
 mutants of the IPv4 OCaml `fold` (a literal, an operator, two labels
 swapped) and three of its step walk (a shift, an `int64` comparison, two
-labels swapped) must fail it.
+labels swapped) and three of the OxCaml one (a literal, a comparison, an
+output given another field's value) must fail it.
 
 ## Scope
 
@@ -197,17 +249,18 @@ else: an optional codec of a fixed size, which 3D reads as a list of
 elements, signed and little-endian fields, checked arithmetic, a scanner
 that holds an output in a mutable local (more than four optional fields
 deep), a negative `int64` literal and an `int64` normalised to 63 bits in
-the step walk. Outside the rendering stay the frame loops (`fold_frames`,
-`fold_frames_step`, `fold_index_step`), the OxCaml scanner, the views, the
-record module, and the Rust Wire_rust writes, which has a walk of its own
-and stays under `make fuzz-rust`.
+the step walks. Outside the rendering stay the frame loops (`fold_frames`,
+`fold_frames_step`, `fold_frames_unboxed`, `fold_index_step`), the
+OxCaml `fold_unboxed` and `decode_unboxed`, the views, the record module,
+and the Rust Wire_rust writes, which has a walk of its own and stays
+under `make fuzz-rust`.
 
 ## Opting a codec in
 
-Add it to `scripts/fstar-gen/proved.ml`, list its ten files in the
+Add it to `scripts/fstar-gen/proved.ml`, list its sixteen files in the
 targets of `dune` and add a `prove.sh codec M` rule to the `prove` alias.
-`make prove` then runs 3d.exe on `M.3d` and F* on `M.Scan`, `M.Flat`,
-`M.Proof`, `M.Visitor`, `M.Step` and `M.StepProof`. The proved set is Tiny (two fields and a constraint), the
+`make prove` then runs 3d.exe on `M.3d` and F* on each of its fifteen
+modules. The proved set is Tiny (two fields and a constraint), the
 Ethernet and IPv4 headers of `bench/rust/headers.ml` (shared 64-bit loads,
 bitfields, a constraint across two bitfields tested as one range of their
 word), the CLCW of `examples/space` (fourteen bitfields of a 32-bit word),
@@ -221,6 +274,9 @@ of four: `prove.sh refused` requires its Scan and Flat to verify and its
 Proof to fail. `ClcwStepMutant` is the CLCW step walk with `vcid` shifted
 out of its word by 17 bits instead of 18: `prove.sh refused ... Step`
 requires its Step and Flat to verify and its StepProof to fail.
+`TinyOxMutant` is Tiny's OxCaml `fold` with `a` read as the low byte of
+the 16-bit load one byte on, the byte after `a`: `prove.sh refused ...
+OxScan` requires its OxScan and Flat to verify and its OxProof to fail.
 
 ## Cost
 
@@ -258,3 +314,19 @@ and 200: a `StepProof` of 10 to 23 s of CPU per codec (IPv4 64 s), a
 `StepProof` 50 s on every run; `WireGen.Vectors` takes 81 s with the
 `Int64` vectors and `WireGen.Tables` 98 s with the `int64` masks. An F*
 process peaks at 860 MB.
+
+The OxCaml scanner adds, with the load between 60 and 150: an `OxProof`
+of 11 to 18 s of CPU per codec (Clcw 60 s, IPv4 98 s) and an
+`OxStepProof` of 11 to 22 s (IPv4 56 s), an `OxScan` and an `OxStep`
+under 1 s each, `WireGen.VectorsOx` 103 to 141 s, and the OxCaml
+mutant's failing `OxProof` 14 s on every run; `WireGen.Tables` stays near
+100 s with the rules of a field shifted out of a word, and an F* process
+peaks at 920 MB. IPv4's `Flat`, whose module did not change, takes 360 to
+410 s of CPU against this library where it took 160 s against the library
+of the step walk alone: its one large query is that sensitive to the rules
+in scope, here those of the OxCaml loads, which `WireGen.OCaml` carries
+because the OxCaml scanner needs them where it is checked (a size read
+through a byte of a 16-bit load is bounded by them). IPv4's `OxProof`
+(98 s) is as sensitive: with these rules in `WireGen.Defs` instead, or
+with a lemma for each field the OxCaml walk binds where it first reads it,
+it ran out a 50-minute `WIRE_PROVE_TIMEOUT`.

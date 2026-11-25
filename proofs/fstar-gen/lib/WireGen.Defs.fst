@@ -106,3 +106,15 @@ let shift_left_eq (w:P.int64) (k:nat{k < 64})
 
 let shift_left_is_plan (w:P.int64) (k:nat{k < 64}) : Lemma (P.shift_left w k == V.shift_left64 w k)
   = P.shift_left_def w k
+
+let int64_logor_eq (a b:P.int64)
+  : Lemma (P.int64_logor a b == U.logor #64 a b) [SMTPat (P.int64_logor a b)]
+  = P.int64_logor_def a b
+
+let u16le_at_eq (b:P.buf) (o:P.int64{o + 2 <= P.length b})
+  : Lemma (P.u16le_at b o == le b o 2) [SMTPat (P.u16le_at b o)]
+  = P.u16le_at_def b o
+
+let i32le_at_eq (b:P.buf) (o:P.int64{o + 4 <= P.length b})
+  : Lemma (P.i32le_at b o == le b o 4) [SMTPat (P.i32le_at b o)]
+  = P.i32le_at_def b o

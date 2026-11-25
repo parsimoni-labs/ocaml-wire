@@ -75,6 +75,35 @@ let int64_land_lits =
 
 let word_facts = String.concat conj (List.map word_fact words)
 
+(* The fields of [m] bytes at byte [k] of an 8-byte load that the OxCaml
+   scanner reads by shifting them to the top of the word and down. *)
+let pairs =
+  List.concat_map
+    (fun m ->
+      List.filter_map
+        (fun k -> if k + m <= 8 then Some (k, m) else None)
+        [ 1; 2; 3; 4; 5; 6; 7 ])
+    [ 1; 2; 3; 4; 5; 6; 7 ]
+
+let pair_fact (k, m) =
+  let t =
+    Fmt.str "P.shift_right_logical (P.shift_left (P.i64be b o) %d) %d" (8 * k)
+      (64 - (8 * m))
+  in
+  Fmt.str
+    "(forall (b:P.buf) (o:P.int). {:pattern (%s)} (0 <= o /\\ o + 8 <= \
+     P.length b) ==> (%s == be b (o + %d) %d))"
+    t t k m
+
+let pair_facts = String.concat conj (List.map pair_fact pairs)
+
+let pair_lits =
+  String.concat seq
+    (List.map
+       (fun (k, m) ->
+         Fmt.str "P.word_pair %d %d %d %d" k m (8 * k) (64 - (8 * m)))
+       pairs)
+
 let land_lits =
   String.concat seq
     (List.map (fun (k, m) -> Fmt.str "P.land_lit %d %d" k m) masks)
@@ -122,9 +151,14 @@ let () =
          int64_lands;
          ")\n  = pow2_table ();\n    ";
          int64_land_lits;
+         "\n\nlet pair_table () : Lemma (\n    ";
+         pair_facts;
+         ")\n  = pow2_table ();\n    ";
+         pair_lits;
          "\n\n\
           (* The rules a proof of the step walk poses: those of [tables] and the\n";
-         "   masks of an [int64]. *)\n";
+         "   masks of an [int64], and the fields the OxCaml scanner reads by two\n";
+         "   shifts of a word. *)\n";
          "let tables64 () : Lemma (\n    (";
          pw;
          ") /\\\n    (";
@@ -133,5 +167,7 @@ let () =
          word_facts;
          ") /\\\n    (";
          int64_lands;
-         "))\n  = tables (); int64_table ()\n";
+         ") /\\\n    (";
+         pair_facts;
+         "))\n  = tables (); int64_table (); pair_table ()\n";
        ])

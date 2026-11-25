@@ -391,7 +391,9 @@ val fstar :
     [<codec>.Visitor], which [<codec>.Visitor.fsti] declares and leaves
     abstract; [<codec>.StepProof.fst] proves [fold_step_is_3d], the same
     statement for [fold_step buf off len init], with [S.invalid init] and
-    [S.valid init] given each output as its [int64].
+    [S.valid init] given each output as its [int64]. [<codec>.OxScan],
+    [<codec>.OxProof], [<codec>.OxStep] and [<codec>.OxStepProof] are the same
+    of [scanner ~target:`OxCaml], each [int64_u] written as its 64-bit pattern.
 
     The proof is checked with the F* and Z3 that ship with EverParse, against
     the F* module [codec] that 3d.exe writes from the [.3d] of

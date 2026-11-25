@@ -78,3 +78,13 @@ val fstar_step : ?fields:string list -> step:string -> 'a Wire.Codec.t -> fstar
 (** [fstar_step ?fields ~step c] is {!fstar} for [step_within] and [fold_step]
     in the scanner of [c] with [~step], whose values are [int64]: they call the
     module [step]'s [invalid] and [valid] by name. *)
+
+val fstar_ox : ?fields:string list -> 'a Wire.Codec.t -> fstar
+(** [fstar_ox ?fields c] is {!fstar} for the [fold] of the OxCaml scanner of
+    [c], whose values and positions are [int64_u], written as their 64-bit
+    patterns. *)
+
+val fstar_ox_step :
+  ?fields:string list -> step:string -> 'a Wire.Codec.t -> fstar
+(** [fstar_ox_step ?fields ~step c] is {!fstar_step} for the OxCaml scanner of
+    [c]. *)

@@ -16,49 +16,9 @@ open Lines
    assign, so the code for [n] optional fields grows with [n], nested or
    not. *)
 
-(* How the code holds integers. [Tagged] is [int]. [Boxed] is [int64] for
-   values and [int] for positions; the stock compiler keeps such an [int64]
-   unboxed in a register. [Unboxed] is OxCaml's [int64_u]. [Fstar] is
-   [Tagged] written as F*, and [Fstar64] is [Boxed]: the walk takes the same
-   decisions, and writes each operation and load as a call into the module
-   [P] of the F* primitives. *)
-type num = Tagged | Boxed | Unboxed | Fstar | Fstar64
+include Num
 
-(* How [num] holds values, whether written as OCaml or as F*. *)
-let rep = function Fstar -> Tagged | Fstar64 -> Boxed | num -> num
-
-(* Whether [num] is written as F*. *)
-let is_fstar = function
-  | Fstar | Fstar64 -> true
-  | Tagged | Boxed | Unboxed -> false
-
-(* How the code holds positions, sizes and bounds: a load takes an [int]. *)
-let pos_num = function Boxed -> Tagged | Fstar64 -> Fstar | num -> num
-
-(* The module of the operations on values held as [num], other than [int]. *)
-let i64_ops = function
-  | Unboxed -> "U"
-  | Boxed | Tagged -> "Int64"
-  | Fstar | Fstar64 -> "P"
-
-(* A 64-bit literal written as [digits], an OCaml literal without its
-   suffix: an F* [int64] is its pattern. *)
-let lit64 num digits =
-  match num with
-  | Unboxed -> "#" ^ digits ^ "L"
-  | Fstar | Fstar64 -> digits
-  | Tagged | Boxed -> digits ^ "L"
-
-(* The conversion to [int64] of a value of [from] ([int] or [int32]). *)
-let int64_of num from =
-  if is_fstar num then "P.int64_of_" ^ from else "Int64.of_" ^ from
-
-(* The [int] variable [x] as an [int64]. *)
-let widen_int num x = Fmt.str "(%s %s)" (int64_of num "int") x
-
-(* The [w] bits from bit [lo] up of a word, as an F* walk states a bitfield:
-   of an [int], or of an [int64] pattern. *)
-let bits_of num = if num = Fstar64 then "P.bits64" else "P.bits"
+type num = Num.t = Tagged | Boxed | Unboxed | Fstar | Fstar64 | Fstar_u
 
 (* The buffer the generated code reads: its type, its unchecked accessors, its
    length, the module of its bounds-checked loads and string copies, the
@@ -139,12 +99,6 @@ let local_bigstring_src =
 (* Where a walk failed: a bound, a field's check, or a where clause. *)
 type failure = Bounds | Check of field * check | Where
 type pos = Decision.pos = { var : string option; at : int }
-
-(* How a walk of [num] holds integer values. *)
-let values : num -> Decision.values = function
-  | Tagged | Fstar -> `Int
-  | Boxed | Fstar64 -> `Int64
-  | Unboxed -> `Int64_u
 
 (* What an F* walk states of the code it writes, in bytes of the buffer:
    a binding and, when it reads bytes, the value it holds, or a fact a test
@@ -254,10 +208,19 @@ let rec write w s =
     List.partition (fun (x, _) -> List.exists (reads x) lines) !(w.deferred)
   in
   w.deferred := kept;
-  List.iter (fun (x, (v, _)) -> write w (Fmt.str "let %s = %s in\n" x v)) read;
+  List.iter (fun (x, (v, _)) -> bind_deferred w x v) read;
   w.fn.chars <- w.fn.chars + String.length s;
   w.fn.decisions <- w.fn.decisions + decisions s;
   Format.pp_print_string w.ppf s
+
+(* The binding of the deferred field [x] to [v], which an F* walk notes. *)
+and bind_deferred w x v =
+  write w (Fmt.str "let %s = %s in\n" x v);
+  if is_fstar w.m.num then begin
+    let value = substitute !(w.defs) v in
+    w.defs := (x, value) :: !(w.defs);
+    w.m.note (Let { var = x; value; holds = None })
+  end
 
 let pf w fmt = Fmt.kstr (write w) fmt
 
@@ -267,9 +230,7 @@ let pf w fmt = Fmt.kstr (write w) fmt
 let flush w =
   let loads, kept = List.partition (fun (_, (_, l)) -> l) !(w.deferred) in
   w.deferred := kept;
-  List.iter
-    (fun (x, (v, _)) -> write w (Fmt.str "let %s = %s in\n" x v))
-    (List.rev loads)
+  List.iter (fun (x, (v, _)) -> bind_deferred w x v) (List.rev loads)
 
 (* [f ()] with the deferred bindings as they are now, which the code it writes
    binds in a scope of its own; they are deferred again after it. *)
@@ -323,95 +284,6 @@ let pp_slots m ppf outputs =
 (* An output's value where the walk ends. *)
 let output_value m (o : output) =
   if is_slot m o.id then slot_read m.num ~is_bool:o.is_bool o.id else o.id
-
-(* {2 Numbers} *)
-
-let lit num n =
-  match num with
-  | Tagged -> int_lit n
-  | Fstar ->
-      (* As [Tagged] writes it, a literal past 31 bits through [int64]. *)
-      let wide = String.starts_with ~prefix:"(Int64" (int_lit n) in
-      if wide && n < 0 then
-        fail_unsupported "the F* rendering of %d, a negative int64 literal" n
-      else if wide then Fmt.str "(P.to_int %d)" n
-      else if n < 0 then Fmt.str "(%d)" n
-      else string_of_int n
-  | Boxed -> if n < 0 then Fmt.str "(%dL)" n else Fmt.str "%dL" n
-  | Fstar64 ->
-      (* An [int64] is its pattern, which a negative value is not. *)
-      if n < 0 then
-        fail_unsupported "the F* rendering of %d, a negative int64 literal" n
-      else string_of_int n
-  | Unboxed ->
-      if n < 0 then Fmt.str "(-#%LdL)" (Int64.neg (Int64.of_int n))
-      else Fmt.str "#%dL" n
-
-let unboxed_op = function
-  | "+" -> "add"
-  | "-" -> "sub"
-  | "*" -> "mul"
-  | "land" -> "logand"
-  | "lor" -> "logor"
-  | "lxor" -> "logxor"
-  | op -> invalid_arg op
-
-(* The primitive of [P] an F* walk calls for the OCaml operator [op]. *)
-let fstar_op = function
-  | "+" -> "add"
-  | "-" -> "sub"
-  | "*" -> "mul"
-  | ("land" | "lsr" | "lsl") as op -> op
-  | "<" -> "lt"
-  | "<=" -> "le"
-  | ">" -> "gt"
-  | ">=" -> "ge"
-  | "=" -> "eq"
-  | "<>" -> "ne"
-  | op -> fail_unsupported "the F* rendering of %s" op
-
-(* The primitive of [P] an F* walk calls for the [int64] operation of the
-   OCaml operator [op]: that of [Int64], prefixed. *)
-let fstar64_op = function
-  | ("+" | "-" | "*" | "land") as op -> "int64_" ^ unboxed_op op
-  | op -> "int64_" ^ fstar_op op
-
-let binop num op a b =
-  match num with
-  | Tagged -> Fmt.str "(%s %s %s)" a op b
-  | Fstar -> Fmt.str "(P.%s %s %s)" (fstar_op op) a b
-  | Fstar64 -> Fmt.str "(P.%s %s %s)" (fstar64_op op) a b
-  | Boxed | Unboxed -> Fmt.str "(%s.%s %s %s)" (i64_ops num) (unboxed_op op) a b
-
-(* The type annotation lets the stock compiler compare two [int64] inline. *)
-let relation num op a b =
-  match num with
-  | Tagged -> Fmt.str "((%s : int) %s %s)" a op b
-  | Fstar -> Fmt.str "(P.%s %s %s)" (fstar_op op) a b
-  | Fstar64 -> Fmt.str "(P.%s %s %s)" (fstar64_op op) a b
-  | Boxed -> Fmt.str "((%s : int64) %s %s)" a op b
-  | Unboxed -> Fmt.str "(U.compare %s %s %s 0)" a b op
-
-(* The test that [v] lies outside [lo, hi]. An [int64_u] is tested as one
-   unsigned comparison of [v - lo] with [hi - lo], which wraps a [v] below
-   [lo] past [hi - lo]. *)
-let outside_range num v ~lo ~hi =
-  match num with
-  | Unboxed ->
-      let d = if lo = 0 then v else binop num "-" v (lit num lo) in
-      Fmt.str "(B.unsigned_compare %s %s > 0)" d (lit num (hi - lo))
-  | Tagged | Boxed | Fstar | Fstar64 ->
-      Fmt.str "%s || %s"
-        (relation num "<" v (lit num lo))
-        (relation num ">" v (lit num hi))
-
-(* An [int64] or [int64_u] holds the value of a 63-bit [int]
-   sign-extended. *)
-let normalise63 num v =
-  if num = Fstar64 then
-    fail_unsupported "the F* rendering of an int64 normalised to 63 bits";
-  let u = i64_ops num in
-  Fmt.str "(%s.shift_right (%s.shift_left %s 1) 1)" u u v
 
 (* [e] as an [int] expression when it is one. *)
 let as_int : type a. a T.expr -> int T.expr option = function
@@ -483,13 +355,13 @@ let rec expr : type a. w -> a T.expr -> string =
   | T.Lnot a -> (
       match num with
       | Tagged -> Fmt.str "(lnot %s)" (p a)
-      | Fstar | Fstar64 -> fail_unsupported "the F* rendering of lnot"
+      | Fstar | Fstar64 | Fstar_u -> fail_unsupported "the F* rendering of lnot"
       | Boxed | Unboxed -> Fmt.str "(%s.lognot %s)" (i64_ops num) (p a))
   | T.Lsl (a, b) -> (
       match num with
       | Tagged -> Fmt.str "(%s lsl %s)" (p a) (p b)
       | Fstar -> binop num "lsl" (p a) (p b)
-      | Boxed | Unboxed | Fstar64 ->
+      | Boxed | Unboxed | Fstar64 | Fstar_u ->
           let v =
             Fmt.str "(%s.shift_left %s %s)" (i64_ops num) (p a) (distance b)
           in
@@ -498,7 +370,7 @@ let rec expr : type a. w -> a T.expr -> string =
       match num with
       | Tagged -> Fmt.str "(%s lsr %s)" (p a) (p b)
       | Fstar -> binop num "lsr" (p a) (p b)
-      | Boxed | Unboxed | Fstar64 ->
+      | Boxed | Unboxed | Fstar64 | Fstar_u ->
           let u = i64_ops num in
           let nonnegative = fst (range w.ranges a) >= 0 in
           let input =
@@ -537,7 +409,7 @@ and wide w (e : int T.expr) =
     match (w.m.num, b) with
     | _, T.Int n -> string_of_int n
     | (Tagged | Fstar), _ -> expr w b
-    | (Boxed | Unboxed | Fstar64), _ ->
+    | (Boxed | Unboxed | Fstar64 | Fstar_u), _ ->
         Fmt.str "(%s.to_int %s)" (i64_ops w.m.num) (expr w b)
   in
   match e with
@@ -546,7 +418,7 @@ and wide w (e : int T.expr) =
       match w.m.num with
       | Tagged | Fstar -> Fmt.str "(Int64.of_int %s)" (expr w e)
       | Boxed | Fstar64 -> expr w e
-      | Unboxed -> Fmt.str "(U.to_int64 %s)" (expr w e))
+      | Unboxed | Fstar_u -> Fmt.str "(U.to_int64 %s)" (expr w e))
   | T.Add (a, b) -> op "add" a b
   | T.Sub (a, b) -> op "sub" a b
   | T.Mul (a, b) -> op "mul" a b
@@ -576,6 +448,7 @@ let addr num o k =
     | Tagged | Boxed -> Fmt.str "(%s + %d)" o k
     | Unboxed -> Fmt.str "(U.add %s #%dL)" o k
     | Fstar | Fstar64 -> binop Fstar "+" o (string_of_int k)
+    | Fstar_u -> binop Fstar_u "+" o (lit Fstar_u k)
 
 (* A load at [o + k]. An [int64_u] position is the offset of the wider loads
    as it is: the address is the buffer plus the position, with the distance
@@ -597,20 +470,23 @@ let load m ~o ~k ~bytes ~endian =
       | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
   | (Fstar | Fstar64), (2 | 4) when endian = T.Little ->
       fail_unsupported "the F* rendering of a little-endian load"
-  | (Tagged | Boxed | Fstar | Fstar64), _ | Unboxed, 1 -> (
+  | (Tagged | Boxed | Fstar | Fstar64), _ | (Unboxed | Fstar_u), 1 -> (
       let at =
         match m.num with
         | Tagged | Boxed -> addr Tagged o k
         | Fstar | Fstar64 -> addr Fstar o k
         | Unboxed when k = 0 -> Fmt.str "(B.offset %s)" o
         | Unboxed -> Fmt.str "(B.offset %s + %d)" o k
+        | Fstar_u when k = 0 -> Fmt.str "(P.offset %s)" o
+        | Fstar_u ->
+            binop Fstar "+" (Fmt.str "(P.offset %s)" o) (string_of_int k)
       in
       match bytes with
       | 1 -> Fmt.str "(%s.u8 buf %s)" m.src.u at
       | 2 -> Fmt.str "(%s.u16%s buf %s)" m.src.u e at
       | 4 -> Fmt.str "(%s.i32%s buf %s)" m.src.u e at
       | _ -> Fmt.str "(%s.i64be buf %s)" m.src.u at)
-  | Unboxed, _ -> (
+  | (Unboxed | Fstar_u), _ -> (
       let at = addr m.num o k in
       match bytes with
       | 2 -> Fmt.str "(%s.u16%s_at buf %s)" m.src.u e at
@@ -639,14 +515,17 @@ let u16_in_word m ~lo ~size ~raw ~o ~k ~endian =
             else
               Fmt.str "(%s.to_int (%s.shift_right_logical %s 16) land 0xffff)"
                 i32 i32 i )
-    | Unboxed ->
-        let mask v = if raw then v else Fmt.str "(U.logand %s #0xffffL)" v in
-        ( (fun i -> Fmt.kstr mask "(U.of_int32_u %s)" i),
+    | Unboxed | Fstar_u ->
+        let mask v =
+          if raw then v else binop m.num "land" v (lit64 m.num "0xffff")
+        in
+        let of_int32 = int64_of m.num "int32" and u = i64_ops m.num in
+        ( (fun i -> Fmt.kstr mask "(%s %s)" of_int32 i),
           fun i ->
-            Fmt.kstr mask "(U.shift_right_logical (U.of_int32_u %s) 16)" i )
+            Fmt.kstr mask "(%s.shift_right_logical (%s %s) 16)" u of_int32 i )
   in
   let at k = load m ~o ~k ~bytes:4 ~endian in
-  match (m.ox || m.num = Unboxed, size, endian) with
+  match (m.ox || rep m.num = Unboxed, size, endian) with
   | false, _, _ | _, None, _ -> None
   | _, Some _, T.Big when k >= lo + 2 -> Some (low (at (k - 2)))
   | _, Some size, T.Big when k + 4 <= size -> Some (high (at k))
@@ -660,6 +539,61 @@ let u16_in_word m ~lo ~size ~raw ~o ~k ~endian =
    value may keep whatever its [int] holds above its [bytes], for a caller that
    masks below them: that mask would cost an instruction the compiler does not
    remove. *)
+(* {!unsigned} with integers held as [int64_u], from [word] when a shared
+   word holds the value. *)
+let unsigned_u m ?size ~lo ~raw ~o ~words ~k ~bytes ~endian word =
+  match word with
+  | Some a when bytes > 1 && endian = T.Big ->
+      let u = i64_ops m.num in
+      let shift = 8 * (a + 8 - k - bytes) in
+      let shifted =
+        if shift = 0 then Fmt.str "w%d" a
+        else Fmt.str "(%s.shift_right_logical w%d %d)" u a shift
+      in
+      if a = k then shifted
+      else if shift = 0 then
+        binop m.num "land" shifted
+          (lit64 m.num
+             (Int64.to_string (Int64.pred (Int64.shift_left 1L (8 * bytes)))))
+      else
+        (* A field inside the word: two shifts, where a shift and a mask may
+           cost the compiler a register to hold the mask. *)
+        Fmt.str "(%s.shift_right_logical (%s.shift_left w%d %d) %d)" u u a
+          (8 * (k - a))
+          (64 - (8 * bytes))
+  | _ when bytes = 1 && List.mem k words ->
+      (* The top byte of a word loaded anyway: one shift. *)
+      Fmt.str "(%s.shift_right_logical w%d 56)" (i64_ops m.num) k
+  | _ when bytes = 1 ->
+      (* A byte from the 16-bit load that ends on it, or else the one that
+         starts on it, inside the prefix: no swap, and not at the address of
+         a word, which the compiler would share instead of putting the
+         distance in the load. *)
+      let of_int = int64_of m.num "int" in
+      let le16 k =
+        Fmt.str "(%s %s)" of_int (load m ~o ~k ~bytes:2 ~endian:T.Little)
+      in
+      let starts = match size with Some s -> k + 2 <= s | None -> false in
+      let ends = Option.is_some size && k >= lo + 1 in
+      if ends && not (starts && List.mem (k - 1) words) then
+        Fmt.str "(%s.shift_right_logical %s 8)" (i64_ops m.num) (le16 (k - 1))
+      else if starts then binop m.num "land" (le16 k) (lit64 m.num "255")
+      else Fmt.str "(%s %s)" of_int (load m ~o ~k ~bytes ~endian)
+  | _ when bytes = 4 && raw ->
+      Fmt.str "(%s %s)" (int64_of m.num "int32") (load m ~o ~k ~bytes ~endian)
+  | _ when bytes = 4 ->
+      binop m.num "land"
+        (Fmt.str "(%s %s)" (int64_of m.num "int32")
+           (load m ~o ~k ~bytes ~endian))
+        (lit64 m.num "0xffffffff")
+  | _ when bytes = 2 -> (
+      match u16_in_word m ~lo ~size ~raw ~o ~k ~endian with
+      | Some v -> v
+      | None ->
+          Fmt.str "(%s %s)" (int64_of m.num "int") (load m ~o ~k ~bytes ~endian)
+      )
+  | _ -> Fmt.str "(%s %s)" (int64_of m.num "int") (load m ~o ~k ~bytes ~endian)
+
 let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
   let mask32 v = if raw then v else Fmt.str "(%s land mask32)" v in
   let word = List.find_opt (fun a -> a <= k && k + bytes <= a + 8) words in
@@ -686,22 +620,8 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
       if a = k || raw then Fmt.str "(%s)" v
       else if bytes = 4 then mask32 v
       else Fmt.str "(%s land 0x%x)" v ((1 lsl (8 * bytes)) - 1)
-  | Unboxed, Some a when bytes > 1 && endian = T.Big ->
-      let shift = 8 * (a + 8 - k - bytes) in
-      let shifted =
-        if shift = 0 then Fmt.str "w%d" a
-        else Fmt.str "(U.shift_right_logical w%d %d)" a shift
-      in
-      if a = k then shifted
-      else if shift = 0 then
-        Fmt.str "(U.logand %s #%LdL)" shifted
-          (Int64.pred (Int64.shift_left 1L (8 * bytes)))
-      else
-        (* A field inside the word: two shifts, where a shift and a mask may
-           cost the compiler a register to hold the mask. *)
-        Fmt.str "(U.shift_right_logical (U.shift_left w%d %d) %d)" a
-          (8 * (k - a))
-          (64 - (8 * bytes))
+  | (Unboxed | Fstar_u), _ ->
+      unsigned_u m ?size ~lo ~raw ~o ~words ~k ~bytes ~endian word
   | (Boxed | Fstar64), Some a when bytes = 1 || endian = T.Big ->
       let shift = 8 * (a + 8 - k - bytes) in
       let shifted =
@@ -727,40 +647,14 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
       | Some v -> v
       | None -> load m ~o ~k ~bytes ~endian)
   | Tagged, _ -> load m ~o ~k ~bytes ~endian
-  | Unboxed, _ when bytes = 1 && List.mem k words ->
-      (* The top byte of a word loaded anyway: one shift. *)
-      Fmt.str "(U.shift_right_logical w%d 56)" k
-  | Unboxed, _ when bytes = 1 ->
-      (* A byte from the 16-bit load that ends on it, or else the one that
-         starts on it, inside the prefix: no swap, and not at the address of
-         a word, which the compiler would share instead of putting the
-         distance in the load. *)
-      let le16 k =
-        Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes:2 ~endian:T.Little)
-      in
-      let starts = match size with Some s -> k + 2 <= s | None -> false in
-      let ends = Option.is_some size && k >= lo + 1 in
-      if ends && not (starts && List.mem (k - 1) words) then
-        Fmt.str "(U.shift_right_logical %s 8)" (le16 (k - 1))
-      else if starts then Fmt.str "(U.logand %s #255L)" (le16 k)
-      else Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian)
-  | Unboxed, _ when bytes = 4 && raw ->
-      Fmt.str "(U.of_int32_u %s)" (load m ~o ~k ~bytes ~endian)
-  | Unboxed, _ when bytes = 4 ->
-      Fmt.str "(U.logand (U.of_int32_u %s) #0xffffffffL)"
-        (load m ~o ~k ~bytes ~endian)
-  | Unboxed, _ when bytes = 2 -> (
-      match u16_in_word m ~lo ~size ~raw ~o ~k ~endian with
-      | Some v -> v
-      | None -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian))
-  | Unboxed, _ -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes ~endian)
 
 (* A field's plain value, at [k] from [o]: from the variable [bitword] of a
    bitfield's word when it has one. *)
 let value m ?size ?lo ?bitword ~o ~words ~k f =
   let sign v width =
     match m.num with
-    | Fstar | Fstar64 -> fail_unsupported "the F* rendering of a signed field"
+    | Fstar | Fstar64 | Fstar_u ->
+        fail_unsupported "the F* rendering of a signed field"
     | Tagged ->
         Fmt.str "((%s lsl (Sys.int_size - %d)) asr (Sys.int_size - %d))" v width
           width
@@ -795,7 +689,7 @@ let value m ?size ?lo ?bitword ~o ~words ~k f =
             else binop Fstar "lsr" "mask32" (string_of_int (32 - width))
           in
           if whole then v else binop Fstar "land" v mask
-      | Boxed | Unboxed | Fstar64 ->
+      | Boxed | Unboxed | Fstar64 | Fstar_u ->
           let u = i64_ops m.num in
           let v =
             if shift = 0 then word
@@ -847,7 +741,7 @@ let num_type w =
   match w.m.num with
   | Unboxed -> Some "int64_u"
   | Fstar -> Some "P.int"
-  | Fstar64 -> Some "P.int64"
+  | Fstar64 | Fstar_u -> Some "P.int64"
   | Tagged | Boxed -> None
 
 let bind ?ty w v = { w with scope = (v, ty) :: w.scope }
@@ -1079,7 +973,7 @@ let ranged_words w fields =
    as one range is read whole. *)
 let high_byte_words w fields live =
   let ranged = List.map (fun (at, _, _) -> at) (ranged_words w fields) in
-  if w.m.num <> Unboxed then []
+  if rep w.m.num <> Unboxed then []
   else
     List.filter_map
       (fun f ->
@@ -1111,7 +1005,7 @@ let load_bitwords w ~o ~k ~size ~words ~high live =
       let bytes = Bitfield.byte_size base in
       if List.mem (at, base) high && k + at - 1 >= w.disp then
         write_let w v
-          (Fmt.str "(U.of_int %s)"
+          (Fmt.str "(%s %s)" (int64_of w.m.num "int")
              (load w.m ~o ~k:(k + at - 1) ~bytes:2 ~endian:T.Little))
       else
         write_let w v
@@ -1145,10 +1039,10 @@ let load_words w ~o ~k ~size ~constant ~lo ~hi ~later ~fields live =
         let fresh = Wide_loads.shared_words ~held ~lo ~hi ~later fields in
         m.decide (shared w ~k ~constant ~lo ~hi ~held fields fresh);
         fresh
-    | Tagged | Unboxed | Fstar ->
+    | Tagged | Unboxed | Fstar | Fstar_u ->
         List.map
           (fun a -> k + a)
-          (Wide_loads.words ~unboxed:(m.num = Unboxed) ~size worded)
+          (Wide_loads.words ~unboxed:(rep m.num = Unboxed) ~size worded)
   in
   let w =
     List.fold_left
@@ -1178,8 +1072,12 @@ let checks w f =
 let raw_le m ~o ~k id width =
   let v =
     match width with
-    | 16 -> Fmt.str "(U.of_int %s)" (load m ~o ~k ~bytes:2 ~endian:T.Little)
-    | _ -> Fmt.str "(U.of_int32_u %s)" (load m ~o ~k ~bytes:4 ~endian:T.Little)
+    | 16 ->
+        Fmt.str "(%s %s)" (int64_of m.num "int")
+          (load m ~o ~k ~bytes:2 ~endian:T.Little)
+    | _ ->
+        Fmt.str "(%s %s)" (int64_of m.num "int32")
+          (load m ~o ~k ~bytes:4 ~endian:T.Little)
   in
   (id ^ "_le", v)
 
@@ -1190,7 +1088,7 @@ let raw_le m ~o ~k id width =
 let read_ahead m ~size ~k f =
   match f.store with
   | Int { width = (16 | 32) as width; signed = false; endian = T.Big }
-    when m.num = Unboxed ->
+    when rep m.num = Unboxed ->
       Some (f.id ^ "_le", fun o -> snd (raw_le m ~o ~k f.id width))
   | Int { width = 8; _ } ->
       Some (f.id, fun o -> value m ~size ~o ~words:[] ~k:0 { f with offset = k })
@@ -1240,7 +1138,7 @@ let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
         let bitword = List.assoc (f.offset, base) bitwords in
         bind_field w (value m ~bitword ~o ~words ~k:0 shifted)
     | Int { width = (16 | 32) as width; signed = false; endian = T.Big }
-      when m.num = Unboxed ->
+      when rep m.num = Unboxed ->
         let v = value m ~size:(k + size) ~lo:w.disp ~o ~words ~k:0 shifted in
         let w =
           if is_slot m f.id then bind_field w v
@@ -1250,7 +1148,7 @@ let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
           end
         in
         let raw, v = raw_le m ~o ~k:shifted.offset f.id width in
-        if not (Sset.mem raw m.ahead) then pf w "let %s = %s in@\n" raw v;
+        if not (Sset.mem raw m.ahead) then write_let w raw v;
         { (bind_num w raw) with raws = (f.id, (raw, width)) :: w.raws }
     | _ ->
         bind_field w
@@ -1541,7 +1439,7 @@ let jump w ~j ~exported gates ~fired p =
   pf w "%s %a %s%s@\n" j pp_list args (pos_expr num p)
     (match num with
     | Unboxed -> " [@nontail]"
-    | Tagged | Boxed | Fstar | Fstar64 -> "")
+    | Tagged | Boxed | Fstar | Fstar64 | Fstar_u -> "")
 
 (* The outputs of [gates] a copied continuation reads: those of the case
    [fired], or of none, are absent. A walk cut into functions writes them as
@@ -1614,7 +1512,8 @@ let literal_test w atom =
   in
   match atom with
   | (T.Eq (T.Ref (T.I, id), T.Int c) | T.Eq (T.Int c, T.Ref (T.I, id)))
-    when w.m.num = Unboxed && List.mem_assoc id w.scope
+    when rep w.m.num = Unboxed
+         && List.mem_assoc id w.scope
          && (not (is_slot w.m id))
          && not (List.mem_assoc id w.settled) ->
       Some (id, c, raw id c)

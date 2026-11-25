@@ -45,11 +45,27 @@ let qualified =
     ("Int64.logand", "int64_logand");
     ("Int64.shift_left", "shift_left");
     ("Bytes.length", "length");
+    (* OxCaml's [int64_u], an [int64] pattern in F*. *)
+    ("U.add", "int64_add");
+    ("U.sub", "int64_sub");
+    ("U.mul", "int64_mul");
+    ("U.logand", "int64_logand");
+    ("U.logor", "int64_logor");
+    ("U.shift_right_logical", "shift_right_logical");
+    ("U.shift_left", "shift_left");
+    ("U.of_int", "int64_of_int");
+    ("U.of_int32_u", "int64_of_int32");
+    ("U.to_int", "to_int");
+    ("U.to_int64", "to_int64");
+    ("B.offset", "offset");
   ]
 
 (* The unchecked loads, [Wire_runtime.Unchecked.u16be] and the others, keep
    their name. *)
 let loads = "Wire_runtime.Unchecked."
+
+(* Those of OxCaml, [L.u16le_at] and the others, too. *)
+let ox_loads = "L."
 
 (* What the two texts write alike: the step functions call their module
    [S] by name in both. *)
@@ -112,6 +128,8 @@ let ocaml_name x =
   with
   | Some f, _, _ | None, Some f, _ -> "P." ^ f
   | None, None, Some f when is_variable f -> "P." ^ f
+  | None, None, None when Option.is_some (suffix ~prefix:ox_loads x) ->
+      "P." ^ Option.get (suffix ~prefix:ox_loads x)
   | _ ->
       if List.mem x common || is_variable x then x
       else fail_outside "the OCaml name %s, which the table does not map" x
@@ -156,8 +174,31 @@ let raw text =
         replace ~all:true ~from:("P." ^ f ^ " ") ~into:("P.\\#" ^ f ^ " ") text)
     text infix
 
+(* An integer literal as the decimal of its 64-bit pattern: an [int64] is
+   one in F*, which a negative literal of the OCaml is written as. *)
 let digits s =
-  Int (String.lowercase_ascii (String.concat "" (String.split_on_char '_' s)))
+  let s = String.concat "" (String.split_on_char '_' s) in
+  match Int64.of_string_opt s with
+  | Some v -> Fmt.kstr (fun s -> Int s) "%Lu" v
+  | None -> (
+      match Int64.of_string_opt ("0u" ^ s) with
+      | Some v -> Fmt.kstr (fun s -> Int s) "%Lu" v
+      | None -> fail_outside "the literal %s" s)
+
+(* The OxCaml text as the stock parser reads it: an unboxed literal [#5L] as
+   [5L], a [local] mode dropped. Neither changes the tree. *)
+let ox_normalise text =
+  let text = replace ~all:true ~from:" @ local" ~into:"" text in
+  let b = Buffer.create (String.length text) in
+  String.iteri
+    (fun i c ->
+      let digit_next =
+        i + 1 < String.length text
+        && match text.[i + 1] with '0' .. '9' -> true | _ -> false
+      in
+      if not (c = '#' && digit_next) then Buffer.add_char b c)
+    text;
+  Buffer.contents b
 
 (* How a side reads its text, and each application it makes of a named
    function, with its labels. *)
@@ -177,10 +218,48 @@ let rec param_name p =
   | Ppat_constraint (p, _) -> param_name p
   | _ -> fail_outside "the parameter %a" Pprintast.pattern p
 
+(* [U.compare a b op 0], an [int64_u] comparison, as [P.int64_op a b], and
+   [B.unsigned_compare a b > 0] as [P.int64_unsigned_gt a b]. *)
+let ox_comparison e =
+  match e.pexp_desc with
+  | Pexp_apply
+      ( { pexp_desc = Pexp_ident { txt = op; _ }; _ },
+        [
+          ( Nolabel,
+            {
+              pexp_desc =
+                Pexp_apply
+                  ( { pexp_desc = Pexp_ident { txt = cmp; _ }; _ },
+                    [ (Nolabel, a); (Nolabel, b) ] );
+              _;
+            } );
+          ( Nolabel,
+            {
+              pexp_desc =
+                Pexp_constant { pconst_desc = Pconst_integer ("0", None); _ };
+              _;
+            } );
+        ] ) -> (
+      match (ident cmp, ident op) with
+      | "U.compare", op when List.mem op comparisons ->
+          Some ("P.int64_" ^ List.assoc op infix, a, b)
+      | "B.unsigned_compare", ">" -> Some ("P.int64_unsigned_gt", a, b)
+      | _ -> None)
+  | _ -> None
+
+(* OxCaml's [[@nontail]], a hint to its compiler, is outside the tree. *)
+let hints side e =
+  List.filter
+    (fun a -> not (side.ocaml && a.attr_name.txt = "nontail"))
+    e.pexp_attributes
+
 let rec tree side e =
-  if e.pexp_attributes <> [] then
+  if hints side e <> [] then
     fail_outside "the attribute of %a" Pprintast.expression e;
   match e.pexp_desc with
+  | Pexp_apply _ when side.ocaml && Option.is_some (ox_comparison e) ->
+      let f, a, b = Option.get (ox_comparison e) in
+      App (Id f, [ tree side a; tree side b ])
   | Pexp_ident { txt; _ } ->
       Id ((if side.ocaml then ocaml_name else fstar_name) (ident txt))
   | Pexp_constant { pconst_desc = Pconst_integer (s, None); _ } -> digits s
@@ -306,15 +385,38 @@ let parse_expression what text =
   with (Syntaxerr.Error _ | Lexer.Error _) as e ->
     fail_outside "%s does not parse: %s" what (Printexc.to_string e)
 
+let paragraphs text =
+  let flush acc = function [] -> acc | p -> List.rev p :: acc in
+  let acc, last =
+    List.fold_left
+      (fun (acc, p) line ->
+        if String.trim line = "" then (flush acc p, []) else (acc, line :: p))
+      ([], [])
+      (String.split_on_char '\n' text)
+  in
+  List.rev (flush acc last)
+
 (* The top-level definitions of the OCaml scanner, each read where [fold]
    reaches it: the others, the frame loop among them, are fail_outside the
    subset. Attributes such as [[@inline always]] are hints to the compiler,
    fail_outside the tree. *)
 let ocaml_defs side text =
+  let parse text = Parse.implementation (Lexing.from_string text) in
   let structure =
-    try Parse.implementation (Lexing.from_string text)
-    with (Syntaxerr.Error _ | Lexer.Error _) as e ->
-      fail_outside "the OCaml scanner does not parse: %s" (Printexc.to_string e)
+    try parse text
+    with (Syntaxerr.Error _ | Lexer.Error _) as e -> (
+      (* OxCaml: each definition read on its own, those the stock parser
+         does not read left out, as those [fold] reaches never are. *)
+      match String.index_opt text '#' with
+      | None ->
+          fail_outside "the OCaml scanner does not parse: %s"
+            (Printexc.to_string e)
+      | Some _ ->
+          List.concat_map
+            (fun lines ->
+              try parse (ox_normalise (String.concat "\n" lines))
+              with Syntaxerr.Error _ | Lexer.Error _ -> [])
+            (paragraphs text))
   in
   List.filter_map
     (fun item ->
@@ -365,17 +467,6 @@ let reachable ~root defs =
   List.filter_map
     (fun (x, d) -> if List.mem x seen then Some (Lazy.force d) else None)
     defs
-
-let paragraphs text =
-  let flush acc = function [] -> acc | p -> List.rev p :: acc in
-  let acc, last =
-    List.fold_left
-      (fun (acc, p) line ->
-        if String.trim line = "" then (flush acc p, []) else (acc, line :: p))
-      ([], [])
-      (String.split_on_char '\n' text)
-  in
-  List.rev (flush acc last)
 
 (* The parameter names of an F* header, from the text after the function's
    name: [(x:t)] is [x], [(#r:Type)] is implicit, [(_:unit)] is [()]. *)
@@ -625,25 +716,40 @@ let corpus =
 (* The texts of a codec the F* flavour accepts: the OCaml scanner, with
    the step functions of a module [S], and the F* of its [fold] and of its
    step functions. *)
-type texts = { ocaml : string; scan : string; step : string }
+(* The texts of a codec the F* flavour accepts: the OCaml scanner, with
+   the step functions of a module [S], and the F* of its [fold] and of its
+   step functions; then the same of the OxCaml scanner. *)
+type walks = { ocaml : string; scan : string; step : string }
+type texts = { stock : walks; ox : walks }
 
 let texts c =
   match Wire_ocaml.fstar ~codec:"M" c with
   | exception Invalid_argument _ -> None
   | files ->
+      let walks target scan step =
+        {
+          ocaml = Wire_ocaml.scanner ~target ~step:"S" ~codec:"M" c;
+          scan = List.assoc ("M." ^ scan ^ ".fst") files;
+          step = List.assoc ("M." ^ step ^ ".fst") files;
+        }
+      in
       Some
         {
-          ocaml = Wire_ocaml.scanner ~step:"S" ~codec:"M" c;
-          scan = List.assoc "M.Scan.fst" files;
-          step = List.assoc "M.Step.fst" files;
+          stock = walks `OCaml "Scan" "Step";
+          ox = walks `OxCaml "OxScan" "OxStep";
         }
 
 let outputs c = List.map fst (Wire_ocaml.scanner_fields c)
 
-(* Whether both walks of [t] agree with their F*. *)
+(* Whether both walks of [w] agree with their F*. *)
+let agree_walks ~outputs w =
+  Result.bind (agree ~outputs ~ocaml:w.ocaml ~scan:w.scan ()) (fun () ->
+      agree ~root:"fold_step" ~outputs ~ocaml:w.ocaml ~scan:w.step ())
+
+(* Whether the walks of both scanners agree with their F*. *)
 let agree_both ~outputs t =
-  Result.bind (agree ~outputs ~ocaml:t.ocaml ~scan:t.scan ()) (fun () ->
-      agree ~root:"fold_step" ~outputs ~ocaml:t.ocaml ~scan:t.step ())
+  Result.bind (agree_walks ~outputs t.stock) (fun () ->
+      Result.map_error (fun why -> "OxCaml: " ^ why) (agree_walks ~outputs t.ox))
 
 (* The codecs of the corpus the F* flavour accepts today: a change that
    makes it refuse some shows here. *)
@@ -666,20 +772,21 @@ let test_corpus () =
     Alcotest.failf "%d codecs compared, expected at least %d" compared at_least
 
 (* The IPv4 scanner with one token of its OCaml changed, in [fold] or, with
-   [step], in the step functions. *)
-let mutant ?(step = false) ~from ~into () =
+   [step], in the step functions; with [ox], of the OxCaml scanner. *)
+let mutant ?(ox = false) ?(step = false) ~from ~into () =
   match texts Headers.ipv4 with
   | None -> Alcotest.fail "the F* flavour refuses IPv4"
   | Some t -> (
-      if not (contains t.ocaml from) then
+      let w = if ox then t.ox else t.stock in
+      if not (contains w.ocaml from) then
         Alcotest.failf "no %S in the IPv4 scanner" from;
       let outputs = outputs Headers.ipv4 in
       (match agree_both ~outputs t with
       | Ok () -> ()
       | Error why -> Alcotest.failf "IPv4: %s" why);
-      let ocaml = replace ~from ~into t.ocaml in
+      let ocaml = replace ~from ~into w.ocaml in
       let root, scan =
-        if step then ("fold_step", t.step) else ("fold", t.scan)
+        if step then ("fold_step", w.step) else ("fold", w.scan)
       in
       match agree ~root ~outputs ~ocaml ~scan () with
       | Ok () -> Alcotest.failf "%S as %S: the trees still agree" from into
@@ -705,4 +812,12 @@ let suite =
       Alcotest.test_case "step mutant label" `Quick
         (mutant ~step:true ~from:"init ~version:f1_version ~ihl:f2_ihl"
            ~into:"init ~ihl:f1_version ~version:f2_ihl");
+      Alcotest.test_case "OxCaml mutant literal" `Quick
+        (mutant ~ox:true ~from:"(U.add base #9L)" ~into:"(U.add base #10L)");
+      Alcotest.test_case "OxCaml mutant comparison" `Quick
+        (mutant ~ox:true ~from:"(U.compare stop #20L < 0)"
+           ~into:"(U.compare stop #20L <= 0)");
+      Alcotest.test_case "OxCaml step mutant conversion" `Quick
+        (mutant ~ox:true ~step:true ~from:"~version:(U.to_int64 f1_version)"
+           ~into:"~version:(U.to_int64 f2_ihl)");
     ] )

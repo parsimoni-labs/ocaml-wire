@@ -26,6 +26,11 @@ let be (s:bytes) (o:nat) (w:nat) : v:nat{v < pow2 (8 * w)} =
   Plan.Word.be_bound (byte s) o w;
   Plan.Word.be (byte s) o w
 
+(* The same bytes read little-endian, as the OxCaml scanner reads some. *)
+let le (s:bytes) (o:nat) (w:nat) : v:nat{v < pow2 (8 * w)} =
+  Plan.Word.le_bound (byte s) o w;
+  Plan.Word.le (byte s) o w
+
 let rec be_to_n_is_be (s:bytes) (o:nat) (w:nat)
   : Lemma (requires o + w <= Seq.length s)
           (ensures E.be_to_n (Seq.slice s o (o + w)) == be s o w)

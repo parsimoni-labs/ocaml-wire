@@ -17,10 +17,38 @@
  (modules gen)
  (libraries proved wire wire.ocaml headers space))
 
+(library
+ (name operands)
+ (modules operands)
+ (libraries fmt))
+
 (executable
  (name vectors)
  (modules vectors)
- (libraries wire.runtime fmt))
+ (libraries operands wire.runtime fmt))
+
+; vectors_ox.exe prints WireGen.VectorsOx.fst, the OxCaml primitives the F*
+; rendering of the OxCaml scanner calls, run on OxCaml: only an OxCaml
+; compiler builds it, so on any other it is a stub that prints a notice.
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (copy vectors_ox.ml.ox vectors_ox.ml)))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   vectors_ox.ml
+   (echo "let () = print_endline \"vectors_ox: not an OxCaml compiler\"\n"))))
+
+(executable
+ (name vectors_ox)
+ (modules vectors_ox)
+ (libraries operands wire.runtime fmt))
 
 (executable
  (name tables)

@@ -3,13 +3,12 @@
 # directory, which holds the generated modules, lib/ and ../fstar/.
 #
 #   prove.sh lib FILE...          check the fixed library, in order
-#   prove.sh codec NAME           3d.exe on NAME.3d, then NAME.Scan, NAME.Flat,
-#                                 NAME.Proof, NAME.Visitor, NAME.Step and
-#                                 NAME.StepProof must verify
+#   prove.sh codec NAME           3d.exe on NAME.3d, then every module of
+#                                 NAME (MODULES below) must verify
 #   prove.sh refused NAME SED [WALK]
-#                                 SED applied to NAME.WALK.fst (Scan, or Step):
-#                                 the walk and Flat verify, its proof (Proof,
-#                                 or StepProof) must not
+#                                 SED applied to NAME.WALK.fst (Scan, Step,
+#                                 OxScan or OxStep): the walk and Flat verify,
+#                                 its proof must not
 #   prove.sh prune USED...        remove from the cache all but the entries
 #                                 the USED files list
 #
@@ -90,7 +89,9 @@ schema() {
 
 # The modules of a codec, in the order F* checks them: the fold and its
 # proof, then the step functions and theirs.
-MODULES="Scan.fst Flat.fsti Flat.fst Proof.fsti Proof.fst Visitor.fsti Step.fst StepProof.fsti StepProof.fst"
+MODULES="Scan.fst Flat.fsti Flat.fst Proof.fsti Proof.fst Visitor.fsti
+  Step.fst StepProof.fsti StepProof.fst OxScan.fst OxProof.fsti OxProof.fst
+  OxStep.fst OxStepProof.fsti OxStepProof.fst"
 
 # work NAME SED WALK: a directory of NAME's modules, SED applied to its WALK.
 work() {
@@ -134,26 +135,28 @@ refused)
   walk=${4:-Scan}
   case $walk in
   Scan) needed="Scan.fst Flat.fsti Flat.fst Proof.fsti" proof=Proof ;;
-  Step)
-    needed="Visitor.fsti Step.fst Flat.fsti Flat.fst StepProof.fsti"
-    proof=StepProof
+  OxScan) needed="OxScan.fst Flat.fsti Flat.fst OxProof.fsti" proof=OxProof ;;
+  Step | OxStep)
+    proof=${walk}Proof
+    needed="Visitor.fsti $walk.fst Flat.fsti Flat.fst $proof.fsti"
     ;;
   *)
     echo "prove.sh: unknown walk $walk" >&2
     exit 2
     ;;
   esac
+  refused=$proof
   dir=$(work "$2" "$3" "$walk")
   for m in $needed; do
     verify "$dir/$2.$m" "$dir" "$out"
   done
-  if verify "$dir/$2.$proof.fst" "$dir" "$out" >"$dir/log" 2>&1; then
+  if verify "$dir/$2.$refused.fst" "$dir" "$out" >"$dir/log" 2>&1; then
     cat "$dir/log"
     echo "FAIL $2: the mutant verifies" >&2
     exit 1
   fi
   echo "refused $2: $(grep -m1 -E '^\* Error|timeout' "$dir/log")"
-  grep "^$2.$proof.fst: wall" "$dir/log" >&2
+  grep "^$2.$refused.fst: wall" "$dir/log" >&2
   rm -rf "$dir"
   ;;
 *)

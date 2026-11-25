@@ -21,4 +21,10 @@ let () =
   write dir "IPv4Mutant" Headers.ipv4;
   (* The CLCW, whose step walk make prove shifts vcid by 17, which must not
      verify. *)
-  write dir "ClcwStepMutant" Space.clcw_codec
+  write dir "ClcwStepMutant" Space.clcw_codec;
+  (* Tiny, whose OxCaml fold make prove reads [a] from the byte after it,
+     which must not verify. *)
+  List.iter
+    (fun (Proved.Codec (name, c)) ->
+      if name = "Tiny" then write dir "TinyOxMutant" c)
+    Proved.all

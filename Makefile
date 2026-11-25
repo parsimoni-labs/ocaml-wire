@@ -38,7 +38,7 @@ test-wasm:
 # interfaces state; the release one, which inlines across them; then the
 # paranoid one, which checks every unchecked load as well.
 OXCAML_LANES = @test/ocaml-ox/runtest @fuzz/diff/ocaml-ox/runtest \
-  @test/runtime-ox/runtest
+  @test/runtime-ox/runtest @proofs/fstar-gen/runtest
 test-oxcaml:
 	@test "$$(ocamlopt -config-var ox)" = true || \
 	  { echo "not an OxCaml compiler"; exit 1; }
