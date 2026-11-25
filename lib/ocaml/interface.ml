@@ -222,12 +222,11 @@ type record = {
   size : int;
   fields : field list;
   maps : (string * string) list;
-  make : (string * string) option;
   name : string -> string;
   simd : bool;
 }
 
-let decoded r = match r.make with Some (_, t) -> t | None -> "t"
+let decoded _ = "t"
 
 (* What a read of [f] returns, from the record's start. *)
 let read_what f =
@@ -284,12 +283,14 @@ let pp_values ppf r =
 let pp_record_type ppf r =
   pp_section ppf "records" "Records";
   Fmt.pf ppf "type t = {@\n";
-  List.iter (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (type_of f)) r.fields;
+  List.iter
+    (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (typed ~maps:r.maps f))
+    r.fields;
   Fmt.pf ppf "}@\n";
   pp_doc ppf (Fmt.str "The type for %s records." r.plan.record);
   Fmt.pf ppf "@\n";
   pp_val r.target ppf "v"
-    (arrows (List.map type_of r.fields @ [ "t" ]))
+    (arrows (List.map (typed ~maps:r.maps) r.fields @ [ "t" ]))
     (Fmt.str "[v%s] is the record of these fields." (args r.fields));
   pp_val r.target ppf "pp" "Format.formatter -> t -> unit"
     "[pp ppf r] prints an unspecified representation of [r] on [ppf]."
@@ -311,15 +312,11 @@ let pp_checks ppf r b =
     (arrows [ buf b; "int"; "unit" ])
     (Fmt.str "[validate_exn buf off] is like {!validate} but raises %s."
        parse_exn);
-  let portable = Option.is_none r.make in
+  let portable = no_map r.fields in
   pp_val ~portable target ppf "decode"
     (arrows [ buf b; "int"; Fmt.str "(%s, %s) result" t parse_error ])
-    (Fmt.str
-       "[decode buf off] is the record at [off] in [buf]%s, or the codec's \
-        error. Raises [Invalid_argument] if [off] is negative."
-       (match r.make with
-       | Some (f, _) -> Fmt.str ", built by [%s]" f
-       | None -> ""));
+    "[decode buf off] is the record at [off] in [buf], or the codec's error. \
+     Raises [Invalid_argument] if [off] is negative.";
   pp_val ~portable target ppf "decode_exn"
     (arrows [ buf b; "int"; t ])
     (Fmt.str "[decode_exn buf off] is like {!decode} but raises %s." parse_exn)
@@ -332,16 +329,15 @@ let pp_oxcaml_decoders ppf r =
     "[decode_with k buf off] is [k] applied to the fields of the record at \
      [off] in [buf], in order. [k] is [local], so flambda2 inlines it. Raises \
      as {!decode_exn} does.";
-  if Option.is_none r.make then
-    let bytes =
-      List.exists
-        (fun f -> match f.store with Bytes _ -> true | _ -> false)
-        r.fields
-    in
-    pp_val ~zero_alloc:(not bytes) r.target ppf "decode_local"
-      (arrows [ buf b; "int"; "t @ local" ])
-      "[decode_local buf off] is like {!decode_exn} but builds the record on \
-       the caller's stack."
+  let bytes =
+    List.exists
+      (fun f -> match f.store with Bytes _ -> true | _ -> false)
+      r.fields
+  in
+  pp_val ~zero_alloc:(not bytes) r.target ppf "decode_local"
+    (arrows [ buf b; "int"; "t @ local" ])
+    "[decode_local buf off] is like {!decode_exn} but builds the record on the \
+     caller's stack."
 
 let pp_writes ppf r b =
   let target = r.target in
@@ -353,11 +349,10 @@ let pp_writes ppf r b =
   let rejected =
     if has_checks r.plan then ", or if the record breaks a constraint" else ""
   in
-  if Option.is_none r.make then
-    pp_val target ppf "encode"
-      (arrows [ "t"; buf b; "int"; "unit" ])
-      "[encode r buf off] writes the record [r] at [off] in [buf]. Raises as \
-       {!write} does.";
+  pp_val target ppf "encode"
+    (arrows [ "t"; buf b; "int"; "unit" ])
+    "[encode r buf off] writes the record [r] at [off] in [buf]. Raises as \
+     {!write} does.";
   pp_val ~zero_alloc:checked ~portable:checked target ppf "write"
     (arrows ([ buf b; "int" ] @ typed @ [ "unit" ]))
     (Fmt.str
@@ -697,12 +692,9 @@ let pp_record ?(views = false) ?(buffer = `Bytes) ppf r =
   pp_val r.target ppf "min_size" "int"
     (Fmt.str "[min_size] is the size of a record in bytes, [%d]." r.size);
   pp_values ppf r;
-  let record = Option.is_none r.make in
-  if record then begin
-    pp_record_type ppf r;
-    pp_val r.target ppf "size" "t -> int"
-      (Fmt.str "[size r] is {!min_size}: every record takes %d bytes." r.size)
-  end;
+  pp_record_type ppf r;
+  pp_val r.target ppf "size" "t -> int"
+    (Fmt.str "[size r] is {!min_size}: every record takes %d bytes." r.size);
   match buffer with
   | `Bigstring -> pp_buffer ppf r (bigstring_buf r.target)
   | `Bytes -> (
@@ -717,7 +709,7 @@ let pp_after_views ppf r =
   pp_section ppf "words" "Words of a view";
   pp_view ~views:true ppf r (bytes_buf r.target)
 
-let record ~target ~simd ~make ~maps ~codec ~plan ~size =
+let record ~target ~simd ~maps ~codec ~plan ~size =
   let fields = all_fields plan in
   {
     target;
@@ -726,21 +718,18 @@ let record ~target ~simd ~make ~maps ~codec ~plan ~size =
     size;
     fields;
     maps = List.map (fun (path, t, _) -> (path, t)) maps;
-    make;
     name = namer fields;
     simd;
   }
 
-let record_preamble ppf ~target ~simd ~make ~maps ~codec ~plan ~size =
-  pp_preamble ppf (record ~target ~simd ~make ~maps ~codec ~plan ~size)
+let record_preamble ppf ~target ~simd ~maps ~codec ~plan ~size =
+  pp_preamble ppf (record ~target ~simd ~maps ~codec ~plan ~size)
 
-let record_members ?views ?buffer ppf ~target ~simd ~make ~maps ~codec ~plan
-    ~size =
-  pp_record ?views ?buffer ppf
-    (record ~target ~simd ~make ~maps ~codec ~plan ~size)
+let record_members ?views ?buffer ppf ~target ~simd ~maps ~codec ~plan ~size =
+  pp_record ?views ?buffer ppf (record ~target ~simd ~maps ~codec ~plan ~size)
 
-let record_after_views ppf ~target ~simd ~make ~maps ~codec ~plan ~size =
-  pp_after_views ppf (record ~target ~simd ~make ~maps ~codec ~plan ~size)
+let record_after_views ppf ~target ~simd ~maps ~codec ~plan ~size =
+  pp_after_views ppf (record ~target ~simd ~maps ~codec ~plan ~size)
 
 (* {2 The scanner} *)
 

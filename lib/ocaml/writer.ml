@@ -32,7 +32,6 @@ type t = {
   target : target;
   buffer : buffer;
   simd : bool;
-  make : (string * string) option;
   maps : (string * string * typ) list;
   record : (plan * int) option;
   walk : walk option;
@@ -80,25 +79,14 @@ let clash ~codec names =
   | Some (`Own, `Own, _) | None -> ()
 
 (* A record whose members would define a name twice has none, unless they
-   are what the caller needs; a map needs a constructor the caller names. *)
-let checked_record ~codec ~needed ~make record =
-  let record =
-    match record with
-    | Error _ -> None
-    | Ok r when needed ->
-        clash ~codec (record_names r);
-        Some r
-    | Ok r -> if Names.clash (record_names r) = None then Some r else None
-  in
-  (match record with
-  | Some (plan, _)
-    when Option.is_none make
-         && List.exists (fun f -> Option.is_some f.map) (all_fields plan) ->
-      refuse ~codec
-        "a field is a map, and the generated record cannot name its type; pass \
-         ~make"
-  | _ -> ());
-  record
+   are what the caller needs. *)
+let checked_record ~codec ~needed record =
+  match record with
+  | Error _ -> None
+  | Ok r when needed ->
+      clash ~codec (record_names r);
+      Some r
+  | Ok r -> if Names.clash (record_names r) = None then Some r else None
 
 (* The names a fold defines: without a visitor, its consumer's form and on
    OxCaml the unboxed one; with one, the step forms. *)
@@ -173,8 +161,8 @@ let checked_walk ~codec ~record ~folds c = function
       clash ~codec (accessors @ fields);
       Some { plan; folds; views }
 
-let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?make ?(maps = [])
-    ?folds ~require ~codec c =
+let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?(maps = []) ?folds
+    ~require ~codec c =
   let typs = List.map (fun (path, _, typ) -> (path, typ)) maps in
   let record = record_part ~maps:typs c in
   (* The walk reads [bytes]: a module on a bigarray is a fixed record's. *)
@@ -194,7 +182,7 @@ let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?make ?(maps = [])
     | `Record, _ | `Any, Ok _ -> true
     | `Walk, _ | `Any, Error _ -> false
   in
-  let record = checked_record ~codec ~needed ~make record in
+  let record = checked_record ~codec ~needed record in
   if simd && target <> `OxCaml then
     refuse ~codec "~simd needs the OxCaml target";
   let folds =
@@ -217,7 +205,6 @@ let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?make ?(maps = [])
     target;
     buffer;
     simd;
-    make;
     maps;
     record;
     walk;
@@ -266,19 +253,17 @@ let body ?decide t =
   (* A record's [size] is a function of the record, as for any shape, bound
      last: the module's own code reads the constant. *)
   let size =
-    match (t.record, t.make) with
-    | Some _, None -> "let size (_ : t) = min_size\n"
-    | _ -> ""
+    match t.record with Some _ -> "let size (_ : t) = min_size\n" | None -> ""
   in
   let record, after =
     match t.record with
     | None -> ("", "")
     | Some (plan, size) -> (
-        let make = Option.map fst t.make in
+        let maps = List.map (fun (path, ocaml, _) -> (path, ocaml)) t.maps in
         ( text (fun ppf ->
               pp_maps ppf (all_fields plan);
-              pp_body ~simd:t.simd ?accessor ~buffer:t.buffer ppf
-                ~target:t.target ~make ~plan ~size),
+              pp_body ~simd:t.simd ?accessor ~buffer:t.buffer ~maps ppf
+                ~target:t.target ~plan ~size),
           match accessor with
           | None -> ""
           | Some _ ->
@@ -358,7 +343,7 @@ let mli t =
       (match (t.record, t.walk) with
       | Some (plan, size), _ ->
           Interface.record_preamble ppf ~target:t.target ~simd:t.simd
-            ~make:t.make ~maps:t.maps ~codec:t.codec ~plan ~size
+            ~maps:t.maps ~codec:t.codec ~plan ~size
       | None, Some w -> Interface.scan_preamble ppf ~codec:t.codec ~plan:w.plan
       | None, None -> ());
       Interface.pp_digest t.target ppf;
@@ -366,7 +351,7 @@ let mli t =
       Option.iter
         (fun (plan, size) ->
           Interface.record_members ~views ~buffer:t.buffer ppf ~target:t.target
-            ~simd:t.simd ~make:t.make ~maps:t.maps ~codec:t.codec ~plan ~size)
+            ~simd:t.simd ~maps:t.maps ~codec:t.codec ~plan ~size)
         t.record;
       Option.iter
         (fun w ->
@@ -385,7 +370,7 @@ let mli t =
           Option.iter
             (fun (plan, size) ->
               Interface.record_after_views ppf ~target:t.target ~simd:t.simd
-                ~make:t.make ~maps:t.maps ~codec:t.codec ~plan ~size)
+                ~maps:t.maps ~codec:t.codec ~plan ~size)
             t.record)
         t.walk)
 

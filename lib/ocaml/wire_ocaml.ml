@@ -22,45 +22,7 @@ let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
 
 type buffer = [ `Bytes | `Bigstring ]
 
-let record ?target ?buffer ?simd ?make ?maps ~codec c =
-  (* A constructor, SIMD lanes or maps are the record's; without them, the
-     module of a codec of any shape the walk covers. *)
-  let require =
-    if Option.is_some make || simd = Some true || Option.is_some maps then
-      `Record
-    else `Any
-  in
-  Writer.v ?target ?buffer ?simd ?make ?maps:(named maps) ~require ~codec c
-
-let ml ?target ?buffer ?simd ?make ?maps ~codec c =
-  Writer.ml (record ?target ?buffer ?simd ?make ?maps ~codec c)
-
-let mli ?target ?buffer ?simd ?make ?maps ~codec c =
-  Writer.mli (record ?target ?buffer ?simd ?make ?maps ~codec c)
-
-let scanner_fields = scanner_fields
 let outputs = scanner_fields
-
-(* The folds [scanner] writes: [fold] with the outputs [fields], and with
-   [step] the fold [fold_step] calling it by name. *)
-let scanner_folds ?fields ?step () =
-  { Writer.name = "fold"; outputs = fields; visitor = None }
-  ::
-  (match step with
-  | None -> []
-  | Some m ->
-      [ { Writer.name = "fold_step"; outputs = fields; visitor = Some m } ])
-
-let walk ?target ?fields ?step ~codec c =
-  Writer.v ?target
-    ~folds:(scanner_folds ?fields ?step ())
-    ~require:`Walk ~codec c
-
-let scanner ?target ?fields ?step ~codec c =
-  Writer.ml (walk ?target ?fields ?step ~codec c)
-
-let scanner_mli ?target ?fields ?step ~codec c =
-  Writer.mli (walk ?target ?fields ?step ~codec c)
 
 type view = { module_name : string option; members : view_member list }
 
@@ -72,8 +34,14 @@ and view_member =
 
 (* The outputs of a record reached by the path [prefix] are named after it,
    with the field's name as the folds hand it out, unescaped. *)
-let scanner_views c =
-  let t = Option.get (Writer.views (walk ~codec:(Gen.to_struct c).name c)) in
+let views c =
+  let t =
+    Option.get
+      (Writer.views
+         (Writer.v
+            ~folds:[ { Writer.name = "fold"; outputs = None; visitor = None } ]
+            ~require:`Walk ~codec:(Gen.to_struct c).name c))
+  in
   let global prefix name = if prefix = "" then name else prefix ^ "_" ^ name in
   let rec view prefix (r : View_module.record) =
     {
@@ -111,8 +79,6 @@ let scanner_views c =
     }
   in
   view "" t.root
-
-let views = scanner_views
 
 let fstar ?fields ~codec c =
   try Fstar_module.modules ?fields ~codec c

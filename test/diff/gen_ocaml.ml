@@ -417,7 +417,7 @@ and view_member ~m ~path = function
 (* The backend of the views of the scanner [m], which hands out every output,
    checked against [m]'s [fold] and against the codec [codec]. *)
 let pp_view_backend ppf ~m ~codec c =
-  let fields = Wire_ocaml.scanner_fields c in
+  let fields = Wire_ocaml.outputs c in
   let wrap, codec = codec in
   (* A codec of constant size is checked at an offset, as Codec.View checks
      it: on the frame's own bytes. *)

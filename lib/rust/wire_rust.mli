@@ -58,8 +58,8 @@ val scanner : ?fields:string list -> codec:string -> 'r Wire.Codec.t -> string
     scalar fields, or [None] where the codec rejects it, an overflow of its
     arithmetic included; and [decode(buf, off, len)], which first cuts the frame
     out of [buf], [None] when it does not lie inside. [Fields] has a field per
-    output [Wire_ocaml.scanner_fields] names, spelled by {!ident}: an integer of
-    the field's width and sign, or a [bool] for an optional field's
+    output [Wire_ocaml.outputs] names, spelled by {!ident}: an integer of the
+    field's width and sign, or a [bool] for an optional field's
     [<path>_present]; an absent optional field's outputs are zero. A field in an
     anonymous one is checked but is no output. [fields] selects the outputs by
     those names; every check stays. Each region is a slice of exactly its bytes,

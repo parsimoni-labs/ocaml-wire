@@ -84,19 +84,19 @@ val pp_body :
   ?simd:bool ->
   ?accessor:(field -> string) ->
   ?buffer:[ `Bytes | `Bigstring ] ->
+  maps:(string * string) list ->
   Format.formatter ->
   target:[ `OCaml | `OxCaml ] ->
-  make:string option ->
   plan:plan ->
   size:int ->
   unit
-(** [pp_body ?simd ?accessor ?buffer ppf ~target ~make ~plan ~size] writes the
+(** [pp_body ?simd ?accessor ?buffer ~maps ppf ~target ~plan ~size] writes the
     record's members for a record of [size] bytes, reading [buffer] (default
-    [`Bytes]); see {!Wire_ocaml.ml}. A module on a bigarray has no field handles
-    and no [Global], which read [bytes]. With [accessor], the name of each
-    field's accessor in the module's views, it writes neither [Valid] and
-    [read_<field>] nor [View] and [view_<field>], which the views make, and
-    leaves to {!pp_after_views} what reads through them. *)
+    [`Bytes]); see {!Wire_ocaml.v}. A field under a map holds the OCaml type
+    [maps] gives its path. With [accessor], the name of each field's accessor in
+    the module's views, it writes neither [Valid] and [read_<field>] nor [View]
+    and [view_<field>], which the views make, and leaves to {!pp_after_views}
+    what reads through them. *)
 
 val pp_after_views :
   Format.formatter ->

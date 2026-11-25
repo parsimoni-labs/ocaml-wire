@@ -12,15 +12,13 @@
     not [wire], and needs no codec at run time: it can be embedded in a program
     that does not link [wire]. Its integer types are [Wire_runtime.UInt8.t] and
     the like, which are {!Wire.UInt8.t} and the like where [wire] is linked, and
-    it raises [Wire_runtime.Errors.Parse_error], which is {!Wire.Parse_error},
-    with the value the codec raises, and the codec's [Invalid_argument]
-    messages. The exceptions are a module generated with [~maps]: a map's
-    functions are a [Wire] value, so that module links [wire]; and a module
-    whose codec holds a byte slice, which it hands out as a
-    [Bytesrw.Bytes.Slice.t], as the codec does, and so links [bytesrw]. The
-    module carries the digest of its codec's shape; {!bridge} writes a module
-    that checks it against the codec when it loads, for a program that links
-    [wire] anyway.
+    it answers [Wire_runtime.Error.t], which is {!Wire.Error.t}, with the value
+    the codec answers, and raises the codec's [Invalid_argument] messages. The
+    exceptions are a module generated with [~maps]: a map's functions are a
+    [Wire] value, so that module links [wire]; and a module whose codec holds a
+    byte slice, which it hands out as a [Bytesrw.Bytes.Slice.t], as the codec
+    does, and so links [bytesrw]. The module carries the digest of its codec's
+    shape, which its interpreted twin ({!to_ml}) checks against the codec.
 
     An expression in a constraint or a [where] clause that can leave the native
     int is computed on 64 bits, as unsigned integers, as the codec and 3D
@@ -31,48 +29,35 @@
     a target whose ints have 32 bits or fewer, and any other computes the same
     values in every [int].
 
-    A generator executable, run by a dune rule, prints the module for a codec
-    with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)], and its
-    interface with {!mli} and the same arguments. Each generator has such an
-    interface printer: the interface states the module's public API, each value
-    documented from the codec, and hides the rest; on OxCaml it states the modes
-    and the [[@zero_alloc]] checks of the implementation. The text is not laid
-    out as ocamlformat would; a project that commits the module pipes it through
-    [ocamlformat --impl --name=FILE -] (and [--intf] for the interface) in that
-    rule, so the committed copy is formatted under the project's own
-    [.ocamlformat] and [dune fmt] leaves it alone, and keeps it current with a
-    runtest [diff] and [dune promote] or with [(mode promote)].
-    [examples/generated] in the sources does this.
+    A generator executable declares its modules with {!v} and hands them to
+    {!main}, which writes the files a dune rule's command line names; see
+    {{!generating}Generating}. Each module has an interface: it states the
+    module's public API, each value documented from the codec, and hides the
+    rest; on OxCaml it states the modes and the [[@zero_alloc]] checks of the
+    implementation. The text is not laid out as ocamlformat would; a project
+    that commits the module pipes it through [ocamlformat --impl --name=FILE -]
+    (and [--intf] for the interface) in that rule, so the committed copy is
+    formatted under the project's own [.ocamlformat] and [dune fmt] leaves it
+    alone, and keeps it current with a runtest [diff] and [dune promote] or with
+    [(mode promote)]. [examples/generated] in the sources does this.
 
-    The generated module has [Get.<field> buf off] for each field, which reads
-    it as {!Wire.Codec.get} does with one bounds-checked load at a constant
-    offset, and [Get.<field>_int] for a 32-bit field's [int] view. For a
-    bitfield, [Get.<field>_word] loads the word that holds it and
-    [<field>_of_word] takes the field out, so fields packed in one word share
-    one load.
-
-    [is_valid buf off] checks the record at [off] without raising, loading only
-    the fields its constraints read; [validate] answers the codec's error where
-    it is false, and [validate_exn] raises it. The module's views ({!scanner})
-    read a buffer named once with [Wire_runtime.Buf.v], as ['b Buf.t], and whose
-    length is read once: [check b len off] checks the record, [ok c] tells
-    whether it passed and [get c] turns an answer that passed into a ['b view],
-    and each accessor [<field> b v] (and [view_<field>_int], [view_<field>_word]
-    for a 32-bit field and a bitfield's word) is one load with no bounds check,
-    and only the buffer named ['b] is accepted. The promise is memory safety
-    only: a buffer's length never changes, so a read never leaves the buffer,
-    but if its bytes change after the check, a read may return a value that
-    breaks a constraint. A view is an [int], so it allocates nothing. The module
-    has [size], [decode], [validate] and [write buf off v1 ... vn], which stores
-    field values in order. Without [~make] it also defines a record of the field
-    values, its constructor [v], its printer [pp] and [encode].
+    {b The module.} Every module has [check], [ok] and [get], its views
+    ({{!views}Views}), with an accessor per named field and [set_<field>] for a
+    field at a constant offset; [min_size]; [validate buf off], which answers
+    the codec's error where the record is bad; [decode buf off], the record as
+    the module's record type [t]; [encode r buf off]; [size r], the bytes
+    [encode] writes; [pp]; and the folds it declares ({!fold}). A codec of
+    constant size also has [write buf off ~f1 ... ~fn], which writes the record
+    of these field values, [Get.<field> buf off], which reads one field with one
+    bounds-checked load at a constant offset, and, for a bitfield,
+    [Get.<field>_word] and [<field>_of_word], so fields packed in one word share
+    one load. Bad input never makes a decoder raise.
 
     With [~buffer:`Bigstring] the module reads and writes a bigarray of bytes
     instead, with the same functions and the same errors, and no walk:
     [Valid.v buf] validates the record at offset 0 and [read_<field>] on what it
     returns is one load with no check of its own; [View.check b len off],
-    [View.ok], [View.get] and [view_<field> b v] are its views, [View.at] raises
-    the codec's error where the check fails, and
+    [View.ok], [View.get] and [view_<field> b v] are its views, and
     [View.with_ b len off ~ok ~fail] hands the view to [ok] or calls [fail]. *)
 
 type target = [ `OCaml | `OxCaml ]
@@ -168,13 +153,35 @@ val v :
     [CapturedIPv4] is [captured_ipv4]), for [target] (default: the compiler the
     generator runs on), on [buffer] (default [`Bytes]), with [folds] (default:
     one fold [fold] of every output, without a visitor, when the module has
-    folds). The module never refers to [c]. [maps], [simd] and [buffer] are as
-    for {!ml}.
+    folds). The module never refers to [c].
 
-    Raises [Invalid_argument], naming the field and the reason, as {!ml} does,
-    for [folds] on a codec no fold covers (see {!scanner}), and naming the
-    names, for a fold whose functions take a name the module defines or another
-    fold's. *)
+    A field under a {!Wire.map} is specialised when [maps] names the map: the
+    record holds the map's OCaml type, and the module calls the map's functions
+    by its path.
+
+    With [~simd:true] (default [false]), for the OxCaml target on arm64 or
+    amd64, a 4-byte record whose fields each sit in one byte, unsigned and with
+    no check, enum or map, also gets [X4], four records in the lanes of a SIMD
+    register. [X4.with_] checks and loads four records, and [X4.<field>] takes a
+    field out of each lane. A write builds an [X4.part] from each field's bits,
+    [X4.<field>_bits] (its low bits) or [X4.<field>_of] (checked), joined with
+    [X4.( ++ )]; since any such bits are a valid record, [X4.store] and
+    [X4.fill] check only that the records fit, and raise what [write_int_at]
+    would for the first that does not. The module then needs the runtime's
+    [Vec], which exists on OxCaml for arm64 (NEON) and amd64 (SSE) only.
+
+    The walk covers integers up to 32 bits, bitfields, byte arrays and slices of
+    any size, nested codecs, optional fields and fields in a sized region, exact
+    or at most; a fixed record of named scalars at constant offsets also takes
+    wider integers and maps. Raises [Invalid_argument], naming the field and the
+    reason, for a codec no part of the module covers: parameters, actions, a
+    field of a type it does not read (a repetition, a tagged union), or a map
+    [maps] does not name; for [folds], [~maps] or [~simd:true] on a codec the
+    walk, or the fixed record, does not cover; for [~simd:true] with the
+    [`OCaml] target; naming both fields when two of them would define the same
+    OCaml name ({!ident}), or one of them a getter that would shadow a name the
+    getters call, such as [Get.cast]; and naming the names, for a fold whose
+    functions take a name the module defines or another fold's. *)
 
 val name : t -> string
 (** [name t] is the name of [t]'s module: its file is [name t ^ ".ml"]. *)
@@ -228,198 +235,42 @@ val outputs : 'r Wire.Codec.t -> (string * bool) list
     field in an anonymous one is checked but not an output. Raises
     [Invalid_argument] for a codec no fold covers. *)
 
-val ml :
-  ?target:target ->
-  ?buffer:buffer ->
-  ?simd:bool ->
-  ?make:string * string ->
-  ?maps:map list ->
-  codec:string ->
-  'r Wire.Codec.t ->
-  string
-(** [ml ?target ?buffer ?simd ?make ?maps ~codec c] is the source of a module
-    specialised to [c], for [target] (default [`OCaml]), on [buffer] (default
-    [`Bytes]). [codec], the OCaml path of [c], names it in the module's header;
-    the module itself never refers to [c]. [make] is [(f, r)]: [f] the path of a
-    function taking the field values in order, which builds the decoded value,
-    and [r] the path of the type it returns. It defaults to a generated record,
-    which a codec with a map field cannot use.
-
-    It is the one module of [c], whatever its shape: on [bytes] without [maps],
-    it also holds the folds, the check and the views {!scanner} writes, with
-    every output. A codec that is not a record of named scalars at constant
-    offsets (a field of variable size, an optional field, a record a field
-    holds, a sized region, an anonymous field) has no members of a fixed record;
-    its module holds, beside the views, a record type for each record of the
-    codec (an optional field an option, a field of bytes a slice of the buffer
-    or a string, a record a field holds its module's record), [min_size],
-    [decode buf off] and [decode_exn], which check the record to the end of
-    [buf] as {!scanner}'s [check] does and then read each field through its
-    accessor, [validate], [validate_exn] and [is_valid], [encode r buf off],
-    which refuses with [Invalid_argument] a record whose values break a size, a
-    presence or a check, and [size r], the bytes [encode] writes. Where the
-    check fails, [decode] and [validate] answer the codec's error: they walk the
-    record as the codec does, its checks of the fields at constant offsets
-    first, then its fixed bytes, then each field in order, naming the field the
-    codec names. Bad input never makes them raise.
-
-    A field under a {!Wire.map} is specialised when [maps] names the map. The
-    generated module calls the map's functions by its path; {!bridge} checks
-    that the field still holds that very map.
-
-    With [~simd:true] (default [false]), for the OxCaml target on arm64 or
-    amd64, a 4-byte record whose fields each sit in one byte, unsigned and with
-    no check, enum or map, also gets [X4], four records in the lanes of a SIMD
-    register. [X4.with_] checks and loads four records, and [X4.<field>] takes a
-    field out of each lane. A write builds an [X4.part] from each field's bits,
-    [X4.<field>_bits] (its low bits) or [X4.<field>_of] (checked), joined with
-    [X4.( ++ )]; since any such bits are a valid record, [X4.store] and
-    [X4.fill] check only that the records fit, and raise what [write_int_at]
-    would for the first that does not. The generated module then needs the
-    runtime's [Vec], which exists on OxCaml for arm64 (NEON) and amd64 (SSE)
-    only.
-
-    Raises [Invalid_argument], naming the field and the reason, for a codec no
-    part of the module covers: parameters, actions, a field of a type the walk
-    does not read (an integer of more than 32 bits, a repetition, a tagged
-    union), or a map [maps] does not name; for a codec of variable size with
-    [~make], [~maps] or [~buffer:`Bigstring], which only a fixed record takes;
-    for [~simd:true] with the [`OCaml] target; and naming both fields when two
-    of them would define the same OCaml name ({!ident}), or one of them a getter
-    that would shadow a name the getters call, such as [Get.cast]. *)
-
-val mli :
-  ?target:target ->
-  ?buffer:buffer ->
-  ?simd:bool ->
-  ?make:string * string ->
-  ?maps:map list ->
-  codec:string ->
-  'r Wire.Codec.t ->
-  string
-(** [mli ?target ?buffer ?simd ?make ?maps ~codec c] is the interface of
-    [ml ?target ?buffer ?simd ?make ?maps ~codec c]: its types and values, each
-    documented, the fields of [c] with their place, width and constraints in the
-    preamble. The interface for [`OCaml] is OCaml, so js_of_ocaml and
-    wasm_of_ocaml read it too; the one for [`OxCaml] takes buffers [local] and
-    states the [[@zero_alloc]] checks and the portability of the implementation.
-    Raises [Invalid_argument] as {!ml} does. *)
-
-(** {1 Scanning}
-
-    [scanner] writes the code that walks a codec of any shape in its scope and
-    hands out its scalar fields, with no value built and no byte copied. *)
-
-val scanner_fields : 'r Wire.Codec.t -> (string * bool) list
-(** [scanner_fields c] is the outputs of {!scanner} for [c], in declaration
-    order: each named scalar field, its name the path of field labels ({!ident})
-    joined with ['_'], and for each optional field [<path>_present], flagged
-    [true]. A field in an anonymous one is checked but not an output. Raises
-    [Invalid_argument] as {!scanner} does. *)
-
-val scanner :
-  ?target:target ->
-  ?fields:string list ->
-  ?step:string ->
-  codec:string ->
-  'r Wire.Codec.t ->
-  string
-(** [scanner ?target ?fields ?step ~codec c] is the source of a module that
-    checks a record of [c] in a frame of bytes and hands out its scalar fields.
-    It covers integers up to 32 bits, bitfields, byte arrays and slices of any
-    size, nested codecs, optional fields and fields in a sized region, exact or
-    at most; it raises [Invalid_argument] for any other field, parameters and
-    actions. The generated module links [wire.runtime], and refuses to load
-    where ints have 32 bits or fewer if it holds a value of more than 31 bits.
-
-    [fold buf off len ~invalid ~valid] checks the record at [off] in the [len]
-    bytes there, as {!Wire.Codec.decode} does on those bytes alone, and calls
-    [valid] with each output as a labelled [int] (a [bool] for a presence), or
-    [invalid ()] when the record or the bounds are bad. An absent field is 0.
-    [fields] selects the outputs: the others are not read unless a check needs
-    them, and every check still runs.
-
-    [n] optional fields give code linear in [n], whether they follow each other
-    or nest, and whatever outputs are handed out.
-    [fold_frames buf off len ~stride ~init ~invalid ~valid] folds over the
-    [len / stride] frames of [stride] bytes, each checked on its own; it raises
-    [Invalid_argument] for bad bounds or a [stride] that is not positive.
-
-    [step], the path of a module [M] with a type [M.t], the accumulator, and
-    [valid : t -> f1:int64 -> ... -> fn:int64 -> t] (a presence is a [bool]) and
-    [invalid : t -> t], adds [fold_step buf off len ~init] and
-    [fold_step_frames buf off len ~stride ~init], which are [fold] and
-    [fold_frames] with [init] as the accumulator, calling that module's
-    functions by name, and [fold_step_index buf ~offs ~lens ~init], which folds
-    [fold_step] over the frames of [lens.(i)] bytes at [offs.(i)], reading the
-    length of [buf] once; it raises [Invalid_argument] if [offs] and [lens]
-    differ in length. OCaml without flambda never inlines a function passed as
-    an argument, so only these call the consumer with no closure call. They pass
-    each integer to [valid] as an [int64], on both targets. Nothing is boxed and
-    no frame allocates where the compiler inlines [valid]. OCaml without flambda
-    inlines [valid] only when its body defines no function, a partial
-    application or a primitive used as a value included (docs/execution.md,
-    Generated code). On OCaml the runtime's loads must be inlined too, which
-    dune's dev profile prevents by compiling [wire.runtime] with [-opaque].
-    Where ints have 32 bits or fewer, an [int64] is a heap value and they run
-    slower than [fold]. The module must be in scope where the generated code is
-    compiled.
-
-    On OxCaml the outputs are [int64_u] inside, and [fold_unboxed] and
-    [fold_frames_unboxed] (whose accumulator has layout [bits64]) hand them out
-    unboxed.
-
-    The module is the one {!ml} writes for [c], the members a fixed record of
-    named scalars adds included: it is the same module, with the folds that
-    [fields] and [step] select. *)
-
-val scanner_mli :
-  ?target:target ->
-  ?fields:string list ->
-  ?step:string ->
-  codec:string ->
-  'r Wire.Codec.t ->
-  string
-(** [scanner_mli ?target ?fields ?step ~codec c] is the interface of
-    [scanner ?target ?fields ?step ~codec c], as {!mli} is that of {!ml}. Raises
-    [Invalid_argument] as {!scanner} does. *)
-
 (** {2 Views}
 
-    A scanner also writes the views of its codec: [check b length ~off ~len]
-    runs the checks of [fold] on the record at [off] in the [len] bytes there,
-    in the buffer [b] of length [length] named by [Wire_runtime.Buf.v], and
-    answers a ['b check]. A codec of constant size takes no window:
-    [check b length off] checks its record at [off] in [b], as
-    {!Wire.Codec.View.check} does; [ok] tests it and [get] makes it a ['b view],
-    an [int] that only the accessors of [b] take. Each named integer field of
-    the record is an accessor named after it, [name b v], returning its value as
-    the codec decodes it, a [Wire_runtime.UInt16.t] for a 16-bit integer and an
-    [int] for a bitfield (0 when it is absent), each optional field that holds
-    no record a presence [name_present b v], and each field that holds a record
-    an accessor [name b len v] returning a check of that record's module, which
-    passes iff the record is present and its fixed bytes lie in [b]. Each codec
-    a field holds has one module, named after it ([CapturedIPv4] is
-    [Captured_ipv4]), with the same accessors. A field at a constant offset
-    inside the bytes the check guarantees is one load; any other is placed again
-    from the bytes that place it, with a bound check, and a presence or a tag is
-    tested again, so an accessor reads no byte outside [b] even when bytes are
-    written after the check. A named field of bytes is an accessor too,
-    answering a [Bytesrw.Bytes.Slice.t] of [b] for a byte slice and a copy for a
-    byte array, as the codec decodes them. An integer or a bitfield at a
-    constant offset inside the bytes the check guarantees also has
-    [set_<name> b v x], which writes [x] there in place, one store or a load and
-    a store of a bitfield's word; it refuses a bitfield too wide for its field
-    with [Invalid_argument] and checks none of the record's constraints, as
-    {!Wire.Codec.set} does. An accessor named as a value the module defines
-    ([size], [check], [decode], ...) takes a trailing ['_'], as a keyword does:
-    [size] is [size_] and [size_] [size__]. *)
+    A module also has the views of its codec: [check b length ~off ~len] runs
+    the checks of [fold] on the record at [off] in the [len] bytes there, in the
+    buffer [b] of length [length] named by [Wire_runtime.Buf.v], and answers a
+    ['b check]. A codec of constant size takes no window: [check b length off]
+    checks its record at [off] in [b], as {!Wire.Codec.View.check} does; [ok]
+    tests it and [get] makes it a ['b view], an [int] that only the accessors of
+    [b] take. Each named integer field of the record is an accessor named after
+    it, [name b v], returning its value as the codec decodes it, a
+    [Wire_runtime.UInt16.t] for a 16-bit integer and an [int] for a bitfield (0
+    when it is absent), each optional field that holds no record a presence
+    [name_present b v], and each field that holds a record an accessor
+    [name b len v] returning a check of that record's module, which passes iff
+    the record is present and its fixed bytes lie in [b]. Each codec a field
+    holds has one module, named after it ([CapturedIPv4] is [Captured_ipv4]),
+    with the same accessors. A field at a constant offset inside the bytes the
+    check guarantees is one load; any other is placed again from the bytes that
+    place it, with a bound check, and a presence or a tag is tested again, so an
+    accessor reads no byte outside [b] even when bytes are written after the
+    check. A named field of bytes is an accessor too, answering a
+    [Bytesrw.Bytes.Slice.t] of [b] for a byte slice and a copy for a byte array,
+    as the codec decodes them. An integer or a bitfield at a constant offset
+    inside the bytes the check guarantees also has [set_<name> b v x], which
+    writes [x] there in place, one store or a load and a store of a bitfield's
+    word; it refuses a bitfield too wide for its field with [Invalid_argument]
+    and checks none of the record's constraints, as {!Wire.Codec.set} does. An
+    accessor named as a value the module defines ([size], [check], [decode],
+    ...) takes a trailing ['_'], as a keyword does: [size] is [size_] and
+    [size_] [size__]. *)
 
 type view = { module_name : string option; members : view_member list }
 (** The views of a record: its module, [None] for the codec's own, and its
     accessors in declaration order. *)
 
-(** An accessor and the output of {!scanner_fields} it reads. *)
+(** An accessor and the output of {!outputs} it reads. *)
 and view_member =
   | Int of { name : string; output : string; carrier : string option }
       (** An integer field, and the module of its accessor's type when that is
@@ -437,33 +288,30 @@ val views : 'r Wire.Codec.t -> view
 (** [views c] is the views the module of [c] has. Raises [Invalid_argument] for
     a codec no fold covers. *)
 
-val scanner_views : 'r Wire.Codec.t -> view
-(** [scanner_views c] is the views {!scanner} writes for [c]. Raises
-    [Invalid_argument] as {!scanner} does. *)
-
 val fstar :
   ?fields:string list ->
   codec:string ->
   'r Wire.Codec.t ->
   (string * string) list
 (** [fstar ?fields ~codec c] is the F* proof that the [fold] of
-    [scanner ?fields ~codec c] answers what the parser EverParse writes for the
-    3D projection of [c] answers on the same bytes: each F* file of the proof,
-    by name. [<codec>.Scan.fst] is that [fold], from the walk that writes the
-    OCaml, its operations and loads written as calls into the primitives
-    [WireGen.OCaml]; [<codec>.Flat.fst] reads the record field by field and
-    proves that reading equal to the parser; [<codec>.Proof.fst] proves
-    [fold_is_3d]: on a window inside the buffer,
+    [to_ml (v ~folds:[ fold ?outputs:fields "fold" ] c)] answers what the parser
+    EverParse writes for the 3D projection of [c] answers on the same bytes:
+    each F* file of the proof, by name. [<codec>.Scan.fst] is that [fold], from
+    the walk that writes the OCaml, its operations and loads written as calls
+    into the primitives [WireGen.OCaml]; [<codec>.Flat.fst] reads the record
+    field by field and proves that reading equal to the parser;
+    [<codec>.Proof.fst] proves [fold_is_3d]: on a window inside the buffer,
     [fold buf off len ~invalid ~valid] is [valid] applied to the outputs of the
     value the parser reads from the window's bytes, or [invalid ()] where it
-    reads none. [<codec>.Step.fst] is [fold_step_within] and [fold_step] of
-    [scanner ~step:"S"], values held as [int64], calling the module
-    [<codec>.Visitor], which [<codec>.Visitor.fsti] declares and leaves
-    abstract; [<codec>.StepProof.fst] proves [fold_step_is_3d], the same
-    statement for [fold_step buf off len init], with [S.invalid init] and
-    [S.valid init] given each output as its [int64]. [<codec>.OxScan],
-    [<codec>.OxProof], [<codec>.OxStep] and [<codec>.OxStepProof] are the same
-    of [scanner ~target:`OxCaml], each [int64_u] written as its 64-bit pattern.
+    reads none. [<codec>.Step.fst] is [fold_step] and [fold_step_within] of the
+    same module with a fold [fold "fold_step"] whose visitor is [s.ml]
+    ({!to_ml}), values held as [int64], calling the module [<codec>.Visitor],
+    which [<codec>.Visitor.fsti] declares and leaves abstract;
+    [<codec>.StepProof.fst] proves [fold_step_is_3d], the same statement for
+    [fold_step buf off len init], with [S.invalid init] and [S.valid init] given
+    each output as its [int64]. [<codec>.OxScan], [<codec>.OxProof],
+    [<codec>.OxStep] and [<codec>.OxStepProof] are the same of that module for
+    [~target:`OxCaml], each [int64_u] written as its 64-bit pattern.
     [<codec>.Frames] and [<codec>.Index] (and [<codec>.OxFrames],
     [<codec>.OxIndex]) are the walks of a frame of the loops of
     [fold_step_frames] and [fold_step_index], each a function whose parameters
@@ -478,7 +326,7 @@ val fstar :
     are unsigned big-endian integers of up to 32 bits, bitfields of such words,
     byte arrays of any size, nested codecs, optional codecs of a variable size
     and codecs in a sized region, with constraints; it raises [Invalid_argument]
-    for any other codec, and for one whose scanner holds an output in a mutable
+    for any other codec, and for one whose fold holds an output in a mutable
     local. *)
 
 (** {1 The plan}
@@ -496,7 +344,7 @@ module Plan : sig
 
   type output = {
     id : string;  (** The variable that holds it. *)
-    name : string;  (** As {!scanner_fields} names it. *)
+    name : string;  (** As {!outputs} names it. *)
     is_bool : bool;  (** A presence. *)
     wire_width : int;  (** Its bits on the wire; 1 for a presence. *)
     signed : bool;
@@ -544,17 +392,17 @@ module Plan : sig
 
   val v : 'r Wire.Codec.t -> t
   (** [v c] is the plan of [c]. Raises [Invalid_argument] with the reason for a
-      codec whose shape {!scanner} refuses; the names a backend spells its
-      outputs with are its own to check. *)
+      codec whose shape {!v} refuses; the names a backend spells its outputs
+      with are its own to check. *)
 
   val nodes : t -> node list
   (** [nodes t] is the nodes of [t], in the order the codec checks them. *)
 
   (** {2:decisions Decisions}
 
-      What {!scanner} decides, beyond the plan, that changes which checks the
-      generated code runs or which bytes it reads. The scanner writes its code
-      from these decisions, so they are what that code does. *)
+      What {!v} decides, beyond the plan, that changes which checks the
+      generated code runs or which bytes it reads. The module's walks are
+      written from these decisions, so they are what that code does. *)
 
   type pos = { var : string option; at : int }
   (** A position in a window: a variable when the data decides it, plus a
@@ -688,7 +536,7 @@ module Plan : sig
   (** [outputs t] is the outputs of [t], in declaration order. *)
 
   val select : t -> string list option -> output list
-  (** [select t names] is the outputs of [t] that [names] names, as {!scanner}'s
+  (** [select t names] is the outputs of [t] that [names] names, as {!fold}'s
       [fields] does, in declaration order; all of them for [None]. Raises
       [Invalid_argument] naming a name that no output has. *)
 
@@ -731,7 +579,7 @@ module Plan : sig
 
   (** What the code at a point of a walk knows: the ranges of the variables,
       narrowed by the checks passed on the way, and the facts those establish.
-      The arithmetic decisions below are the ones {!scanner} makes. *)
+      The arithmetic decisions below are the ones {!v} makes. *)
   module Scope : sig
     type plan := t
     type t

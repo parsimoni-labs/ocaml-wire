@@ -86,7 +86,7 @@ let export label maximum slot input output =
       (fun (Diff_codecs.Scan c) -> c.label = label)
       Diff_codecs.scan_cases
   in
-  let names = List.map fst (Wire_ocaml.scanner_fields c.codec) in
+  let names = List.map fst (Wire_ocaml.outputs c.codec) in
   let oracle = Diff_driver.oracle label in
   Diff_driver.report_oracle "cloud reference";
   let check =

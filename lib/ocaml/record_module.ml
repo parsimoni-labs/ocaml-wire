@@ -116,13 +116,6 @@ let typed_value ~src f =
             f.id
       | Bits _ | Bytes _ -> Fmt.str "(cast Value.%s_eq %s)" f.label f.id)
 
-(* The value handed to a constructor the caller wrote, which cannot name the
-   module's carriers: a bitfield as its [int], a byte array as its [string]. *)
-let plain_typed_value ~src f =
-  match (f.map, f.store) with
-  | None, (Bits _ | Bytes _) -> f.id
-  | _ -> typed_value ~src f
-
 (* The attributes the OxCaml target adds: an allocation check on a hot path,
    and on a cold one the promise that it only raises. *)
 let zero_alloc = function `OxCaml -> "[@zero_alloc]" | `OCaml -> ""
@@ -894,9 +887,16 @@ let pp_maps ppf fields =
     fields;
   Fmt.pf ppf "@\n"
 
-let pp_record ppf fields =
+(* The type of [f] in the record: its map's OCaml type for a field under a
+   map, one of [maps]. *)
+let record_type ~maps f =
+  match f.map with Some path -> List.assoc path maps | None -> type_of f
+
+let pp_record ~maps ppf fields =
   Fmt.pf ppf "type t = {@\n";
-  List.iter (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (type_of f)) fields;
+  List.iter
+    (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (record_type ~maps f))
+    fields;
   Fmt.pf ppf "}@\n@\nlet v %a = { %a }@\n@\n" pp_vars fields
     Fmt.(list ~sep:(any "; ") string)
     (List.map (fun f -> Fmt.str "%s = %s" f.label f.id) fields)
@@ -907,15 +907,18 @@ let pp_record ppf fields =
 let pp_printer ppf fields =
   let printer f =
     let base = Fmt.str "%s.%s.pp" rt in
-    match f.store with
-    | Int { width = 8; signed = false; _ } -> (base "UInt8", "")
-    | Int { width = 8; signed = true; _ } -> (base "SInt8", "")
-    | Int { width = 16; signed = false; _ } -> (base "UInt16", "")
-    | Int { width = 16; signed = true; _ } -> (base "SInt16", "")
-    | Int { signed = false; _ } -> (base "UInt32", "")
-    | Int { signed = true; _ } -> (base "SInt32", "")
-    | Bits _ -> ("int", " :> int")
-    | Bytes _ -> ("string", " :> string")
+    match (f.map, f.store) with
+    | Some _, _ -> ("opaque", "")
+    | None, store -> (
+        match store with
+        | Int { width = 8; signed = false; _ } -> (base "UInt8", "")
+        | Int { width = 8; signed = true; _ } -> (base "SInt8", "")
+        | Int { width = 16; signed = false; _ } -> (base "UInt16", "")
+        | Int { width = 16; signed = true; _ } -> (base "SInt16", "")
+        | Int { signed = false; _ } -> (base "UInt32", "")
+        | Int { signed = true; _ } -> (base "SInt32", "")
+        | Bits _ -> ("int", " :> int")
+        | Bytes _ -> ("string", " :> string"))
   in
   let has p = List.exists (fun f -> fst (printer f) = p) fields in
   Fmt.pf ppf
@@ -930,6 +933,9 @@ let pp_printer ppf fields =
   if has "string" then
     Fmt.pf ppf
       "  let string ppf s = Format.pp_print_string ppf (String.escaped s) in@\n";
+  (* A map's value is the caller's type, which the module cannot print. *)
+  if has "opaque" then
+    Fmt.pf ppf "  let opaque ppf _ = Format.pp_print_string ppf \"_\" in@\n";
   Fmt.pf ppf
     "  Format.pp_open_hvbox ppf 2;@\n  Format.pp_print_char ppf '{';@\n";
   List.iter
@@ -1283,7 +1289,7 @@ let pp_validate_written ~src ppf ~target =
    still a string on the heap, so with one it makes no such promise.
    [decode_with] takes the constructor as an argument, which flambda2 inlines
    with it. *)
-let pp_oxcaml ~src ppf ~record ~plan ~size =
+let pp_oxcaml ~src ppf ~plan ~size =
   let fields = all_fields plan in
   pp_decode ~src ~ox:true ppf ~plan ~size
     ~head:(Fmt.str "let[@inline] decode_with (make @@ local) %s off" src.buf)
@@ -1293,16 +1299,15 @@ let pp_oxcaml ~src ppf ~record ~plan ~size =
       (fun f -> match f.store with Bytes _ -> true | _ -> false)
       fields
   in
-  if record then
-    pp_decode ~src ~ox:true ppf ~plan ~size
-      ~head:
-        (Fmt.str "let%s decode_local %s off"
-           (if bytes then "" else "[@zero_alloc]")
-           src.buf)
-      ~call:(fun args ->
-        Fmt.str "exclave_ stack_ { %a }"
-          Fmt.(list ~sep:(any "; ") string)
-          (List.map2 (fun f a -> Fmt.str "%s = %s" f.label a) fields args))
+  pp_decode ~src ~ox:true ppf ~plan ~size
+    ~head:
+      (Fmt.str "let%s decode_local %s off"
+         (if bytes then "" else "[@zero_alloc]")
+         src.buf)
+    ~call:(fun args ->
+      Fmt.str "exclave_ stack_ { %a }"
+        Fmt.(list ~sep:(any "; ") string)
+        (List.map2 (fun f a -> Fmt.str "%s = %s" f.label a) fields args))
 
 (* [decode] answers the codec's error as a value, as [Wire.Codec.decode]
    does; [decode_exn] raises it. *)
@@ -1561,38 +1566,31 @@ let src_of ~target = function
       | `OCaml -> bigstring_src)
 
 (* The checks, decoders, writes and reads of a fixed record on [src]. *)
-let pp_codec ~src ~bytes ppf ~target ~make ~plan ~size =
-  let record = Option.is_none make in
+let pp_codec ~src ~bytes ppf ~target ~plan ~size =
   pp_cold ~src ppf ~target ~plan ~size;
   pp_validate ~src ppf ~target ~plan ~size;
   if has_checks plan then pp_validate_written ~src ppf ~target;
-  let make = Option.value ~default:"v" make in
-  let value = if record then typed_value else plain_typed_value in
-  pp_decode ~src ~value ppf ~plan ~size
-    ~head:(Fmt.str "let decode_exn %s off" src.buf) ~call:(fun args ->
-      Fmt.str "%s %a" make pp_list args);
+  pp_decode ~src ppf ~plan ~size ~head:(Fmt.str "let decode_exn %s off" src.buf)
+    ~call:(fun args -> Fmt.str "v %a" pp_list args);
   pp_decode_result ~src ppf;
-  if target = `OxCaml && bytes then pp_oxcaml ~src ppf ~record ~plan ~size;
+  if target = `OxCaml && bytes then pp_oxcaml ~src ppf ~plan ~size;
   pp_write_int ~src ppf ~target ~plan;
   pp_write ~src ppf ~target ~plan;
   pp_write_at ~src ~ints:true ppf ~target ~plan;
   pp_write_at ~src ~ints:false ppf ~target ~plan;
   pp_getters ~src ppf ~target (all_fields plan)
 
-let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ppf ~target ~make ~plan
+let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
     ~size =
   let views = Option.is_some accessor in
   let fields = all_fields plan in
   Fmt.pf ppf "let size = %d@\nlet min_size = size@\n@\n" size;
   pp_values ppf fields;
-  let record = Option.is_none make in
-  if record then begin
-    pp_record ppf fields;
-    pp_printer ppf fields
-  end;
+  pp_record ~maps ppf fields;
+  pp_printer ppf fields;
   let src = src_of ~target buffer in
   let bytes = buffer = `Bytes in
-  pp_codec ~src ~bytes ppf ~target ~make ~plan ~size;
+  pp_codec ~src ~bytes ppf ~target ~plan ~size;
   (* Beside the module's views, [Valid] and [View] would be second checks,
      and [read_<field>] and [view_<field>] second reads of each field. *)
   if not views then begin
@@ -1600,7 +1598,7 @@ let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ppf ~target ~make ~plan
     pp_view ~src ppf ~target ~plan ~size
   end;
   if simd then pp_x4 ~src ppf ~plan ~size;
-  if record then pp_encode ~src ppf fields
+  pp_encode ~src ppf fields
 
 (* The members that read through the module's views, written after them: the
    reads with no accessor of their own. *)

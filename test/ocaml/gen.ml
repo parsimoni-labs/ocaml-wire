@@ -3,11 +3,11 @@ let write file s =
   output_string oc s;
   close_out oc
 
-(* [Step], the consumer the scanner of [c] calls by name, adds up the outputs,
-   which it takes as [int64]. The scanner's module defines it first, so the
+(* [Step], the visitor the fold [fold_step] of [c] calls by name, adds up the
+   outputs, which it takes as [int64]. The module defines it first, so the
    compiler inlines it in every profile and no output is boxed. *)
 let summed c =
-  let fields = Wire_ocaml.scanner_fields c in
+  let fields = Wire_ocaml.outputs c in
   let args = List.map (fun (name, _) -> "~" ^ name) fields
   and terms =
     List.map
@@ -29,74 +29,67 @@ let () =
   let target = if flag "--oxcaml" then `OxCaml else `OCaml in
   let simd = flag "--simd" in
   let base name = Filename.remove_extension name in
-  (* Each module, and its interpreted twin. [make] is the constructor
-     [Schemas.<codec>_make] and its type [Schemas.<codec>], the type of the
-     codec's records. *)
-  let g name ?(make = true) ?maps codec c =
-    let make =
-      if make then Some ("Schemas." ^ codec ^ "_make", "Schemas." ^ codec)
-      else None
-    in
-    let codec = "Schemas." ^ codec in
-    write name (Wire_ocaml.ml ~target ~simd ?make ?maps ~codec c);
-    write (name ^ "i") (Wire_ocaml.mli ~target ~simd ?make ?maps ~codec c);
-    (* Its interpreted twin, but for a map, which only a constructor the
-       caller names reads. *)
+  (* Each module, and its interpreted twin, but for a map, which a twin does
+     not read. *)
+  let g name ?maps c =
+    let m = Wire_ocaml.v ~target ~simd ?maps c in
+    write name (Wire_ocaml.to_ml m);
+    write (name ^ "i") (Wire_ocaml.to_mli m);
     if Option.is_none maps then begin
-      let m = Wire_ocaml.v ~target ~simd c in
       write (base name ^ "_codec.ml") (Wire_ocaml.to_ml ~twin:true m);
       write (base name ^ "_codec.mli") (Wire_ocaml.to_mli ~twin:true m)
     end
   in
-  (* The same module on a bigarray, under the same constructor. *)
-  let big name codec c =
-    let make = ("Schemas." ^ codec ^ "_make", "Schemas." ^ codec)
-    and codec = "Schemas." ^ codec in
-    write name (Wire_ocaml.ml ~target ~buffer:`Bigstring ~make ~codec c);
-    write (name ^ "i")
-      (Wire_ocaml.mli ~target ~buffer:`Bigstring ~make ~codec c)
+  (* The same module on a bigarray. *)
+  let big name c =
+    let m = Wire_ocaml.v ~target ~buffer:`Bigstring c in
+    write name (Wire_ocaml.to_ml m);
+    write (name ^ "i") (Wire_ocaml.to_mli m)
   in
-  let s name ?(step = false) ?(path = "Schemas.") codec c =
-    let codec = path ^ codec in
-    let ml = Wire_ocaml.scanner ~target ~codec c
-    and mli = Wire_ocaml.scanner_mli ~target ~codec c in
+  (* A module of the walk alone: its fold [fold], and with [step] the fold
+     [fold_step], whose visitor is [Step]. *)
+  let s name ?(step = false) c =
+    let folds =
+      Wire_ocaml.(fold "fold" :: (if step then [ fold "fold_step" ] else []))
+    in
+    let m = Wire_ocaml.v ~target ~folds c
+    and visitors = if step then [ ("fold_step", "step.ml") ] else [] in
     if not step then begin
-      write name ml;
-      write (name ^ "i") mli
+      write name (Wire_ocaml.to_ml m);
+      write (name ^ "i") (Wire_ocaml.to_mli m)
     end
     else begin
-      let step = "Step" in
-      write name (summed c ^ Wire_ocaml.scanner ~target ~step ~codec c);
+      write name (summed c ^ Wire_ocaml.to_ml ~visitors m);
       write (name ^ "i")
         ("module Step : sig\n  type t = int\nend\n\n"
-        ^ Wire_ocaml.scanner_mli ~target ~step ~codec c)
+        ^ Wire_ocaml.to_mli ~visitors m)
     end
   in
-  g "g_ipv4.ml" "ipv4" Schemas.ipv4;
-  g "g_ipv4_record.ml" ~make:false "ipv4" Schemas.ipv4;
-  g "g_mixed_record.ml" ~make:false "mixed" Schemas.mixed;
-  g "g_checked.ml" "checked" Schemas.checked;
-  g "g_mixed.ml" "mixed" Schemas.mixed;
-  g "g_small.ml" "small" Schemas.small;
-  g "g_eth.ml" "eth" Schemas.eth;
-  g "g_wide.ml" "wide" Schemas.wide;
-  g "g_signed.ml" "signed" Schemas.signed;
-  g "g_packed.ml" "packed" Schemas.packed;
-  g "g_refined.ml" "refined" Schemas.refined;
-  g "g_overflow.ml" "overflow" Schemas.overflow;
-  g "g_lanes.ml" "lanes" Schemas.lanes;
-  big "g_ipv4_big.ml" "ipv4" Schemas.ipv4;
-  big "g_checked_big.ml" "checked" Schemas.checked;
-  big "g_mixed_big.ml" "mixed" Schemas.mixed;
-  big "g_eth_big.ml" "eth" Schemas.eth;
-  big "g_wide_big.ml" "wide" Schemas.wide;
-  s "s_sized.ml" "sized" Schemas.sized;
-  s "s_overflow.ml" "overflow" Schemas.overflow;
-  s "s_skipped.ml" "skipped" Schemas.skipped;
-  s "s_huge.ml" ~step:true "huge" Schemas.huge;
-  s "s_nested.ml" ~step:true "nested 12" (Schemas.nested 12);
-  s "s_capture.ml" ~path:"Packet_stack." "capture" Packet_stack.capture;
-  g "g_mapped.ml" "mapped" Schemas.mapped
+  g "g_ipv4.ml" Schemas.ipv4;
+  g "g_ipv4_record.ml" Schemas.ipv4;
+  g "g_mixed_record.ml" Schemas.mixed;
+  g "g_checked.ml" Schemas.checked;
+  g "g_mixed.ml" Schemas.mixed;
+  g "g_small.ml" Schemas.small;
+  g "g_eth.ml" Schemas.eth;
+  g "g_wide.ml" Schemas.wide;
+  g "g_signed.ml" Schemas.signed;
+  g "g_packed.ml" Schemas.packed;
+  g "g_refined.ml" Schemas.refined;
+  g "g_overflow.ml" Schemas.overflow;
+  g "g_lanes.ml" Schemas.lanes;
+  big "g_ipv4_big.ml" Schemas.ipv4;
+  big "g_checked_big.ml" Schemas.checked;
+  big "g_mixed_big.ml" Schemas.mixed;
+  big "g_eth_big.ml" Schemas.eth;
+  big "g_wide_big.ml" Schemas.wide;
+  s "s_sized.ml" Schemas.sized;
+  s "s_overflow.ml" Schemas.overflow;
+  s "s_skipped.ml" Schemas.skipped;
+  s "s_huge.ml" ~step:true Schemas.huge;
+  s "s_nested.ml" ~step:true (Schemas.nested 12);
+  s "s_capture.ml" Packet_stack.capture;
+  g "g_mapped.ml" Schemas.mapped
     ~maps:
       Wire_ocaml.
         [

@@ -26,15 +26,14 @@ val v :
   ?target:target ->
   ?buffer:[ `Bytes | `Bigstring ] ->
   ?simd:bool ->
-  ?make:string * string ->
   ?maps:(string * string * typ) list ->
   ?folds:fold list ->
   require:require ->
   codec:string ->
   'a Wire.Codec.t ->
   t
-(** [v ?target ?buffer ?simd ?make ?maps ?folds ~require ~codec c] is the module
-    of [c] on [buffer] (default [`Bytes]), with [folds] (default one fold named
+(** [v ?target ?buffer ?simd ?maps ?folds ~require ~codec c] is the module of
+    [c] on [buffer] (default [`Bytes]), with [folds] (default one fold named
     ["fold"] of every output, with no visitor) when the walk covers [c]; see
     {!Wire_ocaml.v}. A module on a bigarray is a fixed record's, with no walk.
     Raises [Invalid_argument] naming the field and the reason when [c] has no
