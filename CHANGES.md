@@ -2,6 +2,36 @@
 
 ### Breaking
 
+- The module `Wire_ocaml.scanner` writes has no output record: `type t` with
+  `ok`, its `decode` and `pp`, and on OxCaml `type unboxed`,
+  `decode_unboxed` and `box`, are removed. Read the outputs with `fold buf
+  off len ~invalid:(fun () -> None) ~valid:(fun ~f1 ~f2 -> Some (f1, f2))`,
+  or check the record with `check` and read each field with its accessor.
+  `decode` is now the codec's value (@samoht)
+
+- A view's accessor returns the field's value as the codec decodes it, a
+  `Wire_runtime.UInt16.t` for a 16-bit integer, a `UInt32.t` for a 32-bit
+  one, an `int` for a bitfield, where it returned an `int`: convert with
+  `UInt16.to_int` and the like. `Wire_ocaml.view_member`'s `Int` carries
+  the carrier's module, and a field of bytes is a new `Bytes` member
+  (@samoht)
+
+- An accessor named as a value the generated module defines (`size`,
+  `check`, `decode`, ...) takes a trailing `_`, `size_`, where the
+  generator refused it, and an output named `ok` is no longer refused: call
+  `size_` (@samoht)
+
+- A fixed record's `write`, `write_int`, `write_at` and `write_int_at` take
+  each field under its label, `write buf off ~version ~ihl ...`: add the
+  labels, in any order (@samoht)
+
+- `Wire_ocaml.ml` writes the module of a codec of any shape the walk
+  covers, where it refused one of variable size, and `Wire_ocaml.scanner`
+  writes a fixed record's members too: code that relied on `ml` refusing a
+  shape checks `Wire.Codec.wire_size_opt` itself. A module whose codec holds
+  a byte slice links `bytesrw`: add it to the `libraries` that compile the
+  module (@samoht)
+
 - `Wire.Codec.validate` returns a `result`, as `decode` does. Call
   `validate_exn` to keep raising (#492, @samoht)
 
@@ -99,6 +129,15 @@
   out the same values, for records with variable-size fields, nested and
   optional codecs and sized regions. `make prove` checks it for the codecs
   `proofs/fstar-gen` lists (@samoht)
+
+- One module per codec, whatever its shape: `Wire_ocaml.ml` and
+  `Wire_ocaml.scanner` write the same module, with the folds, `check` and an
+  accessor per field for every codec the walk covers, and a fixed record's
+  members where the codec is one. A codec of any other shape gets a record
+  type per record it holds, `decode`, `validate`, `encode` and `size`,
+  answering the codec's error, field path and offset included; an integer
+  or a bitfield at a constant offset gets `set_<field>`, written in place on
+  a view (@samoht)
 
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an
   earlier integer field (#414, #450, @samoht)

@@ -122,9 +122,15 @@ spans whose size an expression gives, optional fields (gates), sized windows
 (regions) and where clauses, in the order the codec checks them, over
 variables unique in the plan. One walk over the plan writes every function
 that checks a record: `is_valid`, the decoders and the function that finds
-the codec's error for a fixed record, and `fold`, `fold_frames`, `decode`
-and `check` (and with `~step`, `fold_step`, `fold_frames_step` and
-`fold_index_step`) for a codec of any shape in scope. OCaml without flambda never inlines a function passed as an
+the codec's error for a fixed record, and `fold`, `fold_frames` and
+`check` (and with `~step`, `fold_step`, `fold_frames_step` and
+`fold_index_step`) for a codec of any shape in scope. One writer
+(`Writer`) puts them in one module per codec, whatever its shape: the walks,
+the check and the views of every codec the walk covers, and the members of a
+fixed record of named scalars (its record, decoder, writes, `Get`, `Valid`,
+`View`, `Field`, `Global`, `Bigstring`) where the codec is one;
+`Wire_ocaml.ml` and `Wire_ocaml.scanner` write the same module, with the
+folds their arguments select. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
 their consumer by name, with no closure call. They allocate nothing per
@@ -195,6 +201,31 @@ variable size is placed by that record's `end_at`, the walk of its spans to
 its end. The views of a run of optional fields, or of optional fields nested
 inside each other, cost about 55 lines and 370 words of code per field, on
 either target: a module per level, each accessor walking only its record.
+An accessor returns the field's value as the codec decodes it: a 16-bit
+integer is a `UInt16.t`, typed at the accessor's end from the `int` it reads
+by `cast` and the carrier's `int_eq`, which the compilers inline to nothing,
+a 32-bit one a `UInt32.t` through a proof the module binds once where ints
+have more than 32 bits, a bitfield an `int`; a named field of bytes is a
+slice of the buffer or a copy. An integer or a bitfield in the leading prefix
+also has `set_<field>`, one store, or a load and a store of a bitfield's
+word, with no check of the record's constraints, as `Codec.set` makes none.
+
+A codec the walk covers whose record is not one of named scalars at
+constant offsets has its values written beside the views (`Value_module`):
+each record its module holds has a record type and a printer, `of_view`,
+which reads each field through its accessor, `encode_at` and `size`, which
+walk the plan from the values and refuse a record whose values break a size,
+a presence or a check, and the codec's own adds `decode`, `validate` and
+`encode`. `decode` is the check, then `of_view`; where the check fails,
+`error_at` walks the plan as the codec walks the record and answers the
+codec's error, field path and offset included: the checks of the fields at
+constant offsets of the record decoded (through optional fields and records
+held there) come before its fixed bytes, a record entered at a variable
+offset checks its bitfields before its fixed bytes, a short field is named
+only when it is checked, a short span names the record that holds it, and a
+region is measured first. Each record's check pass calls those of the
+records it holds, so the code stays linear in them; the views and values of
+a level of nested optional fields cost about 133 lines.
 
 The invariants above hold for the generated code as follows.
 
@@ -330,8 +361,10 @@ where `scan` starts and assigned where its field is present, so the code is
 linear in the number of optional fields, as the OCaml is.
 
 The differential lanes compare every generated module with the codec on
-random bytes: the record modules on the sampled fixed records, the scanners
-on every sampled shape and on hand-written structured cases, and, with
+random bytes: the fixed records' members on the sampled fixed records, the
+walks and views on every sampled shape and on hand-written structured cases,
+the values of the modules with no fixed record on the same frames (decode
+written back by encode, validate and its error exactly), and, with
 `BUILD_EVERPARSE=1`, those cases with the EverParse C validators of their
 standalone and FFI projections for acceptance and the bytes consumed, and
 with every scalar member of the FFI projection's default visitor, nested fields

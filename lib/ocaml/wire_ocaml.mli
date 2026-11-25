@@ -327,9 +327,16 @@ val scanner_bridge_mli :
     check guarantees is one load; any other is placed again from the bytes that
     place it, with a bound check, and a presence or a tag is tested again, so an
     accessor reads no byte outside [b] even when bytes are written after the
-    check. An accessor named as a value the module defines ([size], [check],
-    [decode], ...) takes a trailing ['_'], as a keyword does: [size] is [size_]
-    and [size_] [size__]. *)
+    check. A named field of bytes is an accessor too, answering a
+    [Bytesrw.Bytes.Slice.t] of [b] for a byte slice and a copy for a byte array,
+    as the codec decodes them. An integer or a bitfield at a constant offset
+    inside the bytes the check guarantees also has [set_<name> b v x], which
+    writes [x] there in place, one store or a load and a store of a bitfield's
+    word; it refuses a bitfield too wide for its field with [Invalid_argument]
+    and checks none of the record's constraints, as {!Wire.Codec.set} does. An
+    accessor named as a value the module defines ([size], [check], [decode],
+    ...) takes a trailing ['_'], as a keyword does: [size] is [size_] and
+    [size_] [size__]. *)
 
 type view = { module_name : string option; members : view_member list }
 (** The views of a record: its module, [None] for the codec's own, and its
