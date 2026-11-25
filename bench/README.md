@@ -327,7 +327,7 @@ pick for exactly this work:
 | `Wire.Codec stack decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of one bounded stack codec |
 | `Wire.Codec stack check/enter/read` | interpreted codec (OCaml 5, OxCaml) | `View.check` of the same bounded stack codec, which builds nothing, then `View.enter` of each layer present (a `View.sub` or `View.sub_option` per sub-codec field) and a `View.read` of a `View.field` per field |
 | `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | a `Codec.View.codec` per header codec; `View.check`/`View.ok`/`View.get` per header, then a `View.read` of a `View.field` per field; the harness links the layers |
-| `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the scanner of the stack: `decode`, `fold` and `fold_frames` (batch), on OxCaml also their unboxed forms; `selected outputs` hands out only the checksum's fields |
+| `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the scanner of the stack: `fold` and `fold_frames` (batch), on OxCaml also their unboxed forms; `selected outputs` hands out only the checksum's fields |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `View.check`/`View.ok` per header, then a `view_<field>` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
 | `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.scanner` of the stack | `scan` per frame; `selected outputs` hands out only the checksum's fields |
 | `wire.rust, linked headers` | generated Rust of the fixed headers | `Valid::at` per header, then a read per field; the harness links the layers |
@@ -382,8 +382,8 @@ into a checksum, and the report fails if they disagree.
 The existing `test/ocaml` and `fuzz/diff/ocaml` suites compare scanner
 acceptance and scalar fields with `Codec`, including truncation at every
 byte, nonzero frame offsets, IPv4/TCP options and arbitrary mutations.
-Their `ocaml-ox` lanes also compare boxed and unboxed APIs and check
-`decode_unboxed` with `[@zero_alloc]` in release builds. With
+Their `ocaml-ox` lanes also compare the boxed and unboxed folds and check
+`fold_frames_unboxed` with `[@zero_alloc]` in release builds. With
 `BUILD_EVERPARSE=1`, the same differential driver compiles the projected
 3D schemas through EverParse and compares C acceptance, consumed length and
 the scalar members of the default visitor, nested fields included.
@@ -988,6 +988,37 @@ around the walk. On OCaml and flambda the views cost 7 and 10 more than
 the prototype: the same IHL test, a bitfield word masked to 16 bits and
 then by its test, and `ok` and `get` testing the answer twice, which only
 flambda2 merges.
+
+Since the one module per codec, an accessor returns its field's carrier,
+a `UInt16.t` for a port, which the row reads as `(x :> int)`, and a
+`UInt32.t` for an address, read with `UInt32.to_int`. The 16-bit and 8-bit
+carriers type the accessor's `int` with their `unsafe_of_int`, the
+`%identity` primitive: through `cast` and `UInt16.to_int`, two inlined
+functions, OCaml without flambda kept a binding that tags each port and
+then untags it to shift it, 1.7 more instructions a packet.
+
+The one module per codec changes no row that reads a generated module:
+`bench/count.sh`, five runs of each row, the tree before it (`fc6e0ec4`)
+and after it interleaved within each run, median of five, on the ARM64
+macOS host at a load average of 15.1 before and 16.1 after. Instructions
+/ cycles per item (apps, 100,000 items) or per packet (the MAWI parse);
+every row gave the same result on both trees:
+
+| Row | OCaml before | OCaml after | flambda before | flambda after | OxCaml before | OxCaml after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| routing | 56.2 / 16.1 | 56.2 / 14.9 | 56.1 / 15.1 | 56.1 / 15.0 | 44.2 / 13.8 | 44.1 / 13.3 |
+| gateway | 762 / 196 | 762 / 193 | 964 / 193 | 964 / 193 | 626 / 194 | 625 / 191 |
+| clcw | 46.9 / 7.3 | 46.9 / 6.8 | 46.9 / 7.4 | 47.0 / 7.5 | 42.0 / 6.8 | 42.0 / 6.7 |
+| routing_write | 97.1 / 19.6 | 97.1 / 19.4 | 96.2 / 19.5 | 96.1 / 18.8 | 68.1 / 18.3 | 68.1 / 17.8 |
+| gateway_write | 782 / 87.4 | 783 / 86.9 | 783 / 79.8 | 783 / 84.5 | 511 / 69.3 | 511 / 61.2 |
+| clcw_write | 66.2 / 8.1 | 66.1 / 8.2 | 66.1 / 7.9 | 66.1 / 7.9 | 51.1 / 6.2 | 51.2 / 6.8 |
+| MAWI scanner, `fold_step` | 149.8 / 43.4 | 149.9 / 44.0 | 144.8 / 41.4 | 144.6 / 41.2 | 72.9 / 28.8 | 73.3 / 29.5 |
+| MAWI check/view, accessors | 237.2 / 52.1 | 237.3 / 51.9 | 244.1 / 53.4 | 244.2 / 53.4 | 174.7 / 45.8 | 174.3 / 43.8 |
+| MAWI `View.check`, linked headers | 222.3 / 49.2 | 222.4 / 48.3 | 249.3 / 51.0 | 249.3 / 51.0 | 198.6 / 54.1 | 197.7 / 49.1 |
+| MAWI swap, generated `Global` | 188.8 / 43.4 | 188.8 / 44.0 | 209.3 / 46.1 | 209.2 / 45.3 | 188.3 / 44.3 | 188.4 / 44.3 |
+
+The NEON lanes rows, on OxCaml, count 10.4 / 1.0 (clcw) and 7.1 / 1.2
+(clcw_write) before and 10.4 / 1.0 and 7.1 / 1.1 after.
 
 ### One loop, interpreted or generated (`make bench-flow-swap`)
 

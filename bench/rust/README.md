@@ -73,7 +73,10 @@ runs taken one row after another do not; the medians still move by about
 | mix128-sorted | `931fc45b7033d274f304753455284eacf77f1063d3424221c6de88041680c6d6` |
 
 Instructions / cycles per packet, ordered by the instructions on
-`fixed64-random`:
+`fixed64-random`. The `wire.ocaml fused stack` and `fused stack, unboxed
+API` rows timed the scanner's output record, its `decode` and
+`decode_unboxed`, which the one module per codec removed; they are no
+longer run, and their lines below are kept as measured:
 
 | Row | fixed64 random | fixed64 sorted | mix128 random | mix128 sorted |
 | --- | ---: | ---: | ---: | ---: |
