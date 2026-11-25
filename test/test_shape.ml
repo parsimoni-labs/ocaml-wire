@@ -329,7 +329,7 @@ let count_times_width bound width =
 
 let test_byte_size_product_rejected () =
   rejects "bound reaches 2^32 bytes" ~codec:"Wide"
-    ~mentions:[ "body"; "n"; "536870912"; "8" ]
+    ~mentions:[ "body"; "n"; "8" ]
     (count_times_width 0x2000_0000 8);
   rejects "bound exceeds 2^32 bytes" ~codec:"Wider" ~mentions:[ "body"; "n" ]
     (count_times_width 0x3000_0000 8);
@@ -370,9 +370,9 @@ let test_byte_size_product_accepted () =
       Types.field "body"
         (Types.byte_array ~size:(Types.Mul (Types.ref "n", int 8)));
     ];
-  (* With no bound in the schema there is nothing certain to report, and the
-     diagnostic stays with EverParse rather than guessing. *)
-  accepts "Unbounded"
+  (* With no bound in the schema the product needs 64 bits, which a size
+     cannot have. *)
+  rejects "unbounded" ~codec:"Unbounded" ~mentions:[ "body"; "n" ]
     [
       Types.field "n" Types.uint32be;
       Types.field "body"

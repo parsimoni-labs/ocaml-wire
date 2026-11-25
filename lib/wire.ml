@@ -128,6 +128,7 @@ let codec (c : 'r Codec.t) : 'r typ =
       Codec
         {
           codec_name = Codec.name c;
+          codec_id = Codec.id c;
           codec_decode;
           codec_validate;
           codec_validate_sized;
@@ -146,6 +147,7 @@ let codec (c : 'r Codec.t) : 'r typ =
       Codec
         {
           codec_name = Codec.name c;
+          codec_id = Codec.id c;
           codec_decode;
           codec_validate;
           codec_validate_sized;
@@ -169,6 +171,18 @@ type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
       iter : ('elt -> unit) -> 'seq -> unit;
     }
       -> ('elt, 'seq) seq_map
+
+(* A per-byte condition is checked when the type is built: it projects to an
+   element struct of its own, which sees no parameter and no other field. *)
+let byte_array_where ~size ~per_byte =
+  let t = Types.byte_array_where ~size ~per_byte in
+  (match t with
+  | Byte_array_where { elt_var; cond; _ } -> (
+      try Types.check_per_byte elt_var cond
+      with Invalid_argument m ->
+        Fmt.invalid_arg "Wire.byte_array_where: per-byte condition: %s" m)
+  | _ -> ());
+  t
 
 let seq_list = Types.seq_list
 let array_seq = Types.array_seq
@@ -381,10 +395,14 @@ let rec parse_direct : type a.
       let n = Eval.expr Eval.empty size in
       check_span len ~off ~n;
       (Bytes.sub_string buf off n, off + n)
-  | Byte_array_where { size; elt_var; cond } ->
+  | Byte_array_where { size; elt_var; cond; test } ->
       let n = Eval.expr Eval.empty size in
       check_span len ~off ~n;
-      let bad = Eval.bad_byte ~elt_var ~cond buf ~first:off ~len:n in
+      let bad =
+        Eval.first_bad
+          (Eval.byte_test ~elt_var ~cond test)
+          buf ~first:off ~len:n
+      in
       if bad >= 0 then raise_constraint ~at:(off + bad) ~which:Per_byte ();
       (Bytes.sub_string buf off n, off + n)
   | Byte_slice { size } ->
@@ -943,9 +961,9 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Byte_array { size } ->
       check_byte_field_size size ~actual:(String.length v);
       write_string enc v
-  | Byte_array_where { size; elt_var; cond } ->
+  | Byte_array_where { size; elt_var; cond; test } ->
       check_byte_field_size size ~actual:(String.length v);
-      Eval.check_byte_refinement ~elt_var ~cond v;
+      Eval.check_byte_refinement ~elt_var ~cond ~test v;
       write_string enc v
   | Byte_slice { size } ->
       let src = Slice.bytes v in
@@ -1145,6 +1163,7 @@ module SInt32 = SInt32
 module SInt8 = SInt8
 module SInt16 = SInt16
 module UInt8 = UInt8
+module Buf = Buf
 module UInt16 = UInt16
 module Ascii = Ascii
 

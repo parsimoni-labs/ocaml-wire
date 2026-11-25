@@ -53,34 +53,54 @@ let doc_string s = String.escaped s
 
 (* {1 Expressions}
 
-   A constraint is OCaml arithmetic on 63-bit [int]s, which the codec checks:
-   a sum, difference or product that leaves them is an error. The generated
-   code computes on [i64] values that always hold such an [int]. An operation
-   the plan checks ([P.Scope.checked]) is a call to [add], [sub] or [mul],
-   whose failure rejects the record through [?]; OCaml's [lsl] and [lsr] are
-   Rust shifts where the ranges show they agree (a nonnegative operand, a
-   constant count below 63 and, for [lsl], no bit shifted out), and otherwise
-   follow what OCaml does on the tagged integer. Flat modules and scanners
-   both write their expressions here, over the plan's variables. *)
+   A constraint is OCaml arithmetic on 63-bit [int]s, which the generated code
+   computes on [i64] values that always hold such an [int]. An integer
+   expression that can leave them ([P.Scope.wide]) is compared on [u64], as
+   the codec computes it on 64 bits and 3D at the type that holds it; any
+   other stays inside them. OCaml's [lsl] and [lsr] are Rust shifts where the
+   ranges show they agree (a nonnegative operand, a constant count below 63
+   and, for [lsl], no bit shifted out), and otherwise follow what OCaml does on
+   the tagged integer. Flat modules and scanners both write their expressions
+   here, over the plan's variables. *)
 
 let int_lit n = if n < 0 then Fmt.str "(%di64)" n else Fmt.str "%di64" n
+
+(* [e] as an [int] expression when it is one. *)
+let as_int : type a. a T.expr -> int T.expr option = function
+  | T.Int _ as e -> Some e
+  | T.Ref (T.I, _) as e -> Some e
+  | T.Add _ as e -> Some e
+  | T.Sub _ as e -> Some e
+  | T.Mul _ as e -> Some e
+  | T.Land _ as e -> Some e
+  | T.Lor _ as e -> Some e
+  | T.Lxor _ as e -> Some e
+  | T.Lnot _ as e -> Some e
+  | T.Lsl _ as e -> Some e
+  | T.Lsr _ as e -> Some e
+  | T.Cast _ as e -> Some e
+  | T.If_then_else _ as e -> Some e
+  | _ -> None
 
 let rec expr : type a. P.Scope.t -> a T.expr -> string =
  fun scope e ->
   let r : type b. b T.expr -> string = fun e -> expr scope e in
   let op o a b = Fmt.str "(%s %s %s)" (r a) o (r b) in
-  let arith (e : int T.expr) o f a b =
-    if P.Scope.checked scope e then Fmt.str "%s(%s, %s)?" f (r a) (r b)
-    else op o a b
+  let cmp : type b. string -> b T.expr -> b T.expr -> string =
+   fun o a b ->
+    match (as_int a, as_int b) with
+    | Some x, Some y when P.Scope.wide scope x || P.Scope.wide scope y ->
+        Fmt.str "(%s %s %s)" (wide scope x) o (wide scope y)
+    | _ -> op o a b
   in
   let range e = P.Scope.range scope e in
   match e with
   | T.Int n -> int_lit n
   | T.Bool b -> string_of_bool b
   | T.Ref (T.I, v) -> v
-  | T.Add (a, b) -> arith e "+" "add" a b
-  | T.Sub (a, b) -> arith e "-" "sub" a b
-  | T.Mul (a, b) -> arith e "*" "mul" a b
+  | T.Add (a, b) -> op "+" a b
+  | T.Sub (a, b) -> op "-" a b
+  | T.Mul (a, b) -> op "*" a b
   | T.Land (a, b) -> op "&" a b
   | T.Lor (a, b) -> op "|" a b
   | T.Lxor (a, b) -> op "^" a b
@@ -95,12 +115,12 @@ let rec expr : type a. P.Scope.t -> a T.expr -> string =
   | T.Lsr (a, T.Int n) when n >= 0 && n < 63 && fst (range a) >= 0 ->
       Fmt.str "(%s >> %d)" (r a) n
   | T.Lsr (a, b) -> Fmt.str "lsr(%s, %s)" (r a) (r b)
-  | T.Eq (a, b) -> op "==" a b
-  | T.Ne (a, b) -> op "!=" a b
-  | T.Lt (a, b) -> op "<" a b
-  | T.Le (a, b) -> op "<=" a b
-  | T.Gt (a, b) -> op ">" a b
-  | T.Ge (a, b) -> op ">=" a b
+  | T.Eq (a, b) -> cmp "==" a b
+  | T.Ne (a, b) -> cmp "!=" a b
+  | T.Lt (a, b) -> cmp "<" a b
+  | T.Le (a, b) -> cmp "<=" a b
+  | T.Gt (a, b) -> cmp ">" a b
+  | T.Ge (a, b) -> cmp ">=" a b
   | T.And (a, b) -> op "&&" a b
   | T.Or (a, b) -> op "||" a b
   | T.Not a -> Fmt.str "(!%s)" (r a)
@@ -110,33 +130,36 @@ let rec expr : type a. P.Scope.t -> a T.expr -> string =
       Fmt.str "(if %s { %s } else { %s })" (r c) (r a) (r b)
   | _ -> fail_unsupported "expression %a" T.pp_expr e
 
-(* The helpers the expressions call, returning [result]: [ok v] for a value,
-   [overflow] where the codec's arithmetic overflows. *)
-let arith_prelude ~result ~ok ~overflow =
-  Fmt.str
-    {|const INT_MIN: i64 = -(1 << 62);
-const INT_MAX: i64 = (1 << 62) - 1;
+(* [e] as a [u64], which 3D proves holds its value: its variables are below
+   [2^32], so the [u64] operations compute it exactly. *)
+and wide scope (e : int T.expr) =
+  let r = wide scope in
+  let op o a b = Fmt.str "(%s %s %s)" (r a) o (r b) in
+  let distance (b : int T.expr) =
+    match b with
+    | T.Int n -> string_of_int n
+    | _ -> Fmt.str "(%s as u32)" (expr scope b)
+  in
+  match e with
+  | T.Int n -> Fmt.str "%du64" n
+  | T.Ref (T.I, v) -> Fmt.str "(%s as u64)" v
+  | T.Add (a, b) -> op "+" a b
+  | T.Sub (a, b) -> op "-" a b
+  | T.Mul (a, b) -> op "*" a b
+  | T.Land (a, b) -> op "&" a b
+  | T.Lor (a, b) -> op "|" a b
+  | T.Lxor (a, b) -> op "^" a b
+  | T.Lnot a -> Fmt.str "(!%s)" (r a)
+  | T.Lsl (a, b) -> Fmt.str "(%s << %s)" (r a) (distance b)
+  | T.Lsr (a, b) -> Fmt.str "(%s >> %s)" (r a) (distance b)
+  | T.Cast (`U8, a) -> Fmt.str "(%s & 0xff)" (r a)
+  | T.Cast (`U16, a) -> Fmt.str "(%s & 0xffff)" (r a)
+  | T.If_then_else (c, a, b) ->
+      Fmt.str "(if %s { %s } else { %s })" (expr scope c) (r a) (r b)
+  | _ -> fail_unsupported "expression %a" T.pp_expr e
 
-// The codec computes on 63-bit integers and rejects a record where a sum,
-// a difference or a product leaves them. Both operands hold one, so the
-// [i64] sum and difference cannot overflow.
-#[inline(always)]
-fn int(v: i64) -> %s {
-    if v < INT_MIN || v > INT_MAX { %s } else { %s(v) }
-}
-
-#[inline(always)]
-fn add(a: i64, b: i64) -> %s { int(a + b) }
-
-#[inline(always)]
-fn sub(a: i64, b: i64) -> %s { int(a - b) }
-
-#[inline(always)]
-fn mul(a: i64, b: i64) -> %s {
-    match a.checked_mul(b) { Some(p) => int(p), None => %s }
-}
-
-// OCaml's [lsl] and [lsr] on the tagged integer [2a + 1], with the count
+let shift_prelude =
+  {|// OCaml's [lsl] and [lsr] on the tagged integer [2a + 1], with the count
 // taken modulo 64 as the machine does.
 #[inline(always)]
 fn lsl(a: i64, b: i64) -> i64 { (a << 1).wrapping_shl(b as u32) >> 1 }
@@ -146,7 +169,6 @@ fn lsr(a: i64, b: i64) -> i64 {
     ((((a << 1) | 1) as u64).wrapping_shr(b as u32) as i64) >> 1
 }
 |}
-    result overflow ok result result result overflow
 
 (* {1 Layout}
 
@@ -312,9 +334,6 @@ pub enum Error {
     /// `field`, a closed enum at offset `at`, holds `value`, which is none of
     /// its cases.
     InvalidEnum { field: &'static str, at: usize, value: i64 },
-    /// A constraint's arithmetic leaves the 63-bit integers of the codec,
-    /// which rejects the record.
-    Overflow,
     /// A value handed to a write does not fit its bitfield, or is not a case
     /// of its closed enum.
     OutOfRange { field: &'static str, value: i64 },
@@ -358,11 +377,7 @@ fn field_mut<const N: usize>(buf: &mut [u8], off: usize, at: usize) -> Result<&m
 }
 |}
 
-let prelude =
-  error_prelude
-  ^ arith_prelude ~result:"Result<i64, Error>" ~ok:"Ok"
-      ~overflow:"Err(Error::Overflow)"
-  ^ "\n" ^ frame_prelude
+let prelude = error_prelude ^ shift_prelude ^ "\n" ^ frame_prelude
 
 let member v cases =
   Fmt.str "(%a)"
@@ -379,50 +394,119 @@ let pp_record ppf fields =
     fields;
   Fmt.pf ppf "}@\n@\n"
 
-(* [check] makes the codec's checks on a record in an array, in its order:
-   each field's in field order, then the [where] clauses, each written under
-   what the checks before it established. *)
-let pp_check ppf ~plan ~fields ~where =
-  Fmt.pf ppf
-    "#[inline(always)]@\n\
-     fn check(b: &[u8; SIZE], off: usize) -> Result<(), Error> {@\n";
+(* A check of the record: one of a field's, or a [where] clause. *)
+type step = On of field * P.check | Where of bool T.expr
+
+(* Where [f] ends in the record. *)
+let field_end f = f.off + width_bytes f.store
+
+(* The checks of a record that fits, in the codec's order: each field's in
+   field order, then the [where] clauses. *)
+let fit_steps ~fields ~where =
+  List.concat_map (fun f -> List.map (fun c -> On (f, c)) f.checks) fields
+  @ List.map (fun w -> Where w) where
+
+(* The checks of a record that does not fit, in the order 3D makes them: a
+   [where] clause comes after the last field it reads, as the refinement of
+   that field the projection makes it, or before every field when it reads
+   none. *)
+let short_steps ~fields ~where =
+  let reads w f = List.mem f.var (T.collect_refs w) in
+  let after f w =
+    match List.rev (List.filter (reads w) fields) with
+    | last :: _ -> last.var = f.var
+    | [] -> false
+  in
+  let first = List.filter (fun w -> not (List.exists (reads w) fields)) where in
+  List.map (fun w -> Where w) first
+  @ List.concat_map
+      (fun f ->
+        List.map (fun c -> On (f, c)) f.checks
+        @ List.map (fun w -> Where w) (List.filter (after f) where))
+      fields
+
+(* Where the bytes a step reads end: those of its field, or of the last field
+   a [where] clause reads. *)
+let step_end ~fields = function
+  | On (f, _) -> field_end f
+  | Where w ->
+      List.fold_left
+        (fun acc f ->
+          if List.mem f.var (T.collect_refs w) then max acc (field_end f)
+          else acc)
+        0 fields
+
+(* The reads of the fields' values, then [steps], each written under what the
+   checks before it established, returning [fail ~at e] when it fails with
+   the error [e], its bytes ending at [at]. *)
+let pp_steps ppf ~plan ~fields ~fail steps =
   List.iter
     (fun f ->
       match f.store with
       | Bytes _ -> ()
       | _ -> Fmt.pf ppf "    let %s = %s as i64;@\n" f.var (read "b" f))
     fields;
-  let scope =
-    List.fold_left
-      (fun scope f ->
-        List.fold_left
-          (fun scope (c : P.check) ->
-            let cond = expr scope c.cond in
-            (match c.kind with
-            | Enum _ ->
-                Fmt.pf ppf
-                  "    if !(%s) { return Err(Error::InvalidEnum { field: %s, \
-                   at: off + %d, value: %s }); }@\n"
-                  cond f.lit f.off f.var
-            | Constraint | Tag ->
-                Fmt.pf ppf
-                  "    if !(%s) { return Err(Error::Constraint { field: %s, \
-                   at: off + %d }); }@\n"
-                  cond f.lit f.off);
-            P.Scope.refine scope [ c.cond ])
-          scope f.checks)
-      (P.Scope.v plan) fields
-  in
   ignore
     (List.fold_left
-       (fun scope w ->
-         Fmt.pf ppf
-           "    if !(%s) { return Err(Error::Constraint { field: \"\", at: off \
-            }); }@\n"
-           (expr scope w);
-         P.Scope.refine scope [ w ])
-       scope where);
+       (fun scope step ->
+         let at = step_end ~fields step in
+         let cond, err =
+           match step with
+           | On (f, c) ->
+               let err =
+                 match c.kind with
+                 | Enum _ ->
+                     Fmt.str
+                       "Error::InvalidEnum { field: %s, at: off + %d, value: \
+                        %s }"
+                       f.lit f.off f.var
+                 | Constraint | Tag ->
+                     Fmt.str "Error::Constraint { field: %s, at: off + %d }"
+                       f.lit f.off
+               in
+               (c.cond, err)
+           | Where w -> (w, "Error::Constraint { field: \"\", at: off }")
+         in
+         Fmt.pf ppf "    if !(%s) { return %s; }@\n" (expr scope cond)
+           (fail ~at err);
+         P.Scope.refine scope [ cond ])
+       (P.Scope.v plan) steps)
+
+(* [check] makes the codec's checks on a record in an array, in its order. *)
+let pp_check ppf ~plan ~fields ~where =
+  Fmt.pf ppf
+    "#[inline(always)]@\n\
+     fn check(b: &[u8; SIZE], off: usize) -> Result<(), Error> {@\n";
+  pp_steps ppf ~plan ~fields
+    ~fail:(fun ~at:_ e -> Fmt.str "Err(%s)" e)
+    (fit_steps ~fields ~where);
   Fmt.pf ppf "    Ok(())@\n}@\n@\n"
+
+(* [short] is the error of a record that does not fit at [off]: its checks run
+   on the bytes there are, padded with zeros, and the first that fails is the
+   error when its bytes are there, else the end of input. *)
+let pp_short ppf ~plan ~fields ~where =
+  Fmt.pf ppf
+    "#[cold]@\n\
+     #[inline(never)]@\n\
+     fn short(buf: &[u8], off: usize) -> Error {@\n\
+    \    let too_short = Error::TooShort { expected: off.saturating_add(SIZE), \
+     got: buf.len() };@\n";
+  let steps = short_steps ~fields ~where in
+  if steps <> [] then begin
+    Fmt.pf ppf
+      "    let rest = match buf.get(off..) { Some(r) => r, None => return \
+       too_short };@\n\
+      \    let avail = rest.len().min(SIZE);@\n\
+      \    let mut padded = [0u8; SIZE];@\n\
+      \    padded[..avail].copy_from_slice(&rest[..avail]);@\n\
+      \    let b = &padded;@\n";
+    pp_steps ppf ~plan ~fields
+      ~fail:(fun ~at e ->
+        Fmt.str "if %d > avail { too_short } else { %s }" at e)
+      steps
+  end;
+  Fmt.pf ppf "    too_short@\n}@\n@\n"
 
 let pp_record_of ppf ~b fields =
   Fmt.pf ppf "Record {@\n";
@@ -434,13 +518,13 @@ let pp_entry ppf ~fields =
     "/// Checks the record at `off` as the codec's `validate` does.@\n\
      #[inline]@\n\
      pub fn validate(buf: &[u8], off: usize) -> Result<(), Error> {@\n\
-    \    check(frame(buf, off)?, off)@\n\
+    \    check(frame(buf, off).map_err(|_| short(buf, off))?, off)@\n\
      }@\n\
      @\n\
      /// Checks and reads the record at `off`, as the codec's `decode` does.@\n\
      #[inline]@\n\
      pub fn decode(buf: &[u8], off: usize) -> Result<Record, Error> {@\n\
-    \    let b = frame(buf, off)?;@\n\
+    \    let b = frame(buf, off).map_err(|_| short(buf, off))?;@\n\
     \    check(b, off)?;@\n\
     \    Ok(%a)@\n\
      }@\n\
@@ -674,7 +758,7 @@ let pp_valid ppf ~fields =
     \    /// Checks the record at `off` in `buf`.@\n\
     \    #[inline]@\n\
     \    pub fn at(buf: &'a [u8], off: usize) -> Result<Self, Error> {@\n\
-    \        let b = frame(buf, off)?;@\n\
+    \        let b = frame(buf, off).map_err(|_| short(buf, off))?;@\n\
     \        check(b, off)?;@\n\
     \        Ok(Valid(b))@\n\
     \    }@\n\
@@ -760,15 +844,14 @@ let digest c = Wire.Private.Gen.digest c
 
    The plan is [Wire_ocaml.Plan], the one [Wire_ocaml.scanner] writes out, and
    so are its decisions: which variables are bound, which arithmetic is
-   checked, and the decision tree of a run of optional fields. This section
+   computed on [u64], and the decision tree of a run of optional fields. This section
    only spells them in Rust. A region is a
    slice of exactly its bytes and the cursor is that slice's remaining tail:
    a prefix's check against its region is [split_first_chunk], which hands
    back the prefix as an array its loads index at constant offsets, and a
    sized region is the slice [split_at] cuts once its size was checked
    against the tail. Every scalar is an [i64] holding the 63-bit [int] the
-   codec computes with; a checked operation returns [None] where the codec's
-   overflows, which rejects the record through [?]. The code after a run of
+   codec computes with. The code after a run of
    optional fields is written once: the run binds the tail it leaves, and
    its outputs that are not slots, in one [let]. A slot ([Plan.slots], an
    output under more than [Plan.slot_depth] optional fields) is a [let mut]
@@ -797,7 +880,7 @@ let line s fmt =
 
 let indent s = { s with depth = s.depth + 1 }
 
-(* A check: the record is rejected where [cond] is false, or overflows. *)
+(* A check: the record is rejected where [cond] is false. *)
 let scan_check s cond = line s "if !(%s) { return None; }" (expr s.scope cond)
 
 let is_scalar (f : P.field) =
@@ -1092,8 +1175,7 @@ let scan_header ~codec ~digest ~slots =
       "";
     ]
 
-let scan_prelude =
-  arith_prelude ~result:"Option<i64>" ~ok:"Some" ~overflow:"None"
+let scan_prelude = shift_prelude
 
 let pp_scan_fields ppf outputs =
   Fmt.pf ppf
@@ -1211,6 +1293,7 @@ let pp ~codec ppf c =
       Fmt.pf ppf "%s@\n" prelude;
       pp_record ppf fields;
       pp_check ppf ~plan ~fields ~where;
+      pp_short ppf ~plan ~fields ~where;
       pp_entry ppf ~fields;
       pp_write ppf ~fields;
       List.iter (pp_accessors ppf) fields;

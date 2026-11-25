@@ -1184,37 +1184,28 @@ let test_enum_codec_validates () =
     "array unknown element rejected" false (ok ca "\238\220\220\187")
 
 (* Decode diagnostics: end of input is reported only for a read that actually
-   ran off the end of the buffer. A misuse in a size expression keeps its own
-   error, and a byte span the data sizes below zero stays inside the result
-   type. *)
+   ran off the end of the buffer, and a byte span the data sizes below zero
+   stays inside the result type. [field_pos] has no 3D form, so a size that
+   reads it is refused when the codec is built. *)
 
 let f_diag_len = Field.v "len" uint8
 
-let field_pos_size_codec =
-  Codec.v "FieldPosSize"
-    (fun _len body -> body)
-    Codec.
-      [
-        (f_diag_len $ fun x -> UInt8.v (String.length x));
-        Field.v "body"
-          (byte_array ~size:Expr.(Field.ref f_diag_len + field_pos))
-        $ Fun.id;
-      ]
-
 let test_size_misuse_reports_itself () =
-  let check name decode =
-    match decode () with
-    | Ok _ -> Alcotest.failf "%s: decoded a value" name
-    | Error e ->
-        Alcotest.failf "%s: misreported as a parse error: %a" name
-          pp_parse_error e
-    | exception Invalid_argument msg ->
-        if not (contains ~sub:"[field_pos] only valid inside an action" msg)
-        then Alcotest.failf "%s: unexpected message %S" name msg
-  in
-  check "Codec.decode" (fun () ->
-      Codec.decode field_pos_size_codec (Bytes.of_string "\001ab") 0);
-  check "of_string" (fun () -> of_string (codec field_pos_size_codec) "\001ab")
+  match
+    Codec.v "FieldPosSize"
+      (fun _len body -> body)
+      Codec.
+        [
+          (f_diag_len $ fun x -> UInt8.v (String.length x));
+          Field.v "body"
+            (byte_array ~size:Expr.(Field.ref f_diag_len + field_pos))
+          $ Fun.id;
+        ]
+  with
+  | _ -> Alcotest.fail "a size reading field_pos was accepted"
+  | exception Invalid_argument msg ->
+      if not (contains ~sub:"field_pos" msg) then
+        Alcotest.failf "unexpected message %S" msg
 
 let dep_size_codec =
   Codec.v "DepSizeTrunc"

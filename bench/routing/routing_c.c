@@ -1,7 +1,7 @@
 /* APID routing -- application logic with EverParse field extraction.
 
    Uses EverParse-generated SpacePacketValidateWireSpacePacket to extract fields
-   into a typed SpacePacketFields struct via the default plug. Application
+   into a typed SpacePacketFields struct via the default visitor. Application
    logic (routing dispatch) reads named members. No hand-written bitfield
    manipulation. */
 

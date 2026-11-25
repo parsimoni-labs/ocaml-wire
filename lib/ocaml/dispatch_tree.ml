@@ -52,12 +52,10 @@ let decide facts conds =
   among facts conds
 
 (* Whether the conditions [a] and [b], [b] after [a], exclude each other, so
-   [b] need not be evaluated where [a] holds: the codec evaluates it there, so
-   it must not be one that may overflow, unless what [a] establishes decides
-   it before any overflow. *)
+   [b] need not be evaluated where [a] holds. *)
 let exclusive facts a b =
   simplify (assume facts a true) b = T.Bool false
-  || (simplify (assume facts b true) a = T.Bool false && not (may_overflow b))
+  || simplify (assume facts b true) a = T.Bool false
 
 (* The optional fields at the head of [nodes] whose conditions, as [lower]
    writes them, exclude each other, and the nodes after them. *)

@@ -66,6 +66,67 @@ val codec : t Codec.t
     Ethernet header. Unknown IPv4 protocols and fragments retain an opaque
     payload. Ethernet padding after the IPv4 total length is accepted. *)
 
+(** {1:fields Fields}
+
+    The fields the cross-language benchmark reads through checked views. *)
+
+val tcp_src_port : (UInt16.t, tcp) Codec.field
+(** The TCP source port. *)
+
+val tcp_dst_port : (UInt16.t, tcp) Codec.field
+(** The TCP destination port. *)
+
+val tcp_seq : (UInt32.t, tcp) Codec.field
+(** The TCP sequence number. *)
+
+val tcp_ack : (UInt32.t, tcp) Codec.field
+(** The TCP acknowledgment number. *)
+
+val tcp_data_offset : (int, tcp) Codec.field
+(** The TCP header length, in 32-bit words. *)
+
+val tcp_flags : (int, tcp) Codec.field
+(** The TCP flags. *)
+
+val tcp_window : (UInt16.t, tcp) Codec.field
+(** The TCP window. *)
+
+val udp_src_port : (UInt16.t, udp) Codec.field
+(** The UDP source port. *)
+
+val udp_dst_port : (UInt16.t, udp) Codec.field
+(** The UDP destination port. *)
+
+val udp_length_field : (UInt16.t, udp) Codec.field
+(** The UDP length, header included. *)
+
+val ipv4_total_length : (UInt16.t, ipv4) Codec.field
+(** The IPv4 total length, header included. *)
+
+val ipv4_ttl : (UInt8.t, ipv4) Codec.field
+(** The IPv4 time to live. *)
+
+val ipv4_protocol : (UInt8.t, ipv4) Codec.field
+(** The IPv4 protocol. *)
+
+val ipv4_src : (UInt32.t, ipv4) Codec.field
+(** The IPv4 source address. *)
+
+val ipv4_dst : (UInt32.t, ipv4) Codec.field
+(** The IPv4 destination address. *)
+
+val ipv4_tcp : (tcp option, ipv4) Codec.field
+(** The TCP header, present in an unfragmented packet of protocol 6. *)
+
+val ipv4_udp : (udp option, ipv4) Codec.field
+(** The UDP header, present in an unfragmented packet of protocol 17. *)
+
+val eth_ether_type : (UInt16.t, t) Codec.field
+(** The EtherType. *)
+
+val eth_ipv4 : (ipv4 option, t) Codec.field
+(** The IPv4 packet, present when the EtherType is 0x0800. *)
+
 val pp : Format.formatter -> t -> unit
 (** Display the selected network and transport layers. *)
 

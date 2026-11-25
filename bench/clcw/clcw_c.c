@@ -1,7 +1,7 @@
 /* CLCW polling loop -- application logic with EverParse field extraction.
 
    Uses EverParse-generated ClcwValidateWireClcw to extract bitfields into a typed
-   ClcwFields struct via the default plug. Application logic (anomaly
+   ClcwFields struct via the default visitor. Application logic (anomaly
    detection) reads named members of the struct. No hand-written bitfield
    manipulation, no index arithmetic. */
 

@@ -289,7 +289,7 @@ type mixed_record = { a : UInt8.t; b : UInt8.t }
 
 let test_mixed_params () =
   let max_val = Param.input "max_val" uint8 in
-  let out_sum = Param.output "out_sum" uint8 in
+  let out_sum = Param.output "out_sum" uint16be in
   let f_a = Field.v "a" uint8 in
   let f_b = Field.v "b" uint8 in
   let cf_a =
@@ -301,12 +301,12 @@ let test_mixed_params () =
     Field.v "b"
       ~action:
         (Action.on_success
-           [ Action.assign out_sum Expr.(Param.expr out_sum + Field.ref f_b) ])
+           [ Action.assign out_sum Expr.(Field.ref f_a + Field.ref f_b) ])
       uint8
   in
   let c =
     Codec.v "Mixed"
-      ~where:Expr.(Param.expr out_sum <= Param.expr max_val)
+      ~where:Expr.(Field.ref f_a + Field.ref f_b <= Param.expr max_val)
       (fun a b -> { a; b })
       Codec.[ (cf_a $ fun r -> r.a); (cf_b $ fun r -> r.b) ]
   in
@@ -314,7 +314,7 @@ let test_mixed_params () =
   let buf = Bytes.of_string "\x0A\x14" in
   let env = Codec.env c |> Param.bind max_val (UInt8.v 50) in
   ignore (decode_ok (Codec.decode ~env c buf 0));
-  Alcotest.(check int) "out_sum" 30 (UInt8.to_int (Param.get env out_sum));
+  Alcotest.(check int) "out_sum" 30 (UInt16.to_int (Param.get env out_sum));
   (* a=10, b=20 => out_sum=30, max_val=20 => 30 > 20: FAIL *)
   let env = Codec.env c |> Param.bind max_val (UInt8.v 20) in
   expect_constraint_fail (Codec.decode ~env c buf 0)
@@ -685,15 +685,9 @@ let test_slice_navigation_requires_parameters () =
     Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ Fun.id)
   in
   let codec = Codec.v "ParamSlice" Fun.id [ field ] in
-  List.iter
-    (fun stage ->
-      match stage () with
-      | _ -> Alcotest.fail "staged slice navigation without its input parameter"
-      | exception Invalid_argument _ -> ())
-    [
-      (fun () -> Codec.slice_offset codec field);
-      (fun () -> Codec.slice_length codec field);
-    ]
+  match Codec.View.codec codec with
+  | _ -> Alcotest.fail "a view without its input parameter"
+  | exception Invalid_argument _ -> ()
 
 let test_slice_navigation_with_parameters () =
   let size = Param.input "size" uint8 in
@@ -708,28 +702,24 @@ let test_slice_navigation_with_parameters () =
   in
   let buf = Bytes.of_string "_abcDEF" in
   let env = Codec.env codec |> Param.bind size (UInt8.v 3) in
-  let offset = Staged.unstage (Codec.slice_offset ~env codec body) in
-  let length = Staged.unstage (Codec.slice_length ~env codec body) in
+  let module V = (val Codec.View.codec ~env codec) in
   let slice = (Staged.unstage (Codec.get ~env codec body)) buf 1 in
+  let (Buf.Any b) = Buf.v buf in
+  let r = Codec.View.(get (check V.codec b (Buf.length b) 1)) in
+  let read = Codec.View.(read (field V.codec body) b r) in
   Alcotest.(check int)
     "absolute offset"
     (Bytesrw.Bytes.Slice.first slice)
-    (offset buf 1);
+    (Bytesrw.Bytes.Slice.first read);
   Alcotest.(check int)
     "length"
     (Bytesrw.Bytes.Slice.length slice)
-    (length buf 1);
+    (Bytesrw.Bytes.Slice.length read);
   List.iter
     (fun env ->
-      List.iter
-        (fun stage ->
-          match stage env with
-          | _ -> Alcotest.fail "accepted an invalid slice environment"
-          | exception Invalid_argument _ -> ())
-        [
-          (fun env -> Codec.slice_offset ~env codec body);
-          (fun env -> Codec.slice_length ~env codec body);
-        ])
+      match Codec.View.codec ~env codec with
+      | _ -> Alcotest.fail "accepted an invalid slice environment"
+      | exception Invalid_argument _ -> ())
     [ Codec.env codec; Codec.env (Codec.v "Other" () []) ]
 
 (* -- Suite -- *)

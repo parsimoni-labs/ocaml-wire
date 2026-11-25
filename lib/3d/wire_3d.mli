@@ -156,21 +156,21 @@ val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_external_typedefs ~outdir schemas] writes the default
     [<Name>_ExternalTypedefs.h] for each schema that uses the WireCtx contract,
     declaring [WIRECTX] as a forward reference to the matching [<Name>Fields]
-    plug struct. *)
+    visitor struct. *)
 
 val check_plug_names : Wire.Everparse.t -> unit
 (** [check_plug_names s] raises [Invalid_argument] naming both fields when two
     of [s]'s fields would define one [_IDX_] macro or one struct member of its
-    default plug: the macro upper-cases the field name ([X] and [x]); the
+    default visitor: the macro upper-cases the field name ([X] and [x]); the
     member's escape ({!Wire.Everparse.plug_member}) keeps names apart. It also
     refuses a field whose name is not an identifier. {!write_fields} runs it
     first. *)
 
 val write_fields : outdir:string -> Wire.Everparse.t list -> unit
-(** [write_fields ~outdir schemas] writes the default [<Name>_Fields.{c,h}] plug
-    for each schema that uses the WireCtx contract: a typed struct (one member
-    per named field) and the [<Name>Set*] switch dispatchers that populate it.
-*)
+(** [write_fields ~outdir schemas] writes the default [<Name>_Fields.{c,h}]
+    visitor for each schema that uses the WireCtx contract: a typed struct (one
+    member per named field) and the [<Name>Set*] switch dispatchers that
+    populate it. *)
 
 val generate_c : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_c ?quiet ~outdir schemas] invokes EverParse on existing [.3d]
@@ -223,8 +223,8 @@ val generate_standalone :
 (** [generate_standalone ?quiet ?name ~outdir ~package codecs] runs the
     documentation pipeline: project each codec in documentation mode, merge them
     into one [<Name>.3d], and (when [everparse-3d.exe] is available) compile it
-    to a single validator-only [<Name>.c] (no [_Fields] plug, no FFI). The file
-    base is [name] when given, else [package], normalised to a CamelCase
+    to a single validator-only [<Name>.c] (no [_Fields] visitor, no FFI). The
+    file base is [name] when given, else [package], normalised to a CamelCase
     identifier (["my-pkg"] becomes [MyPkg]); [package] always names the opam
     package. The generated [<Name>CheckWire<Codec>] wrappers validate the whole
     buffer, rejecting trailing bytes (see {!generate_c}). Only the checked

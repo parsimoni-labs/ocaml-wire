@@ -1,4 +1,4 @@
-(* Tests for codec.ml: embedded sub-codecs and cross-codec references. *)
+(* Tests for codec.ml: embedded sub-codecs. *)
 
 open Wire
 open Test_helpers
@@ -137,112 +137,6 @@ let test_codec_embed_nested_roundtrip () =
     (UInt16.to_int decoded.inner.y);
   Alcotest.(check int) "l0.z" (UInt8.to_int original.z) (UInt8.to_int decoded.z)
 
-(* -- Cross-codec Field.ref: parent expression references sub-codec field -- *)
-
-(* TC/TM-style frame: header contains a length field, the data field's size
-   is computed from that nested header field via Field.ref. *)
-
-type tc_header = { version : UInt8.t; frame_len : UInt8.t }
-
-let f_tc_version = Field.v "Version" uint8
-let f_tc_frame_len = Field.v "FrameLen" uint8
-
-let tc_header_codec =
-  Codec.v "TcHeader"
-    (fun version frame_len -> { version; frame_len })
-    Codec.
-      [
-        (f_tc_version $ fun r -> r.version);
-        (f_tc_frame_len $ fun r -> r.frame_len);
-      ]
-
-type tc_frame = { hdr : tc_header; data : string; check : UInt8.t }
-
-(* The data field's size is `Field.ref f_tc_frame_len - 2 - 1` (header is 2 bytes,
-   trailer is 1 byte). The Field.ref must resolve into the embedded header codec. *)
-let tc_frame_codec =
-  Codec.v "TcFrame"
-    (fun hdr data check -> { hdr; data; check })
-    Codec.
-      [
-        (Field.v "Header" (codec tc_header_codec) $ fun r -> r.hdr);
-        ( Field.v "Data"
-            (byte_array ~size:Expr.(Field.ref f_tc_frame_len - int 2 - int 1))
-        $ fun r -> r.data );
-        (Field.v "Check" uint8 $ fun r -> r.check);
-      ]
-
-let test_codec_cross_field_ref () =
-  (* frame_len=8 -> data is 8-2-1=5 bytes *)
-  let buf = Bytes.create 8 in
-  Bytes.set_uint8 buf 0 1;
-  (* version *)
-  Bytes.set_uint8 buf 1 8;
-  (* frame_len *)
-  Bytes.blit_string "HELLO" 0 buf 2 5;
-  Bytes.set_uint8 buf 7 0xCC;
-  let r = decode_ok (Codec.decode tc_frame_codec buf 0) in
-  Alcotest.(check int) "version" 1 (UInt8.to_int r.hdr.version);
-  Alcotest.(check int) "frame_len" 8 (UInt8.to_int r.hdr.frame_len);
-  Alcotest.(check string) "data" "HELLO" r.data;
-  Alcotest.(check int) "check" 0xCC (UInt8.to_int r.check)
-
-let test_codec_crossref_field_varying () =
-  (* frame_len=5 -> data is 2 bytes *)
-  let buf = Bytes.create 5 in
-  Bytes.set_uint8 buf 0 2;
-  Bytes.set_uint8 buf 1 5;
-  Bytes.blit_string "AB" 0 buf 2 2;
-  Bytes.set_uint8 buf 4 0xFF;
-  let r = decode_ok (Codec.decode tc_frame_codec buf 0) in
-  Alcotest.(check int) "frame_len" 5 (UInt8.to_int r.hdr.frame_len);
-  Alcotest.(check string) "data" "AB" r.data;
-  Alcotest.(check int) "check" 0xFF (UInt8.to_int r.check)
-
-(* -- Adversarial: cross-codec Field.ref edge cases -- *)
-
-(* Attacker sets frame_len=255 in a 5-byte buffer. The data field's computed
-   size (255-3=252) exceeds available bytes -- must report Unexpected_eof,
-   not crash or silently truncate. *)
-let test_codec_crossref_field_oversized () =
-  let buf = Bytes.create 5 in
-  Bytes.set_uint8 buf 0 1;
-  Bytes.set_uint8 buf 1 0xFF;
-  (* attacker frame_len *)
-  Bytes.blit_string "AB" 0 buf 2 2;
-  Bytes.set_uint8 buf 4 0xCC;
-  match Codec.decode tc_frame_codec buf 0 with
-  | Ok _ -> Alcotest.fail "expected EOF on oversized data field"
-  | Error { kind = Unexpected_eof _; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
-
-(* Attacker sets frame_len=2 -> data size = 2-3 = -1. Must error, not crash. *)
-let test_codec_crossref_field_underflow () =
-  let buf = Bytes.create 4 in
-  Bytes.set_uint8 buf 0 1;
-  Bytes.set_uint8 buf 1 2;
-  (* below header+trailer minimum *)
-  Bytes.set_uint8 buf 2 0;
-  Bytes.set_uint8 buf 3 0xCC;
-  match Codec.decode tc_frame_codec buf 0 with
-  | Ok r ->
-      (* If accepted, the data must be empty or the decode must have rejected
-         the negative size. Either is acceptable as long as no crash. *)
-      Alcotest.(check bool)
-        "data length non-negative" true
-        (String.length r.data >= 0)
-  | Error _ -> ()
-
-(* frame_len=3 -> data size = 0. Boundary case: empty data. *)
-let test_codec_crossref_field_zerodata () =
-  let buf = Bytes.create 3 in
-  Bytes.set_uint8 buf 0 1;
-  Bytes.set_uint8 buf 1 3;
-  Bytes.set_uint8 buf 2 0xCC;
-  let r = decode_ok (Codec.decode tc_frame_codec buf 0) in
-  Alcotest.(check string) "data" "" r.data;
-  Alcotest.(check int) "check" 0xCC (UInt8.to_int r.check)
-
 (* Sub-codec field name shadowing: parent has its own field with same name as
    a sub-codec field. The parent's name should win for parent-scope expressions
    defined after the parent field. *)
@@ -284,92 +178,10 @@ let test_codec_field_shadow () =
   Alcotest.(check int) "parent.shared" 3 (UInt8.to_int r.shared);
   Alcotest.(check string) "data" "ABC" r.data
 
-(* Two-level deep nesting: outer references a field three levels down. *)
-
-type inner_l1 = { il1_x : UInt8.t }
-
-let f_il1_x = Field.v "DeepLen" uint8
-
-let inner_l1_codec =
-  Codec.v "InnerL1"
-    (fun x -> { il1_x = x })
-    Codec.[ (f_il1_x $ fun r -> r.il1_x) ]
-
-type middle_l2 = { inner : inner_l1; y : UInt8.t }
-
-let middle_l2_codec =
-  Codec.v "MiddleL2"
-    (fun inner y -> { inner; y })
-    Codec.
-      [
-        (Field.v "Inner" (codec inner_l1_codec) $ fun r -> r.inner);
-        (Field.v "Y" uint8 $ fun r -> r.y);
-      ]
-
-type outer_l3 = { mid : middle_l2; data : string }
-
-(* The outer references DeepLen which lives 2 levels deep inside the middle codec. *)
-let outer_l3_codec =
-  Codec.v "OuterL3"
-    (fun mid data -> { mid; data })
-    Codec.
-      [
-        (Field.v "Middle" (codec middle_l2_codec) $ fun r -> r.mid);
-        (Field.v "Data" (byte_array ~size:(Field.ref f_il1_x)) $ fun r -> r.data);
-      ]
-
-let test_codec_crossref_field_twolevels () =
-  let buf = Bytes.create 6 in
-  Bytes.set_uint8 buf 0 4;
-  (* DeepLen at l1 *)
-  Bytes.set_uint8 buf 1 0xFF;
-  (* l2.y *)
-  Bytes.blit_string "ABCD" 0 buf 2 4;
-  let r = decode_ok (Codec.decode outer_l3_codec buf 0) in
-  Alcotest.(check int) "deep_len" 4 (UInt8.to_int r.mid.inner.il1_x);
-  Alcotest.(check int) "y" 0xFF (UInt8.to_int r.mid.y);
-  Alcotest.(check string) "data" "ABCD" r.data
-
-(* Sub-codec with bitfield referenced from parent. The sub-codec packs a 4-bit
-   length and 4-bit flags into one byte; the parent uses the length to size data. *)
-
-type bf_hdr = { len : int; flags : int }
-
-let f_bh_len = Field.v "BfLen" (bits ~width:4 U8)
-let f_bh_flags = Field.v "BfFlags" (bits ~width:4 U8)
-
-let bf_hdr_codec =
-  Codec.v "BfHdr"
-    (fun len flags -> { len; flags })
-    Codec.[ (f_bh_len $ fun r -> r.len); (f_bh_flags $ fun r -> r.flags) ]
-
-type bf_frame = { hdr : bf_hdr; data : string }
-
-let bf_frame_codec =
-  Codec.v "BfFrame"
-    (fun hdr data -> { hdr; data })
-    Codec.
-      [
-        (Field.v "Hdr" (codec bf_hdr_codec) $ fun r -> r.hdr);
-        ( Field.v "Data" (byte_array ~size:(Field.ref f_bh_len)) $ fun r ->
-          r.data );
-      ]
-
-let test_codec_crossref_field_bitfield () =
-  (* Default [bit_order = Msb_first]: [BfLen] (first declared) is the top
-     nibble, [BfFlags] is the bottom nibble. len=3, flags=0xA -> byte = 0x3A. *)
-  let buf = Bytes.create 4 in
-  Bytes.set_uint8 buf 0 0x3A;
-  Bytes.blit_string "XYZ" 0 buf 1 3;
-  let r = decode_ok (Codec.decode bf_frame_codec buf 0) in
-  Alcotest.(check int) "len" 3 r.hdr.len;
-  Alcotest.(check int) "flags" 0xA r.hdr.flags;
-  Alcotest.(check string) "data" "XYZ" r.data
-
-(* A sub-codec whose last field is the rest of the buffer, in a region shorter
-   than the buffer and behind a gate: its extent runs to the end of the
-   buffer, not the region's, so the region refuses it once the buffer is
-   longer. *)
+(* A sub-codec whose last field is the rest of its input, in a region shorter
+   than the buffer and behind a gate: in the region it takes the rest of the
+   region, as 3D's [consume-all] does, and behind the gate the rest of the
+   buffer. *)
 let tail =
   Codec.v "Tail"
     (fun a b -> (a, b))
@@ -417,19 +229,72 @@ let test_codec_embed_tail () =
   in
   check 3
     [
-      "error @0: unexpected EOF: expected 4 bytes, got 3";
-      "error @0: unexpected EOF: expected 4 bytes, got 3";
+      "error t@0: unexpected EOF: expected 4 bytes, got 3";
+      "error t@0: unexpected EOF: expected 4 bytes, got 3";
       "ok 2 \"\\003\"";
       "ok ";
     ];
   check 4 [ "ok 1 \"\\002\\003\\004\""; "ok "; "ok 2 \"\\003\\004\""; "ok " ];
   check 8
     [
-      "error t@4: unexpected EOF: expected 4 bytes, got 8";
-      "error t@4: unexpected EOF: expected 4 bytes, got 8";
+      "ok 1 \"\\002\\003\\004\"";
+      "ok ";
       "ok 2 \"\\003\\004\\005\\006\\007\\b\"";
       "ok ";
     ]
+
+(* 3D does not see a sub-codec's fields from the struct that embeds it: an
+   expression of the enclosing codec naming one, in a constraint, an action,
+   a size, a presence condition or the [where] clause, has no projection
+   (3d.exe: "Variable x8 not found"), so the codec is refused when it is
+   built. A field of the codec's own that shadows the name still builds. *)
+let test_sub_codec_field_out_of_scope () =
+  let x8 = Field.v "x8" uint8 in
+  let sub = Codec.v "SubX8" Fun.id Codec.[ x8 $ Fun.id ] in
+  let mid = Codec.v "MidX8" Fun.id Codec.[ Field.v "s" (codec sub) $ Fun.id ] in
+  let with_sub ?where sub last =
+    Codec.v "Outer" ?where
+      (fun h y -> (h, y))
+      Codec.[ Field.v "h" (codec sub) $ fst; last $ snd ]
+  in
+  let refused what f =
+    match f () with
+    | _ -> Alcotest.failf "%s: built" what
+    | exception Invalid_argument msg ->
+        if not (contains ~sub:"sub-codec" msg) then
+          Alcotest.failf "%s: refused for another reason: %s" what msg
+  in
+  refused "constraint" (fun () ->
+      with_sub sub
+        (Field.v "y" uint8 ~self_constraint:(fun y -> Expr.(Field.ref x8 = y))));
+  refused "size" (fun () ->
+      with_sub sub (Field.v "y" (byte_array ~size:(Field.ref x8))));
+  refused "present" (fun () ->
+      with_sub sub
+        (Field.optional "y" ~present:Expr.(Field.ref x8 = int 1) uint8));
+  refused "where" (fun () ->
+      with_sub sub ~where:Expr.(Field.ref x8 = int 5) (Field.v "y" uint8));
+  refused "two levels" (fun () ->
+      with_sub mid (Field.v "y" (byte_array ~size:(Field.ref x8))));
+  let len = Field.v "len" (bits ~width:4 U8) in
+  let bf =
+    Codec.v "BfX8"
+      (fun l f -> (l, f))
+      Codec.[ len $ fst; Field.v "flags" (bits ~width:4 U8) $ snd ]
+  in
+  refused "bitfield" (fun () ->
+      with_sub bf (Field.v "y" (byte_array ~size:(Field.ref len))));
+  let own = Field.v "x8" uint8 in
+  ignore
+    (Codec.v "OwnX8"
+       (fun h x d -> (h, x, d))
+       Codec.
+         [
+           (Field.v "h" (codec sub) $ fun (h, _, _) -> h);
+           (own $ fun (_, x, _) -> x);
+           (Field.v "d" (byte_array ~size:(Field.ref own)) $ fun (_, _, d) -> d);
+         ]
+      : _ Codec.t)
 
 let suite =
   ( "codec_embed",
@@ -442,22 +307,10 @@ let suite =
       Alcotest.test_case "embed: nested" `Quick test_codec_embed_nested;
       Alcotest.test_case "embed: nested roundtrip" `Quick
         test_codec_embed_nested_roundtrip;
-      Alcotest.test_case "embed: cross field ref" `Quick
-        test_codec_cross_field_ref;
-      Alcotest.test_case "embed: cross field ref varying" `Quick
-        test_codec_crossref_field_varying;
-      Alcotest.test_case "embed: cross field ref oversized" `Quick
-        test_codec_crossref_field_oversized;
-      Alcotest.test_case "embed: cross field ref underflow" `Quick
-        test_codec_crossref_field_underflow;
-      Alcotest.test_case "embed: cross field ref zero data" `Quick
-        test_codec_crossref_field_zerodata;
       Alcotest.test_case "embed: cross field ref shadow" `Quick
         test_codec_field_shadow;
-      Alcotest.test_case "embed: cross field ref two levels" `Quick
-        test_codec_crossref_field_twolevels;
-      Alcotest.test_case "embed: cross field ref bitfield" `Quick
-        test_codec_crossref_field_bitfield;
       Alcotest.test_case "embed: rest of the buffer in a region" `Quick
         test_codec_embed_tail;
+      Alcotest.test_case "embed: a sub-codec's field is out of scope" `Quick
+        test_sub_codec_field_out_of_scope;
     ] )

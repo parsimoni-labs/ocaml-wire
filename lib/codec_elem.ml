@@ -333,60 +333,65 @@ let iter_param_refs_action ~assign f = function
   | Types.Success stmts | Types.Act stmts ->
       List.iter (iter_param_refs_stmt ~assign f) stmts
 
-let rec iter_param_refs_typ : type a.
-    assign:(Param.packed -> unit) -> (Param.packed -> unit) -> a typ -> unit =
- fun ~assign f typ ->
+(* Every parameter and field name the expressions inside [typ] read: sizes,
+   counts, presence conditions, tags and [where] conditions. An embedded
+   sub-codec's parameters are the outer codec's to bind, so they are reported;
+   its field names are its own, so they are not. *)
+let rec iter_typ_refs : type a.
+    assign:(Param.packed -> unit) ->
+    param:(Param.packed -> unit) ->
+    field:(string -> unit) ->
+    a typ ->
+    unit =
+ fun ~assign ~param ~field typ ->
+  let walk t = iter_typ_refs ~assign ~param ~field t in
+  let expr e = iter_refs ~param ~field e in
   match typ with
-  | Byte_array { size } | Byte_slice { size } -> iter_param_refs f size
+  | Byte_array { size } | Byte_slice { size } -> expr size
   | Byte_array_where { size; cond; _ } ->
-      iter_param_refs f size;
-      iter_param_refs f cond
-  | Uint_var { size; _ } -> iter_param_refs f size
-  | Zeroterm_at_most { size } -> iter_param_refs f size
+      expr size;
+      expr cond
+  | Uint_var { size; _ } -> expr size
+  | Zeroterm_at_most { size } -> expr size
   | Single_elem { size; elem; _ } ->
-      iter_param_refs f size;
-      iter_param_refs_typ ~assign f elem
+      expr size;
+      walk elem
   | Array { len; elem; _ } ->
-      iter_param_refs f len;
-      iter_param_refs_typ ~assign f elem
+      expr len;
+      walk elem
   | Repeat { size; elem; _ } ->
-      iter_param_refs f size;
-      iter_param_refs_typ ~assign f elem
+      expr size;
+      walk elem
   | Where { cond; inner } ->
-      iter_param_refs f cond;
-      iter_param_refs_typ ~assign f inner
+      expr cond;
+      walk inner
   | Optional { present; inner } ->
-      iter_param_refs f present;
-      iter_param_refs_typ ~assign f inner
+      expr present;
+      walk inner
   | Optional_or { present; inner; _ } ->
-      iter_param_refs f present;
-      iter_param_refs_typ ~assign f inner
-  | Apply { typ; args } ->
-      iter_param_refs_typ ~assign f typ;
-      List.iter (fun (Types.Pack_expr e) -> iter_param_refs f e) args
-  | Map { inner; _ } -> iter_param_refs_typ ~assign f inner
-  | Enum { base; _ } -> iter_param_refs_typ ~assign f base
+      expr present;
+      walk inner
+  | Apply { typ = t; args } ->
+      walk t;
+      List.iter (fun (Types.Pack_expr e) -> expr e) args
+  | Map { inner; _ } -> walk inner
+  | Enum { base; _ } -> walk base
   | Casetype { tag; cases; _ } ->
-      iter_param_refs_typ ~assign f tag;
-      List.iter
-        (fun (Types.Case_branch { cb_inner; _ }) ->
-          iter_param_refs_typ ~assign f cb_inner)
-        cases
+      walk tag;
+      List.iter (fun (Types.Case_branch { cb_inner; _ }) -> walk cb_inner) cases
   | Union { on; cases; _ } ->
-      iter_param_refs f on;
-      List.iter
-        (fun (Types.Case_branch { cb_inner; _ }) ->
-          iter_param_refs_typ ~assign f cb_inner)
-        cases
-  (* An embedded sub-codec carries its own params (in field sizes / where) that
-     the outer codec must surface so its env can bind them. Walk the sub-codec's
-     structural form. *)
+      expr on;
+      List.iter (fun (Types.Case_branch { cb_inner; _ }) -> walk cb_inner) cases
   | Codec { codec_struct; _ } ->
-      iter_params_fields ~assign f codec_struct.fields codec_struct.where
+      iter_params_fields ~assign param codec_struct.fields codec_struct.where
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
   | Float32 _ | Float64 _ | Bits _ | Unit | All_bytes | All_zeros | Zeroterm
   | Struct _ | Type_ref _ | Qualified_ref _ ->
       ()
+
+and iter_param_refs_typ : type a.
+    assign:(Param.packed -> unit) -> (Param.packed -> unit) -> a typ -> unit =
+ fun ~assign f typ -> iter_typ_refs ~assign ~param:f ~field:ignore typ
 
 and iter_params_fields ~assign f fields where =
   List.iter
@@ -399,6 +404,9 @@ and iter_params_fields ~assign f fields where =
 
 let iter_param_refs_fields f fields where =
   iter_params_fields ~assign:f f fields where
+
+let iter_typ_field_refs f typ =
+  iter_typ_refs ~assign:ignore ~param:ignore ~field:f typ
 
 (* The check pass sees an output parameter as the actions before each field
    left it; the read phase sees one value throughout. They agree when no
@@ -491,7 +499,9 @@ let rec read_elem : type a. a typ -> runtime -> Input_end.t -> bytes -> int -> a
   | Unit -> ()
   (* NUL-terminated string element: the bytes up to (not including) the NUL. *)
   | Zeroterm ->
-      let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
+      let nul =
+        zeroterm_nul_pos buf ~first:off ~limit:(Input_end.to_int input_end)
+      in
       Bytes.sub_string buf off (nul - off)
   (* Same, bounded to a fixed [n]-byte region (the element spans the whole
      region; the value is the bytes up to the NUL within it). *)
@@ -501,8 +511,10 @@ let rec read_elem : type a. a typ -> runtime -> Input_end.t -> bytes -> int -> a
   (* Fixed-size byte spans as repeat / array elements: a list of n-byte
      chunks. The size is the element's own constant width. *)
   | Byte_array { size = Int n } -> Bytes.sub_string buf off n
-  | Byte_array_where { size = Int n; elt_var; cond } ->
-      refined_span_reader ~elt_var ~cond buf ~first:off ~len:n
+  | Byte_array_where { size = Int n; elt_var; cond; test } ->
+      refined_span_read
+        (Eval.byte_test ~elt_var ~cond test)
+        buf ~first:off ~len:n
   | Byte_slice { size = Int n } -> Slice.make_or_eod buf ~first:off ~length:n
   (* A lone bitfield occupies its base word; extract the value at its bit
      offset. *)
@@ -631,7 +643,9 @@ let rec elem_size_of : type a.
   | Where { inner; _ } -> elem_size_of inner runtime input_end buf off
   (* Bytes up to the NUL plus the one-byte terminator. *)
   | Zeroterm ->
-      let nul = zeroterm_nul_pos buf ~first:off ~limit:(Bytes.length buf) in
+      let nul =
+        zeroterm_nul_pos buf ~first:off ~limit:(Input_end.to_int input_end)
+      in
       nul - off + 1
   (* A bounded NUL-terminated string spans its whole fixed [n]-byte region. *)
   | Zeroterm_at_most { size = Int n } -> n

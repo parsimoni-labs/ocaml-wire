@@ -15,6 +15,11 @@ val[@zero_alloc] offset : int64_u -> int @@ portable
     [Invalid_argument] for an [off] that does not fit an [int], which narrowing
     would wrap to another offset. *)
 
+external unsigned_compare : int64_u -> int64_u -> int @@ portable
+  = "%int64#_unsigned_compare"
+(** [unsigned_compare a b] compares [a] and [b] as unsigned integers, in one
+    comparison. *)
+
 (** Reads and writes at an [int] offset of a buffer the caller may hold
     [local], for the code [Wire_ocaml] writes for OxCaml: the same names as
     {!Unchecked} and as [Bytes]' checked reads, so a generated module reads a

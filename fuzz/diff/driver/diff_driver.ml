@@ -16,7 +16,7 @@ let report_oracle name =
     (if C_oracle.enabled then
        "EverParse C, verified .3d, on the structured cases and every sampled \
         shape (acceptance and consumed prefix of the standalone and FFI \
-        projections, plug scalars)"
+        projections, visitor scalars)"
      else "C skipped (set BUILD_EVERPARSE=1)")
 
 open Fuzz_gen

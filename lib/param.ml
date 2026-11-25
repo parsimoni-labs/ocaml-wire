@@ -118,12 +118,14 @@ let bind (p : ('a, input) t) (v : 'a) (env : env) : env =
   in
   let slots = Array.copy env.slots in
   let bound = Array.copy env.bound in
+  let wides = Array.copy env.wides in
   let i = env_idx env p.Types.name in
   if i >= 0 then begin
     slots.(i) <- iv;
+    wides.(i) <- Int64.of_int iv;
     bound.(i) <- true
   end;
-  { env with Types.slots; bound }
+  { env with Types.slots; bound; wides }
 
 let bind_by_name name (iv : int) (env : env) : env =
   let i = env_idx env name in
@@ -131,9 +133,11 @@ let bind_by_name name (iv : int) (env : env) : env =
   else begin
     let slots = Array.copy env.Types.slots in
     let bound = Array.copy env.bound in
+    let wides = Array.copy env.wides in
     slots.(i) <- iv;
+    wides.(i) <- Int64.of_int iv;
     bound.(i) <- true;
-    { env with Types.slots; bound }
+    { env with Types.slots; bound; wides }
   end
 
 let get (env : env) (p : ('a, 'k) t) : 'a =
@@ -141,6 +145,7 @@ let get (env : env) (p : ('a, 'k) t) : 'a =
   if i < 0 then
     Fmt.invalid_arg
       "Param.get: parameter %S does not belong to this environment" p.Types.name
+  else if env.wide.(i) then Types.of_int64 p.typ env.wides.(i)
   else of_int p.typ env.slots.(i)
 
 type packed = Pack : ('a, 'k) t -> packed

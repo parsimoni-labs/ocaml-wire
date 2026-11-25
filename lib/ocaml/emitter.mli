@@ -70,7 +70,6 @@ type mode = {
   num : num;
   src : src;
   ox : bool;
-  cold : bool;
   raw32 : bool;
   ranged : bool;
   live : Sset.t;
@@ -78,16 +77,14 @@ type mode = {
   slots : Sset.t;
   ahead : Sset.t;
   fail : failure -> string;
-  overflowed : failure -> string -> string;
   decide : Decision.t -> unit;
 }
 (** What a walk writes: how it holds integers, the buffer it reads, whether the
-    target is OxCaml, whether it is the cold walk that raises the codec's
-    errors, whether it may test two bitfields of a word as one range of the word
-    (a scan, which names no failed field), the variables it binds, the outputs
-    it hands out, those of them that are slots, the variables its caller binds
-    before it by {!read_ahead}, what it writes on a failure, and what it does
-    with each decision it takes. *)
+    target is OxCaml, whether it may test two bitfields of a word as one range
+    of the word (a scan, which names no failed field), the variables it binds,
+    the outputs it hands out, those of them that are slots, the variables its
+    caller binds before it by {!read_ahead}, what it writes on a failure, and
+    what it does with each decision it takes. *)
 
 type cuts = {
   prefix : string;
@@ -160,10 +157,6 @@ val output_text : w -> output -> string
 (** [output_text w o] is the text of the value of [o] at the position of [w]:
     its literal where it is known absent or present. *)
 
-val prune : string list -> string list
-(** [prune lines] is [lines] without each binding [let x = e in] that no later
-    line of its function reads. *)
-
 val lit : num -> int -> string
 (** [lit num n] is the literal [n] in the integers of [num]. *)
 
@@ -223,8 +216,7 @@ val value :
 
 val check : w -> failure -> bool T.expr -> w
 (** [check w failure cond] writes a check that fails with [failure] when [cond]
-    is false, and is [w] one condition deeper; an overflow in [cond] fails too.
-*)
+    is false, and is [w] one condition deeper. *)
 
 val bound : w -> pos -> int -> w
 (** [bound w p need] is [w] after checking that the window has [need] bytes from

@@ -11,20 +11,34 @@ are checked and why the others cannot go wrong.
 `decode c buf off` runs three phases in order, and the other operations run
 a prefix of them.
 
-1. **Frame.** Check `0 <= off` and `off + min_size <= Bytes.length buf`,
-   where `min_size` is the sum of the bytes each field always holds. A
-   fixed-size field counts for its size and a sub-codec for its own
-   `min_size`; an optional field and a span sized by the input count for
-   nothing. A variable-size record then reads its length fields, with
-   checked reads, and
-   checks that its end lies inside the input. After the frame, every byte at
-   a fixed offset below `min_size` is in the buffer.
-2. **Check.** Evaluate the field constraints, the `where` clause, closed enum
-   membership and `map` refusals, in field order. The first failure is the
-   one reported. A scalar inside the frame is read into its slot only when a
+1. **Frame.** Check `0 <= off` and `off + min_size <= input_end`, where
+   `min_size` is the sum of the bytes each field always holds and
+   `input_end` is the end of the buffer at the top level, and the end of the
+   region that holds a nested record. A fixed-size field counts for its size
+   and a sub-codec for its own `min_size`; an optional field and a span sized
+   by the input count for nothing. After the frame, every byte at a fixed
+   offset below `min_size` is in the input. A record that does not fit
+   reports what the validator 3D generates reports, which checks each field
+   as it reaches it: the first field in order that fails its checks within
+   the input, else the end of input. Only then are its checks run again,
+   each field read once it fits, and its `where` clause with the last field
+   it reads, or before every field when it reads none, so a record that fits
+   pays for none of it.
+2. **Check.** Evaluate each field in field order: its bounds (a span, a
+   region and a sub-codec, each against `input_end`, a sub-codec against its
+   own frame first), its constraints, closed enum membership and `map`
+   refusals; then the `where` clause. The first failure is the one reported.
+   A variable-size record last checks that its end, from its length fields,
+   lies inside the input, which only fails for a field the checks do not
+   read. A scalar inside the frame is read into its slot only when a
    constraint, an action or the `where` clause uses it, and a comparison of a
-   field with a literal or another field is tested directly. Any other field
-   runs its general validator, so the choice is made field by field.
+   field with a literal or another field is tested directly. On a target
+   whose `int` holds 63 bits, the tests of fields that one 8-byte word of the
+   frame holds are one test of that word: exact values anywhere in it, and a
+   range below them, whose subtraction cannot borrow from them unless it
+   fails, so the IPv4 version and header length are one range test, and the
+   TCP gate of IPv4 one masked comparison. Any other field runs its general
+   validator, so the choice is made field by field.
 3. **Read.** Build the value. A field at a fixed offset inside `min_size` is
    read with no bounds check; any other field is read with one. A size that
    reads an output parameter gets the value the check pass left, which is the
@@ -36,6 +50,28 @@ a prefix of them.
 it. `encode` writes the fields and, when the codec has constraints, runs the
 checks on what it wrote.
 
+`View.check` runs the frame and the checks, as `validate` does, and keeps
+the record's offset instead of its error. A field of a view is then read
+with no bounds check when it lies at a fixed offset inside `min_size` and
+has no action. On a target whose `int` holds 63 bits, an unsigned
+big-endian integer or bitfield in a frame of at least 8 bytes is read inline,
+one 8-byte load, a shift and a mask; in a frame of 4 to 7 bytes it is read
+from a 4-byte word by one call. Any other field is one call, and a field that
+`get` reads with a check is read with that check.
+
+A codec of variable size, or one whose checks are more than word tests, is
+checked by its walk in check mode: the same plan as the walk that decodes
+it, the same frame, tests, spans, gates and regions in field order, with no
+value built and no field read but those a check, a size or a gate reads.
+`View.enter` then reaches a sub-record of a view without checking it again:
+the walk of the record around it finds where it starts, or that its gate
+leaves it absent, and `enter` tests only that the sub-record's frame lies in
+the buffer, so its fields read in place as those of any view. The walk goes
+past a span or a region by its size, with no test of its bounds, which the
+check made, and walks only a sub-codec that measures itself. A record whose
+bytes changed after its check can move a sub-record, never out of the
+buffer: a negative size refuses it, and a sum past `max_int` is `max_int`.
+
 ## Invariants
 
 These are what the unchecked reads rely on. Each one is enforced where the
@@ -44,7 +80,9 @@ codec is built, so no input can break it.
 - **Unchecked reads stay in the frame.** A read without a bounds check is
   created only for a field whose offset and width are constants of the
   schema, with `0 <= offset` and `offset + width <= min_size` at the point
-  the field is added (`Codec.field_read`).
+  the field is added (`Codec.field_read`, `Codec.View.field`), and a view
+  is made only of a record whose frame lies in the buffer (`Codec.View.check`,
+  `Codec.View.enter`).
 - **The frame only grows.** `min_size` never decreases as fields are added,
   and never exceeds `Sys.max_string_length`, so the frame check cannot
   overflow (`Codec.add_min_size`). A codec whose fields, sub-codecs
@@ -64,7 +102,11 @@ codec is built, so no input can break it.
   `Invalid_argument` is for misuse of the API (a negative offset, a missing
   `env`).
 - **Field order.** Reads and checks run in declaration order, so the error
-  names the first bad field.
+  names the first bad field. The walk `decode` runs on a record without
+  parameters reports the same error as the check pass: it checks the frame,
+  then the fields in order, then the `where` clause, and leaves a failed
+  constraint of a fixed-offset field to the record's check pass, which names
+  the first one.
 - **One answer.** `decode` fails exactly when `validate` does, and both agree
   with the EverParse C validator; the differential fuzzer checks this.
 
@@ -86,22 +128,23 @@ shape in scope. OCaml without flambda never inlines a function passed as an
 argument, nor a function whose body defines a closure, so `fold_frames`
 rejects a frame with no closure of its own, and the step functions call
 their consumer by name, with no closure call. They allocate nothing per
-frame where the compiler inlines the consumer and the runtime's loads.
+frame where the compiler inlines the consumer and the runtime's loads. OCaml
+without flambda inlines the consumer's `valid` only when its body defines no
+function, a partial application or a primitive used as a value included;
+otherwise each call boxes the `int64` values it is passed.
 
-On OxCaml their loop over frames is unrolled four times, then walks the
-remaining frames one by one. OCaml polls for signals and other domains once
-per loop iteration, so the unrolled loop polls once per four frames. An
-iteration computes where its four frames start and loads, for each, the
-fields in its leading bytes that choose a nested optional field (the IPv4
-protocol of a packet stack), before the first frame's checks: on input whose
-kind varies from frame to frame, the branch on that field mispredicts often,
-and the next frame's choice then waits for no load. On
-OCaml the loop walks one frame per iteration, because four inlined walks
-cost the stock compiler more in spilled registers than the polls they save.
-The loop over frames that hold the leading prefixes comes last in the
-function, where the compiler closes it with one branch. On OCaml the loop
-over frames too short for it is a function of its own, called once per
-batch, so that its variables take no register from the main loop.
+Their loop over frames is unrolled four times, then walks the remaining
+frames one by one. OCaml polls for signals and other domains once per loop
+iteration, so the unrolled loop polls once per four frames. An iteration
+computes where its four frames start and loads, for each, the fields in its
+leading bytes that choose a nested optional field (the IPv4 protocol of a
+packet stack), before the first frame's checks: on input whose kind varies
+from frame to frame, the branch on that field mispredicts often, and the
+next frame's choice then waits for no load. The loop over frames that hold
+the leading prefixes comes last in the function, where the compiler closes
+it with one branch. On OCaml the loop over frames too short for it is a
+function of its own, called once per batch, so that its variables take no
+register from the main loop.
 
 The invariants above hold for the generated code as follows.
 
@@ -232,8 +275,8 @@ random bytes: the record modules on the sampled fixed records, the scanners
 on every sampled shape and on hand-written structured cases, and, with
 `BUILD_EVERPARSE=1`, those cases with the EverParse C validators of their
 standalone and FFI projections for acceptance and the bytes consumed, and
-with every scalar member of the FFI projection's default plug, nested fields
-and presence flags included ([the FFI plug](projection.md#the-ffi-plug)), an
+with every scalar member of the FFI projection's default visitor, nested fields
+and presence flags included ([the FFI visitor](projection.md#the-ffi-visitor)), an
 absent field as zero. The sampled shapes are compared with those validators
 too, on acceptance, the bytes consumed and their top-level integer members.
 On OxCaml the scanners hold integers as `int64_u`; the

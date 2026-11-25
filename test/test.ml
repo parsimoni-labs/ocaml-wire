@@ -8,6 +8,7 @@ let () =
       Test_codec_stack.suite;
       Test_codec_variable.suite;
       Test_codec_projection.suite;
+      Test_arith_3d.suite;
       Test_codec_bitfield.suite;
       Test_codec_encode.suite;
       Test_codec_writer.suite;
@@ -18,6 +19,7 @@ let () =
       Test_codec_dependent.suite;
       Test_codec_embed.suite;
       Test_codec_optional.suite;
+      Test_codec_fault.suite;
       Test_codec_repeat.suite;
       Test_codec_casetype.suite;
       Test_codec_union.suite;

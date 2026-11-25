@@ -1,0 +1,483 @@
+(* Tests for arith_3d.ml: the arithmetic of constraints, sizes and presence
+   conditions, as 3D types and verifies it. *)
+
+open Wire
+open Test_helpers
+
+let projected c = Everparse.Raw.to_3d (Everparse.project ~mode:`Ffi c).module_
+
+let projects_to what c sub =
+  let s = projected c in
+  Alcotest.(check bool)
+    (Fmt.str "%s: %s" what sub)
+    true
+    (Re.execp (Re.compile (Re.str sub)) s)
+
+let check_refused what want f =
+  Alcotest.(check bool) what want (raises_invalid f)
+
+(* A field [a] of [typ], then a [uint16be] [l] whose constraint is [f a l]. *)
+let constrained typ f () =
+  let a = Field.v "a" typ in
+  Codec.v "Arith"
+    (fun a l -> (a, l))
+    Codec.
+      [
+        a $ fst;
+        Field.v "l" uint16be ~self_constraint:(fun l -> f (Field.ref a) l) $ snd;
+      ]
+
+(* An IPv4-like first byte, then [Length] constrained by [f ihl]. *)
+let header f =
+  let ihl = Field.v "IHL" (bits ~width:4 U8) in
+  Codec.v "Header"
+    (fun v i l -> (v, i, l))
+    Codec.
+      [
+        (Field.v "Version" (bits ~width:4 U8) $ fun (v, _, _) -> v);
+        (ihl $ fun (_, i, _) -> i);
+        ( Field.v "Length" uint16be ~self_constraint:(fun l ->
+              f (Field.ref ihl) l)
+        $ fun (_, _, l) -> l );
+      ]
+
+(* 3D computes [a << 2] over a [UINT8] in 8 bits and wraps, and refuses to
+   verify [a * 4] there. The projection casts the operand to the narrowest type
+   that holds the result, so the C computes what OCaml does, and leaves alone
+   an operation whose range fits its type: [IHL * 4] over 4 bits. *)
+let test_arith_widened () =
+  projects_to "a lsl 2 over uint8"
+    (constrained uint8 Expr.(fun a l -> l >= a lsl int 2) ())
+    "(((UINT16) a) << 2)";
+  projects_to "a * 4 over uint8"
+    (constrained uint8 Expr.(fun a l -> l >= a * int 4) ())
+    "(((UINT16) a) * 4)";
+  projects_to "a + 1 over uint8"
+    (constrained uint8 Expr.(fun a l -> l >= a + int 1) ())
+    "(((UINT16) a) + 1)";
+  projects_to "IHL * 4 over 4 bits"
+    (header Expr.(fun ihl l -> l >= ihl * int 4))
+    "(IHL * 4)";
+  projects_to "IHL lsl 2 over 4 bits"
+    (header Expr.(fun ihl l -> l >= ihl lsl int 2))
+    "(IHL << 2)";
+  projects_to "a guarded subtraction"
+    (constrained uint8 Expr.(fun a l -> a >= int 1 && l >= a - int 1) ())
+    "(a - 1)";
+  projects_to "a lsl 2 in a size"
+    (let n = Field.v "n" uint8 in
+     Codec.v "SizeShift"
+       (fun n d -> (n, d))
+       Codec.
+         [
+           n $ fst;
+           Field.v "d" (byte_array ~size:Expr.(Field.ref n lsl int 2)) $ snd;
+         ])
+    "[:byte-size (((UINT16) n) << 2)]"
+
+(* Each shape 3d.exe cannot verify, or whose C would compute a value OCaml does
+   not, is refused when the codec is built; its neighbour that 3D verifies and
+   both compute alike is accepted. *)
+let test_arith_refused () =
+  let u8 = constrained uint8 and u16 = constrained uint16be in
+  check_refused "a - 1 unguarded" true (u8 Expr.(fun a l -> l >= a - int 1));
+  check_refused "a - 1 under a >= 1" false
+    (u8 Expr.(fun a l -> a >= int 1 && l >= a - int 1));
+  check_refused "a - 1 when a >= 1 holds or a = 0" false
+    (u8 Expr.(fun a l -> a = int 0 || l >= a - int 1));
+  check_refused "l - a under l >= a" false
+    (u8 Expr.(fun a l -> l >= a && l - a <= int 5));
+  check_refused "a - a" false (u8 Expr.(fun a l -> l >= a - a));
+  check_refused "l - a - 1 under l > a" false
+    (u8 Expr.(fun a l -> l > a && l - a - int 1 <= int 5));
+  check_refused "l - (a + 1) under l > a" false
+    (u8 Expr.(fun a l -> l > a && l - (a + int 1) <= int 5));
+  check_refused "l - a under l = a" false
+    (u8 Expr.(fun a l -> l = a && l - a = int 0));
+  check_refused "l - a - 1 under l >= a" true
+    (u8 Expr.(fun a l -> l >= a && l - a - int 1 <= int 5));
+  check_refused "l / a, a possibly zero" true
+    (u8 Expr.(fun a l -> l / a <= int 5));
+  check_refused "l / a under a > 0" false
+    (u8 Expr.(fun a l -> a > int 0 && l / a <= int 5));
+  check_refused "l mod a, a possibly zero" true
+    (u8 Expr.(fun a l -> l mod a <= int 5));
+  check_refused "lnot a" true (u8 Expr.(fun a l -> l >= lnot a));
+  check_refused "a land lnot 2 over uint8" false
+    (u8 Expr.(fun a l -> l >= a land lnot (int 2)));
+  check_refused "a land lnot 2 over uint16" true
+    (u16 Expr.(fun a l -> l >= a land lnot (int 2)));
+  check_refused "a negative literal" true (u8 Expr.(fun a _ -> a <> int (-1)));
+  check_refused "field_pos" true (u8 Expr.(fun _ l -> l >= field_pos));
+  check_refused "a shift by 64" true (u8 Expr.(fun a l -> l >= a lsl int 64));
+  check_refused "a shift by an unbounded field" true
+    (u8 Expr.(fun a l -> l >= l lsl a));
+  check_refused "a shift by a bounded field" false
+    (u8 Expr.(fun a l -> a < int 8 && l >= l lsr a));
+  check_refused "a narrowing cast" true (u16 Expr.(fun a l -> l >= to_uint8 a));
+  check_refused "a narrowing cast of a bounded value" false
+    (u16 Expr.(fun a l -> a <= int 200 && l >= to_uint8 a));
+  check_refused "a sum past OCaml's native int" false
+    (u8 Expr.(fun a l -> l >= a + int Stdlib.(max_int - 5)));
+  check_refused "a uint32 square" false
+    (constrained uint32be Expr.(fun a l -> l <= a * a));
+  check_refused "a product past 64 bits" true
+    (u8 Expr.(fun a l -> l >= a * a * a * a * a * a * a * a * a));
+  check_refused "a uint64 sum past 64 bits" true
+    (constrained uint64be Expr.(fun a l -> l >= a + int 1));
+  check_refused "a masked uint64 sum, which F* bounds by its type" true
+    (constrained uint64be Expr.(fun a l -> l >= (a land int 255) + int 1));
+  let f = Field.v "f" float32be in
+  check_refused "a float ordered from another field" true (fun () ->
+      Codec.v "FloatCross"
+        (fun f v -> (f, v))
+        Codec.
+          [
+            f $ fst;
+            Field.v "v" uint8 ~self_constraint:(fun v -> Expr.(Field.ref f < v))
+            $ snd;
+          ]);
+  check_refused "a float compared for equality from another field" false
+    (fun () ->
+      Codec.v "FloatCrossEq"
+        (fun f v -> (f, v))
+        Codec.
+          [
+            f $ fst;
+            Field.v "v" uint8 ~self_constraint:(fun _ ->
+                Expr.(Field.ref f = int 0))
+            $ snd;
+          ])
+
+(* 3D reads a signed field as its unsigned bit pattern in a presence condition
+   and a size too. A comparison with a literal projects in two's-complement
+   form; any other use is refused. A subtraction or multiplication in a
+   presence condition is checked when the codec is built. *)
+let test_arith_presence_and_size () =
+  let gated typ present () =
+    let n = Field.v "n" typ in
+    Codec.v "Gated"
+      (fun n d -> (n, d))
+      Codec.
+        [
+          n $ fst;
+          Field.optional "d" ~present:(present (Field.ref n)) uint8 $ snd;
+        ]
+  in
+  let sized typ size () =
+    let n = Field.v "n" typ in
+    Codec.v "Sized"
+      (fun n d -> (n, d))
+      Codec.
+        [ n $ fst; Field.v "d" (byte_array ~size:(size (Field.ref n))) $ snd ]
+  in
+  projects_to "an int8 presence"
+    (gated int8 Expr.(fun n -> n >= int 5) ())
+    "((n ^ 128) >= 133)";
+  check_refused "an int8 presence over n + 1" true
+    (gated int8 Expr.(fun n -> n + int 1 >= int 5));
+  check_refused "an int8 size" true (sized int8 Fun.id);
+  check_refused "an int16 size" true (sized int16be Fun.id);
+  check_refused "a uint32 cube in a presence" true
+    (gated uint32be Expr.(fun n -> n * n * n > int 0));
+  check_refused "a uint8 square in a presence" false
+    (gated uint8 Expr.(fun n -> n * n > int 3));
+  check_refused "a subtraction in a presence" true
+    (gated uint8 Expr.(fun n -> n - int 1 > int 3));
+  check_refused "a size past 32 bits" true
+    (sized uint8 Expr.(fun n -> n + (int 0x2000_0000 * int 8)));
+  check_refused "a uint16 product size" false
+    (sized uint16be Expr.(fun n -> n * int 2));
+  check_refused "a constant size of 2^32" true
+    (sized uint8 Expr.(fun _ -> int 0x2000_0000 * int 8));
+  check_refused "a constant size below 2^32" false
+    (sized uint8 (fun _ -> int 0x2000_0000));
+  let per_byte f () =
+    Codec.v "PerByte" Fun.id
+      Codec.
+        [ Field.v "d" (byte_array_where ~size:(int 4) ~per_byte:f) $ Fun.id ]
+  in
+  check_refused "a per-byte subtraction that can go below zero" true
+    (per_byte Expr.(fun b -> b - int 1 <= int 200));
+  check_refused "a guarded per-byte subtraction" false
+    (per_byte Expr.(fun b -> b >= int 1 && b - int 1 <= int 200));
+  (* Past the native int, a per-byte condition is computed on 64 bits, as 3D
+     computes it at its [UINT64]: [b + k] reaches [max_int] at [b = 5] only. *)
+  let past =
+    per_byte Expr.(fun b -> b + int Stdlib.(max_int - 5) <> int max_int)
+  in
+  check_refused "a per-byte sum past the native int" false past;
+  let accepts b =
+    Result.is_ok (Codec.decode (past ()) (Bytes.make 4 (Char.chr b)) 0)
+  in
+  Alcotest.(check bool) "b = 4" true (accepts 4);
+  Alcotest.(check bool) "b = 5" false (accepts 5);
+  Alcotest.(check bool) "b = 6" true (accepts 6);
+  Alcotest.(check bool) "b = 255" true (accepts 255)
+
+(* A value past the native int is computed on 64 bits, unsigned, at the type 3D
+   gives it: [a + k] with [k] near [max_int] passes [max_int] once [a > 5], and
+   the square of a [uint32] reaches [2^60] once [a >= 2^30]. *)
+let test_arith_wide () =
+  let k = Stdlib.(max_int - 5) in
+  let near =
+    constrained uint8
+      Expr.(fun a l -> a + int k <> int max_int && l >= int 0)
+      ()
+  in
+  let decodes c s = Result.is_ok (Codec.decode c (Bytes.of_string s) 0) in
+  Alcotest.(check bool) "a = 4" true (decodes near "\004\000\000");
+  Alcotest.(check bool) "a = 5" false (decodes near "\005\000\000");
+  Alcotest.(check bool) "a = 255" true (decodes near "\255\000\000");
+  let a = Field.v "a" uint32be in
+  let square =
+    Codec.v "Square"
+      (fun a d -> (a, d))
+      Codec.
+        [
+          a $ fst;
+          Field.optional "d"
+            ~present:
+              Expr.(
+                Field.ref a * Field.ref a
+                >= int 0x2000_0000 * int 0x2000_0000 * int 4)
+            uint8
+          $ snd;
+        ]
+  in
+  let present s =
+    match Codec.decode square (Bytes.of_string s) 0 with
+    | Ok (_, d) -> Some (Option.is_some d)
+    | Error _ -> None
+  in
+  Alcotest.(check (option bool))
+    "a = 2^30 - 1" (Some false)
+    (present "\x3f\xff\xff\xff");
+  Alcotest.(check (option bool))
+    "a = 2^30" (Some true)
+    (present "\x40\x00\x00\x00\x01");
+  Alcotest.(check (option bool))
+    "a = 2^32 - 1" (Some true)
+    (present "\xff\xff\xff\xff\x01")
+
+(* The body of an optional region is a 3D declaration of its own, which reads
+   the fields it names as [UINT32] formals: a size over them must verify there
+   as written. An action's arithmetic is checked and widened as a
+   constraint's is. *)
+let test_arith_regions_and_actions () =
+  let inner = Codec.v "Inner" Fun.id Codec.[ Field.v "x" uint8 $ Fun.id ] in
+  let a = Field.v "a" uint8 in
+  let sized size = nested ~size:(size (Field.ref a)) (codec inner) in
+  let region size () =
+    Codec.v "Region"
+      (fun a r -> (a, r))
+      Codec.[ a $ fst; Field.v "r" (sized size) $ snd ]
+  in
+  let optional size () =
+    Codec.v "OptRegion"
+      (fun a r -> (a, r))
+      Codec.
+        [
+          a $ fst;
+          Field.optional "r" ~present:Expr.(Field.ref a > int 0) (sized size)
+          $ snd;
+        ]
+  in
+  check_refused "a product sizing an optional region" false
+    (optional Expr.(fun a -> a * int 4));
+  projects_to "an optional region declares the bound of a uint8"
+    (optional Expr.(fun a -> a * int 4) ())
+    "where ((a <= 255))";
+  check_refused "a uint32 product sizing an optional region" true (fun () ->
+      let a = Field.v "a" uint32be in
+      Codec.v "OptRegion32"
+        (fun a r -> (a, r))
+        Codec.
+          [
+            a $ fst;
+            Field.optional "r"
+              ~present:Expr.(Field.ref a > int 0)
+              (nested ~size:Expr.(Field.ref a * int 4) (codec inner))
+            $ snd;
+          ]);
+  let mapped () =
+    Codec.v "OptRegionMapped"
+      (fun a r -> (a, r))
+      Codec.
+        [
+          a $ fst;
+          Field.optional "r"
+            ~present:Expr.(Field.ref a > int 0)
+            (map ~decode:Fun.id ~encode:Fun.id
+               (sized Expr.(fun a -> a * int 4)))
+          $ snd;
+        ]
+  in
+  projects_to "a mapped optional region declares the bound of a uint8"
+    (mapped ()) "where ((a <= 255))";
+  check_refused "a field sizing an optional region" false (optional Fun.id);
+  projects_to "a product sizing a region"
+    (region Expr.(fun a -> a * int 4) ())
+    "(((UINT16) a) * 4)";
+  let act f () =
+    let out = Param.output "out" uint16be in
+    Codec.v "Act" Fun.id
+      Codec.
+        [
+          Field.v "a" uint8
+            ~action:(Action.on_success [ Action.assign out (f (Field.ref a)) ])
+          $ Fun.id;
+        ]
+  in
+  projects_to "an assigned product"
+    (act Expr.(fun a -> a * int 4) ())
+    "*out = (((UINT16) a) * 4);";
+  check_refused "an assigned subtraction that can go below zero" true
+    (act Expr.(fun a -> a - int 1))
+
+(* 3D stores a value only into an output of at least its type ("Expected type
+   UINT8"). A wider value that the conditions before it bound within the output
+   is narrowed with a cast 3d.exe verifies, any other is refused, and so is
+   [field_pos], which 3D reads only into a [var]. *)
+let test_arith_assignments () =
+  let out8 = Param.output "out" uint8 in
+  let out32 = Param.output "out" uint32be in
+  (* [x], then [y] whose action is [stmts x]. *)
+  let after x stmts () =
+    Codec.v "Assign"
+      (fun x y -> (x, y))
+      Codec.
+        [
+          x $ fst;
+          Field.v "y" uint8 ~action:(Action.on_success (stmts (Field.ref x)))
+          $ snd;
+        ]
+  in
+  let x16 = Field.v "x" uint16be in
+  let bounded =
+    Field.v "x" uint16be ~self_constraint:Expr.(fun x -> x <= int 200)
+  in
+  let x8 = Field.v "x" uint8 in
+  check_refused "a uint16 field into a uint8 output" true
+    (after x16 (fun x -> [ Action.assign out8 x ]));
+  projects_to "a bounded uint16 field into a uint8 output"
+    (after bounded (fun x -> [ Action.assign out8 x ]) ())
+    "*out = ((UINT8) x);";
+  check_refused "x + 1 over a uint8 into a uint8 output" true
+    (after x8 (fun x -> [ Action.assign out8 Expr.(x + int 1) ]));
+  projects_to "a guarded x + 1 into a uint8 output"
+    (after x8
+       (fun x ->
+         [
+           Action.if_
+             Expr.(x < int 255)
+             [ Action.assign out8 Expr.(x + int 1) ]
+             None;
+         ])
+       ())
+    "*out = (x + 1);";
+  check_refused "300 into a uint8 output" true
+    (after x8 (fun _ -> [ Action.assign out8 (int 300) ]));
+  check_refused "7 into a uint8 output" false
+    (after x8 (fun _ -> [ Action.assign out8 (int 7) ]));
+  projects_to "sizeof this into a uint8 output"
+    (after x8 (fun _ -> [ Action.assign out8 sizeof_this ]) ())
+    "*out = ((UINT8) (sizeof (this)));";
+  check_refused "sizeof this past 255 into a uint8 output" true
+    (after
+       (Field.v "x" (byte_array ~size:(int 300)))
+       (fun _ -> [ Action.assign out8 sizeof_this ]));
+  projects_to "sizeof this into a uint32 output"
+    (after x8 (fun _ -> [ Action.assign out32 sizeof_this ]) ())
+    "*out = sizeof (this);";
+  check_refused "field_pos into a uint32 output" true
+    (after x8 (fun _ -> [ Action.assign out32 field_pos ]));
+  projects_to "a uint8 field into a uint32 output"
+    (after x8 (fun x -> [ Action.assign out32 x ]) ())
+    "*out = x;"
+
+(* A per-byte condition projects to a one-byte element struct of its own: it
+   reads its byte and no parameter or other field, and its [sizeof_this] is 1. *)
+let test_arith_per_byte () =
+  let lim = Param.input "lim" uint8 in
+  let pb per_byte () = byte_array_where ~size:(int 2) ~per_byte in
+  check_refused "a parameter in a per-byte condition" true
+    (pb Expr.(fun b -> b <= Param.expr lim));
+  check_refused "another field in a per-byte condition" true
+    (pb Expr.(fun b -> b <= Field.ref (Field.v "n" uint8)));
+  check_refused "sizeof this in a per-byte condition" false
+    (pb Expr.(fun b -> b <= sizeof_this));
+  check_refused "a per-byte b + 1 into its byte" false
+    (pb Expr.(fun b -> b + int 1 <= int 200));
+  let c =
+    Codec.v "PerByteThis" Fun.id
+      Codec.
+        [
+          Field.v "d"
+            (byte_array_where ~size:(int 2)
+               ~per_byte:Expr.(fun b -> b <= sizeof_this))
+          $ Fun.id;
+        ]
+  in
+  let accepts s = Result.is_ok (Codec.decode c (Bytes.of_string s) 0) in
+  Alcotest.(check bool) "sizeof this is 1 per byte" true (accepts "\x01\x00");
+  Alcotest.(check bool) "a byte past it" false (accepts "\x02\x00")
+
+(* 3D declares an MSB-first word's bitfields from the least significant bit, so
+   an action reads only the bitfields the codec declares after its own. *)
+let test_arith_bit_actions () =
+  let out = Param.output "out" uint8 in
+  let a = Field.v "a" (bits ~width:4 U8) in
+  let b = Field.v "b" (bits ~width:4 U8) in
+  let word act_a act_b () =
+    Codec.v "BitActs"
+      (fun a b -> (a, b))
+      Codec.
+        [
+          Field.v "a" (bits ~width:4 U8) ?action:act_a $ fst;
+          Field.v "b" (bits ~width:4 U8) ?action:act_b $ snd;
+        ]
+  in
+  let assign e = Some (Action.on_act [ Action.assign out e ]) in
+  check_refused "an action reading the bitfield 3D declares after it" true
+    (word None (assign (Field.ref a)));
+  check_refused "an action reading its own bitfield" false
+    (word None (assign (Field.ref b)));
+  check_refused "two act blocks in one word" false
+    (word (assign (Field.ref a)) (assign (Field.ref b)));
+  check_refused "an on_success block beside another action in one word" true
+    (word
+       (Some (Action.on_success [ Action.assign out (Field.ref a) ]))
+       (assign (Field.ref b)));
+  check_refused "an on_success block alone in its word" false
+    (word (Some (Action.on_success [ Action.assign out (Field.ref a) ])) None);
+  projects_to "an if in a bitfield's act block"
+    (word
+       (Some
+          (Action.on_act
+             [
+               Action.if_
+                 Expr.(Field.ref a > int 3)
+                 [ Action.assign out (Field.ref a) ]
+                 None;
+             ]))
+       None ())
+    "if ((a > 3)) { *out = a;"
+
+let suite =
+  ( "arith_3d",
+    [
+      Alcotest.test_case "widened where 3D would overflow" `Quick
+        test_arith_widened;
+      Alcotest.test_case "refused where 3D cannot verify it" `Quick
+        test_arith_refused;
+      Alcotest.test_case "presence conditions and sizes" `Quick
+        test_arith_presence_and_size;
+      Alcotest.test_case "computed on 64 bits past the native int" `Quick
+        test_arith_wide;
+      Alcotest.test_case "optional regions and actions" `Quick
+        test_arith_regions_and_actions;
+      Alcotest.test_case "assignments to outputs" `Quick test_arith_assignments;
+      Alcotest.test_case "per-byte conditions" `Quick test_arith_per_byte;
+      Alcotest.test_case "bitfield actions" `Quick test_arith_bit_actions;
+    ] )

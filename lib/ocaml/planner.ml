@@ -111,9 +111,9 @@ type plan = {
 (* {2 Ranges}
 
    The values an integer expression may take, from the ranges of the
-   variables it reads. An addition, subtraction or product whose ends fit the
-   native int cannot overflow and is written as plain arithmetic; any other
-   one fails where it overflows, as the codec's does. *)
+   variables it reads. An expression whose values all fit the native int is
+   written as plain arithmetic; one that can leave it is computed on 64 bits,
+   unsigned, as 3D computes it at the type that holds it ([past_native]). *)
 
 let full = (min_int, max_int)
 
@@ -178,6 +178,28 @@ let rec range ranges (e : int T.expr) =
    arithmetic. *)
 let fits ranges op a b =
   Option.is_some (corners op (range ranges a) (range ranges b))
+
+(* Whether [e] or a subexpression can take a value past the native int, or
+   shifts by its width or more. *)
+let rec past_native ranges (e : int T.expr) =
+  let p = past_native ranges in
+  let shift (b : int T.expr) = snd (range ranges b) in
+  match e with
+  | T.Add (a, b) -> (not (fits ranges T.checked_add a b)) || p a || p b
+  | T.Sub (a, b) -> (not (fits ranges T.checked_sub a b)) || p a || p b
+  | T.Mul (a, b) -> (not (fits ranges T.checked_mul a b)) || p a || p b
+  | T.Lsl (a, b) ->
+      let k = shift b and lo, hi = range ranges a in
+      k < 0
+      || k >= Sys.int_size - 1
+      || lo < 0
+      || hi > max_int asr k
+      || p a || p b
+  | T.Lsr (a, b) -> shift b >= Sys.int_size || p a || p b
+  | T.Land (a, b) | T.Lor (a, b) | T.Lxor (a, b) -> p a || p b
+  | T.Lnot a | T.Cast (_, a) -> p a
+  | T.If_then_else (_, a, b) -> p a || p b
+  | _ -> false
 
 (* Whether [e] holds a value, or shifts by an amount, that only an [int] of 63
    bits gets right. *)
@@ -632,31 +654,8 @@ let rec assume facts (e : bool T.expr) truth =
       { facts with integers = (n, v) :: facts.integers }
   | _ -> facts
 
-(* Whether evaluating [e] may overflow, which rejects the record. *)
-let rec may_overflow : type a. a T.expr -> bool = function
-  | T.Add _ | T.Sub _ | T.Mul _ -> true
-  | T.Int _ | T.Bool _ | T.Ref _ -> false
-  | T.Land (a, b) | T.Lor (a, b) | T.Lxor (a, b) | T.Lsl (a, b) | T.Lsr (a, b)
-    ->
-      may_overflow a || may_overflow b
-  | T.Lnot a -> may_overflow a
-  | T.Eq (a, b) -> may_overflow a || may_overflow b
-  | T.Ne (a, b) -> may_overflow a || may_overflow b
-  | T.Lt (a, b) -> may_overflow a || may_overflow b
-  | T.Le (a, b) -> may_overflow a || may_overflow b
-  | T.Gt (a, b) -> may_overflow a || may_overflow b
-  | T.Ge (a, b) -> may_overflow a || may_overflow b
-  | T.And (a, b) | T.Or (a, b) -> may_overflow a || may_overflow b
-  | T.Not a -> may_overflow a
-  | T.Cast (_, a) -> may_overflow a
-  | T.If_then_else (c, a, b) ->
-      may_overflow c || may_overflow a || may_overflow b
-  | _ -> true
-
 (* [e] with what [facts] decides folded away. The code evaluates what is left
-   from left to right, as the codec does: a left operand that may overflow
-   stays, even when the right one decides, so the record is rejected where
-   the codec's evaluation overflows. *)
+   from left to right, as the codec does. *)
 let rec simplify facts (e : bool T.expr) : bool T.expr =
   match List.assoc_opt (key e) facts.truths with
   | Some b -> T.Bool b
@@ -668,14 +667,14 @@ let rec simplify facts (e : bool T.expr) : bool T.expr =
       | T.And (a, b) -> (
           match (each a, each b) with
           | T.Bool false, _ -> T.Bool false
-          | a, T.Bool false when not (may_overflow a) -> T.Bool false
+          | _, T.Bool false -> T.Bool false
           | T.Bool true, b -> b
           | a, T.Bool true -> a
           | a, b -> T.And (a, b))
       | T.Or (a, b) -> (
           match (each a, each b) with
           | T.Bool true, _ -> T.Bool true
-          | a, T.Bool true when not (may_overflow a) -> T.Bool true
+          | _, T.Bool true -> T.Bool true
           | T.Bool false, b -> b
           | a, T.Bool false -> a
           | a, b -> T.Or (a, b))

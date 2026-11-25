@@ -8,9 +8,9 @@
     Wire types project to EverParse 3D struct fields. Each named field gets a
     [<Name>Set*] callback (schema-prefixed per type family: [<Name>SetU8],
     [<Name>SetU16be], ...) that extracts its value during validation. The
-    default plug {!Wire_3d} ships, [<Name>_Fields.c], switches on the field
+    default visitor {!Wire_3d} ships, [<Name>_Fields.c], switches on the field
     index to populate a typed [<Name>Fields] struct; consumers that want a
-    different layout supply their own plug.
+    different layout supply their own visitor.
 
     Three EverParse limitations shape the projection:
 
@@ -95,18 +95,18 @@ type plug_field = {
   setter : string;  (** [WireSet*] name that extracts this field. *)
   val_c_type : string;  (** C type of the value argument to the setter. *)
 }
-(** Plug info: the data needed by a concrete [WIRECTX] implementation (e.g.
-    {!Wire_3d}'s [<Name>_Fields] default plug) to materialise a typed struct
+(** Visitor info: the data needed by a concrete [WIRECTX] implementation (e.g.
+    {!Wire_3d}'s [<Name>_Fields] default visitor) to materialise a typed struct
     plus [WireSet*] switch dispatchers from a schema. *)
 
 val plug_member : string -> string
-(** [plug_member name] is the plug struct member a field named [name] takes:
-    [name] escaped against C's keywords and the macros of the headers the plug
-    includes ([int_], [NULL_], and [int__] for [int_]), so distinct names stay
-    distinct members. *)
+(** [plug_member name] is the visitor struct member a field named [name] takes:
+    [name] escaped against C's keywords and the macros of the headers the
+    visitor includes ([int_], [NULL_], and [int__] for [int_]), so distinct
+    names stay distinct members. *)
 
 val plug_fields : t -> plug_field list
-(** [plug_fields s] enumerates the plug's members in index order: the named
+(** [plug_fields s] enumerates the visitor's members in index order: the named
     fields of the source struct in declaration order and, when the struct embeds
     another codec (as a field, under an optional or in a sized region), each
     scalar of every embedded codec and a [<path>_present] flag per optional,
@@ -117,8 +117,8 @@ val plug_fields : t -> plug_field list
 
 val plug_setters : t -> (string * string) list
 (** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
-    [(setter, val_c_type)] pairs. Each one needs an implementation in the plug.
-*)
+    [(setter, val_c_type)] pairs. Each one needs an implementation in the
+    visitor. *)
 
 val extern_fn_names : t -> string list
 (** [extern_fn_names s] lists the names of every extern function declared in the
@@ -134,8 +134,8 @@ type mode = [ `Ffi | `Standalone ]
     that EverParse compiles to a standalone verified C parser, which also reads
     as a protocol specification. [`Ffi] emits the [WireCtx] extern and per-field
     setter callbacks ([WireSet*]), so the C validator is callable from OCaml and
-    extracts every field through the plug (used by benchmarks and differential
-    testing). *)
+    extracts every field through the visitor (used by benchmarks and
+    differential testing). *)
 
 val project : ?mode:mode -> 'r Codec.t -> t
 (** [project ?mode codec] projects [codec] to a 3D schema; [mode] defaults to
@@ -317,6 +317,12 @@ module Raw : sig
       [["uint8_t"; "uint16_t"]]. Matches the widths the generated validator
       wrapper takes, so a caller can build the wrapper call without reading the
       generated header. *)
+
+  val param_c_types : struct_ -> [ `Input of string | `Output of string ] list
+  (** [param_c_types s] is, for each parameter of [s] in declaration order, its
+      C type: an input's is the type the generated validator wrapper takes
+      ({!input_param_c_types}), an output's the type of the cell the wrapper
+      takes a pointer to. *)
 
   val struct_typ : struct_ -> unit Types.typ
   (** View a 3D struct as a wire type. *)

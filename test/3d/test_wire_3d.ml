@@ -222,11 +222,11 @@ let test_name_collision () =
   rejects "same .3d file (dune)" generate_dune [ "header"; "Header" ]
     [ "Header.3d" ];
   (* [TMFrame] and [Tmframe] write two files that share the [TmframeFields]
-     plug struct tag and the [TMFRAME_FIELDS_H] include guard, so a
-     translation unit including both takes one plug layout for the other. *)
+     visitor struct tag and the [TMFRAME_FIELDS_H] include guard, so a
+     translation unit including both takes one visitor layout for the other. *)
   rejects "same C identifier" generate_3d [ "TMFrame"; "Tmframe" ]
     [ "\"TMFrame\""; "\"Tmframe\""; "Tmframe" ];
-  rejects "same C identifier (plug)"
+  rejects "same C identifier (visitor)"
     (fun schemas -> Wire_3d.write_fields ~outdir:tmpdir schemas)
     [ "TMFrame"; "Tmframe" ] [ "Tmframe" ];
   rejects "post-digit C identifier" generate_3d [ "Foo2Bar"; "Foo2bar" ]
@@ -340,7 +340,7 @@ let doc_codec name =
 
 let test_generate_dune_standalone () =
   (* The doc pipeline emits a single-file [dune.inc]: the package name becomes a
-     CamelCase module name and there is no FFI plug or test harness. *)
+     CamelCase module name and there is no FFI visitor or test harness. *)
   let tmpdir = Filename.temp_dir "wire_3d_dune_doc" "" in
   Wire_3d.generate_dune_standalone ~outdir:tmpdir ~package:"my-pkg"
     [ Wire_3d.pack (doc_codec "Pkt") ];
@@ -395,7 +395,7 @@ let test_generate_dune_standalone () =
     (has "%{env:BUILD_EVERPARSE=}");
   Alcotest.(check bool)
     "C rule never auto-regenerates" false (has "mode fallback");
-  Alcotest.(check bool) "no FFI plug" false (has "_Fields");
+  Alcotest.(check bool) "no FFI visitor" false (has "_Fields");
   Alcotest.(check bool) "no FFI test harness" false (has "test.c")
 
 let test_generate_dune_standalone_name_override () =
@@ -565,54 +565,10 @@ let diff_param_codec =
     (fun len data -> (len, data))
     [ Codec.( $ ) f_length fst; Codec.( $ ) f_data snd ]
 
-(* Build the package's validator and [agree] once, then pass [f] a function that
-   runs [agree] on a corpus and returns its exit status and output. *)
-let with_agree ~name ~package codecs f =
-  let tmpdir = Filename.temp_dir ("wire_3d_diff_" ^ package) "" in
-  Fun.protect
-    ~finally:(fun () -> ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir))
-    (fun () ->
-      Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
-      let sh cmd =
-        let ic = Fmt.kstr Unix.open_process_in "cd %s && %s 2>&1" tmpdir cmd in
-        let output = In_channel.input_all ic in
-        (Unix.close_process_in ic, output)
-      in
-      let base = String.capitalize_ascii name in
-      let run corpus =
-        let oc = open_out (Filename.concat tmpdir "corpus") in
-        (match corpus with
-        | `Fuzz count ->
-            let ppf = Format.formatter_of_out_channel oc in
-            Wire_3d.generate_corpus ~count ppf codecs
-        | `Lines lines -> List.iter (fun l -> output_string oc (l ^ "\n")) lines);
-        close_out oc;
-        sh "./agree corpus"
-      in
-      match
-        Fmt.kstr sh
-          "cc %s %s -c %s.c %sWrapper.c && ar rcs lib.a %s.o %sWrapper.o && cc \
-           %s %s agree.c lib.a -o agree"
-          Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines base base base
-          base Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
-      with
-      | Unix.WEXITED 0, _ -> f run
-      | _, output ->
-          Alcotest.failf "agree for %s does not build:\n%s" name output)
-
-let differential_ok ~name ~package ~corpus codecs =
-  let status, output =
-    with_agree ~name ~package codecs (fun run -> run corpus)
-  in
-  match status with
-  | Unix.WEXITED 0 -> ()
-  | Unix.WEXITED n ->
-      Alcotest.failf "differential %s failed with exit %d:\n%s" name n output
-  | _ -> Alcotest.failf "differential %s terminated abnormally:\n%s" name output
-
 let test_doc_differential () =
   needs_3d_exe ();
-  differential_ok ~name:"protospec" ~package:"demo-doc" ~corpus:(`Fuzz 400)
+  Agree.differential_ok ~name:"protospec" ~package:"demo-doc"
+    ~corpus:(`Fuzz 400)
     [
       Wire_3d.pack diff_enum_codec;
       Wire_3d.pack diff_range_codec;
@@ -625,12 +581,13 @@ let test_doc_differential_no_params () =
      harness must not emit an unused [parse_params] helper (a -Werror under the
      strict flags) when no codec takes parameters. *)
   needs_3d_exe ();
-  differential_ok ~name:"plainspec" ~package:"plain-doc" ~corpus:(`Fuzz 100)
+  Agree.differential_ok ~name:"plainspec" ~package:"plain-doc"
+    ~corpus:(`Fuzz 100)
     [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
 let test_doc_differential_nested_regions () =
   needs_3d_exe ();
-  differential_ok ~name:"nestedspec" ~package:"nested-doc"
+  Agree.differential_ok ~name:"nestedspec" ~package:"nested-doc"
     ~corpus:
       (`Lines
          [
@@ -679,7 +636,7 @@ let diff_msb_array_codec =
 
 let test_doc_differential_msb_sub_codec () =
   needs_3d_exe ();
-  differential_ok ~name:"msbspec" ~package:"msb-doc"
+  Agree.differential_ok ~name:"msbspec" ~package:"msb-doc"
     ~corpus:
       (`Lines
          [
@@ -693,7 +650,7 @@ let test_doc_differential_msb_sub_codec () =
 
 let test_doc_differential_region_cardinality () =
   needs_3d_exe ();
-  differential_ok ~name:"invariantspec" ~package:"invariant-doc"
+  Agree.differential_ok ~name:"invariantspec" ~package:"invariant-doc"
     ~corpus:
       (`Lines
          [
@@ -748,26 +705,10 @@ let diff_opt_at_most_codec =
   diff_opt_region_codec "OptRegionAtMost" (fun ~size t ->
       Wire.nested_at_most ~size t)
 
-(* A corpus line for [hex], after checking that the codec gives [accepted]:
-   the record decodes and spans the whole input. *)
-let corpus_line name c hex accepted =
-  let buf =
-    Bytes.init
-      (String.length hex / 2)
-      (fun i -> Char.chr (int_of_string ("0x" ^ String.sub hex (2 * i) 2)))
-  in
-  let codec_accepts =
-    match Codec.decode c buf 0 with
-    | Error _ -> false
-    | Ok _ -> Codec.wire_size_at c buf 0 = Bytes.length buf
-  in
-  Alcotest.(check bool) (name ^ " " ^ hex) accepted codec_accepts;
-  Fmt.str "%s - %s %d" name hex (Bool.to_int accepted)
-
 let test_doc_differential_span_and_scalar_regions () =
   needs_3d_exe ();
   let lines name c cases =
-    List.map (fun (hex, ok) -> corpus_line name c hex ok) cases
+    List.map (fun (hex, ok) -> Agree.corpus_line name c hex ok) cases
   in
   let codecs =
     [
@@ -777,7 +718,7 @@ let test_doc_differential_span_and_scalar_regions () =
     ]
   in
   let fuzzed = Fmt.str "%a" (Wire_3d.generate_corpus ~count:128) codecs in
-  differential_ok ~name:"regionspec" ~package:"region-doc"
+  Agree.differential_ok ~name:"regionspec" ~package:"region-doc"
     ~corpus:
       (`Lines
          (lines "SpanSub" diff_span_sub_codec
@@ -886,7 +827,8 @@ let diff_signed_codec =
 
 let test_doc_differential_signed () =
   needs_3d_exe ();
-  differential_ok ~name:"signedspec" ~package:"signed-doc" ~corpus:(`Fuzz 256)
+  Agree.differential_ok ~name:"signedspec" ~package:"signed-doc"
+    ~corpus:(`Fuzz 256)
     [ Wire_3d.pack diff_signed_codec ]
 
 (* A union switches on an earlier field in both validators: a byte tag with a
@@ -940,7 +882,8 @@ let diff_union_bits_codec =
 
 let test_doc_differential_union () =
   needs_3d_exe ();
-  differential_ok ~name:"unionspec" ~package:"union-doc" ~corpus:(`Fuzz 400)
+  Agree.differential_ok ~name:"unionspec" ~package:"union-doc"
+    ~corpus:(`Fuzz 400)
     [ Wire_3d.pack diff_union_codec; Wire_3d.pack diff_union_bits_codec ]
 
 (* An 8192-byte payload makes each corpus line 16384 hex chars; the agree
@@ -954,7 +897,8 @@ let diff_large_payload_codec =
 
 let test_doc_differential_large_payload () =
   needs_3d_exe ();
-  differential_ok ~name:"sharedspec" ~package:"shared-doc" ~corpus:(`Fuzz 40)
+  Agree.differential_ok ~name:"sharedspec" ~package:"shared-doc"
+    ~corpus:(`Fuzz 40)
     [ Wire_3d.pack diff_large_payload_codec ]
 
 (* Interior consecutive caps: EverParse normalizes the validator symbol to
@@ -968,7 +912,8 @@ let diff_caps_name_codec =
 
 let test_doc_differential_caps_name () =
   needs_3d_exe ();
-  differential_ok ~name:"spacewire" ~package:"space-wire" ~corpus:(`Fuzz 40)
+  Agree.differential_ok ~name:"spacewire" ~package:"space-wire"
+    ~corpus:(`Fuzz 40)
     [ Wire_3d.pack diff_caps_name_codec ]
 
 (* A valid record followed by trailing bytes must be rejected. EverParse's
@@ -979,7 +924,7 @@ let test_doc_differential_caps_name () =
    both one byte over and one byte short. *)
 let test_doc_differential_trailing_bytes () =
   needs_3d_exe ();
-  differential_ok ~name:"trailspec" ~package:"trail-doc"
+  Agree.differential_ok ~name:"trailspec" ~package:"trail-doc"
     ~corpus:
       (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
     [ Wire_3d.pack diff_range_codec ]
@@ -990,7 +935,7 @@ let test_doc_differential_trailing_bytes () =
    with exit 2 instead of feeding a wrong byte to the validator. *)
 let test_doc_differential_hex () =
   needs_3d_exe ();
-  with_agree ~name:"hexspec" ~package:"hex-doc"
+  Agree.with_agree ~name:"hexspec" ~package:"hex-doc"
     [ Wire_3d.pack diff_range_codec ]
     (fun run ->
       (match
@@ -1034,7 +979,7 @@ let diff_wrapped_param_codec =
 
 let test_doc_differential_wrapped_param () =
   needs_3d_exe ();
-  differential_ok ~name:"limitspec" ~package:"limit-doc"
+  Agree.differential_ok ~name:"limitspec" ~package:"limit-doc"
     ~corpus:
       (`Lines
          [
@@ -1701,6 +1646,136 @@ let test_projection_filenames () =
     "stale provenance is not promotable" false
     (contains_exact "Rpmsg_endpoint_info.provenance.gen")
 
+(* Expressions whose C answer differed from OCaml's before the projection
+   typed them as 3D does: [a lsl 2] over a [UINT8] wrapped at 256 in the C, a
+   signed field in a presence condition read as its bit pattern, a size shifted
+   past 8 bits. Each input's verdict is the OCaml codec's own, so the C must
+   give the same one. *)
+let arith_codecs =
+  let open Wire in
+  let shl =
+    let a = Field.v "a" uint8 in
+    Codec.v "ArithShl"
+      (fun a l -> (a, l))
+      Codec.
+        [
+          a $ fst;
+          Field.v "l" uint16be ~self_constraint:(fun l ->
+              Expr.(l >= Field.ref a lsl int 2))
+          $ snd;
+        ]
+  in
+  let ihl = Field.v "IHL" (bits ~width:4 U8) in
+  let mul =
+    Codec.v "ArithMul"
+      (fun v i l -> (v, i, l))
+      Codec.
+        [
+          (Field.v "Version" (bits ~width:4 U8) $ fun (v, _, _) -> v);
+          (ihl $ fun (_, i, _) -> i);
+          ( Field.v "Length" uint16be ~self_constraint:(fun l ->
+                Expr.(l >= Field.ref ihl * int 4))
+          $ fun (_, _, l) -> l );
+        ]
+  in
+  let n = Field.v "n" int8 in
+  let signed =
+    Codec.v "ArithSigned"
+      (fun n d -> (n, d))
+      Codec.
+        [
+          n $ fst;
+          Field.optional "d" ~present:Expr.(Field.ref n >= int 5) uint8 $ snd;
+        ]
+  in
+  let m = Field.v "m" uint8 in
+  let size =
+    Codec.v "ArithSize"
+      (fun m d -> (m, d))
+      Codec.
+        [
+          m $ fst;
+          Field.v "d" (byte_array ~size:Expr.(Field.ref m lsl int 2)) $ snd;
+        ]
+  in
+  let w = Field.v "v" uint8 in
+  let sub =
+    Codec.v "ArithSub"
+      (fun v l -> (v, l))
+      Codec.
+        [
+          w $ fst;
+          Field.v "l" uint8 ~self_constraint:(fun l ->
+              Expr.(Field.ref w >= int 1 && l >= Field.ref w - int 1))
+          $ snd;
+        ]
+  in
+  (* Values past OCaml's native int, which 3D computes as a [UINT64]: a sum
+     near [2^62], one near [2^63], a product reaching [2^64 - 1] and the square
+     of a [uint32]. *)
+  let k = max_int - 5 in
+  let wide name cond =
+    Codec.v name Fun.id
+      Codec.[ Field.v "a" uint32be ~self_constraint:cond $ Fun.id ]
+  in
+  let near62 = wide "ArithNear62" Expr.(fun a -> a + int k >= int max_int) in
+  let near63 =
+    wide "ArithNear63" Expr.(fun a -> (a + int k + int k) lsr int 62 = int 2)
+  in
+  let near64 =
+    wide "ArithNear64"
+      Expr.(fun a -> (a * int 0x1_0000_0001) lsr int 32 = int 0xffff_ffff)
+  in
+  let square = wide "ArithSquare" Expr.(fun a -> (a * a) lsr int 63 = int 1) in
+  let line (name, c) hex =
+    let buf =
+      Bytes.init
+        (String.length hex / 2)
+        (fun i -> Char.chr (int_of_string ("0x" ^ String.sub hex (2 * i) 2)))
+    in
+    let ok =
+      match Codec.validate c buf 0 with
+      | Ok () -> Codec.wire_size_at c buf 0 = Bytes.length buf
+      | Error _ -> false
+      | exception Invalid_argument _ -> false
+    in
+    Fmt.str "%s - %s %d" name hex (if ok then 1 else 0)
+  in
+  let lines c = List.map (line c) in
+  ( [
+      Wire_3d.pack shl;
+      Wire_3d.pack mul;
+      Wire_3d.pack signed;
+      Wire_3d.pack size;
+      Wire_3d.pack sub;
+      Wire_3d.pack near62;
+      Wire_3d.pack near63;
+      Wire_3d.pack near64;
+      Wire_3d.pack square;
+    ],
+    lines ("ArithShl", shl)
+      [ "ff03e8"; "ff03fc"; "0a0028"; "0a0027"; "4003ff"; "40ffff" ]
+    @ lines ("ArithMul", mul) [ "450014"; "4f003b"; "4f003c"; "f0ffff" ]
+    @ lines ("ArithSigned", signed)
+        [ "ff"; "ffaa"; "05aa"; "05"; "7f01"; "80"; "fb"; "fbaa" ]
+    @ lines ("ArithSize", size)
+        [ "00"; "0101020304"; "01010203"; "40" ^ String.make 512 'a' ]
+    @ lines ("ArithSub", sub) [ "0000"; "0100"; "0504"; "0503"; "ff00"; "fffe" ]
+    @ lines ("ArithNear62", near62)
+        [ "00000000"; "00000004"; "00000005"; "ffffffff" ]
+    @ lines ("ArithNear63", near63)
+        [ "00000000"; "0000000b"; "0000000c"; "ffffffff" ]
+    @ lines ("ArithNear64", near64)
+        [ "00000000"; "7fffffff"; "fffffffe"; "ffffffff" ]
+    @ lines ("ArithSquare", square)
+        [ "00000000"; "b504f333"; "b504f334"; "ffffffff" ] )
+
+let test_arith_differential () =
+  needs_3d_exe ();
+  let codecs, lines = arith_codecs in
+  Agree.differential_ok ~name:"arithspec" ~package:"arith-doc"
+    ~corpus:(`Lines lines) codecs
+
 let suite =
   ( "wire_3d",
     [
@@ -1732,6 +1807,8 @@ let suite =
         test_doc_differential_no_params;
       Alcotest.test_case "doc differential nested regions (needs 3d.exe)" `Quick
         test_doc_differential_nested_regions;
+      Alcotest.test_case "doc differential arithmetic (needs 3d.exe)" `Quick
+        test_arith_differential;
       Alcotest.test_case "doc differential region/cardinality (needs 3d.exe)"
         `Quick test_doc_differential_region_cardinality;
       Alcotest.test_case "doc differential Msb_first sub-codec (needs 3d.exe)"

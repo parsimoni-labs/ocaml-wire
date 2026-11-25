@@ -39,7 +39,7 @@ let pp_c_stub_bounds ppf ~lower =
   Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + off;@\n";
   Fmt.pf ppf "  uint32_t len = (uint32_t)(buf_len - (mlsize_t) off);@\n"
 
-(* The C side reads each field from the default plug, whose member escapes C's
+(* The C side reads each field from the default visitor, whose member escapes C's
    keywords ([Wire.Everparse.plug_member]). *)
 let pp_field_value ppf (fname, kind) =
   let fname = Wire.Everparse.plug_member fname in
@@ -47,7 +47,7 @@ let pp_field_value ppf (fname, kind) =
   | Wire.Everparse.Raw.Int64 ->
       Fmt.pf ppf "caml_copy_int64((int64_t) fields.%s)" fname
   | Float32 | Float64 ->
-      (* The 3D plug stores floats with their typed C type ([float] /
+      (* The 3D visitor stores floats with their typed C type ([float] /
          [double]) and bit-reinterprets in the setter, so we hand the
          value straight to [caml_copy_double]. *)
       Fmt.pf ppf "caml_copy_double((double) fields.%s)" fname
@@ -142,12 +142,12 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   Fmt.pf ppf "#include <string.h>@\n";
   Fmt.pf ppf "@\n";
   (* Headers only. Each codec's validator ([<Name>.c]) and [<Name>_Fields.c]
-     plug is compiled as its own translation unit and linked in (see
+     visitor is compiled as its own translation unit and linked in (see
      [build_codec_archive]), so the per-codec shared types (an [enum], a
      synthesised [_RefByte_*] or [Se_*] element struct) stay confined to that
      unit and any set of codecs links without colliding on a duplicate
      definition. *)
-  Fmt.pf ppf "/* EverParse headers + default <Name>_Fields plug */@\n";
+  Fmt.pf ppf "/* EverParse headers + default <Name>_Fields visitor */@\n";
   List.iteri
     (fun i (s : Wire.Everparse.Raw.struct_) ->
       let base = String.capitalize_ascii (Wire.Everparse.Raw.struct_name s) in
@@ -160,7 +160,7 @@ let to_c_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   Format.pp_print_flush ppf ();
   Buffer.contents buf
 
-(* Compile each generated validator and [_Fields] plug in [schema_dir] as its
+(* Compile each generated validator and [_Fields] visitor in [schema_dir] as its
    own translation unit and archive them into [archive] (a [lib<name>.a], so a
    dune [(foreign_archives <name>)] links it). [wire_ffi.c] (see [to_c_stubs])
    includes only the headers and calls the validators across this link, so the

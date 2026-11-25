@@ -680,17 +680,6 @@ let test_byte_slice_negative_size () =
       Alcotest.fail
         "negative byte_slice size crashed instead of failing cleanly"
 
-(* A record whose sizes sum past [max_int] fails with an EOF that names more
-   bytes than the buffer holds. *)
-let check_eof_past_buffer name = function
-  | Ok _ -> Alcotest.failf "%s: accepted a record larger than any buffer" name
-  | Error (e : parse_error) -> (
-      match e.kind with
-      | Unexpected_eof { expected; got } ->
-          if expected <= got then
-            Alcotest.failf "%s: %a names no missing byte" name pp_parse_error e
-      | k -> Alcotest.failf "%s: expected an eof, got %a" name pp_error_kind k)
-
 type deep = { inner : deep option; big : Bytesrw.Bytes.Slice.t }
 
 (* [depth + 1] variable-size codecs nested in each other, each ending with a
@@ -721,15 +710,17 @@ let deep_top big depth =
     (fun body tail -> (body, tail))
     Codec.[ (body $ fun (b, _) -> b); (tail $ fun (_, t) -> t) ]
 
-(* A codec that no buffer can hold is refused when it is built. *)
+(* A codec that no buffer can hold is refused when it is built: past the
+   largest buffer or, for a size of 2^32 bytes or more, because 3D has no type
+   for it. *)
 let test_nested_codecs_past_largest_buffer () =
   List.iter
     (fun depth ->
       match deep_top (Sys.max_string_length - 1) depth with
       | _ -> Alcotest.failf "%d levels: built a codec no buffer can hold" depth
       | exception Invalid_argument msg ->
-          if not (Re.execp (Re.compile (Re.str "past the largest buffer")) msg)
-          then
+          let said s = Re.execp (Re.compile (Re.str s)) msg in
+          if not (said "past the largest buffer" || said "UINT64") then
             Alcotest.failf "%d levels: refused for another reason: %s" depth msg)
     [ 1; 32 ]
 
@@ -763,64 +754,76 @@ let test_sub_codec_min_size () =
   check_located_eof "validate" ~at:0 ~expected:4 ~got:2
     (Codec.validate sub_min_outer buf 0)
 
-type spans = {
-  a : Bytesrw.Bytes.Slice.t;
-  b : Bytesrw.Bytes.Slice.t;
-  c : Bytesrw.Bytes.Slice.t;
-  tl : UInt8.t;
-}
-
-let spans_tl = Codec.(Field.v "tl" uint8 $ fun r -> r.tl)
-
-(* Three spans, each sized by a field times 2^31. Two of the largest size
-   nearly fill a 63-bit int, and a third overflows it. *)
-let spans () =
-  let x1 = Field.v "x1" uint32be
-  and x2 = Field.v "x2" uint32be
-  and x3 = Field.v "x3" uint32be in
-  let k = 1 lsl 31 in
-  let span name x =
-    Field.v name (byte_slice ~size:Expr.(Field.ref x * int k))
-  in
-  Codec.v "Spans"
-    (fun _ _ _ a b c tl -> { a; b; c; tl })
-    Codec.
-      [
-        (x1 $ fun _ -> UInt32.zero);
-        (x2 $ fun _ -> UInt32.zero);
-        (x3 $ fun _ -> UInt32.zero);
-        (span "a" x1 $ fun r -> r.a);
-        (span "b" x2 $ fun r -> r.b);
-        (span "c" x3 $ fun r -> r.c);
-        spans_tl;
-      ]
-
-let spans_buf x3 =
-  let b = Bytes.make 13 '\042' in
-  Bytes.set_int32_be b 0 Int32.max_int;
-  Bytes.set_int32_be b 4 Int32.max_int;
-  Bytes.set_int32_be b 8 (Int32.of_int x3);
-  b
-
-let spans_past_max_int () =
-  let spans = spans () in
-  let buf = spans_buf 0 in
-  check_eof_past_buffer "decode" (Codec.decode spans buf 0);
-  check_eof_past_buffer "validate" (Codec.validate spans buf 0);
-  (* A third span of 2^32 bytes would wrap the sum to 0. [get] of the field
-     after the spans must still fail. *)
-  let buf = spans_buf 2 in
-  let get = Staged.unstage (Codec.get spans spans_tl) in
-  match get buf 0 with
-  | v ->
-      Alcotest.failf "get read %d from a field %d bytes past the buffer"
-        (UInt8.to_int v) max_int
-  | exception (Parse_error _ | Invalid_argument _) -> ()
-
-(* The sum under test needs 63-bit ints. On narrower ints the product
-   overflows first and is rejected as out of range. *)
+(* A span sized by a field times 2^31 needs a 64-bit size, which 3D does not
+   have, so the sizes of a codec's spans cannot sum past [max_int]: such a
+   codec is refused when it is built. *)
 let test_spans_past_max_int () =
-  if Sys.int_size >= 63 then spans_past_max_int ()
+  let x = Field.v "x" uint32be in
+  match
+    Codec.v "Spans"
+      (fun _ a -> a)
+      Codec.
+        [
+          (x $ fun _ -> UInt32.zero);
+          Field.v "a"
+            (byte_slice ~size:Expr.(Field.ref x * (int 0x4000 * int 0x2_0000)))
+          $ Fun.id;
+        ]
+  with
+  | _ -> Alcotest.fail "a span of a field times 2^31 was accepted"
+  | exception Invalid_argument _ -> ()
+
+(* A record with two faults reports the first in check order, the same from
+   the walk [decode] runs and from the general path: its fields in order, each
+   against its own bounds, then its [where] clause. *)
+let test_error_order () =
+  let len = Field.v "len" uint8 in
+  let c =
+    Codec.v "TwoFaults"
+      ~where:Expr.(Field.ref len <> int 3)
+      (fun l d -> (l, d))
+      Codec.
+        [ len $ fst; Field.v "data" (byte_array ~size:(Field.ref len)) $ snd ]
+  in
+  let answer f =
+    match f () with
+    | () -> "ok"
+    | exception Parse_error e -> Fmt.str "%a" pp_parse_error e
+  in
+  let answers c buf =
+    [
+      answer (fun () -> ignore (Codec.decode_exn c buf 0));
+      answer (fun () -> Codec.validate_exn c buf 0);
+    ]
+  in
+  let check name buf want =
+    Alcotest.(check (list string)) name [ want; want ] (answers c buf);
+    Alcotest.(check (list string))
+      (name ^ ", general") [ want; want ]
+      (answers (Private.Testing.general c) buf)
+  in
+  check "span past the end, where fails" (Bytes.of_string "\003a")
+    "@1: unexpected EOF: expected 3 bytes, got 1";
+  check "where fails" (Bytes.of_string "\003abc") "@0: where clause violated";
+  (* A scalar in a region too short for it is measured before it is read: its
+     read has no bounds check of its own. *)
+  let len = Field.v "len" uint8 in
+  let c =
+    Codec.v "ShortScalarRegion"
+      (fun l v -> (l, v))
+      Codec.
+        [
+          len $ fst;
+          Field.v "v" (nested_at_most ~size:(Field.ref len) uint16be) $ snd;
+        ]
+  in
+  Alcotest.(check (list string))
+    "scalar past its region"
+    [
+      "@2: unexpected EOF: expected 1 bytes, got 2";
+      "@2: unexpected EOF: expected 1 bytes, got 2";
+    ]
+    (answers c (Bytes.of_string "\001\255"))
 
 let suite =
   ( "codec_variable",
@@ -868,5 +871,8 @@ let suite =
         test_nested_codecs_past_largest_buffer;
       Alcotest.test_case "a sub-codec's fixed bytes count in min_size" `Quick
         test_sub_codec_min_size;
-      Alcotest.test_case "spans past max_int" `Quick test_spans_past_max_int;
+      Alcotest.test_case "spans past max_int refused" `Quick
+        test_spans_past_max_int;
+      Alcotest.test_case "errors: fields in order, then where" `Quick
+        test_error_order;
     ] )

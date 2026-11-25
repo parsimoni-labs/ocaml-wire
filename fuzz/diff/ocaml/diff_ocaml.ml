@@ -149,7 +149,7 @@ let specialisable_packed (Fuzz_gen.Pack g) = specialisable (Fuzz_gen.codec g)
 
 (* The EverParse backend's scope, less its refusal of field names the FFI
    pipeline spells alike: the generator names fields its own way and refuses
-   its own clashes, so a codec the plug alone refuses ([restrict] and
+   its own clashes, so a codec the visitor alone refuses ([restrict] and
    [restrict_]) is still compared here. *)
 let in_scope p =
   match Diff_codecs.scope_exclusion p with
@@ -504,7 +504,7 @@ let restrict (Reference r) fields got =
         (List.filter (fun (n, _) -> List.mem n known && List.mem n fields))
         got
 
-(* The plug members a reference states, each with the value its C member
+(* The visitor members a reference states, each with the value its C member
    holds: the field's low [bits] bits, so a signed field reads as its two's
    complement there, and an absent one as 0. *)
 let plug_snapshot (Reference r) fields pairs =
@@ -534,7 +534,7 @@ let scan_oracle (Reference r as ref_) oracle bounded value buf off len =
         string_of_int consumed (o.standalone buf off len);
       Option.iter
         (fun pairs ->
-          scan_same r.label "EverParse C plug scalars"
+          scan_same r.label "EverParse C visitor scalars"
             (fun l -> show_snapshot (Some l))
             (plug_snapshot ref_ o.fields pairs)
             (plug_snapshot ref_ o.fields members))

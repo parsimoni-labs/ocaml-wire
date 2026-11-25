@@ -433,8 +433,9 @@ let param_action_gens =
 
 (* Flat records shaped for a fast path each: a fixed span after the last
    data-sized one, a range check before a span sized by the data, a range
-   check before an enum check, a byte table, the widest
-   staged encode, and getters that answer differently on each call. *)
+   check before an enum check, a byte table, interval tests sharing a word,
+   the widest staged encode, and getters that answer differently on each
+   call. *)
 let flat_gens =
   let gen mks = Pack (snd (flat_of "Flat" mks)) in
   let wide16 = match wide 16 with Any a -> Pack a.g in
@@ -452,6 +453,16 @@ let flat_gens =
       gen [ range8_group ~lo:0 ~hi:10; enum8_group [ ("x", 0) ] ] );
     ( "flat_table",
       gen [ bits_group ~limits:[ 5; 20 ] Wire.U8 [ 3; 5 ]; u8_group ] );
+    ( "flat_words",
+      gen
+        [
+          bits_group ~limits:[ 9; 9 ] Wire.U8 [ 4; 4 ];
+          range8_group ~lo:10 ~hi:200;
+          range16s_group ~lo:(-300) ~hi:1000;
+          fixed_bytes_group ~slice:false 2;
+          u16be_group;
+          range8_group ~lo:1 ~hi:100;
+        ] );
     ("flat_wide16", wide16);
     ( "flat_impure",
       Pack

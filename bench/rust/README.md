@@ -20,12 +20,16 @@ record the compiler versions. All rows must agree on the checksum of each
 corpus family. Keep validation, fragment handling and checksum work
 identical when changing an implementation.
 
-`make bench-rust BUILD_EVERPARSE=1` adds the EverParse C row
+`make bench-rust BUILD_EVERPARSE=1` adds the two EverParse C rows
 (`everparse/`): the validator EverParse verifies and extracts from the same
-`Packet_stack.codec`, called once per slot in a C loop, with every field
-read from the default `EthernetStack_Fields` plug, nested IPv4, TCP and UDP
-members and presence flags included. It times its passes in C, as the Rust
-harness does, and prints the same `RESULT` lines.
+`Packet_stack.codec`, called once per slot in a C loop. `EverParse C,
+default visitor` reads every field from the default `EthernetStack_Fields`
+visitor, nested IPv4, TCP and UDP members and presence flags included.
+`EverParse C, inline visitor` (`everparse/stack_inline.c`) reads the same
+members from a visitor copied from the shipped `EthernetStack_Fields.c` and
+trimmed to them, its setters `static inline` in the validator's translation
+unit. Both time their passes in C, as the Rust harness does, and print the
+same `RESULT` lines.
 
 ## Measurements
 
@@ -96,11 +100,12 @@ Instructions / cycles per packet, ordered by the instructions on
 | wire.ocaml fused stack, unboxed API, OxCaml | 141 / 38.1 | 141 / 31.6 | 139 / 39.7 | 139 / 24.5 |
 | wire.ocaml selected outputs, fold, OCaml | 143 / 43.0 | 143 / 36.0 | 142 / 44.9 | 142 / 29.4 |
 | wire.ocaml View.check/view, linked headers, OxCaml | 164 / 47.7 | 164 / 40.8 | 161 / 51.8 | 161 / 35.5 |
+| EverParse C, inline visitor | 165 / 36.1 | 165 / 30.7 | 164 / 36.5 | 165 / 25.1 |
 | wire.ocaml View.check/view, linked headers, OCaml | 212 / 58.1 | 212 / 50.2 | 209 / 60.5 | 209 / 43.6 |
 | wire.ocaml View.check/view, linked headers, OCaml flambda | 224 / 58.1 | 224 / 51.0 | 220 / 61.7 | 220 / 47.5 |
 | wire.ocaml fused stack, OCaml flambda | 273 / 65.0 | 272 / 57.9 | 268 / 67.8 | 268 / 50.9 |
 | wire.ocaml fused stack, OCaml | 477 / 129 | 477 / 121 | 471 / 130 | 471 / 112 |
-| EverParse C, default plug | 677 / 120 | 676 / 113 | 687 / 121 | 688 / 107 |
+| EverParse C, default visitor | 678 / 121 | 678 / 115 | 689 / 124 | 688 / 108 |
 | Wire.Codec check/read, linked headers, OCaml | 681 / 139 | 681 / 130 | 670 / 136 | 669 / 117 |
 | Wire.Codec check/read, linked headers, OxCaml | 713 / 142 | 713 / 133 | 701 / 142 | 700 / 124 |
 | Wire.Codec check/read, linked headers, OCaml flambda | 740 / 146 | 740 / 141 | 727 / 148 | 727 / 130 |
@@ -113,12 +118,18 @@ Every row gave checksum `886803207481188` on both `fixed64` corpora and
 instructions on the random and the sorted order of a family; the sorted
 order saves cycles where the branches on the kind of packet predict.
 
-The EverParse C row is `make bench-rust-count BUILD_EVERPARSE=1`, counted
-the same way at the same commit with EverParse 3d v2026.10.27; its C was
-compiled by Apple clang 21.0.0 at `-O2`.
-Each field reaches the plug through an out-of-line setter in another
-translation unit, 30 calls for a TCP packet, and the plug is zeroed per
-slot; the run does not separate that cost from the validator's own.
+The two EverParse C rows are `make bench-rust-count BUILD_EVERPARSE=1`,
+counted the same way at commit `5dc37350` with the inline-visitor row added,
+the median of five runs, under a load average of 310 to 340, with EverParse
+3d v2026.10.27; their C was compiled by Apple clang 21.0.0 at `-O2`. The
+default-visitor row counted within 0.5% of its instructions at `5dc37350`
+itself. In the default-visitor row each field reaches the visitor through an
+out-of-line setter in another translation unit, 30 calls for a TCP packet,
+and the whole 35-member visitor is zeroed per slot. The inline-visitor row
+compiles the setters into the validator, where each folds to one store or
+none, and zeroes a struct of the 19 members it reads: the 513 instructions
+per packet between the two rows are the visitor, and the inline-visitor row's 165
+are the validator's own work.
 
 The `fold` and `batch` rows call the scanner's `fold_step` and
 `fold_frames_step`, which call the checksum module `Step` by name. Stock

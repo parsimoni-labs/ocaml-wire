@@ -20,7 +20,6 @@ type t =
       at : pos;
       window : string;
       size_var : string;
-      overflows : bool;
       bound : bound;
     }
   | Shared_words of {
@@ -45,6 +44,7 @@ type t =
       at : pos;
       window : string;
       cases : int;
+      conditions : bool T.expr list;
       choice : choice;
       join : join;
       hoisted : int T.expr option;
@@ -55,7 +55,7 @@ type t =
       need : int;
       frames : int;
       short : short_frames option;
-      ahead : string list;
+      ahead : (string * int * int) list;
     }
 
 let pp_pos ppf p =
@@ -99,11 +99,9 @@ let pp ppf = function
   | Prefix_bound { at; window; bytes; tested } ->
       Fmt.pf ppf "prefix at %a in %s: %d bytes, %s" pp_pos at window bytes
         (if tested then "tested" else "known")
-  | Span_bound { size; at; window; size_var; overflows; bound } ->
-      Fmt.pf ppf "span at %a in %s: %a bytes as %s%s, %a" pp_pos at window
-        T.pp_expr size size_var
-        (if overflows then " (checked arithmetic)" else "")
-        pp_bound bound
+  | Span_bound { size; at; window; size_var; bound } ->
+      Fmt.pf ppf "span at %a in %s: %a bytes as %s, %a" pp_pos at window
+        T.pp_expr size size_var pp_bound bound
   | Shared_words { at; constant; lo; hi; window; fields = _; held; loads } ->
       Fmt.pf ppf "words at %d%s in %s, within [%d, %d]: load %a, hold %a" at
         (if constant then "" else " from a variable")
@@ -111,7 +109,7 @@ let pp ppf = function
   | Word_range { at; window; first; second; lo; hi } ->
       Fmt.pf ppf "word range at %a in %s: %s and %s in [%d, %d]" pp_pos at
         window first second lo hi
-  | Dispatch { at; window; cases; choice; join; hoisted } ->
+  | Dispatch { at; window; cases; conditions = _; choice; join; hoisted } ->
       Fmt.pf ppf "dispatch at %a in %s: %d case%s, %s%a: %a" pp_pos at window
         cases (plural cases)
         (match join with Joined -> "joined" | Copied -> "copied")
@@ -126,5 +124,8 @@ let pp ppf = function
         short
         Fmt.(
           if ahead = [] then nop
-          else any ", reads ahead " ++ list ~sep:(any ", ") string)
+          else
+            any ", reads ahead "
+            ++ list ~sep:(any ", ") (fun ppf (v, k, n) ->
+                pf ppf "%s (%d bytes at %d)" v n k))
         ahead

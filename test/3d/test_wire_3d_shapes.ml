@@ -25,7 +25,8 @@ let contains s sub =
 
 (* [Action.var name e] must not project to [var name = e;] -- 3D's [var]
    binds an atomic action, not a pure expression. The DSL combinator [Var]
-   has to be lowered by inlining the bound expression at every use site. *)
+   has to be lowered by inlining the bound expression at every use site,
+   widened as the arithmetic of its uses needs. *)
 let test_var_inlines () =
   let f_a = field "Tag" uint8 in
   let f_b = field "Value" uint16be in
@@ -51,7 +52,7 @@ let test_var_inlines () =
     "no [var x = ...] in 3D output" false (contains out "var x");
   Alcotest.(check bool)
     "x usage replaced by inlined expression" true
-    (contains out "(Tag + Value) + 1")
+    (contains out "((((UINT32) Tag) + ((UINT32) Value)) + 1)")
 
 (* Var bindings inside if-branches must not leak between sibling branches. *)
 let test_var_scoping_in_if () =
@@ -80,10 +81,10 @@ let test_var_scoping_in_if () =
   Alcotest.(check bool) "no var leak" false (contains out "var x");
   Alcotest.(check bool)
     "inlined inside then-branch" true
-    (contains out "*out = (Tag + 7);");
+    (contains out "*out = (((UINT16) Tag) + 7);");
   Alcotest.(check bool)
     "inlined inside cond" true
-    (contains out "(Tag + 7) > 100")
+    (contains out "(((UINT16) Tag) + 7) > 100")
 
 (* Struct-level [where] referencing fields must lower to a constraint on
    the latest referenced field, not stay at struct level. 3D's [where]
@@ -371,7 +372,7 @@ let test_extern_names_wrapped () =
 
 (* Since v2026.10, EverParse does not declare the extern setters in the order
    the schema references them, and it CamelCases a snake-case schema name in
-   them. Each setter of the plug takes the declared name equal to its own up to
+   them. Each setter of the visitor takes the declared name equal to its own up to
    case and underscores, and with it its own value type. *)
 let test_extern_names_by_name () =
   let schema =
@@ -412,7 +413,7 @@ let test_extern_names_by_name () =
               c_type)))
     setters
 
-(* The default plug of a schema, written next to a stand-in for the
+(* The default visitor of a schema, written next to a stand-in for the
    [_ExternalAPI.h] 3d.exe would emit, which declares each setter under its
    own name. *)
 let plug_of fields =
@@ -456,7 +457,7 @@ let plug_of fields =
       in
       (header, read_file (Filename.concat dir "Kw_Fields.c"), compiles))
 
-(* The plug names a field three ways: the [_IDX_] macro upper-cases it, so [X]
+(* The visitor names a field three ways: the [_IDX_] macro upper-cases it, so [X]
    and [x] would define one macro twice, which is refused naming the two
    fields. The struct member escapes C's keywords injectively, so [restrict]
    and [restrict_] are the members [restrict_] and [restrict__]. *)
@@ -496,7 +497,7 @@ let test_plug_names () =
   Alcotest.(check bool)
     "macro keeps the field name" true
     (contains header "#define KW_IDX_RESTRICT 1");
-  Alcotest.(check bool) "the plug header compiles as C23" true compiles
+  Alcotest.(check bool) "the visitor header compiles as C23" true compiles
 
 (* A field named for an F* keyword reaches the F* EverParse writes once a
    constraint reads it, and [typeof] reaches the C, where GNU C and C23 read
@@ -526,7 +527,7 @@ let test_keyword_fields_e2e () =
           Filename.null Filename.null
       in
       Alcotest.(check int) "the validator compiles" 0 (compile "KwEnd.c");
-      Alcotest.(check int) "the plug compiles" 0 (compile "KwEnd_Fields.c"))
+      Alcotest.(check int) "the visitor compiles" 0 (compile "KwEnd_Fields.c"))
 
 let suite =
   ( "wire_3d_shapes",
@@ -560,7 +561,7 @@ let suite =
       Alcotest.test_case "bare uint64 projects" `Slow test_bare_uint64_projects;
       Alcotest.test_case "nested field projects through EverParse" `Slow
         test_nested_field_projects;
-      Alcotest.test_case "plug: field names" `Quick test_plug_names;
+      Alcotest.test_case "visitor: field names" `Quick test_plug_names;
       Alcotest.test_case "keyword field names (needs 3d.exe)" `Quick
         test_keyword_fields_e2e;
     ] )

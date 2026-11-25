@@ -194,6 +194,33 @@ let range8_group ~lo ~hi =
         });
   }
 
+(* An [int16be] whose own constraint keeps it in [lo, hi]: an interval test
+   on a signed field. *)
+let range16s_group ~lo ~hi =
+  {
+    glabel = Fmt.str "rngs%d_%d" lo hi;
+    mk =
+      (fun p ->
+        {
+          columns =
+            [
+              int_column p Wire.int16be ~of_int:Wire.SInt16.v
+                ~to_int:Wire.SInt16.to_int ~self_constraint:(fun r ->
+                  Wire.Expr.(r >= Wire.int lo && r <= Wire.int hi));
+            ];
+          cells = one_int lo (hi - lo + 1);
+          hostile =
+            Some
+              (Alcobar.choose
+                 (List.filter_map
+                    (fun v ->
+                      if v >= -0x8000 && v <= 0x7FFF && (v < lo || v > hi) then
+                        Some (Alcobar.const [ Int v ])
+                      else None)
+                    [ lo - 1; hi + 1; -0x8000; 0x7FFF ]));
+        });
+  }
+
 (* A [uint8] with a constraint no interval states: a general check step. *)
 let even8_group =
   {

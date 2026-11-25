@@ -26,9 +26,11 @@
 
     A refusal is an [Error] value: [TooShort], [Constraint] naming the field and
     its offset (the empty name for the codec's [where] clause), [InvalidEnum]
-    with the value, [Overflow] when a constraint's arithmetic leaves the 63-bit
-    integers the codec computes on, which it rejects too, and [OutOfRange] for a
-    write. Errors come in the codec's order. *)
+    with the value, and [OutOfRange] for a write. Errors come in the codec's
+    order. A constraint's arithmetic that can leave the 63-bit ints of the
+    64-bit host that runs the generator is computed on [u64], as the codec
+    computes it on 64 bits; the module's fixed-width integers then compute it
+    alike on every target. *)
 
 val ident : string -> string
 (** [ident name] is the Rust name the module derives from the field [name]

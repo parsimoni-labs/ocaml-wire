@@ -27,6 +27,21 @@ module Packet_stack = struct
     Field.v "data_offset" (bits ~width:4 U16be) ~self_constraint:(fun x ->
         Expr.(x >= int 5))
 
+  let tcp_src_port = Codec.(Field.v "src_port" uint16be $ fun r -> r.src_port)
+  let tcp_dst_port = Codec.(Field.v "dst_port" uint16be $ fun r -> r.dst_port)
+  let tcp_seq = Codec.(Field.v "seq" uint32be $ fun r -> r.seq)
+  let tcp_ack = Codec.(Field.v "ack" uint32be $ fun r -> r.ack)
+  let tcp_data_offset = Codec.(data_offset $ fun r -> r.data_offset)
+
+  let tcp_flags =
+    Codec.(Field.v "flags" (bits ~width:9 U16be) $ fun r -> r.flags)
+
+  let tcp_options =
+    Codec.(
+      Field.v "options"
+        (byte_slice ~size:Expr.((Field.ref data_offset lsl int 2) - int 20))
+      $ fun r -> r.options)
+
   let tcp =
     Codec.v "StackTCP"
       (fun src_port dst_port seq ack data_offset reserved flags window checksum
@@ -46,20 +61,17 @@ module Packet_stack = struct
         })
       Codec.
         [
-          (Field.v "src_port" uint16be $ fun r -> r.src_port);
-          (Field.v "dst_port" uint16be $ fun r -> r.dst_port);
-          (Field.v "seq" uint32be $ fun r -> r.seq);
-          (Field.v "ack" uint32be $ fun r -> r.ack);
-          (data_offset $ fun r -> r.data_offset);
+          tcp_src_port;
+          tcp_dst_port;
+          tcp_seq;
+          tcp_ack;
+          tcp_data_offset;
           (Field.v "reserved" (bits ~width:3 U16be) $ fun r -> r.reserved);
-          (Field.v "flags" (bits ~width:9 U16be) $ fun r -> r.flags);
+          tcp_flags;
           (Field.v "window" uint16be $ fun r -> r.window);
           (Field.v "checksum" uint16be $ fun r -> r.checksum);
           (Field.v "urgent" uint16be $ fun r -> r.urgent);
-          ( Field.v "options"
-              (byte_slice
-                 ~size:Expr.((Field.ref data_offset lsl int 2) - int 20))
-          $ fun r -> r.options );
+          tcp_options;
         ]
 
   type udp = {
@@ -73,19 +85,25 @@ module Packet_stack = struct
   let udp_length =
     Field.v "length" uint16be ~self_constraint:(fun x -> Expr.(x >= int 8))
 
+  let udp_src_port = Codec.(Field.v "src_port" uint16be $ fun r -> r.src_port)
+  let udp_length_f = Codec.(udp_length $ fun r -> r.length)
+
+  let udp_payload =
+    Codec.(
+      Field.v "payload" (byte_slice ~size:Expr.(Field.ref udp_length - int 8))
+      $ fun r -> r.payload)
+
   let udp =
     Codec.v "StackUDP"
       (fun src_port dst_port length checksum payload ->
         { src_port; dst_port; length; checksum; payload })
       Codec.
         [
-          (Field.v "src_port" uint16be $ fun r -> r.src_port);
+          udp_src_port;
           (Field.v "dst_port" uint16be $ fun r -> r.dst_port);
-          (udp_length $ fun r -> r.length);
+          udp_length_f;
           (Field.v "checksum" uint16be $ fun r -> r.checksum);
-          ( Field.v "payload"
-              (byte_slice ~size:Expr.(Field.ref udp_length - int 8))
-          $ fun r -> r.payload );
+          udp_payload;
         ]
 
   type ipv4 = {
@@ -150,6 +168,29 @@ module Packet_stack = struct
       opaque;
     }
 
+  let ipv4_total_length = Codec.(total_length $ fun r -> r.total_length)
+  let ipv4_ttl = Codec.(Field.v "ttl" uint8 $ fun r -> r.ttl)
+  let ipv4_protocol = Codec.(protocol $ fun r -> r.protocol)
+  let ipv4_src = Codec.(Field.v "src" uint32be $ fun r -> r.src)
+
+  let ipv4_options =
+    Codec.(
+      Field.v "options"
+        (byte_slice ~size:Expr.((Field.ref ihl lsl int 2) - int 20))
+      $ fun r -> r.options)
+
+  let ipv4_tcp =
+    Codec.(
+      Field.optional "tcp" ~present:is_tcp
+        (nested_at_most ~size:payload_size (codec tcp))
+      $ fun r -> r.tcp)
+
+  let ipv4_udp =
+    Codec.(
+      Field.optional "udp" ~present:is_udp
+        (nested_at_most ~size:payload_size (codec udp))
+      $ fun r -> r.udp)
+
   let ipv4 =
     Codec.v "StackIPv4" ipv4_of_fields
       Codec.
@@ -160,24 +201,18 @@ module Packet_stack = struct
           (ihl $ fun r -> r.ihl);
           (Field.v "dscp" (bits ~width:6 U8) $ fun r -> r.dscp);
           (Field.v "ecn" (bits ~width:2 U8) $ fun r -> r.ecn);
-          (total_length $ fun r -> r.total_length);
+          ipv4_total_length;
           (Field.v "identification" uint16be $ fun r -> r.identification);
           (flags $ fun r -> r.flags);
           (fragment_offset $ fun r -> r.fragment_offset);
-          (Field.v "ttl" uint8 $ fun r -> r.ttl);
-          (protocol $ fun r -> r.protocol);
+          ipv4_ttl;
+          ipv4_protocol;
           (Field.v "checksum" uint16be $ fun r -> r.checksum);
-          (Field.v "src" uint32be $ fun r -> r.src);
+          ipv4_src;
           (Field.v "dst" uint32be $ fun r -> r.dst);
-          ( Field.v "options"
-              (byte_slice ~size:Expr.((Field.ref ihl lsl int 2) - int 20))
-          $ fun r -> r.options );
-          ( Field.optional "tcp" ~present:is_tcp
-              (nested_at_most ~size:payload_size (codec tcp))
-          $ fun r -> r.tcp );
-          ( Field.optional "udp" ~present:is_udp
-              (nested_at_most ~size:payload_size (codec udp))
-          $ fun r -> r.udp );
+          ipv4_options;
+          ipv4_tcp;
+          ipv4_udp;
           ( Field.optional "opaque"
               ~present:Expr.(not (is_tcp || is_udp))
               (byte_slice ~size:payload_size)
@@ -193,18 +228,27 @@ module Packet_stack = struct
 
   let ether_type = Field.v "ether_type" uint16be
 
+  let eth_src =
+    Codec.(Field.v "src" (byte_slice ~size:(int 6)) $ fun r -> r.src)
+
+  let eth_ether_type = Codec.(ether_type $ fun r -> r.ether_type)
+
+  let eth_ipv4 =
+    Codec.(
+      Field.optional "ipv4"
+        ~present:Expr.(Field.ref ether_type = int 0x0800)
+        (codec ipv4)
+      $ fun r -> r.ipv4)
+
   let codec =
     Codec.v "EthernetStack"
       (fun dst src ether_type ipv4 -> { dst; src; ether_type; ipv4 })
       Codec.
         [
           (Field.v "dst" (byte_slice ~size:(int 6)) $ fun r -> r.dst);
-          (Field.v "src" (byte_slice ~size:(int 6)) $ fun r -> r.src);
-          (ether_type $ fun r -> r.ether_type);
-          ( Field.optional "ipv4"
-              ~present:Expr.(Field.ref ether_type = int 0x0800)
-              (codec ipv4)
-          $ fun r -> r.ipv4 );
+          eth_src;
+          eth_ether_type;
+          eth_ipv4;
         ]
 end
 
@@ -358,9 +402,10 @@ let stack_answers =
       stack_answer unit (validate Packet_stack.ipv4 input 14);
     ]
 
-(* The answers on the corpus, as one digest, the same on every int width. Changing how the interpreter runs
-   must not change what it answers: a value, an acceptance or a first error
-   (offset, field path and kind) that moves changes the digest. *)
+(* The answers on the corpus, as one digest, the same on every int width: a
+   tripwire, not a contract. A value, an acceptance or a first error (offset,
+   field path and kind) that moves changes it, and the commit that updates it
+   says which answers moved and why. *)
 let test_stack_answers_pinned () =
   let lines = List.concat_map stack_answers stack_inputs in
   let oks =
@@ -369,7 +414,7 @@ let test_stack_answers_pinned () =
   Alcotest.(check int) "answers" 19250 (List.length lines);
   Alcotest.(check int) "accepted" 15088 oks;
   Alcotest.(check string)
-    "digest" "bbe5dae3ba1f2e29c38b4a137661ea0c"
+    "digest" "2062c405835d450cadb1ec84c0003d07"
     (Digest.to_hex (Digest.string (String.concat "\n" lines)))
 
 (* The stack, and a frame around it, decode through the walk, so the answers
@@ -383,6 +428,140 @@ let test_stack_walks () =
       ("ipv4", Private.Testing.paths Packet_stack.ipv4);
       ("frame", Private.Testing.paths (stack_frame (int 64) "StackFrame"));
     ]
+
+(* The fields a view of each layer reads, from a decoded stack. *)
+let show_read (p : Packet_stack.t) =
+  let tcp (t : Packet_stack.tcp) =
+    Fmt.str "tcp %d %d %a %a %d %d %s" (UInt16.to_int t.src_port)
+      (UInt16.to_int t.dst_port) u32 t.seq u32 t.ack t.data_offset t.flags
+      (hex_slice t.options)
+  in
+  let udp (u : Packet_stack.udp) =
+    Fmt.str "udp %d %d %s" (UInt16.to_int u.src_port) (UInt16.to_int u.length)
+      (hex_slice u.payload)
+  in
+  let ipv4 (ip : Packet_stack.ipv4) =
+    Fmt.str "ipv4 %d %d %d %a %s [%s] [%s]"
+      (UInt16.to_int ip.total_length)
+      (UInt8.to_int ip.ttl) (UInt8.to_int ip.protocol) u32 ip.src
+      (hex_slice ip.options)
+      (Option.fold ~none:"" ~some:tcp ip.tcp)
+      (Option.fold ~none:"" ~some:udp ip.udp)
+  in
+  Fmt.str "eth %s %d [%s]" (hex_slice p.src)
+    (UInt16.to_int p.ether_type)
+    (Option.fold ~none:"" ~some:ipv4 p.ipv4)
+
+(* The stack read through checked views. [View.check] of the stack, and of a
+   frame around it, accepts what [validate] accepts; on an accepted record each
+   layer [View.enter] reaches reads the fields [decode] gives, and an absent
+   layer is refused. *)
+let test_stack_views () =
+  let module V = Codec.View in
+  let module P = Packet_stack in
+  let packet =
+    Codec.(
+      Field.v "packet" (nested_at_most ~size:(int 64) (codec P.codec)) $ Fun.id)
+  in
+  let frame = Codec.v "StackViewFrame" Fun.id [ packet ] in
+  let module F = (val V.codec frame) in
+  let module E = (val V.codec P.codec) in
+  let module Ip = (val V.codec P.ipv4) in
+  let module Tcp = (val V.codec P.tcp) in
+  let module Udp = (val V.codec P.udp) in
+  let in_frame = V.sub F.codec E.codec packet in
+  let ip = V.sub_option E.codec Ip.codec P.eth_ipv4 in
+  let tcp = V.sub_option Ip.codec Tcp.codec P.ipv4_tcp in
+  let udp = V.sub_option Ip.codec Udp.codec P.ipv4_udp in
+  let eth_src = V.field E.codec P.eth_src
+  and ether_type = V.field E.codec P.eth_ether_type
+  and ip_len = V.field Ip.codec P.ipv4_total_length
+  and ip_ttl = V.field Ip.codec P.ipv4_ttl
+  and ip_proto = V.field Ip.codec P.ipv4_protocol
+  and ip_src = V.field Ip.codec P.ipv4_src
+  and ip_options = V.field Ip.codec P.ipv4_options
+  and tcp_sp = V.field Tcp.codec P.tcp_src_port
+  and tcp_dp = V.field Tcp.codec P.tcp_dst_port
+  and tcp_seq = V.field Tcp.codec P.tcp_seq
+  and tcp_ack = V.field Tcp.codec P.tcp_ack
+  and tcp_off = V.field Tcp.codec P.tcp_data_offset
+  and tcp_flags = V.field Tcp.codec P.tcp_flags
+  and tcp_options = V.field Tcp.codec P.tcp_options
+  and udp_sp = V.field Udp.codec P.udp_src_port
+  and udp_len = V.field Udp.codec P.udp_length_f
+  and udp_payload = V.field Udp.codec P.udp_payload in
+  let view input off ~framed =
+    let (Buf.Any b) = Buf.v input in
+    let len = Buf.length b in
+    let layer k show = if V.ok k then show (V.get k) else "" in
+    let tcp_of t =
+      Fmt.str "tcp %d %d %a %a %d %d %s"
+        (UInt16.to_int (V.read tcp_sp b t))
+        (UInt16.to_int (V.read tcp_dp b t))
+        u32 (V.read tcp_seq b t) u32 (V.read tcp_ack b t) (V.read tcp_off b t)
+        (V.read tcp_flags b t)
+        (hex_slice (V.read tcp_options b t))
+    in
+    let udp_of u =
+      Fmt.str "udp %d %d %s"
+        (UInt16.to_int (V.read udp_sp b u))
+        (UInt16.to_int (V.read udp_len b u))
+        (hex_slice (V.read udp_payload b u))
+    in
+    let ipv4_of r =
+      Fmt.str "ipv4 %d %d %d %a %s [%s] [%s]"
+        (UInt16.to_int (V.read ip_len b r))
+        (UInt8.to_int (V.read ip_ttl b r))
+        (UInt8.to_int (V.read ip_proto b r))
+        u32 (V.read ip_src b r)
+        (hex_slice (V.read ip_options b r))
+        (layer (V.enter tcp b len r) tcp_of)
+        (layer (V.enter udp b len r) udp_of)
+    in
+    let eth_of e =
+      Fmt.str "eth %s %d [%s]"
+        (hex_slice (V.read eth_src b e))
+        (UInt16.to_int (V.read ether_type b e))
+        (layer (V.enter ip b len e) ipv4_of)
+    in
+    if framed then
+      let k = V.check F.codec b len off in
+      if V.ok k then Some (layer (V.enter in_frame b len (V.get k)) eth_of)
+      else None
+    else
+      let k = V.check E.codec b len off in
+      if V.ok k then Some (eth_of (V.get k)) else None
+  in
+  let decoded c input off =
+    Result.to_option (Codec.decode c input off) |> Option.map show_read
+  in
+  let check name input off ~framed c =
+    Alcotest.(check (option string))
+      name (decoded c input off) (view input off ~framed)
+  in
+  List.iteri
+    (fun i input ->
+      let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
+      check (Fmt.str "stack %d" i) input 0 ~framed:false P.codec;
+      check (Fmt.str "stack %d at 2" i) shifted 2 ~framed:false P.codec;
+      check (Fmt.str "frame %d" i) input 0 ~framed:true frame)
+    stack_inputs;
+  let raises f =
+    match f () with _ -> false | exception Invalid_argument _ -> true
+  in
+  let other =
+    Codec.v "OtherStack"
+      (fun ether_type : P.t ->
+        { dst = Slice.eod; src = Slice.eod; ether_type; ipv4 = None })
+      Codec.[ (Field.v "ether_type" uint16be $ fun (r : P.t) -> r.ether_type) ]
+  in
+  let module O = (val V.codec other) in
+  Alcotest.(check bool)
+    "a field of another codec" true
+    (raises (fun () -> V.sub_option O.codec Ip.codec P.eth_ipv4));
+  Alcotest.(check bool)
+    "a field holding another codec" true
+    (raises (fun () -> V.sub F.codec O.codec packet))
 
 (* A fixed span after one sized by an earlier field: the walk reads the latter
    where the fixed fields before it end, not at the record's minimum size, and
@@ -481,6 +660,136 @@ let test_walk_shared_gates () =
         [ 0; 1; 2 ])
     [ 0; 1; 2 ]
 
+(* A frame is checked against its own region, whatever the buffer holds after
+   it: each input, as a frame of its own length, answers the same at the end of
+   its buffer, where the region and the buffer end together, as in front of
+   more packets. *)
+let test_region_bounds_nested () =
+  let trailer = Bytes.concat Bytes.empty stack_seeds in
+  let answer frame buf =
+    let decode () = Codec.decode_exn frame buf 0 in
+    let validate () = Codec.validate_exn frame buf 0 in
+    [ stack_answer show_stack decode; stack_answer (fun () -> "") validate ]
+    |> String.concat " / "
+  in
+  List.iter
+    (fun input ->
+      let n = Bytes.length input in
+      let frame = stack_frame (int n) "StackRegionFrame" in
+      Alcotest.(check string)
+        (Fmt.str "frame of %d bytes" n)
+        (answer frame input)
+        (answer frame (Bytes.cat input trailer)))
+    stack_inputs;
+  (* TCP without options in an IPv4 payload of 10 bytes: the TCP header counts
+     the 10 bytes of its region, not the 30 left in the frame. *)
+  let short = Bytes.copy (List.nth stack_seeds 4) in
+  Bytes.set_uint16_be short 16 30;
+  let expected =
+    Fmt.str "error %a" pp_parse_error
+      (eof ~at:34 ~field:[ "packet"; "ipv4"; "tcp" ] ~expected:20 ~got:10 ())
+  in
+  Alcotest.(check string)
+    "short TCP region"
+    (String.concat " / " [ expected; expected ])
+    (answer (stack_frame (int 64) "StackRegionFrame") short)
+
+(* Each sub-record [View.enter] places past regions, spans and sub-codecs
+   that measure themselves, present or absent: it reads the fields [decode]
+   gives, and an absent one is refused. *)
+let test_enter_past_regions () =
+  let module V = Codec.View in
+  let k = Field.v "k" uint8 in
+  let k_f = Codec.(k $ fun k -> UInt8.v k) in
+  let inner =
+    Codec.v "Inner"
+      (fun k _ -> UInt8.to_int k)
+      Codec.
+        [
+          (k $ fun k -> UInt8.v k);
+          (Field.v "body" (byte_slice ~size:(Field.ref k)) $ fun _ -> Slice.eod);
+        ]
+  in
+  let g = Field.v "g" uint8 and r = Field.v "r" uint8 in
+  let bit n = Expr.(Field.ref g land int n = int n) in
+  let a =
+    Codec.(
+      Field.optional "a" ~present:(bit 1)
+        (nested_at_most ~size:(Field.ref r) (codec inner))
+      $ fun (_, _, a, _, _, _, _) -> a)
+  and b = Codec.(Field.v "b" (codec inner) $ fun (_, _, _, b, _, _, _) -> b)
+  and c =
+    Codec.(
+      Field.optional "c" ~present:(bit 2) (codec inner)
+      $ fun (_, _, _, _, _, c, _) -> c)
+  and d = Codec.(Field.v "d" (codec inner) $ fun (_, _, _, _, _, _, d) -> d) in
+  let outer =
+    Codec.v "Outer"
+      (fun g r a b _ c d -> (g, r, a, b, (), c, d))
+      Codec.
+        [
+          (g $ fun (g, _, _, _, _, _, _) -> g);
+          (r $ fun (_, r, _, _, _, _, _) -> r);
+          a;
+          b;
+          (Field.v "s" (byte_slice ~size:(Field.ref r)) $ fun _ -> Slice.eod);
+          c;
+          d;
+        ]
+  in
+  Alcotest.(check bool)
+    "walks" true
+    (List.mem "decode.walk" (Private.Testing.paths outer));
+  let module O = (val V.codec outer) in
+  let module I = (val V.codec inner) in
+  let in_a = V.sub_option O.codec I.codec a
+  and in_b = V.sub O.codec I.codec b
+  and in_c = V.sub_option O.codec I.codec c
+  and in_d = V.sub O.codec I.codec d
+  and vk = V.field I.codec k_f in
+  let show (_, _, a, b, _, c, d) =
+    let o = Option.fold ~none:"-" ~some:string_of_int in
+    Fmt.str "%s %d %s %d" (o a) b (o c) d
+  in
+  let viewed input =
+    let (Buf.Any buf) = Buf.v input in
+    let len = Buf.length buf in
+    let ck = V.check O.codec buf len 0 in
+    if not (V.ok ck) then None
+    else
+      let o = V.get ck in
+      let read e =
+        if V.ok e then Some (UInt8.to_int (V.read vk buf (V.get e))) else None
+      in
+      let get e = Option.get (read e) in
+      Some
+        (show
+           ( (),
+             (),
+             read (V.enter in_a buf len o),
+             get (V.enter in_b buf len o),
+             (),
+             read (V.enter in_c buf len o),
+             get (V.enter in_d buf len o) ))
+  in
+  let decoded input =
+    match Codec.decode outer input 0 with
+    | Ok v -> Some (show v)
+    | Error _ -> None
+  in
+  let rnd = Random.State.make [| 11 |] in
+  for i = 1 to 5_000 do
+    let input =
+      Bytes.init
+        (2 + Random.State.int rnd 14)
+        (fun j ->
+          Char.chr
+            (if j = 0 then Random.State.int rnd 4 else Random.State.int rnd 4))
+    in
+    Alcotest.(check (option string))
+      (Fmt.str "input %d" i) (decoded input) (viewed input)
+  done
+
 let suite =
   ( "codec_stack",
     [
@@ -490,6 +799,12 @@ let suite =
         test_walk_trailer;
       Alcotest.test_case "stack: decode walks each layer once" `Quick
         test_stack_walks;
+      Alcotest.test_case "view: enter past regions and sub-codecs" `Quick
+        test_enter_past_regions;
+      Alcotest.test_case "stack: views read what decode reads" `Quick
+        test_stack_views;
       Alcotest.test_case "stack: every entry point's answers are pinned" `Quick
         test_stack_answers_pinned;
+      Alcotest.test_case "stack: a nested header is bounded by its region"
+        `Quick test_region_bounds_nested;
     ] )

@@ -2,7 +2,6 @@
    codec are both a [Wire.S], on random buffers, on OCaml as on OxCaml. *)
 
 open Wire
-module Buf = Wire_runtime.Buf
 
 let outcome f =
   match f () with

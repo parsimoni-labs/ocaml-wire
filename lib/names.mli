@@ -1,13 +1,14 @@
 (** Identifiers that generated code derives from field names.
 
     Each code generator spells a field's name into the identifiers of its
-    target: 3D and the F* EverParse writes from it, the C of a plug, the OCaml
-    of a stub. Escaping is injective: a keyword gets a trailing underscore, and
-    so does every name that is a keyword followed by underscores, so [end],
-    [end_] and [end__] stay three names ([end_], [end__], [end___]) in every
-    target. Folding case or replacing characters a target cannot spell can still
-    give two names one identifier, so a generator computes the identifiers it
-    emits for each namespace and refuses with {!clash} what collides. *)
+    target: 3D and the F* EverParse writes from it, the C of a visitor, the
+    OCaml of a stub. Escaping is injective: a keyword gets a trailing
+    underscore, and so does every name that is a keyword followed by
+    underscores, so [end], [end_] and [end__] stay three names ([end_], [end__],
+    [end___]) in every target. Folding case or replacing characters a target
+    cannot spell can still give two names one identifier, so a generator
+    computes the identifiers it emits for each namespace and refuses with
+    {!clash} what collides. *)
 
 val ocaml_keywords : string list
 (** OCaml's keywords, including [effect] and the infix operators spelled as

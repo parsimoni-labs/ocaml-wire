@@ -45,6 +45,7 @@ type layout_ctx = {
   fixed_prefix : int ref;
   bf : bf_codec_state option;
   field_readers : field_reader list;
+  typed_readers : typed_reader list;
   field_at : string -> (runtime -> Input_end.t -> bytes -> int -> int) option;
       (* Where an earlier field's bytes start, by name: what a field that
          rejects another field's value reports as the place of the failure. *)
@@ -58,6 +59,7 @@ let layout_ctx_of : type f r. (f, r) record -> layout_ctx =
     fixed_prefix = r.fixed_prefix;
     bf = r.r_bf;
     field_readers = r.field_readers;
+    typed_readers = r.typed_readers;
     field_at =
       (fun name ->
         Option.map
@@ -467,11 +469,11 @@ let repeat_raw_fixed : type elt seq.
   let budget = size_fn runtime input_end buf base in
   let start = base + off_fn runtime input_end buf base in
   (* The budget comes from a length field, i.e. untrusted input. Bound it to the
-     buffer before reading so an oversized length fails cleanly instead of
+     input before reading so an oversized length fails cleanly instead of
      crashing [read_elem] with an out-of-range [Bytes.sub]. *)
-  if budget < 0 || start + budget > Bytes.length buf then
-    raise_eof ~at:start ~expected:budget
-      ~got:(bytes_from (Input_end.of_bytes buf) start);
+  if budget < 0 || start + budget > Input_end.to_int input_end then
+    raise_eof ~at:start ~expected:budget ~got:(bytes_from input_end start);
+  let input_end = Input_end.narrow input_end (start + budget) in
   let remainder = if esz > 0 then budget mod esz else budget in
   if remainder <> 0 then
     raise_eof ~at:(start + budget - remainder) ~expected:esz ~got:remainder;
@@ -498,10 +500,10 @@ let repeat_raw_variable : type elt seq.
      base ->
   let budget = size_fn runtime input_end buf base in
   let start = base + off_fn runtime input_end buf base in
-  (* Bound the untrusted budget to the buffer (see [repeat_raw_fixed]). *)
-  if budget < 0 || start + budget > Bytes.length buf then
-    raise_eof ~at:start ~expected:budget
-      ~got:(bytes_from (Input_end.of_bytes buf) start);
+  (* Bound the untrusted budget to the input (see [repeat_raw_fixed]). *)
+  if budget < 0 || start + budget > Input_end.to_int input_end then
+    raise_eof ~at:start ~expected:budget ~got:(bytes_from input_end start);
+  let input_end = Input_end.narrow input_end (start + budget) in
   let rec loop acc pos remaining =
     if remaining <= 0 then seq.finish acc
     else
@@ -786,31 +788,34 @@ let compile_repeat : type elt seq r.
        fun _arr runtime input_end buf base -> check runtime input_end buf base);
   }
 
-(* [expected] is a byte count, so a span whose offset overran the buffer cannot
-   report its size: that size comes out negative, and every consumer does
-   arithmetic on the count (the streaming reader's retry target, the corpus
-   seeder's growth target), which a negative turns into a position behind what
-   is already buffered. Report the bytes missing before the read could start
-   instead, and keep the size for the ordinary case of a span that simply
-   reaches too far. *)
-let missing_before ~first ~sz ~len =
-  if sz < 0 || first < 0 then max 0 (first - len) else sz
-
-(* The span [first, first + sz) must lie inside [buf]. Both ends derive from
-   length fields, i.e. untrusted input: a span sized past the buffer, or a
-   negative size from an overrun offset, would crash the read with a raw
-   [Invalid_argument] that escapes the decode result. Report the missing bytes
-   as end-of-input instead. *)
-let[@inline] check_span_bounds buf ~first ~sz =
-  let len = Bytes.length buf in
-  if sz < 0 || first < 0 || first > len - sz then
-    raise_eof ~at:first
-      ~expected:(missing_before ~first ~sz ~len)
-      ~got:(bytes_from (Input_end.of_bytes buf) first)
-
 (* Absolute index of the first NUL at or after [first], searching up to (but
    not including) [limit]. Raises [Parse_error] when the region ends before a
    terminator is found -- a truncated / unterminated zero-terminated string. *)
+(* The span [first, first + sz) a variable-size reader hands back must lie in
+   the input. An empty byte_slice at or past the end is an eod slice. A negative
+   size or offset, or a length past the end, would make [make_or_eod] raise a
+   raw [Invalid_argument]: the record's bounds check does not catch the last,
+   since a later span that takes the rest can take the bytes back. *)
+let check_var_span : type a. a typ -> Input_end.t -> first:int -> sz:int -> unit
+    =
+ fun typ input_end ~first ~sz ->
+  match typ with
+  | Byte_slice _ ->
+      if sz < 0 || first < 0 then
+        raise_eof ~at:first
+          ~expected:
+            (missing_before ~first ~sz ~len:(Input_end.to_int input_end))
+          ~got:(bytes_from input_end first)
+      else if sz > 0 then check_span_bounds input_end ~first ~sz
+  | _ -> check_span_bounds input_end ~first ~sz
+
+(* The reader of a [byte_array_where] span, its refinement compiled once. *)
+let refined_reader : type a. a typ -> bytes -> first:int -> len:int -> string =
+  function
+  | Byte_array_where { elt_var; cond; test; _ } ->
+      refined_span_reader ~elt_var ~cond ~test
+  | _ -> fun buf ~first ~len -> Bytes.sub_string buf first len
+
 let var_bytes_reader : type a.
     a typ ->
     (runtime -> Input_end.t -> bytes -> int -> int) ->
@@ -820,49 +825,43 @@ let var_bytes_reader : type a.
     bytes ->
     int ->
     a =
- fun typ off_fn size_fn runtime input_end buf base ->
-  let fo = off_fn runtime input_end buf base in
-  let sz = size_fn runtime input_end buf base in
-  let first = base + fo in
-  (match typ with
-  | Byte_slice _ ->
-      (* An empty byte_slice at or past the end is an eod slice. A negative size
-         or offset, or a length past the end, would make [make_or_eod] raise a
-         raw [Invalid_argument]: the record's bounds check does not catch the
-         last, since a later span that takes the rest can take the bytes back. *)
-      if sz < 0 || first < 0 then
-        raise_eof ~at:first
-          ~expected:(missing_before ~first ~sz ~len:(Bytes.length buf))
-          ~got:(bytes_from (Input_end.of_bytes buf) first)
-      else if sz > 0 then check_span_bounds buf ~first ~sz
-  | _ -> check_span_bounds buf ~first ~sz);
-  match typ with
-  | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
-  | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
-  | Byte_array_where { elt_var; cond; _ } ->
-      refined_span_reader ~elt_var ~cond buf ~first:(base + fo) ~len:sz
-  | All_bytes -> Bytes.sub_string buf (base + fo) sz
-  (* [sz] already counts the terminator (see [compile_var_size_fn]). *)
-  | Zeroterm -> Bytes.sub_string buf (base + fo) (sz - 1)
-  | Zeroterm_at_most _ ->
-      let first = base + fo in
-      let nul = zeroterm_nul_pos buf ~first ~limit:(first + sz) in
-      Bytes.sub_string buf first (nul - first)
-  | All_zeros -> all_zeros_reader buf ~first:(base + fo) ~len:sz
-  | Casetype _ -> read_elem typ runtime input_end buf (base + fo)
-  | Single_elem { elem; at_most; _ } ->
-      let first = base + fo in
-      (* The region hands its value [sz] bytes and no more, so the walk that
-         sizes it stops there: a length field the data puts past the region is
-         missing, not read from whatever follows. Bytes a check pass accepted
-         had that walk there ([container_populate]), so their read skips it. *)
-      (if not (Types.is_checked runtime) then
-         let region_end = Input_end.narrow input_end (first + sz) in
-         let consumed = elem_size_of elem runtime region_end buf first in
-         if consumed > sz || ((not at_most) && consumed <> sz) then
-           raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed);
-      read_elem elem runtime input_end buf first
-  | _ -> assert false
+ fun typ off_fn size_fn ->
+  let read_refined = refined_reader typ in
+  fun runtime input_end buf base ->
+    let fo = off_fn runtime input_end buf base in
+    let sz = size_fn runtime input_end buf base in
+    let first = base + fo in
+    check_var_span typ input_end ~first ~sz;
+    match typ with
+    | Byte_slice _ -> Slice.make_or_eod buf ~first:(base + fo) ~length:sz
+    | Byte_array _ -> Bytes.sub_string buf (base + fo) sz
+    | Byte_array_where _ -> read_refined buf ~first:(base + fo) ~len:sz
+    | All_bytes -> Bytes.sub_string buf (base + fo) sz
+    (* [sz] already counts the terminator (see [compile_var_size_fn]). *)
+    | Zeroterm -> Bytes.sub_string buf (base + fo) (sz - 1)
+    | Zeroterm_at_most _ ->
+        let first = base + fo in
+        let nul = zeroterm_nul_pos buf ~first ~limit:(first + sz) in
+        Bytes.sub_string buf first (nul - first)
+    | All_zeros -> all_zeros_reader buf ~first:(base + fo) ~len:sz
+    | Casetype _ ->
+        read_elem typ runtime
+          (Input_end.narrow input_end (first + sz))
+          buf first
+    | Single_elem { elem; at_most; _ } ->
+        let first = base + fo in
+        (* The region hands its value [sz] bytes and no more, so the walk that
+           sizes it stops there: a length field the data puts past the region
+           is missing, not read from whatever follows. Bytes a check pass
+           accepted had that walk there ([container_populate]), so their read
+           skips it. *)
+        let region_end = Input_end.narrow input_end (first + sz) in
+        (if not (Types.is_checked runtime) then
+           let consumed = elem_size_of elem runtime region_end buf first in
+           if consumed > sz || ((not at_most) && consumed <> sz) then
+             raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed);
+        read_elem elem runtime region_end buf first
+    | _ -> assert false
 
 (* The scan a span type's reader performs, without the string it hands back.
    [Codec.validate_exn] returns unit, so running the reader for its checks alone
@@ -870,34 +869,40 @@ let var_bytes_reader : type a.
    length the sender chose, on the path a server runs once per packet.
    [None] for the spans whose reader only re-slices the buffer and has nothing
    to scan. *)
-let span_check : type a. a typ -> (bytes -> first:int -> len:int -> unit) option
-    = function
-  | Byte_array_where { elt_var; cond; _ } ->
+let span_check : type a.
+    a typ -> (Input_end.t -> bytes -> first:int -> len:int -> unit) option =
+  function
+  | Byte_array_where { elt_var; cond; test; _ } ->
+      let check = refined_span_check ~elt_var ~cond ~test in
       Some
-        (fun buf ~first ~len ->
-          check_span_bounds buf ~first ~sz:len;
-          refined_span_check ~elt_var ~cond buf ~first ~len)
+        (fun input_end buf ~first ~len ->
+          check_span_bounds input_end ~first ~sz:len;
+          check buf ~first ~len)
   | All_zeros ->
       Some
-        (fun buf ~first ~len ->
-          check_span_bounds buf ~first ~sz:len;
+        (fun input_end buf ~first ~len ->
+          check_span_bounds input_end ~first ~sz:len;
           all_zeros_check buf ~first ~len)
   | Zeroterm_at_most _ ->
       Some
-        (fun buf ~first ~len ->
-          check_span_bounds buf ~first ~sz:len;
+        (fun input_end buf ~first ~len ->
+          check_span_bounds input_end ~first ~sz:len;
           ignore (zeroterm_nul_pos buf ~first ~limit:(first + len) : int))
   | Zeroterm ->
       (* The terminator search is the size computation, so [len] could not have
          been reached without it. Only the span itself is left to check. *)
-      Some (fun buf ~first ~len -> check_span_bounds buf ~first ~sz:len)
+      Some
+        (fun input_end _buf ~first ~len ->
+          check_span_bounds input_end ~first ~sz:len)
   | Byte_array _ | Byte_slice _ | All_bytes ->
       (* Nothing to scan, since the reader only re-slices the buffer, but the
          span is still checked: a size taken from a length field can reach past
          the end, and a span that skipped the walk left the overrun to surface
          against whichever later field did have a check, blamed at the position
          the overrun had already produced. *)
-      Some (fun buf ~first ~len -> check_span_bounds buf ~first ~sz:len)
+      Some
+        (fun input_end _buf ~first ~len ->
+          check_span_bounds input_end ~first ~sz:len)
   | _ -> None
 
 (* Populate for a span field: the reader's checks, none of its copying, and no
@@ -914,7 +919,7 @@ let span_populate : type a.
   | Some check ->
       Some
         (fun _slots runtime input_end buf base ->
-          check buf
+          check input_end buf
             ~first:(base + off_fn runtime input_end buf base)
             ~len:(size_fn runtime input_end buf base))
 
@@ -925,16 +930,6 @@ let span_populate : type a.
    decode fails; what is left out is the sequence, the nested region's value
    and the case body's record. [None] leaves the field to the generic
    [build_populate]. *)
-(* The check of a region's element the region walk has just measured: a
-   sub-codec takes the end the walk found rather than measuring itself again,
-   which costs as much as the walk. *)
-let sized_check : type a.
-    a typ -> runtime -> Input_end.t -> bytes -> int -> int -> unit = function
-  | Codec { codec_validate_sized; _ } -> codec_validate_sized
-  | typ ->
-      let check = elem_check typ in
-      fun runtime input_end buf off _end_off -> check runtime input_end buf off
-
 let container_populate : type a.
     a typ ->
     off_fn:(runtime -> Input_end.t -> bytes -> int -> int) ->
@@ -947,22 +942,27 @@ let container_populate : type a.
       Some
         (fun _slots runtime input_end buf base ->
           let first = base + off_fn runtime input_end buf base in
-          check_span_bounds buf ~first ~sz:(size_fn runtime input_end buf base);
-          check runtime input_end buf first)
+          let sz = size_fn runtime input_end buf base in
+          check_span_bounds input_end ~first ~sz;
+          check runtime (Input_end.narrow input_end (first + sz)) buf first)
   | Single_elem { elem; at_most; _ } ->
-      let check = sized_check elem in
+      let check = elem_check elem in
       (* A sub-codec that measures and checks itself in one walk answers first;
-         when it cannot tell, the measure and the check below answer. *)
-      let check_end =
+         when it cannot tell, the check and the measure below answer. A
+         sub-codec checks its own bytes against the region's end, so it is
+         checked before it is measured, as the walk finds the error of a
+         region: the contents, then whether they fill it. Any other element
+         reads its bytes unchecked, so it is measured to fit first. *)
+      let check_end, self_bounded =
         match elem with
-        | Codec { codec_check_end; _ } -> codec_check_end
-        | _ -> fun _ _ _ -> -2
+        | Codec { codec_check_end; _ } -> (codec_check_end, true)
+        | _ -> ((fun _ _ _ -> -2), false)
       in
       Some
         (fun _slots runtime input_end buf base ->
           let first = base + off_fn runtime input_end buf base in
           let sz = size_fn runtime input_end buf base in
-          check_span_bounds buf ~first ~sz;
+          check_span_bounds input_end ~first ~sz;
           (* Sized against the region's own bytes, as the reader sizes it: a
              validate that answered from bytes the reader is not given would
              accept and reject on different grounds than the decode it stands
@@ -975,10 +975,11 @@ let container_populate : type a.
             (* A walk that did not accept ([-1]) has been tried: the general
                passes do not try it again. *)
             let runtime = if e = -1 then fallback_runtime else runtime in
+            if self_bounded then check runtime region_end buf first;
             let consumed = elem_size_of elem runtime region_end buf first in
             if consumed > sz || ((not at_most) && consumed <> sz) then
               raise_eof ~at:(first + min consumed sz) ~expected:sz ~got:consumed;
-            check runtime input_end buf first (first + consumed)
+            if not self_bounded then check runtime region_end buf first
           end)
   | _ -> None
 
@@ -1005,6 +1006,34 @@ let var_bytes_write_str buf write_off s =
   Bytes.blit_string s 0 buf write_off len;
   write_off + len
 
+(* The per-byte refinement a [byte_array_where] writer checks, compiled once. *)
+let refined_check : type a. a typ -> string -> unit = function
+  | Byte_array_where { elt_var; cond; test; _ } ->
+      Eval.check_byte_refinement ~elt_var ~cond ~test
+  | _ -> ignore
+
+let write_zeroterm_at_most size_fn runtime buf base write_off s =
+  Types.check_zeroterm_encode s;
+  let region = size_fn runtime (Input_end.of_bytes buf) buf base in
+  let len = String.length s in
+  Types.check_zeroterm_region ~region ~len;
+  Bytes.blit_string s 0 buf write_off len;
+  (* Single fill covers the NUL terminator and any trailing padding. *)
+  Bytes.fill buf (write_off + len) (region - len) '\x00';
+  write_off + region
+
+let write_single_elem elem ~at_most size_fn runtime buf base write_off value =
+  let n = size_fn runtime (Input_end.of_bytes buf) buf base in
+  let actual = Types.size_of_typ_value runtime elem value in
+  Types.check_nested_size ~at_most ~expected:n ~actual;
+  let inner_end =
+    let encode = build_field_encoder_ctx elem in
+    encode runtime buf write_off value
+  in
+  if inner_end < write_off + n then
+    Bytes.fill buf inner_end (write_off + n - inner_end) '\x00';
+  write_off + n
+
 let var_bytes_writer : type a r.
     a typ ->
     (r -> a) ->
@@ -1015,60 +1044,45 @@ let var_bytes_writer : type a r.
     int ->
     int ->
     int =
- fun typ get size_fn v runtime buf base write_off ->
-  let value = get v in
-  match typ with
-  | Byte_slice _ ->
-      let src = (value : Slice.t) in
-      let len = Slice.length src in
-      var_bytes_check_len size_fn runtime buf base ~actual:len;
-      Bytes.blit (Slice.bytes src) (Slice.first src) buf write_off len;
-      write_off + len
-  | Byte_array _ ->
-      let s = (value : string) in
-      var_bytes_check_len size_fn runtime buf base ~actual:(String.length s);
-      var_bytes_write_str buf write_off s
-  | Byte_array_where { elt_var; cond; _ } ->
-      let s = (value : string) in
-      var_bytes_check_len size_fn runtime buf base ~actual:(String.length s);
-      Eval.check_byte_refinement ~elt_var ~cond s;
-      var_bytes_write_str buf write_off s
-  | All_bytes -> var_bytes_write_str buf write_off (value : string)
-  | All_zeros ->
-      let s = (value : string) in
-      Types.check_all_zeros_encode s;
-      var_bytes_write_str buf write_off s
-  | Zeroterm ->
-      let s = (value : string) in
-      Types.check_zeroterm_encode s;
-      let e = var_bytes_write_str buf write_off s in
-      Bytes.set_uint8 buf e 0;
-      e + 1
-  | Zeroterm_at_most _ ->
-      let s = (value : string) in
-      Types.check_zeroterm_encode s;
-      let region = size_fn runtime (Input_end.of_bytes buf) buf base in
-      let len = String.length s in
-      Types.check_zeroterm_region ~region ~len;
-      Bytes.blit_string s 0 buf write_off len;
-      (* Single fill covers the NUL terminator and any trailing padding. *)
-      Bytes.fill buf (write_off + len) (region - len) '\x00';
-      write_off + region
-  | Casetype _ ->
-      let encode = build_field_encoder_ctx typ in
-      encode runtime buf write_off value
-  | Single_elem { elem; at_most; _ } ->
-      let n = size_fn runtime (Input_end.of_bytes buf) buf base in
-      let actual = Types.size_of_typ_value runtime elem value in
-      Types.check_nested_size ~at_most ~expected:n ~actual;
-      let inner_end =
-        let encode = build_field_encoder_ctx elem in
+ fun typ get size_fn ->
+  let check_refined = refined_check typ in
+  fun v runtime buf base write_off ->
+    let value = get v in
+    match typ with
+    | Byte_slice _ ->
+        let src = (value : Slice.t) in
+        let len = Slice.length src in
+        var_bytes_check_len size_fn runtime buf base ~actual:len;
+        Bytes.blit (Slice.bytes src) (Slice.first src) buf write_off len;
+        write_off + len
+    | Byte_array _ ->
+        let s = (value : string) in
+        var_bytes_check_len size_fn runtime buf base ~actual:(String.length s);
+        var_bytes_write_str buf write_off s
+    | Byte_array_where _ ->
+        let s = (value : string) in
+        var_bytes_check_len size_fn runtime buf base ~actual:(String.length s);
+        check_refined s;
+        var_bytes_write_str buf write_off s
+    | All_bytes -> var_bytes_write_str buf write_off (value : string)
+    | All_zeros ->
+        let s = (value : string) in
+        Types.check_all_zeros_encode s;
+        var_bytes_write_str buf write_off s
+    | Zeroterm ->
+        let s = (value : string) in
+        Types.check_zeroterm_encode s;
+        let e = var_bytes_write_str buf write_off s in
+        Bytes.set_uint8 buf e 0;
+        e + 1
+    | Zeroterm_at_most _ ->
+        write_zeroterm_at_most size_fn runtime buf base write_off value
+    | Casetype _ ->
+        let encode = build_field_encoder_ctx typ in
         encode runtime buf write_off value
-      in
-      if inner_end < write_off + n then
-        Bytes.fill buf inner_end (write_off + n - inner_end) '\x00';
-      write_off + n
-  | _ -> assert false
+    | Single_elem { elem; at_most; _ } ->
+        write_single_elem elem ~at_most size_fn runtime buf base write_off value
+    | _ -> assert false
 
 let compile_var_size_fn : type a.
     layout_ctx ->
@@ -1082,12 +1096,10 @@ let compile_var_size_fn : type a.
  fun ctx typ ~off_fn ->
   match typ with
   | All_bytes | All_zeros ->
-      (* Trailing "rest of buffer": size is whatever bytes remain past the
-         current offset. The OCaml decoder gets the buffer length via
-         [Bytes.length buf]; the 3D projection emits [all_bytes], which
-         3D handles natively. *)
+      (* The rest of the input: the bytes left before [input_end], the end of
+         the region the record sits in, as 3D's [consume-all] takes them. *)
       fun runtime input_end buf base ->
-        Bytes.length buf - (base + off_fn runtime input_end buf base)
+        Input_end.to_int input_end - (base + off_fn runtime input_end buf base)
   | Casetype _ ->
       (* Tag is decoded first; the case body's size is whatever the
          selected case's inner typ reports. *)
@@ -1098,7 +1110,8 @@ let compile_var_size_fn : type a.
       (* Consumed bytes = string length plus the one-byte NUL terminator. *)
       fun runtime input_end buf base ->
         let first = base + off_fn runtime input_end buf base in
-        zeroterm_nul_pos buf ~first ~limit:(Bytes.length buf) - first + 1
+        zeroterm_nul_pos buf ~first ~limit:(Input_end.to_int input_end)
+        - first + 1
   | _ ->
       let size_expr =
         match typ with
@@ -1131,27 +1144,6 @@ let prepend_field_check name f arr runtime input_end buf base =
   with Types.Parse_error e ->
     raise (Types.Parse_error { e with field = name :: e.field })
 
-(* Some extents are resolved by walking the field's own bytes, and the record's
-   bounds check does that walk before any field reader runs, so the failure
-   surfaces from the size walk rather than from the wrapped reader: a casetype
-   dispatching on an unknown tag, a zero-terminated string with no terminator.
-   Name the field there too, or the failure reaches the caller with no path at
-   all. Every other extent is arithmetic over fields already read and raises
-   nothing of its own. *)
-let attribute_size_errors : type a.
-    a typ ->
-    string ->
-    (runtime -> Input_end.t -> bytes -> int -> int) ->
-    runtime ->
-    Input_end.t ->
-    bytes ->
-    int ->
-    int =
- fun typ name size_fn ->
-  match typ with
-  | Casetype _ | Zeroterm -> prepend_field name size_fn
-  | _ -> size_fn
-
 let compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
  fun ctx fld ->
@@ -1159,7 +1151,6 @@ let compile_var_bytes : type a r.
   let off_fn = off_fn_of ctx in
   let validator_off = validator_off_of ctx in
   let size_fn = compile_var_size_fn ctx typ ~off_fn in
-  let size_fn = attribute_size_errors typ fld.name size_fn in
   let field_access : field_access =
     match ctx.next_off with
     | Static n -> Variable { off = n; size_fn }
@@ -1177,7 +1168,7 @@ let compile_var_bytes : type a r.
           (* This branch bypasses [var_bytes_reader]; run the same span check it
              would have run, so a [uint_var] sized past the end reports
              truncation the way a [byte_array] does instead of crashing. *)
-          check_span_bounds buf ~first ~sz;
+          check_span_bounds input_end ~first ~sz;
           Uint_var.read endian buf first sz
         in
         let raw_writer : r -> runtime -> bytes -> int -> int -> int =
@@ -1398,7 +1389,8 @@ let compile_union : type a k r.
     let first = base + off_fn runtime input_end buf base in
     let n = tag_fn runtime input_end buf base in
     let case = case_at n runtime input_end buf base in
-    check_span_bounds buf ~first ~sz:(case.size runtime input_end buf first);
+    check_span_bounds input_end ~first
+      ~sz:(case.size runtime input_end buf first);
     case.check runtime input_end buf first
   in
   {
@@ -1661,7 +1653,9 @@ and compile_optional : type a r.
         ~raw_writer:(fun _v _runtime _buf _base write_off -> write_off)
         ~size_delta:0 ~next_off:ctx.next_off ~populate:no_populate ()
   | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.field_readers present in
+      let present_fn =
+        compile_bool_expr ~wide:ctx.typed_readers ctx.field_readers present
+      in
       let readable = present_in_bounds ctx present_fn fsize in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let inner_populate =
@@ -1699,7 +1693,9 @@ and compile_optional_variable : type a r.
     a typ ->
     (a option, r) compiled_field =
  fun ctx fld present inner ->
-  let present_fn = compile_bool_expr ctx.field_readers present in
+  let present_fn =
+    compile_bool_expr ~wide:ctx.typed_readers ctx.field_readers present
+  in
   let get = fld.get in
   let inner_fld =
     {
@@ -1765,7 +1761,9 @@ and compile_optional_or : type a r.
         ~populate ()
   | Bool false, _ -> absent_optional_or ctx inner default
   | _, Some fsize ->
-      let present_fn = compile_bool_expr ctx.field_readers present in
+      let present_fn =
+        compile_bool_expr ~wide:ctx.typed_readers ctx.field_readers present
+      in
       let readable = present_in_bounds ctx present_fn fsize in
       let inner_reader, inner_writer = inner_codec_accessors inner ctx in
       let get = fld.get in
@@ -1810,7 +1808,9 @@ and compile_optional_or_variable : type a r.
     a ->
     (a, r) compiled_field =
  fun ctx fld present inner default ->
-  let present_fn = compile_bool_expr ctx.field_readers present in
+  let present_fn =
+    compile_bool_expr ~wide:ctx.typed_readers ctx.field_readers present
+  in
   let inner_fld =
     {
       id = fld.id;

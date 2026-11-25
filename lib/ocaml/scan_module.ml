@@ -53,7 +53,6 @@ let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
       | Unboxed -> { local_bytes_src with u = "L"; checked = "L" }
       | Tagged | Boxed -> bytes_src);
     ox = false;
-    cold = false;
     raw32 = false;
     ranged = true;
     live = live plan ~outputs:(ids selected);
@@ -61,7 +60,6 @@ let scan_mode ?(decide = ignore) (plan : plan) ~num selected =
     slots = Sset.of_list (ids (slots plan selected));
     ahead = Sset.empty;
     fail = (fun _ -> "");
-    overflowed = (fun _ _ -> "");
     decide;
   }
 
@@ -144,9 +142,7 @@ let scope s names =
    a closure. *)
 let pp_scan ?cuts ?(known = 0) ~name ~scope s ~reject ~accept =
   pp_slots s.m s.ppf s.selected;
-  let m =
-    { s.m with fail = (fun _ -> reject); overflowed = (fun _ _ -> reject) }
-  in
+  let m = { s.m with fail = (fun _ -> reject) } in
   start ?cuts ~scope
     ?first:(Option.map (fun _ -> "record") cuts)
     ~name ~m ~ppf:s.ppf ~ranges:s.plan.ranges ~base:"base" ~limit:"stop" ~known
@@ -189,17 +185,31 @@ let checks_len plan =
 (* The entry tests [len < 0] and [off > length] unless {!checks_len} holds:
    then the walk's first check rejects a negative [len], and
    [len > length - off] an [off] past the buffer. [length] is the length of
-   [buf]. *)
-let pp_entry ?cuts ?(length = "Bytes.length buf") ~name ~scope s ~reject ~accept
-    =
-  Fmt.pf s.ppf "if %s then %s else@\n"
-    (if checks_len s.plan then Fmt.str "off < 0 || len > %s - off" length
-     else
-       Fmt.str "off < 0 || len < 0 || off > %s || len > %s - off" length length)
-    reject;
-  Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
-    (if s.m.num = Unboxed then "U.of_int off" else "off")
-    (if s.m.num = Unboxed then "U.of_int len" else "len");
+   [buf], an [int64_u] with [unboxed_length]: the bounds are then tested on
+   the [int64_u] position and length, as the sign of one [logor], where an
+   [int] holds no 64-bit difference of them that could wrap. *)
+let pp_entry ?cuts ?(length = "Bytes.length buf") ?(unboxed_length = false)
+    ~name ~scope s ~reject ~accept =
+  let unboxed = s.m.num = Unboxed in
+  if unboxed && unboxed_length then
+    Fmt.pf s.ppf
+      "let base = U.of_int off in@\n\
+       let stop = U.of_int len in@\n\
+       if U.compare (U.logor %s (U.sub (U.sub %s base) stop)) #0L < 0 then %s \
+       else@\n"
+      (if checks_len s.plan then "base" else "(U.logor base stop)")
+      length reject
+  else begin
+    Fmt.pf s.ppf "if %s then %s else@\n"
+      (if checks_len s.plan then Fmt.str "off < 0 || len > %s - off" length
+       else
+         Fmt.str "off < 0 || len < 0 || off > %s || len > %s - off" length
+           length)
+      reject;
+    Fmt.pf s.ppf "let base = %s in@\nlet stop = %s in@\n"
+      (if unboxed then "U.of_int off" else "off")
+      (if unboxed then "U.of_int len" else "len")
+  end;
   pp_scan ?cuts ~name ~scope s ~reject ~accept
 
 (* The types of the callbacks [fold_frames_unboxed] takes, whose accumulator
@@ -258,20 +268,27 @@ let rec tested = function
   | Region (_, _, body) :: rest -> tested body @ tested rest
   | (Prefix _ | Span _ | Test _) :: rest -> tested rest
 
+(* The bytes {!read_ahead} loads for the field [f]. *)
+let loaded (f : field) =
+  match f.store with Int { width; _ } -> width / 8 | _ -> 0
+
 (* The fields an unrolled frame loop reads for every frame of an iteration
    before the walk of its first frame: those the walk tests to choose an
    optional field, in the [need] bytes every frame has, and inside an optional
    field itself, which the walk reaches after checks of its own (it loads the
-   leading fields first anyway). Each is a variable and its value at a frame
-   start. A frame's walk then dispatches on a value loaded before the previous
-   frames' branches, so a mispredicted branch of one frame does not delay the
-   next frame's choice by a load. *)
+   leading fields first anyway). Each is a variable, the field's offset and
+   the bytes loaded, with its value at a frame start. A frame's walk then
+   dispatches on a value loaded before the previous frames' branches, so a
+   mispredicted branch of one frame does not delay the next frame's choice by
+   a load. *)
 let read_aheads s ~need =
   let tested = tested s.plan.nodes in
   List.filter_map
     (fun ((f : field), k) ->
       if Sset.mem f.id s.m.live && List.mem f.id tested then
-        Option.map (fun ahead -> (f.id, ahead)) (read_ahead s.m ~size:need ~k f)
+        Option.map
+          (fun ahead -> ((f.id, k, loaded f), ahead))
+          (read_ahead s.m ~size:need ~k f)
       else None)
     (gated_fields ~gated:false 0 s.plan.nodes)
 
@@ -457,8 +474,7 @@ let pp_frames_head s ~name ~unboxed ~callbacks =
 (* The frame loop [name] as a decision: [pp_frames] below writes it. A walk
    with slots is not cut, so its loop is not unrolled. *)
 let frame_loop s ~name ~need ~apart ~unboxed =
-  let native = s.m.num = Unboxed in
-  let frames = if native && Sset.is_empty s.m.slots then unroll else 1 in
+  let frames = if Sset.is_empty s.m.slots then unroll else 1 in
   Decision.Frame_loop
     {
       name;
@@ -508,9 +524,7 @@ let pp_frames ?step s ~unboxed =
           ~valid ~known ~unrolled
       in
       (* The loop over frames that hold the leading prefixes comes last,
-         where the compiler closes it with one conditional branch. On the
-         stock compiler it walks one frame per iteration: four inlined walks
-         cost more in spilled registers than the polls they save. *)
+         where the compiler closes it with one conditional branch. *)
       if need > 0 then begin
         Fmt.pf ppf "if stride < %d then (@\n" need;
         (* [fold_unboxed] is not polymorphic in the layout of its answer, so
@@ -520,10 +534,10 @@ let pp_frames ?step s ~unboxed =
         | None ->
             if unboxed then loop ~unrolled:false 0 else pp_frames_short ?step s);
         Fmt.pf ppf ")@\nelse (@\n";
-        loop ~unrolled:native need;
+        loop ~unrolled:true need;
         Fmt.pf ppf ")"
       end
-      else loop ~unrolled:native 0;
+      else loop ~unrolled:true 0;
       Fmt.pf ppf ";@\n%sacc@\n@\n" read)
 
 (* [fold], or [fold_unboxed], whose consumer takes the outputs unboxed. *)
@@ -537,17 +551,75 @@ let pp_fold s ~unboxed =
         s ~reject:"invalid ()" ~accept:(call s ~unboxed "valid");
       Fmt.pf s.ppf "@\n")
 
+(* The length of [buf] as [step_within] takes it: an [int64_u] where values
+   are. *)
+let length_of s =
+  if s.m.num = Unboxed then "U.of_int (Bytes.length buf)"
+  else "Bytes.length buf"
+
+(* [fold_index_step], which folds [within] over the frames of an index. *)
+let pp_fold_index_step s ~within =
+  let buf = s.m.src.buf in
+  Hashtbl.replace s.taken "fold_index_step" ();
+  (* As in [fold_frames], OxCaml walks [unroll] frames an iteration, so the
+     loop polls and tests its bound once per [unroll] frames. Both arrays have
+     [n] elements, so every index of the loop is in range in each. *)
+  let frames =
+    if s.m.num = Unboxed && Sset.is_empty s.m.slots then unroll else 1
+  in
+  s.m.decide
+    (Decision.Frame_loop
+       { name = "fold_index_step"; need = 0; frames; short = None; ahead = [] });
+  let frame ?(acc = "acc") i =
+    Fmt.str
+      "%s buf ~length (Array.unsafe_get offs %s) (Array.unsafe_get lens %s) \
+       ~init:%s"
+      within i i acc
+  in
+  Fmt.pf s.ppf
+    "let[@inline always] fold_index_step %s ~(offs : int array) ~(lens : int \
+     array) ~init =@\n\
+     let n = Array.length offs in@\n\
+     if Array.length lens <> n then@\n\
+     invalid_arg \"fold_index_step: offs and lens differ in length\";@\n\
+     let length = %s in@\n"
+    buf (length_of s);
+  if s.m.num = Unboxed then begin
+    (* The accumulator may have any layout, which a [ref] cannot hold. *)
+    Fmt.pf s.ppf "let mutable acc = init in@\nlet mutable i = 0 in@\n";
+    if frames > 1 then begin
+      Fmt.pf s.ppf "while i < n - %d do@\n" (frames - 1);
+      for k = 0 to frames - 1 do
+        Fmt.pf s.ppf "acc <- %s;@\n"
+          (frame (if k = 0 then "i" else Fmt.str "(i + %d)" k))
+      done;
+      Fmt.pf s.ppf "i <- i + %d@\ndone;@\n" frames
+    end;
+    Fmt.pf s.ppf "while i < n do@\nacc <- %s;@\ni <- i + 1@\ndone;@\nacc@\n@\n"
+      (frame "i")
+  end
+  else
+    Fmt.pf s.ppf
+      "let acc = ref init in@\n\
+       for i = 0 to n - 1 do@\n\
+       acc := %s@\n\
+       done;@\n\
+       !acc@\n\
+       @\n"
+      (frame ~acc:"!acc" "i")
+
 (* [fold_step], which calls the module [m]'s functions by name, and
    [fold_index_step], which folds it over the frames of an index. Both go
    through [step_within], whose [length] is that of [buf], so that the loop
    over the index loads it once. *)
 let pp_fold_step s m =
   let within = "step_within" and buf = s.m.src.buf in
+  let unboxed = s.m.num = Unboxed in
   with_cuts s "fold_step" (fun s cuts ->
       Hashtbl.replace s.taken within ();
       let body = Buffer.create 4096 in
       let ppf = Format.formatter_of_buffer body in
-      pp_entry ?cuts ~length:"length" ~name:"fold_step"
+      pp_entry ?cuts ~length:"length" ~unboxed_length:true ~name:"fold_step"
         ~scope:(scope s [ ("init", None) ])
         { s with ppf } ~reject:(m ^ ".invalid init")
         ~accept:(call ~step:true s ~unboxed:false (m ^ ".valid init"));
@@ -560,36 +632,16 @@ let pp_fold_step s m =
           let i = String.index buf 'b' in
           String.sub buf 0 i ^ "_" ^ String.sub buf i (String.length buf - i)
       in
-      Fmt.pf s.ppf "let[@inline always] %s %s ~length off len ~init =@\n%s@\n"
-        within param body);
+      Fmt.pf s.ppf "let[@inline always] %s %s ~%s off len ~init =@\n%s@\n"
+        within param
+        (if unboxed then "(length : int64_u)" else "length")
+        body);
   Fmt.pf s.ppf
     "let[@inline always] fold_step %s off len ~init =@\n\
-     %s buf ~length:(Bytes.length buf) off len ~init@\n\
+     %s buf ~length:(%s) off len ~init@\n\
      @\n"
-    buf within;
-  Hashtbl.replace s.taken "fold_index_step" ();
-  (* On OxCaml the accumulator may have any layout, which a [ref] cannot hold.
-     Both arrays have [n] elements, so every index of the loop is in range in
-     each. *)
-  let bind, get, set =
-    if s.m.num = Unboxed then ("let mutable acc = init in", "acc", "acc <-")
-    else ("let acc = ref init in", "!acc", "acc :=")
-  in
-  Fmt.pf s.ppf
-    "let[@inline always] fold_index_step %s ~(offs : int array) ~(lens : int \
-     array) ~init =@\n\
-     let n = Array.length offs in@\n\
-     if Array.length lens <> n then@\n\
-     invalid_arg \"fold_index_step: offs and lens differ in length\";@\n\
-     let length = Bytes.length buf in@\n\
-     %s@\n\
-     for i = 0 to n - 1 do@\n\
-     %s %s buf ~length (Array.unsafe_get offs i) (Array.unsafe_get lens i) \
-     ~init:%s@\n\
-     done;@\n\
-     %s@\n\
-     @\n"
-    buf bind set within get get
+    buf within (length_of s);
+  pp_fold_index_step s ~within
 
 let pp_result_type s name hash =
   Fmt.pf s.ppf "type %s = %s{ ok : bool;@\n" name hash;
@@ -690,7 +742,7 @@ let selected (plan : plan) = function
       List.filter (fun (o : output) -> List.mem o.name wanted) plan.outputs
 
 let without_dead_bindings text =
-  String.concat "\n" (prune (String.split_on_char '\n' text))
+  String.concat "\n" (Lines.prune (String.split_on_char '\n' text))
 
 (* The scanner after its header: the walks, the outputs and their printer. *)
 let pp_body ?step s =

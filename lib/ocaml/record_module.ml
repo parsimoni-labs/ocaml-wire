@@ -26,7 +26,6 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     num = Tagged;
     src;
     ox;
-    cold = false;
     raw32;
     ranged = false;
     live;
@@ -34,7 +33,6 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     slots = Sset.empty;
     ahead = Sset.empty;
     fail = (fun _ -> fail);
-    overflowed = (fun _ _ -> fail);
     decide = ignore;
   }
 
@@ -43,7 +41,6 @@ let cold ~src ~live =
     num = Tagged;
     src;
     ox = false;
-    cold = true;
     raw32 = false;
     ranged = false;
     live;
@@ -55,13 +52,6 @@ let cold ~src ~live =
       | Bounds -> "no_error ()"
       | Check (f, c) -> raise_check f c
       | Where -> errors ^ ".where_clause ~at:off");
-    overflowed =
-      (fun failure e ->
-        match failure with
-        | Check (f, _) ->
-            Fmt.str "%s.relocate ~at:(off + %d) ~field:[ %S ] %s" errors
-              f.offset f.name e
-        | Where | Bounds -> Fmt.str "%s.relocate ~at:off ~field:[] %s" errors e);
     decide = ignore;
   }
 
@@ -188,12 +178,110 @@ let pp_validate ~src ppf ~target ~plan ~size =
      @\n"
     attr src.buf src.buf errors
 
+(* {2 A record that does not fit}
+
+   3D checks each field as it reaches it: a record that does not fit reports
+   the first field in order that fails a check where it fits, else the end of
+   input. A [where] clause is checked with the last field it reads, as the
+   refinement of that field the projection makes it, or before every field
+   when it reads none. *)
+
+(* Where each field of [fields] ends, by its variable. *)
+let field_ends fields =
+  List.fold_left
+    (fun acc (f : field) -> Smap.add f.id (f.offset + width_bytes f.store) acc)
+    Smap.empty fields
+
+(* The nodes of a record that does not fit, with the [where] clause after the
+   last field it reads, and where that field ends: the prefix is cut there. *)
+let short_nodes ends (plan : plan) =
+  let part n nodes = if n = 0 then [] else nodes in
+  match plan.nodes with
+  | [ Prefix (fields, size); Test e ] ->
+      let at =
+        List.fold_left
+          (fun acc id ->
+            match Smap.find_opt id ends with Some e -> max acc e | None -> acc)
+          0 (T.collect_refs e)
+      in
+      let before, after = List.partition (fun f -> f.offset < at) fields in
+      let after = List.map (fun f -> { f with offset = f.offset - at }) after in
+      let prefix n = function [] -> Span (T.Int n) | fs -> Prefix (fs, n) in
+      ( at,
+        part at [ prefix at before ]
+        @ (Test e :: part (size - at) [ prefix (size - at) after ]) )
+  | nodes -> (0, nodes)
+
+(* The checks of the walk of a record that does not fit, over [avail] of its
+   bytes padded with zeros: each raises its error where its field fits, the
+   [where] clause where the last field it reads fits, else the end of input. A
+   field keeps its offset in the record in its error. *)
+let short_cold ~src ~live ~size ~ends ~offsets ~where_end =
+  let end_of (f : field) = Option.value ~default:size (Smap.find_opt f.id ends)
+  and placed (f : field) =
+    {
+      f with
+      offset = Option.value ~default:f.offset (Smap.find_opt f.id offsets);
+    }
+  in
+  let fits n e =
+    Fmt.str "(if %d > avail then %s.frame ~size ~len off else %s)" n errors e
+  in
+  let m = cold ~src ~live in
+  {
+    m with
+    fail =
+      (function
+      | Bounds -> "no_error ()"
+      | Check (f, c) -> fits (end_of f) (raise_check (placed f) c)
+      | Where -> fits where_end (errors ^ ".where_clause ~at:off"));
+  }
+
+(* [short buf off] raises the error of a record that does not fit at [off]:
+   its first check that fails, run on the bytes there are, else the frame's. *)
+let pp_short ~src ppf ~target ~plan ~size =
+  if not (has_checks plan) then
+    Fmt.pf ppf "let%s short %s off =@\n  %s.frame ~size ~len:(%s buf) off@\n@\n"
+      (cold_attr target) src.buf errors src.len
+  else begin
+    let tmp =
+      match target with `OxCaml -> local_bytes_src | `OCaml -> bytes_src
+    in
+    Fmt.pf ppf
+      "let%s short %s off =@\n\
+      \  let len = %s buf in@\n\
+      \  if off >= 0 then begin@\n\
+      \    let avail = len - off in@\n\
+      \    let tmp = Bytes.make size '\\000' in@\n\
+      \    for i = 0 to avail - 1 do@\n\
+      \      %s.set_u8 tmp i (%s.u8 buf (off + i))@\n\
+      \    done;@\n\
+      \    let buf = tmp in@\n"
+      (cold_attr target) src.buf src.len tmp.u src.u;
+    let fields = all_fields plan in
+    let ends = field_ends fields in
+    let offsets =
+      List.fold_left
+        (fun acc (f : field) -> Smap.add f.id f.offset acc)
+        Smap.empty fields
+    in
+    let where_end, nodes = short_nodes ends plan in
+    let m =
+      short_cold ~src:tmp
+        ~live:(live ~cold:true plan ~outputs:[])
+        ~size ~ends ~offsets ~where_end
+    in
+    start ~m ~ppf ~ranges:plan.ranges ~base:"0" ~limit:"len" ~known:size nodes
+      (fun _ _ -> Fmt.pf ppf "()@\n");
+    Fmt.pf ppf "  end;@\n  %s.frame ~size ~len off@\n@\n" errors
+  end
+
 let pp_cold ~src ppf ~target ~plan ~size =
+  pp_short ~src ppf ~target ~plan ~size;
   Fmt.pf ppf
     "let%s fail %s off =@\n\
-    \  if off < 0 || off > %s buf - size then@\n\
-    \    %s.frame ~size ~len:(%s buf) off;@\n"
-    (cold_attr target) src.buf src.len errors src.len;
+    \  if off < 0 || off > %s buf - size then short buf off;@\n"
+    (cold_attr target) src.buf src.len;
   let m = cold ~src ~live:(live ~cold:true plan ~outputs:[]) in
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "no_error ()@\n");
   Fmt.pf ppf

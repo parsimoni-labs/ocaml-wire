@@ -214,12 +214,10 @@ let test_lookalike_field_handles () =
     Codec.(Field.v "payload" (byte_slice ~size:(int 1)) $ Fun.id)
   in
   let payload_codec = Codec.v "PayloadOwner" Fun.id [ payload_field ] in
-  expect_foreign_field ~op:"Codec.slice_offset" ~field:"payload"
+  let module P = (val Codec.View.codec payload_codec) in
+  expect_foreign_field ~op:"Codec.View.field" ~field:"payload"
     ~codec:"PayloadOwner" (fun () ->
-      ignore (Codec.slice_offset payload_codec lookalike_payload));
-  expect_foreign_field ~op:"Codec.slice_length" ~field:"payload"
-    ~codec:"PayloadOwner" (fun () ->
-      ignore (Codec.slice_length payload_codec lookalike_payload))
+      ignore (Codec.View.field P.codec lookalike_payload))
 
 let expect_foreign_env ~op ~codec f =
   match f () with
@@ -611,7 +609,7 @@ let test_encode_impure_byte_array_getter () =
 
 (* What [decode], [validate] and [check] make of the same bytes: each one
    accepts them or each one refuses. *)
-let check_entry_points_agree what c bytes =
+let check_entry_points_agree (type r) what (c : r Codec.t) bytes =
   let buf = Bytes.of_string bytes in
   let verdict f =
     match f () with () -> "ok" | exception Parse_error _ -> "refused"
@@ -624,7 +622,10 @@ let check_entry_points_agree what c bytes =
     (verdict (fun () -> Codec.validate_exn c buf 0));
   Alcotest.(check string)
     (what ^ ": check") decoded
-    (if Codec.ok (Codec.check c buf 0) then "ok" else "refused")
+    (let module V = (val Codec.View.codec c) in
+     let (Buf.Any b) = Buf.v buf in
+     if Codec.View.(ok (check V.codec b (Buf.length b) 0)) then "ok"
+     else "refused")
 
 (* A fixed-size field after the last span must fit in the buffer too. *)
 let test_fixed_after_span_fits () =

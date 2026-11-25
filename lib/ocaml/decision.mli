@@ -36,7 +36,6 @@ type t =
       at : pos;
       window : string;
       size_var : string;
-      overflows : bool;
       bound : bound;
     }
   | Shared_words of {
@@ -61,6 +60,7 @@ type t =
       at : pos;
       window : string;
       cases : int;
+      conditions : bool T.expr list;
       choice : choice;
       join : join;
       hoisted : int T.expr option;
@@ -71,7 +71,7 @@ type t =
       need : int;
       frames : int;
       short : short_frames option;
-      ahead : string list;
+      ahead : (string * int * int) list;
     }
 
 val pp : Format.formatter -> t -> unit

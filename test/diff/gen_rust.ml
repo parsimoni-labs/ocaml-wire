@@ -96,7 +96,6 @@ macro_rules! error {
                     res[2] = $index(field);
                     3
                 }
-                $m::Error::Overflow => 4,
                 $m::Error::OutOfRange { field, value } => {
                     res[1] = value;
                     res[2] = $index(field);
@@ -256,16 +255,15 @@ let structured =
       (c.label, scanners ~validate:true ~label:c.label c.codec))
     Diff_codecs.scan_cases
 
-(* The schemas of test/ocaml whose condition, size and checks hold products
-   that overflow the native int for a large 32-bit field, and the one whose
-   decision tree reaches a test from two paths. *)
+(* The schemas of test/ocaml whose condition, size and checks compute near the
+   top of their types, and the one whose decision tree reaches a test from two
+   paths. *)
 let schemas =
   [
     ("sized", scanners ~validate:true ~label:"sized" Schemas.sized);
     ("overflow", scanners ~validate:true ~label:"overflow" Schemas.overflow);
     ("shared", scanners ~validate:true ~label:"shared" Schemas.shared);
     ("skipped", scanners ~validate:true ~label:"skipped" Schemas.skipped);
-    ("bigspan", scanners ~validate:true ~label:"bigspan" Schemas.bigspan);
   ]
 
 let contains s sub =

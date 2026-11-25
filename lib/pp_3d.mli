@@ -19,6 +19,19 @@ val unwrap_bits : 'a typ -> (bitfield_base * bit_order * int) option
     through any {!Dsl.val-map}, {!Dsl.val-enum} or [where]; [None] for any other
     [t]. *)
 
+val bound_regions :
+  ?params:param list -> bool expr option -> field list -> field list
+(** [bound_regions ?params where fields] is [fields] with each optional region
+    whose size verifies only under the bounds the struct proves of the fields it
+    reads under a [Where] stating them, which its declaration states as its
+    [where]. *)
+
+val check_fields : bool expr option -> field list -> unit
+(** [check_fields where fields] raises [Invalid_argument] where projecting a
+    struct of [fields] and [where] would: for a constraint, size, presence
+    condition or [where] whose arithmetic 3d.exe cannot verify, or which the C
+    would compute differently from OCaml (docs/projection.md, Arithmetic). *)
+
 val pp_module : Format.formatter -> module_ -> unit
 (** Pretty-print a module as 3D source. *)
 

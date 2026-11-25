@@ -69,7 +69,7 @@ type field_check = {
 
 (* Both sides report a field as a host integer, so the only thing left to
    reconcile is the width: an [int8] the OCaml decoder returns as [-1] and the C
-   plug reports as [255] carry the same wire byte. Compare the field's own bytes
+   visitor reports as [255] carry the same wire byte. Compare the field's own bytes
    and nothing above them. *)
 let to_slot width v =
   if width >= 8 then v

@@ -28,98 +28,334 @@ let leaf : type a. a scalar -> cursor -> int = function
   | Bits16be { off; shift; mask } ->
       fun c -> (Unchecked.u16be c.wbuf (c.wbase + off) lsr shift) land mask
 
+(* {1 Expressions}
+
+   An expression compiles to as few closures as its shape allows, each reading
+   the fields it needs itself: a call costs more than a read, so the number of
+   calls is the cost. A field of the frame, scaled and offset ([ihl * 4 - 20]),
+   is read in the closure of the operator that uses it; a conjunction of
+   interval tests of fields is the staged word test of the check pass, one
+   closure; the answers of earlier gates are bits of the cursor, tested
+   together. *)
+
+(* How a field of a frame of at least 8 bytes reads on a target whose [int]
+   holds 63 bits: the 8-byte word at [q] of the record, shifted right by [s]
+   and masked by [m]. *)
+type word = { q : int; s : int; m : int }
+
+let[@inline] word_value c q s m =
+  Int64.to_int (Int64.shift_right_logical (Codec_words.load c.wbuf c.wbase q) s)
+  land m
+
+(* An integer operand: a literal, a fixed-offset field [f] of the record as
+   [(f lsl k) + a], or a closure. A field holds at most 32 bits, [k] is at
+   most 16 and [abs a] under [2^40], so the value lies far inside the native
+   int and the checked arithmetic it stands for cannot overflow. *)
+type operand =
+  | Const of int
+  | Lin of { f : packed_scalar; w : word option; k : int; a : int }
+  | Fn of (cursor -> int)
+
+let max_shift = 16
+let small n = n > -(1 lsl 40) && n < 1 lsl 40
+
 type env = {
   prefix : (string * packed_scalar) list;
+  size : int;
+      (* The bytes of the record's frame, which the walk checks before any
+         expression reads a field. *)
   sizeof : bool;
   known : (bool expr * int) list;
       (* The gates of the record evaluated before, each with its bit of
          [wgates]. *)
+  mutable checked : bool;  (** Whether an operation can raise. *)
 }
+
+let word env (Ps s) =
+  match Codec_view.bits_of_scalar s with
+  | Some { o; n; s; w; _ }
+    when Sys.int_size >= 63 && env.size >= 8 && w > 0 && w <= 32 && o >= 0
+         && o + n <= env.size ->
+      let { Codec_words.q; l; r; m; _ } =
+        Codec_words.word ~size:env.size o ~bytes:n ~s ~w ~signed:false
+      in
+      Some { q; s = r - l; m }
+  | _ -> None
+
+let lin env f = Lin { f; w = word env f; k = 0; a = 0 }
+
+let lin_fn (Ps s) w k a =
+  match (w, k, a) with
+  | Some { q; s; m }, 0, 0 -> fun c -> word_value c q s m
+  | Some { q; s; m }, _, _ -> fun c -> (word_value c q s m lsl k) + a
+  | None, 0, 0 -> leaf s
+  | None, _, _ ->
+      let l = leaf s in
+      fun c -> (l c lsl k) + a
+
+let fn = function
+  | Const n -> fun _ -> n
+  | Lin { f; w; k; a } -> lin_fn f w k a
+  | Fn f -> f
 
 let field env name =
   match List.assoc_opt name env.prefix with
-  | Some (Ps s) -> leaf s
+  | Some p -> lin env p
   | None -> raise Exit
 
-(* The operators of [Expr_compiler], on the cursor. A leaf is a field at a
-   fixed offset, read from the buffer; a [sizeof] is the type's width, as the
-   layout pass reads it. Any other leaf, and a 64-bit operand, raises [Exit]:
-   the record then has no walk. A literal operand is applied in place, as
-   [Expr_compiler] does. *)
-let rec int_expr env (e : int expr) : cursor -> int =
+let add env o n =
+  match o with
+  | Const m when small m && small n -> Const (m + n)
+  | Lin l when small n && small (l.a + n) -> Lin { l with a = l.a + n }
+  | o ->
+      env.checked <- true;
+      let f = fn o in
+      Fn (fun c -> checked_add (f c) n)
+
+let shift o n =
+  match o with
+  | Lin l when l.a = 0 && n >= 0 && l.k + n <= max_shift ->
+      Lin { l with k = l.k + n }
+  | o ->
+      let f = fn o in
+      Fn (fun c -> f c lsl n)
+
+let rec log2 n = if n <= 1 then 0 else 1 + log2 (n lsr 1)
+
+let mul env o n =
+  match o with
+  | Lin l
+    when l.a = 0 && n > 0 && n land (n - 1) = 0 && l.k + log2 n <= max_shift ->
+      Lin { l with k = l.k + log2 n }
+  | o ->
+      env.checked <- true;
+      let f = fn o in
+      Fn (fun c -> checked_mul (f c) n)
+
+(* [f land n] as a field of its own, when [f] is unsigned and the bits [n]
+   keeps of it are its lowest. *)
+let masked (Ps s) n =
+  let bits m = if m land (m + 1) = 0 then Some m else None in
+  match s with
+  | Byte off ->
+      Option.map
+        (fun mask -> Ps (Bits8 { off; shift = 0; mask }))
+        (bits (0xff land n))
+  | U16be off ->
+      Option.map
+        (fun mask -> Ps (Bits16be { off; shift = 0; mask }))
+        (bits (0xffff land n))
+  | Bits8 { off; shift; mask } ->
+      Option.map
+        (fun mask -> Ps (Bits8 { off; shift; mask }))
+        (bits (mask land n))
+  | Bits16be { off; shift; mask } ->
+      Option.map
+        (fun mask -> Ps (Bits16be { off; shift; mask }))
+        (bits (mask land n))
+  | _ -> None
+
+let mask env o n =
+  match o with
+  | Lin { f; k = 0; a = 0; _ } when n >= 0 -> (
+      match masked f n with
+      | Some (Ps (Bits8 { mask = 0; _ } | Bits16be { mask = 0; _ })) -> Const 0
+      | Some f -> lin env f
+      | None ->
+          let f = fn o in
+          Fn (fun c -> f c land n))
+  | o ->
+      let f = fn o in
+      Fn (fun c -> f c land n)
+
+(* [a + b] or [a - b] of two fields read as words: plain arithmetic, their
+   bounds keeping it exact. *)
+let sum env ~neg a b checked =
+  match (a, b) with
+  | ( Lin { w = Some { q = q1; s = s1; m = m1 }; k = k1; a = a1; _ },
+      Lin { w = Some { q = q2; s = s2; m = m2 }; k = k2; a = a2; _ } ) ->
+      if neg then
+        Fn
+          (fun c ->
+            (word_value c q1 s1 m1 lsl k1)
+            + a1
+            - ((word_value c q2 s2 m2 lsl k2) + a2))
+      else
+        Fn
+          (fun c ->
+            (word_value c q1 s1 m1 lsl k1)
+            + a1
+            + (word_value c q2 s2 m2 lsl k2)
+            + a2)
+  | _ ->
+      env.checked <- true;
+      let fa = fn a and fb = fn b in
+      Fn (fun c -> checked (fa c) (fb c))
+
+let binary op a b =
+  let fa = fn a and fb = fn b in
+  Fn (fun c -> op (fa c) (fb c))
+
+let checked_binary env op a b =
+  env.checked <- true;
+  binary op a b
+
+(* A condition: a literal; whether the answers of earlier gates in [mask] are
+   not all false ([set]) or all false; a conjunction of interval tests of
+   fixed-offset fields, each one interval; or a closure. *)
+type test =
+  | Is of bool
+  | Gates of { mask : int; set : bool }
+  | Intervals of (packed_scalar * (int * int) array) list
+  | Cond of (cursor -> bool)
+
+let max_tests = 8
+
+(* The answer [v] of a condition, recorded in [wgates] as the bit [bit] when
+   it is a gate's ([bit <> 0]). *)
+let[@inline] answer (c : cursor) bit v =
+  if bit <> 0 then
+    c.wgates <- c.wgates land lnot bit lor (-Bool.to_int v land bit);
+  v
+
+let bit i = if i >= 0 then 1 lsl i else 0
+let[@inline] load (c : cursor) q = Codec_words.load c.wbuf c.wbase q
+let holds = Codec_intervals.holds
+
+(* The interval tests [tests] as tests of words of the frame, one closure of
+   the cursor, which records its answer as the bit [gate] when it is not
+   negative; [None] when a test is not one of a word. One row per number of
+   tests; the formatter would staircase them. *)
+let staged ~gate ~size tests =
+  let gate = bit gate in
+  match Codec_intervals.word_tests ~size tests with
+  | Some [ (_, q1, s1, m1, lo1, n1) ] ->
+      Some (fun c -> answer c gate (holds (load c q1) s1 m1 lo1 n1))
+  | Some [ (_, q1, s1, m1, lo1, n1); (k2, q2, s2, m2, lo2, n2) ] ->
+      Some (fun c -> let x1 = load c q1 in answer c gate (holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else load c q2 in holds x2 s2 m2 lo2 n2))
+  | Some [ (_, q1, s1, m1, lo1, n1); (k2, q2, s2, m2, lo2, n2); (k3, q3, s3, m3, lo3, n3) ] ->
+      Some (fun c -> let x1 = load c q1 in answer c gate (holds x1 s1 m1 lo1 n1 && let x2 = if k2 then x1 else load c q2 in holds x2 s2 m2 lo2 n2 && let x3 = if k3 then x2 else load c q3 in holds x3 s3 m3 lo3 n3))
+  | Some _ ->
+      Option.map
+        (fun st c -> answer c gate (st c.wbuf c.wbase))
+        (Codec_intervals.staged ~size tests)
+  | None -> None
+[@@ocamlformat "disable"]
+
+let test env = function
+  | Is b -> fun _ -> b
+  | Gates { mask; set = true } -> fun (c : cursor) -> c.wgates land mask <> 0
+  | Gates { mask; set = false } -> fun (c : cursor) -> c.wgates land mask = 0
+  | Intervals tests -> (
+      match staged ~gate:(-1) ~size:env.size (Array.of_list tests) with
+      | Some st -> st
+      | None ->
+          let one (Ps s, set) =
+            let l = leaf s in
+            fun c -> Codec_intervals.in_set set (l c)
+          in
+          List.fold_right
+            (fun t rest ->
+              let t = one t in
+              fun c -> t c && rest c)
+            tests
+            (fun _ -> true))
+  | Cond f -> f
+
+let negate env = function
+  | Is b -> Is (not b)
+  | Gates b -> Gates { b with set = not b.set }
+  | t ->
+      let f = test env t in
+      Cond (fun c -> not (f c))
+
+let range v lo hi =
+  match v with
+  | Const n -> Is (n >= lo && n <= hi)
+  | Lin { f; k = 0; a = 0; _ } -> Intervals [ (f, [| (lo, hi) |]) ]
+  | v ->
+      let f = fn v in
+      Cond
+        (fun c ->
+          let x = f c in
+          x >= lo && x <= hi)
+
+(* How two operands compare. *)
+type order = Lt | Ge | Eq | Ne
+
+let[@inline] ordered op (x : int) y =
+  match op with Lt -> x < y | Ge -> x >= y | Eq -> x = y | Ne -> x <> y
+
+(* Two fields read as words compare in a closure of the comparison, which
+   tests no [op] when it runs. *)
+let compare_words op q1 s1 m1 k1 a1 q2 s2 m2 k2 a2 =
+  let[@inline] x c = (word_value c q1 s1 m1 lsl k1) + a1
+  and[@inline] y c = (word_value c q2 s2 m2 lsl k2) + a2 in
+  match op with
+  | Lt -> fun c -> x c < y c
+  | Ge -> fun c -> x c >= y c
+  | Eq -> fun c -> x c = y c
+  | Ne -> fun c -> x c <> y c
+
+let compare op a b =
+  match (a, b) with
+  | ( Lin { w = Some { q = q1; s = s1; m = m1 }; k = k1; a = a1; _ },
+      Lin { w = Some { q = q2; s = s2; m = m2 }; k = k2; a = a2; _ } ) ->
+      Cond (compare_words op q1 s1 m1 k1 a1 q2 s2 m2 k2 a2)
+  | _ ->
+      let fa = fn a and fb = fn b in
+      Cond (fun c -> ordered op (fa c) (fb c))
+
+(* An expression [Expr_compiler] evaluates on 64 bits raises [Exit]: the record
+   then has no walk. *)
+let rec root env (e : int expr) : operand =
+  if prefix_wide env.prefix e then raise Exit else int_expr env e
+
+and int_expr env (e : int expr) : operand =
   let rec_ = int_expr env in
   match e with
-  | Int n -> fun _ -> n
+  | Int n -> Const n
   | Ref (I, name) -> field env name
   | Sizeof t when env.sizeof ->
-      let n = Option.value ~default:0 (field_wire_size t) in
-      fun _ -> n
+      Const (Option.value ~default:0 (field_wire_size t))
   | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos -> raise Exit
-  | Add (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> checked_add (fa c) k
-  | Sub (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> checked_sub (fa c) k
-  | Mul (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> checked_mul (fa c) k
-  | Land (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> fa c land k
-  | Lsl (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> fa c lsl k
+  | Add (a, Int k) -> add env (rec_ a) k
+  | Sub (a, Int k) when k <> min_int -> add env (rec_ a) (-k)
+  | Mul (a, Int k) -> mul env (rec_ a) k
+  | Lsl (a, Int k) -> shift (rec_ a) k
+  | Land (a, Int k) -> mask env (rec_ a) k
   | Lsr (a, Int k) ->
-      let fa = rec_ a in
-      fun c -> fa c lsr k
-  | Add (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_add (fa c) (fb c)
-  | Sub (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_sub (fa c) (fb c)
-  | Mul (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_mul (fa c) (fb c)
-  | Div (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_div (fa c) (fb c)
-  | Mod (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> checked_mod (fa c) (fb c)
-  | Land (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c land fb c
-  | Lor (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lor fb c
-  | Lxor (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lxor fb c
+      let fa = fn (rec_ a) in
+      Fn (fun c -> fa c lsr k)
+  | Add (a, b) -> sum env ~neg:false (rec_ a) (rec_ b) checked_add
+  | Sub (a, b) -> sum env ~neg:true (rec_ a) (rec_ b) checked_sub
+  | Mul (a, b) -> checked_binary env checked_mul (rec_ a) (rec_ b)
+  | Div (a, b) -> checked_binary env checked_div (rec_ a) (rec_ b)
+  | Mod (a, b) -> checked_binary env checked_mod (rec_ a) (rec_ b)
+  | Land (a, b) -> binary ( land ) (rec_ a) (rec_ b)
+  | Lor (a, b) -> binary ( lor ) (rec_ a) (rec_ b)
+  | Lxor (a, b) -> binary ( lxor ) (rec_ a) (rec_ b)
   | Lnot a ->
-      let fa = rec_ a in
-      fun c -> lnot (fa c)
-  | Lsl (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lsl fb c
-  | Lsr (a, b) ->
-      let fa = rec_ a and fb = rec_ b in
-      fun c -> fa c lsr fb c
+      let fa = fn (rec_ a) in
+      Fn (fun c -> lnot (fa c))
+  | Lsl (a, b) -> binary ( lsl ) (rec_ a) (rec_ b)
+  | Lsr (a, b) -> binary ( lsr ) (rec_ a) (rec_ b)
   | Cast (w, a) -> (
-      let fa = rec_ a in
+      let fa = fn (rec_ a) in
       match w with
-      | `U8 -> fun c -> fa c land 0xFF
-      | `U16 -> fun c -> fa c land 0xFFFF
-      | `U32 -> fun c -> fa c land UInt32.mask32
-      | `U64 -> fa)
+      | `U8 -> Fn (fun c -> fa c land 0xFF)
+      | `U16 -> Fn (fun c -> fa c land 0xFFFF)
+      | `U32 -> Fn (fun c -> fa c land UInt32.mask32)
+      | `U64 -> Fn fa)
   | If_then_else (b, t, e) ->
-      let fb = bool_expr env b and ft = rec_ t and fe = rec_ e in
-      fun c -> if fb c then ft c else fe c
+      let fb = test env (bool_expr env b)
+      and ft = fn (rec_ t)
+      and fe = fn (rec_ e) in
+      Fn (fun c -> if fb c then ft c else fe c)
 
-and as_int : type a. env -> a expr -> (cursor -> int) option =
+and as_int : type a. env -> a expr -> operand option =
  fun env e ->
-  let go e = Some (int_expr env e) in
+  let go e = Some (root env e) in
   match e with
   | Int _ as e -> go e
   | Ref (I, _) as e -> go e
@@ -142,7 +378,7 @@ and as_int : type a. env -> a expr -> (cursor -> int) option =
   | If_then_else _ as e -> go e
   | _ -> None
 
-and as_bool : type a. env -> a expr -> (cursor -> bool) option =
+and as_bool : type a. env -> a expr -> test option =
  fun env e ->
   let go e = Some (bool_expr env e) in
   match e with
@@ -164,71 +400,101 @@ and int_operands : type a. env -> a expr -> a expr -> _ =
   | Some fa, Some fb -> (fa, fb)
   | _ -> raise Exit
 
-and bool_expr env (e : bool expr) : cursor -> bool =
+and bool_expr env (e : bool expr) : test =
   match List.assq_opt e env.known with
-  | Some i ->
-      let bit = 1 lsl i in
-      fun c -> c.wgates land bit <> 0
+  | Some i -> Gates { mask = 1 lsl i; set = true }
   | None -> bool_cases env e
 
-and bool_cases env (e : bool expr) : cursor -> bool =
+and bools : type a. env -> a expr -> a expr -> same:bool -> test option =
+ fun env a b ~same ->
+  match (as_bool env a, as_bool env b) with
+  | Some ta, Some tb ->
+      let fa = test env ta and fb = test env tb in
+      Some
+        (if same then Cond (fun c -> fa c = fb c)
+         else Cond (fun c -> fa c <> fb c))
+  | _ -> None
+
+and bool_cases env (e : bool expr) : test =
+  let int a = root env a in
   match e with
-  | Bool b -> fun _ -> b
-  | Eq (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c = k
-  | Ne (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c <> k
+  | Bool b -> Is b
+  | Eq (a, Int k) -> range (int a) k k
+  | Ne (a, Int k) -> negate env (range (int a) k k)
   | Lt (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c < k
-  | Le (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c <= k
+      if k = min_int then Is false else range (int a) min_int (k - 1)
+  | Le (a, Int k) -> range (int a) min_int k
   | Gt (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c > k
-  | Ge (a, Int k) ->
-      let fa = int_expr env a in
-      fun c -> fa c >= k
+      if k = max_int then Is false else range (int a) (k + 1) max_int
+  | Ge (a, Int k) -> range (int a) k max_int
   | Eq (a, b) -> (
-      match (as_bool env a, as_bool env b) with
-      | Some fa, Some fb -> fun c -> fa c = fb c
-      | _ ->
-          let fa, fb = int_operands env a b in
-          fun c -> fa c = fb c)
+      match bools env a b ~same:true with
+      | Some t -> t
+      | None ->
+          let a, b = int_operands env a b in
+          compare Eq a b)
   | Ne (a, b) -> (
-      match (as_bool env a, as_bool env b) with
-      | Some fa, Some fb -> fun c -> fa c <> fb c
-      | _ ->
-          let fa, fb = int_operands env a b in
-          fun c -> fa c <> fb c)
+      match bools env a b ~same:false with
+      | Some t -> t
+      | None ->
+          let a, b = int_operands env a b in
+          compare Ne a b)
   | Lt (a, b) ->
-      let fa, fb = int_operands env a b in
-      fun c -> fa c < fb c
+      let a, b = int_operands env a b in
+      compare Lt a b
   | Le (a, b) ->
-      let fa, fb = int_operands env a b in
-      fun c -> fa c <= fb c
+      let a, b = int_operands env a b in
+      compare Ge b a
   | Gt (a, b) ->
-      let fa, fb = int_operands env a b in
-      fun c -> fa c > fb c
+      let a, b = int_operands env a b in
+      compare Lt b a
   | Ge (a, b) ->
-      let fa, fb = int_operands env a b in
-      fun c -> fa c >= fb c
-  | And (a, b) ->
-      let fa = bool_expr env a and fb = bool_expr env b in
-      fun c -> fa c && fb c
-  | Or (a, b) ->
-      let fa = bool_expr env a and fb = bool_expr env b in
-      fun c -> fa c || fb c
-  | Not a ->
-      let fa = bool_expr env a in
-      fun c -> not (fa c)
+      let a, b = int_operands env a b in
+      compare Ge a b
+  | And (a, b) -> (
+      match (bool_expr env a, bool_expr env b) with
+      | Is false, _ -> Is false
+      | Is true, t | t, Is true -> t
+      | Intervals ta, Intervals tb
+        when List.length ta + List.length tb <= max_tests ->
+          Intervals (ta @ tb)
+      | Gates { mask = m1; set = false }, Gates { mask = m2; set = false } ->
+          Gates { mask = m1 lor m2; set = false }
+      | ta, tb ->
+          let fa = test env ta and fb = test env tb in
+          Cond (fun c -> fa c && fb c))
+  | Or (a, b) -> (
+      match (bool_expr env a, bool_expr env b) with
+      | Is true, _ -> Is true
+      | Is false, t | t, Is false -> t
+      | Gates { mask = m1; set = true }, Gates { mask = m2; set = true } ->
+          Gates { mask = m1 lor m2; set = true }
+      | ta, tb ->
+          let fa = test env ta and fb = test env tb in
+          Cond (fun c -> fa c || fb c))
+  | Not a -> negate env (bool_expr env a)
   | Ref _ -> .
 
-let size prefix e = int_expr { prefix; sizeof = true; known = [] } e
-let cond prefix e = bool_expr { prefix; sizeof = false; known = [] } e
+let env ?(sizeof = false) ?(known = []) ~size prefix =
+  { prefix; size; sizeof; known; checked = false }
+
+let size ~size prefix e = fn (root (env ~sizeof:true ~size prefix) e)
+
+(* A condition that raises leaves the record to the general path, whose check
+   pass names its error at the field it constrains; a size that raises names
+   its own, rebased to the record by [decode]. *)
+let guard env f =
+  if not env.checked then f
+  else fun c -> match f c with b -> b | exception Parse_error _ -> unwalked ()
+
+let cond ~size prefix e =
+  let env = env ~size prefix in
+  let f = test env (bool_expr env e) in
+  guard env f
+
+let cond_at prefix e =
+  ignore (cond ~size:0 prefix e : cursor -> bool);
+  fun ~size -> cond ~size prefix e
 
 (* The gates a record has evaluated so far, each the bit of [wgates] that holds
    its answer, while there are bits. *)
@@ -236,75 +502,240 @@ type gates = (bool expr * int) list
 
 let no_gates = []
 
-let gate ~gates prefix e =
-  let g = bool_expr { prefix; sizeof = true; known = gates } e in
+let gate ~size ~gates prefix e =
+  let env = env ~sizeof:true ~known:gates ~size prefix in
+  let g = bool_expr env e in
   let i = List.length gates in
-  if List.memq e (List.map fst gates) || i >= Sys.int_size - 1 then (g, gates)
+  let plain = guard env (test env g) in
+  if List.memq e (List.map fst gates) || i >= Sys.int_size - 1 then
+    (plain, plain, gates)
   else
-    let bit = 1 lsl i in
-    ( (fun c ->
-        let v = g c in
-        c.wgates <- (if v then c.wgates lor bit else c.wgates land lnot bit);
-        v),
+    let staged =
+      match g with
+      | Intervals tests -> staged ~gate:i ~size:env.size (Array.of_list tests)
+      | _ -> None
+    in
+    let b = bit i in
+    ( (match (staged, g) with
+      | Some st, _ -> st
+      | None, Gates { mask; set } ->
+          fun c -> answer c b (c.wgates land mask <> 0 = set)
+      | None, _ -> fun c -> answer c b (plain c)),
+      plain,
       (e, i) :: gates )
 
 (* {1 Fields the cursor moves over}
 
    Each starts where the cursor is ([wpos]) and leaves it where the field
-   ends, after the checks the layout pass makes of the same field. *)
+   ends, after the checks the layout pass makes of the same field. Each is a
+   walk in its two modes: [wvalue] reads the field, [wskip] makes the same
+   checks and moves the cursor the same way, building nothing. *)
 
 type _ span = Slice_span : Slice.t span | String_span : string span
 
+(* A walk that does not accept a record stops at the first check that fails.
+   Only the [wnames] walk, which finds the error of a record the others
+   refused, builds that error ([errors]); the others raise [Unwalked], out of
+   line, so the walk that accepts pays for neither. *)
+
+(* The span of [sz] bytes at [first], which does not fit before [stop]. *)
+let[@inline never] overrun stop ~first ~sz =
+  Codec_leaf.check_span_bounds stop ~first ~sz;
+  unwalked ()
+
+(* The region of [expected] bytes at [at] its sub-codec did not fill as it
+   must, having taken [got]. *)
+let[@inline never] misfit ~at ~expected ~got = raise_eof ~at ~expected ~got
+
 (* A byte span of [size] bytes, which must fit before [wend]. *)
-let span (type a) (kind : a span) size : cursor -> a =
- fun c ->
+let[@inline] bound ~errors size c =
   let cur = c.wpos and sz = size c in
-  if sz < 0 || cur > Input_end.to_int c.wend - sz then unwalked ();
+  if sz < 0 || cur > Input_end.to_int c.wend - sz then
+    if errors then overrun c.wend ~first:cur ~sz else unwalked ();
   c.wpos <- cur + sz;
+  sz
+
+let[@inline] span_value (type a) ~errors (kind : a span) size c : a =
+  let cur = c.wpos in
+  let sz = bound ~errors size c in
   match kind with
-  | Slice_span -> Slice.make_or_eod c.wbuf ~first:cur ~length:sz
+  | Slice_span ->
+      if sz = 0 then Slice.eod else Slice.make c.wbuf ~first:cur ~length:sz
   | String_span -> Bytes.sub_string c.wbuf cur sz
 
-(* A field present when [present] holds; an absent one takes no bytes. *)
-let gated present (item : cursor -> 'a) : cursor -> 'a option =
- fun c -> if present c then Some (item c) else None
+let span kind size : _ Types.walk =
+  {
+    wvalue = (fun c -> span_value ~errors:false kind size c);
+    wskip = (fun c -> ignore (bound ~errors:false size c : int));
+    wnames = (fun c -> span_value ~errors:true kind size c);
+  }
 
-(* A sub-codec in a region of [size] bytes, which it must not pass, nor fall
-   short of unless [at_most]; the cursor goes on at the region's end. *)
-let region ~at_most size (sub : cursor -> 'a) : cursor -> 'a =
- fun c ->
+let with_name name (e : parse_error) =
+  Parse_error { e with field = name :: e.field }
+
+(* [run], naming the errors under it with [name] as the check pass does. Only
+   the [wnames] walks call it, so the walk that accepts sets up no handler. *)
+let named name run =
+  match name with
+  | None -> run
+  | Some name -> (
+      fun c -> try run c with Parse_error e -> raise (with_name name e))
+
+(* A sub-codec in a region of [size] bytes, checked against the region's end,
+   which it must reach unless [at_most]; the cursor goes on at the region's
+   end. *)
+let[@inline] inside ~errors ~at_most size c run =
   let cur = c.wpos and sz = size c and stop = c.wend and base = c.wbase in
   let gates = c.wgates in
-  if sz < 0 || cur > Input_end.to_int stop - sz then unwalked ();
+  if sz < 0 || cur > Input_end.to_int stop - sz then
+    if errors then overrun stop ~first:cur ~sz else unwalked ();
   c.wend <- Input_end.narrow stop (cur + sz);
-  let v = sub c in
+  let v = run c in
   let n = c.wpos - cur in
-  if n > sz || ((not at_most) && n <> sz) then unwalked ();
+  if n > sz || ((not at_most) && n <> sz) then
+    if errors then misfit ~at:(cur + min n sz) ~expected:sz ~got:n
+    else unwalked ();
   c.wbase <- base;
   c.wgates <- gates;
   c.wend <- stop;
   c.wpos <- cur + sz;
   v
 
+let region ~at_most ~name size (sub : 'a Types.walk) : 'a Types.walk =
+  {
+    wvalue = (fun c -> inside ~errors:false ~at_most size c sub.wvalue);
+    wskip = (fun c -> inside ~errors:false ~at_most size c sub.wskip);
+    wnames =
+      named name (fun c -> inside ~errors:true ~at_most size c sub.wnames);
+  }
+
 (* A sub-codec measuring itself. *)
-let sub (sub : cursor -> 'a) : cursor -> 'a =
- fun c ->
+let[@inline] keep c run =
   let base = c.wbase and gates = c.wgates in
-  let v = sub c in
+  let v = run c in
   c.wbase <- base;
   c.wgates <- gates;
   v
 
-(* A fixed-size sub-codec at offset [off] of the record: the cursor stays
-   where it was. *)
-let fixed_sub off (sub : cursor -> 'a) : cursor -> 'a =
- fun c ->
-  let base = c.wbase and pos = c.wpos in
-  c.wpos <- base + off;
-  let v = sub c in
-  c.wbase <- base;
-  c.wpos <- pos;
-  v
+let sub ~name (sub : 'a Types.walk) : 'a Types.walk =
+  {
+    wvalue = (fun c -> keep c sub.wvalue);
+    wskip = (fun c -> keep c sub.wskip);
+    wnames = named name (fun c -> keep c sub.wnames);
+  }
+
+(* The same fields present when [present] holds, each one closure with its
+   gate; an absent one takes no bytes. *)
+let gated_span present kind size : _ option Types.walk =
+  {
+    wvalue =
+      (fun c ->
+        if present c then Some (span_value ~errors:false kind size c) else None);
+    wskip =
+      (fun c -> if present c then ignore (bound ~errors:false size c : int));
+    wnames =
+      (fun c ->
+        if present c then Some (span_value ~errors:true kind size c) else None);
+  }
+
+let gated_region present ~at_most ~name size (sub : 'a Types.walk) :
+    'a option Types.walk =
+  {
+    wvalue =
+      (fun c ->
+        if present c then Some (inside ~errors:false ~at_most size c sub.wvalue)
+        else None);
+    wskip =
+      (fun c ->
+        if present c then inside ~errors:false ~at_most size c sub.wskip);
+    wnames =
+      named name (fun c ->
+          if present c then
+            Some (inside ~errors:true ~at_most size c sub.wnames)
+          else None);
+  }
+
+let gated_sub present ~name (sub : 'a Types.walk) : 'a option Types.walk =
+  {
+    wvalue = (fun c -> if present c then Some (keep c sub.wvalue) else None);
+    wskip = (fun c -> if present c then keep c sub.wskip);
+    wnames =
+      named name (fun c -> if present c then Some (keep c sub.wnames) else None);
+  }
+
+(* The bytes a field takes under its gate [present]: none when it is
+   absent. *)
+let gated_moves present size = Moves (fun c -> if present c then size c else 0)
+
+(* A field the cursor moves over: a byte span, a sub-codec in a region, or one
+   measuring itself, each with a walk of its own. *)
+let moving : type a.
+    name:string option ->
+    frame:int ->
+    (string * packed_scalar) list ->
+    a typ ->
+    a Types.walk * walk_move =
+ fun ~name ~frame prefix typ ->
+  let size = size ~size:frame prefix in
+  match typ with
+  | Byte_slice { size = e } -> (span Slice_span (size e), Moves (size e))
+  | Byte_array { size = e } -> (span String_span (size e), Moves (size e))
+  | Single_elem { size = e; elem = Codec { codec_walk = Some w; _ }; at_most }
+    ->
+      (region ~at_most ~name (size e) w, Moves (size e))
+  | Codec { codec_walk = Some w; _ } ->
+      let w = sub ~name w in
+      (w, Walks w.wskip)
+  | _ -> raise Exit
+
+(* [moving] under the gate [present], in the closures of the field. *)
+let gated_moving : type a.
+    name:string option ->
+    frame:int ->
+    (string * packed_scalar) list ->
+    (cursor -> bool) ->
+    a typ ->
+    a option Types.walk * walk_move =
+ fun ~name ~frame prefix present typ ->
+  let size = size ~size:frame prefix in
+  let moves e = gated_moves present (size e) in
+  match typ with
+  | Byte_slice { size = e } -> (gated_span present Slice_span (size e), moves e)
+  | Byte_array { size = e } -> (gated_span present String_span (size e), moves e)
+  | Single_elem { size = e; elem = Codec { codec_walk = Some w; _ }; at_most }
+    ->
+      (gated_region present ~at_most ~name (size e) w, moves e)
+  | Codec { codec_walk = Some w; _ } ->
+      let w = gated_sub present ~name w in
+      (w, Walks w.wskip)
+  | _ -> raise Exit
+
+(* A sub-codec at offset [off] of the record, in a region of [size] bytes when
+   [size >= 0], which it must not pass, nor fall short of unless [at_most]:
+   the cursor stays where it was. *)
+let fixed_sub ?(at_most = true) ?(size = -1) ~name off (sub : 'a Types.walk) :
+    'a Types.walk =
+  let[@inline] at c run =
+    let base = c.wbase and pos = c.wpos and stop = c.wend in
+    let gates = c.wgates in
+    let cur = base + off in
+    c.wpos <- cur;
+    if size >= 0 then c.wend <- Input_end.narrow stop (cur + size);
+    let v = run c in
+    (if size >= 0 then
+       let n = c.wpos - cur in
+       if n > size || ((not at_most) && n <> size) then unwalked ());
+    c.wbase <- base;
+    c.wgates <- gates;
+    c.wend <- stop;
+    c.wpos <- pos;
+    v
+  in
+  {
+    wvalue = (fun c -> at c sub.wvalue);
+    wskip = (fun c -> at c sub.wskip);
+    wnames = named name (fun c -> at c sub.wnames);
+  }
 
 (* {1 The record}
 
@@ -329,12 +760,14 @@ let scalar : type a. a scalar -> cursor -> a = function
   | Bits16be { off; shift; mask } ->
       fun c -> (Unchecked.u16be c.wbuf (c.wbase + off) lsr shift) land mask
 
-let read : type a. a walk_read -> cursor -> a = function
+let read : type a. names:bool -> a walk_read -> cursor -> a =
+ fun ~names -> function
   | Scalar s -> scalar s
   | String (off, n) -> fun c -> Bytes.sub_string c.wbuf (c.wbase + off) n
+  | Slice (_, 0) -> fun _ -> Slice.eod
   | Slice (off, n) ->
-      fun c -> Slice.make_or_eod c.wbuf ~first:(c.wbase + off) ~length:n
-  | Walk w -> w
+      fun c -> Slice.make c.wbuf ~first:(c.wbase + off) ~length:n
+  | Walk w -> if names then w.wnames else w.wvalue
 
 type (_, _) readers =
   | Nil : ('r, 'r) readers
@@ -343,8 +776,8 @@ type (_, _) readers =
       -> ('a -> 'rest, 'result) readers
 
 let readers : type full result.
-    (full, result) walk_readers -> (full, result) readers =
- fun readers ->
+    names:bool -> (full, result) walk_readers -> (full, result) readers =
+ fun ~names readers ->
   let rec go : type mid.
       (full, mid) walk_readers ->
       (mid, result) readers ->
@@ -352,7 +785,7 @@ let readers : type full result.
    fun readers acc ->
     match readers with
     | WNil -> acc
-    | WSnoc (rest, r) -> go rest (Cons (read r, acc))
+    | WSnoc (rest, r) -> go rest (Cons (read ~names r, acc))
   in
   go readers Nil
 
@@ -436,69 +869,300 @@ let stage : type mid result.
 
    The frame, then the checks of the fixed-offset fields, then each field read
    in order: in place, or by moving the cursor over it, which checks it as the
-   layout pass would. So the walk accepts what the layout pass and the check
-   pass it leaves accept, and reads each field where the read pass would, with
-   each size and gate evaluated once. A sub-codec's walk builds its record
-   before the walk of the record around it has finished checking: a
-   constructor can see a record the walk then rejects. *)
+   layout pass would, then the [where] clause. So the walk accepts what the
+   layout pass and the check pass it leaves accept, and reads each field where
+   the read pass would, with each size and gate evaluated once. A sub-codec's
+   walk builds its record before the walk of the record around it has finished
+   checking: a constructor can see a record the walk then rejects.
 
-let walk_checks checks =
-  let within =
+   A [wnames] walk that does not accept raises the error the check pass
+   raises, in the same order: the frame against the input the record is given, its fields in
+   order, which all fixed-offset ones precede, and its [where] clause last. The
+   frame, a span, a region and the [where] clause raise their own; a check of a
+   fixed-offset field that fails leaves the error to the record's check pass
+   ([fail]), which finds the first field to fail, and a condition that raises
+   leaves the record to the general path. *)
+
+(* The error of the record at [base], which the walk did not accept, from its
+   check pass; [Unwalked] if that pass accepts it. *)
+let[@inline never] settle fail c base =
+  fail c.wend c.wbuf base;
+  unwalked ()
+
+(* The record at [base] does not fit before [stop]: [unfit] raises its
+   error. *)
+let[@inline never] unframed unfit c base =
+  unfit c.wend c.wbuf base;
+  unwalked ()
+
+(* The fields [body] walks, then the [where] clause of a frame of [size] bytes,
+   which reads the record at [wbase] as the fields leave it. Without one, the
+   walk of the record ends in a tail call. *)
+let with_where ~errors ~size where body =
+  match where with
+  | None -> body
+  | Some f ->
+      let where = f ~size in
+      fun c ->
+        let v = body c in
+        if not (where c) then
+          if errors then raise_constraint ~at:c.wbase ~which:Where ()
+          else unwalked ();
+        v
+
+(* The conditions of [checks], compiled for a frame of [size] bytes, as one
+   test. *)
+let conditions ~size checks =
+  match
     List.filter_map
-      (function Within (s, set) -> Some (s, set) | Holds _ -> None)
+      (function Holds f -> Some (f ~size) | Within _ -> None)
       checks
-  and holds =
-    List.filter_map (function Holds f -> Some f | Within _ -> None) checks
+  with
+  | [] -> None
+  | [ f ] -> Some f
+  | fs -> Some (fun c -> List.for_all (fun f -> f c) fs)
+
+(* The walk tests the fixed-offset fields in the form the check pass picks:
+   one word test, the staged word tests, or the scan of the flat tests. The
+   frame check comes first, so the unchecked reads stay in the record. *)
+let record_walk ~errors ~min_size ~start ~fail ~unfit ~where checks body =
+  let within =
+    Array.of_list
+      (List.filter_map
+         (function Within (s, set) -> Some (s, set) | Holds _ -> None)
+         checks)
+  and holds = conditions ~size:min_size checks
+  and body = with_where ~errors ~size:min_size where body in
+  let[@inline] refuse c base =
+    if errors then settle fail c base else unwalked ()
   in
-  let flat, tables = Codec_intervals.flatten_intervals (Array.of_list within) in
-  (flat, tables, Array.of_list holds)
-
-let rec holds_all holds c i =
-  i >= Array.length holds
-  || ((Array.unsafe_get holds i) c && holds_all holds c (i + 1))
-
-let record_walk ~min_size ~start checks body =
-  let flat, tables, holds = walk_checks checks in
-  let n = Array.length flat in
-  fun c ->
+  let[@inline] frame c =
     let base = c.wpos and stop = c.wend in
-    if base < 0 || base > Input_end.to_int stop - min_size then unwalked ();
-    let buf = c.wbuf in
-    if n > 0 && Codec_intervals.scan_intervals flat tables buf base n 0 >= 0
-    then unwalked ();
+    if base < 0 || base > Input_end.to_int stop - min_size then
+      if errors then unframed unfit c base else unwalked ();
+    base
+  in
+  let[@inline] rest c base =
     c.wbase <- base;
-    if not (holds_all holds c 0) then unwalked ();
+    (match holds with Some f when not (f c) -> refuse c base | _ -> ());
     c.wpos <- base + start;
     body c
+  in
+  match Codec_intervals.single ~size:min_size within with
+  | Some (q, l, r, m, lo, hi) ->
+      fun c ->
+        let base = frame c in
+        if not (Codec_intervals.within c.wbuf base q l r m lo hi) then
+          refuse c base;
+        rest c base
+  | None when within = [||] ->
+      fun c ->
+        let base = frame c in
+        rest c base
+  | None -> (
+      match Codec_intervals.word_tests ~size:min_size within with
+      | Some [ (_, q, s, m, lo, n) ] ->
+          fun c ->
+            let base = frame c in
+            if
+              not
+                (Codec_intervals.holds
+                   (Codec_words.load c.wbuf base q)
+                   s m lo n)
+            then refuse c base;
+            rest c base
+      | _ -> (
+          match staged ~gate:(-1) ~size:min_size within with
+          | Some test ->
+              fun c ->
+                let base = frame c in
+                c.wbase <- base;
+                if not (test c) then refuse c base;
+                rest c base
+          | None ->
+              let flat, tables = Codec_intervals.flatten_intervals within in
+              let n = Array.length flat in
+              fun c ->
+                let base = frame c in
+                if
+                  Codec_intervals.scan_intervals flat tables c.wbuf base n 0
+                  >= 0
+                then refuse c base;
+                rest c base))
+
+(* The walks of a list in order, one closure per four. *)
+let rec seq = function
+  | [] -> fun _ -> ()
+  | [ a ] -> a
+  | [ a; b ] ->
+      fun c ->
+        a c;
+        b c
+  | [ a; b; d ] ->
+      fun c ->
+        a c;
+        b c;
+        d c
+  | [ a; b; d; e ] ->
+      fun c ->
+        a c;
+        b c;
+        d c;
+        e c
+  | a :: b :: d :: rest ->
+      let rest = seq rest in
+      fun c ->
+        a c;
+        b c;
+        d c;
+        rest c
+
+(* The checks of the fields of [places], in field order: those of each field
+   the cursor walks, as its walk makes them, and nothing for a field read in
+   place, whose checks the record's frame and tests make. *)
+let skips places = seq (List.filter_map (fun p -> p.pskip) places)
+
+(* The offset [o], not negative, moved by a size [s] a check has passed: a
+   negative one, which the bytes give when they changed since, refuses the
+   place, and a sum past [max_int] is [max_int], past any buffer. *)
+let[@inline] moved o s =
+  if s < 0 then unwalked ()
+  else
+    let o = o + s in
+    if o < 0 then max_int else o
+
+(* The offset after the fields that take [sizes] bytes, from [o]: a closed
+   form, one closure. *)
+let rec advance = function
+  | [] -> fun _ o -> o
+  | [ f ] -> fun c o -> moved o (f c)
+  | [ f; g ] -> fun c o -> moved (moved o (f c)) (g c)
+  | f :: g :: rest ->
+      let rest = advance rest in
+      fun c o -> rest c (moved (moved o (f c)) (g c))
+
+(* Where each field the cursor walks, or a gate guards, starts in the record at
+   the cursor's [wbase]: past the fields before it, then its gate. The
+   record's checks have passed, so the cursor moves over a span or a region
+   by its size, with no test of its bounds, and walks only a sub-codec that
+   measures itself; [enter] tests that the place's frame lies in the
+   buffer. *)
+let place ~start before gate =
+  let moves =
+    List.filter
+      (fun p -> match p.pmove with Stays -> false | Moves _ | Walks _ -> true)
+      before
+    |> List.map (fun p -> p.pmove)
+  in
+  let sizes =
+    List.filter_map
+      (function Moves f -> Some f | Stays | Walks _ -> None)
+      moves
+  in
+  if List.length sizes = List.length moves then
+    match (sizes, gate) with
+    | [], None -> fun c -> c.wbase + start
+    | [], Some gate -> fun c -> if gate c then c.wbase + start else -1
+    | [ f ], None -> fun c -> moved (c.wbase + start) (f c)
+    | [ f ], Some gate ->
+        fun c ->
+          let o = moved (c.wbase + start) (f c) in
+          if gate c then o else -1
+    | [ f; g ], Some gate ->
+        fun c ->
+          let o = moved (moved (c.wbase + start) (f c)) (g c) in
+          if gate c then o else -1
+    | sizes, None ->
+        let adv = advance sizes in
+        fun c -> adv c (c.wbase + start)
+    | sizes, Some gate ->
+        let adv = advance sizes in
+        fun c ->
+          let o = adv c (c.wbase + start) in
+          if gate c then o else -1
+  else
+    let walk =
+      seq
+        (List.map
+           (function
+             | Moves f -> fun c -> c.wpos <- moved c.wpos (f c)
+             | Walks w -> w
+             | Stays -> fun _ -> ())
+           moves)
+    in
+    let gate = Option.value gate ~default:(fun _ -> true) in
+    fun c ->
+      c.wpos <- c.wbase + start;
+      walk c;
+      if gate c then c.wpos else -1
+
+let places ~start places =
+  let rec go before acc = function
+    | [] -> List.rev acc
+    | p :: rest ->
+        let acc =
+          match (p.pskip, p.pgate) with
+          | None, None -> acc
+          | _ -> (p.pname, place ~start (List.rev before) p.pgate) :: acc
+        in
+        go (p :: before) acc rest
+  in
+  go [] [] places
 
 (* The walk of a sealed record without parameters, while every field has one
    and its [where] clause reads only fixed-offset fields. *)
-let record ~n_params ~min_size ~prefix ~where make = function
+let record ~n_params ~min_size ~prefix ~where ~fail ~unfit make = function
   | Some w when n_params = 0 -> (
-      match Option.map (cond prefix) where with
+      match Option.map (cond_at prefix) where with
       | exception Exit -> None
-      | where ->
-          let checks =
-            Option.fold ~none:[] ~some:(fun f -> [ Holds f ]) where
-            @ List.rev w.wchecks_rev
-          in
+      | where -> (
           let start = Option.value ~default:min_size w.wstart in
-          Option.map
-            (record_walk ~min_size ~start checks)
-            (stage make (readers w.wreaders)))
+          let checks = List.rev w.wchecks_rev in
+          let fields = List.rev w.wplaces_rev in
+          let walk ~errors body =
+            record_walk ~errors ~min_size ~start ~fail ~unfit ~where checks body
+          in
+          match
+            ( stage make (readers ~names:false w.wreaders),
+              stage make (readers ~names:true w.wreaders) )
+          with
+          | Some value, Some names ->
+              Some
+                ( {
+                    wvalue = walk ~errors:false value;
+                    wskip = walk ~errors:false (skips fields);
+                    wnames = walk ~errors:true names;
+                  },
+                  places ~start fields )
+          | _ -> None))
   | Some _ | None -> None
 
-(* A decode through [walk], or [general] when the walk does not accept. *)
-let decode walk general buf off =
-  let c =
-    {
-      wbuf = buf;
-      wbase = off;
-      wpos = off;
-      wend = Input_end.of_bytes buf;
-      wgates = 0;
-    }
-  in
-  match walk c with
+let[@inline] cursor buf off wend =
+  { wbuf = buf; wbase = off; wpos = off; wend; wgates = 0 }
+
+(* The error of a walk that failed, from the same walk naming its fields. A size
+   that does not evaluate is reported at the record it sizes, the one the
+   cursor is in, as the check pass reports it. *)
+let named_error walk general buf off =
+  let c = cursor buf off (Input_end.of_bytes buf) in
+  match walk.wnames c with
   | v -> v
-  | exception (Types.Unwalked | Types.Parse_error _) -> general buf off
+  | exception Types.Unwalked -> general buf off
+  | exception
+      Parse_error
+        ({ kind = Value_out_of_range _ | Zero_divisor; at = 0; _ } as e) ->
+      raise (Parse_error { e with at = c.wbase })
+
+(* A decode through [walk], or [general] when the walk can neither accept nor
+   name an error. *)
+let decode walk general buf off =
+  match walk.wvalue (cursor buf off (Input_end.of_bytes buf)) with
+  | v -> v
+  | exception (Types.Unwalked | Parse_error _) ->
+      named_error walk general buf off
+
+(* Whether [walk] accepts the record at [off], the bytes stopping at [wend]. *)
+let accepts walk buf off wend =
+  match walk.wskip (cursor buf off wend) with
+  | () -> true
+  | exception (Types.Unwalked | Types.Parse_error _) -> false

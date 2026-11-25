@@ -58,13 +58,13 @@ let c_ident (s : t) = everparse_name s.name
    collides whenever the names differ only in case, since macOS and Windows
    fold it in file names ([header] and [Header] both write [Header.3d],
    [FooBar] and [Foobar] one file there, and the second write wins: the
-   verified C, the plug and the provenance stamp then describe one codec while
+   verified C, the visitor and the provenance stamp then describe one codec while
    the OCaml side still parses with both, so the shadowed codec's FFI stubs
    validate against the other codec's spec). [c_ident] collides more widely,
    since [everparse_name] also strips underscores and collapses uppercase runs
    ([TMFrame] and [Tmframe] write two [_Fields.h] files that share the
    [TMFRAME_FIELDS_H] include guard and the [TmframeFields] struct tag, so a
-   translation unit including both takes one schema's plug layout for the
+   translation unit including both takes one schema's visitor layout for the
    other's). The standalone pipeline already rejects a name collision in
    [Wire.Everparse.merge]; do the same for the per-schema pipeline, up front
    and naming both codecs. [c_ident] is [pascal_case], the mangling behind the
@@ -93,7 +93,7 @@ let extern_api_path ~outdir s =
 
 (* The extern callback names are read straight out of the [_ExternalAPI.h]
    file EverParse has just generated rather than predicted with [pascal_case],
-   so the plug defines exactly what that header declares.
+   so the visitor defines exactly what that header declares.
 
    KaRaMeL pretty-prints the declaration to a column budget, so a long enough
    schema name puts [extern void] and the name it introduces on separate lines.
@@ -356,8 +356,8 @@ let has_3d_exe () = locate_3d_exe () <> None
 
 (* The [_ExternalTypedefs.h] header seen by the EverParse-generated validator
    and wrapper. The default shipped by wire.3d is a forward declaration that
-   ties WIRECTX to the matching [<Name>_Fields] plug struct. Users who want
-   their own plug (e.g. {!Wire_stubs} for OCaml FFI) overwrite this file with
+   ties WIRECTX to the matching [<Name>_Fields] visitor struct. Users who want
+   their own visitor (e.g. {!Wire_stubs} for OCaml FFI) overwrite this file with
    a different WIRECTX definition; they must then also omit the default
    [<Name>_Fields.c] from their link. *)
 let write_external_typedefs ~outdir schemas =
@@ -386,7 +386,7 @@ let plug_prefix s =
 
 let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
 
-(* The plug names each field twice in C: the [_IDX_] macro upper-cases the
+(* The visitor names each field twice in C: the [_IDX_] macro upper-cases the
    name, so [X] and [x] would define one macro twice. The struct member's
    escape is injective, so only the macro can clash, but both are checked.
    Refuse naming both fields before writing either file. *)
@@ -397,7 +397,8 @@ let check_plug_names s =
       if not (Wire.Private.Names.is_identifier f.name) then
         Fmt.invalid_arg
           "Wire_3d: in %S, field %S is not an identifier \
-           ([A-Za-z_][A-Za-z0-9_]*) and cannot name a plug member; rename it"
+           ([A-Za-z_][A-Za-z0-9_]*) and cannot name a visitor member; rename \
+           it"
           s.name f.name)
     fields;
   let check what ident =
@@ -408,14 +409,14 @@ let check_plug_names s =
     | None -> ()
     | Some (a, b, id) ->
         Fmt.invalid_arg
-          "Wire_3d: in %S, fields %S and %S both define the plug's %s %S; \
+          "Wire_3d: in %S, fields %S and %S both define the visitor's %s %S; \
            rename one of them"
           s.name a b what id
   in
   check "macro" (index_macro s);
   check "struct member" Wire.Everparse.plug_member
 
-(* Typed-struct plug: one C struct per schema with one member per named field,
+(* Typed-struct visitor: one C struct per schema with one member per named field,
    plus a [WireSet*] implementation that switches on idx to populate it. *)
 let write_fields_header ~outdir s =
   let fields = Wire.Everparse.plug_fields s in
@@ -438,7 +439,8 @@ let write_fields_header ~outdir s =
     (fun f -> pr "#define %s %d@\n" (index_macro s f.Wire.Everparse.name) f.idx)
     fields;
   if fields <> [] then pr "@\n";
-  pr "/* Default plug: one typed member per named field. Pass a pointer to@\n";
+  pr
+    "/* Default visitor: one typed member per named field. Pass a pointer to@\n";
   pr "   [%sFields] as [WIRECTX *] when you want every field populated. */@\n"
     ident;
   pr "typedef struct %sFields {@\n" ident;
@@ -455,7 +457,7 @@ let write_fields_header ~outdir s =
 
 (* Emit one [case N:] body inside a [WireSet*] setter. [float] / [double]
    fields get a [memcpy] bit-reinterpret because the parser hands us the
-   underlying [UINT32] / [UINT64] but the plug struct stores the typed
+   underlying [UINT32] / [UINT64] but the visitor struct stores the typed
    float; everyone else takes a value cast. *)
 let emit_setter_case ppf logical f =
   if String.equal f.Wire.Everparse.setter logical then
@@ -544,7 +546,7 @@ let write_fields ~outdir schemas =
 
 (* Files shipped with a schema whose validator depends on the WireCtx contract:
    the forward-decl header, the EverParse-emitted API / wrapper, and the
-   default plug pair. Every file in this list is installed and accounted for
+   default visitor pair. Every file in this list is installed and accounted for
    in the dune rules; wrapper artefacts are only needed at install time,
    while [_Fields.{c,h}] also link into the runtest. *)
 let wire_ctx_files schemas =
@@ -1097,7 +1099,7 @@ let pack c = Pack c
 (* -- Documentation / single-file pipeline. [main ~mode:`Standalone] drives these:
    project each codec with [Wire.Everparse.project] (FFI-free), merge the family
    into one [<Package>.3d] with [write], and compile that single spec to a
-   validator-only [<Package>.c] -- no per-codec files, no [_Fields] plug, no FFI
+   validator-only [<Package>.c] -- no per-codec files, no [_Fields] visitor, no FFI
    stubs. The package name becomes the 3D module name, so turn it into a valid
    EverParse identifier (CamelCase, no hyphens): "my-pkg" -> "MyPkg". -- *)
 let doc_module_name package =
@@ -1496,31 +1498,56 @@ let emit_agree_preamble ppf base ~has_params =
     pr "}"
   end
 
+(* The call of a codec with parameters: an input takes the corpus's next
+   value; an output points at a cell of its own type, printed after an
+   accepted input as [out <codec> <hex> <value>,...]. *)
+let emit_agree_call ppf cname check ptypes =
+  let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
+  let args, outputs, inputs, _ =
+    List.fold_left
+      (fun (args, outputs, i, o) -> function
+        | `Input t -> (Fmt.str "(%s) p[%d]" t i :: args, outputs, i + 1, o)
+        | `Output t -> (Fmt.str "&o%d" o :: args, (o, t) :: outputs, i, o + 1))
+      ([], [], 0, 0) ptypes
+  in
+  let outputs = List.rev outputs in
+  pr "  if (strcmp(name, \"%s\") == 0) {" cname;
+  if inputs > 0 then begin
+    pr "    unsigned long p[%d];" inputs;
+    pr "    parse_params(params, p, %d);" inputs
+  end;
+  List.iter (fun (o, t) -> pr "    %s o%d = 0;" t o) outputs;
+  pr "    int ok = %s(%s, base, len) ? 1 : 0;" check
+    (String.concat ", " (List.rev args));
+  if outputs <> [] then begin
+    pr "    if (ok) {";
+    pr "      printf(\"out %%s %%s\", name, hex);";
+    List.iteri
+      (fun k (o, _) ->
+        pr "      printf(\"%s%%llu\", (unsigned long long) o%d);"
+          (if k = 0 then " " else ",")
+          o)
+      outputs;
+    pr "      printf(\"\\n\");";
+    pr "    }"
+  end;
+  pr "    return ok;";
+  pr "  }"
+
 let emit_agree_run ppf triples =
   let pr fmt = Fmt.pf ppf (fmt ^^ "@\n") in
   pr "";
   pr
-    "static int run(const char *name, const char *params, uint8_t *base, \
-     uint32_t len) {";
+    "static int run(const char *name, const char *params, const char *hex, \
+     uint8_t *base, uint32_t len) {";
   pr "  (void) params;";
+  pr "  (void) hex;";
   List.iter
     (fun (cname, check, ptypes) ->
-      let n = List.length ptypes in
-      if n = 0 then
+      if ptypes = [] then
         pr "  if (strcmp(name, \"%s\") == 0) return %s(base, len) ? 1 : 0;"
           cname check
-      else begin
-        let args =
-          ptypes
-          |> List.mapi (fun i t -> Fmt.str "(%s) p[%d]" t i)
-          |> String.concat ", "
-        in
-        pr "  if (strcmp(name, \"%s\") == 0) {" cname;
-        pr "    unsigned long p[%d];" n;
-        pr "    parse_params(params, p, %d);" n;
-        pr "    return %s(%s, base, len) ? 1 : 0;" check args;
-        pr "  }"
-      end)
+      else emit_agree_call ppf cname check ptypes)
     triples;
   pr "  fprintf(stderr, \"agree: unknown codec '%%s'\\n\", name);";
   pr "  exit(3);";
@@ -1591,7 +1618,7 @@ let emit_agree_main ppf =
     "  while (fscanf(fp, \"%%255s %%4095s %%131072s %%ld\", name, params, hex, \
      &verdict) == 4) {";
   emit_agree_decode ppf;
-  pr "    int accept = run(name, params, buf, len);";
+  pr "    int accept = run(name, params, hex, buf, len);";
   pr "    total++;";
   pr "    if (accept != (int) verdict) {";
   pr "      mismatch++;";
@@ -1631,9 +1658,7 @@ let generate_agree ?name ~outdir ~package codecs =
       (fun (Pack c) ->
         let s = project ~mode:`Standalone c in
         let ptypes =
-          match s.source with
-          | Some st -> Raw.input_param_c_types st
-          | None -> []
+          match s.source with Some st -> Raw.param_c_types st | None -> []
         in
         (* EverParse builds the wrapper symbol as
            [pascal_case (module ^ "_check_" ^ codec)], so compute it the same way
@@ -1644,7 +1669,12 @@ let generate_agree ?name ~outdir ~package codecs =
           ptypes ))
       codecs
   in
-  let has_params = List.exists (fun (_, _, ptypes) -> ptypes <> []) triples in
+  let has_params =
+    List.exists
+      (fun (_, _, ptypes) ->
+        List.exists (function `Input _ -> true | `Output _ -> false) ptypes)
+      triples
+  in
   let oc = open_out (Filename.concat outdir "agree.c") in
   let ppf = Format.formatter_of_out_channel oc in
   emit_agree_preamble ppf base ~has_params;

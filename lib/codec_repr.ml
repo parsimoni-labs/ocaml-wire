@@ -10,8 +10,9 @@ let alloc_slots n = { ints = Array.make n 0; int64s = Array.make n 0L }
 
 (* A loop rather than [Array.fill]: a scratch holds a slot per field, and for
    that few the C call costs more than the stores. The [int64s] half is
-   written only by a field with a full-width slot ([Types.has_int64_slot]), so
-   a record without one has nothing there to clear. *)
+   written only by a field with a full-width slot ([Types.has_int64_slot]) or a
+   [wide_kind] one, which writes it on every pass, so a record without the
+   former has nothing there to clear. *)
 let clear_ints s n =
   for i = 0 to n - 1 do
     s.ints.(i) <- 0
@@ -86,47 +87,145 @@ let at_of base field_off = if field_off >= 0 then base + field_off else base
 
 (* Raise a field-constraint failure, reporting the offending field's value so a
    demux can route on it (e.g. a version field that failed [self = N]).
-   [field_idx] is the field's int slot; [at] is the field's byte offset. *)
+   [field_idx] is the field's slot; [at] is the field's byte offset. Only a
+   field read at full width writes its [int64s] slot, so a non-zero one holds
+   the value, which its int slot may be too narrow for. *)
 let raise_field_constraint ~field_idx ~at arr =
   let value =
     if field_idx >= 0 && field_idx < Array.length arr.ints then
-      Some (Int64.of_int arr.ints.(field_idx))
+      let full = arr.int64s.(field_idx) in
+      Some
+        (if Int64.equal full 0L then Int64.of_int arr.ints.(field_idx) else full)
     else None
   in
   raise_constraint ~at ~which:Field ?value ()
 
+(* How a field reads at full width when a native int cannot hold all its
+   values on this platform: EverParse reads its whole bit pattern, so a
+   constraint over it is evaluated on 64 bits from the [int64s] slot
+   ([Expr_compiler.wide]). A float is its IEEE 754 bit pattern, as in 3D. *)
+let float32_bits v = Int64.logand (Int64.of_int32 v) 0xFFFF_FFFFL
+
+(* The kind, and the 64 bits a decoded value reads as; an absent optional reads
+   as zero, as its slots do. *)
+let rec wide_of : type a. a typ -> (Expr_compiler.wide * (a -> int64)) option =
+  function
+  | Uint64 _ -> Some (Unsigned, UInt64.to_int64)
+  | Float64 _ -> Some (Unsigned, Int64.bits_of_float)
+  | Int64 _ -> Some (Signed, Fun.id)
+  | Uint32 _ when Sys.int_size <= 32 ->
+      Some
+        ( Unsigned,
+          fun v ->
+            Int64.logand (Int64.of_int32 (UInt32.to_int32 v)) 0xFFFF_FFFFL )
+  | Float32 _ when Sys.int_size <= 32 ->
+      Some (Unsigned, fun v -> float32_bits (Int32.bits_of_float v))
+  | Int32 _ when Sys.int_size <= 32 ->
+      Some (Signed, fun v -> Int64.of_int32 (SInt32.to_int32 v))
+  | Uint_var _ when Sys.int_size < 63 -> Some (Unsigned, Optint.Int63.to_int64)
+  | Where { inner; _ } -> wide_of inner
+  | Enum { base; _ } -> wide_of base
+  | Map { inner; encode; _ } ->
+      Option.map (fun (k, f) -> (k, fun v -> f (encode v))) (wide_of inner)
+  | Optional { inner; _ } ->
+      Option.map
+        (fun (k, f) -> (k, function Some v -> f v | None -> 0L))
+        (wide_of inner)
+  | Optional_or { inner; _ } -> wide_of inner
+  | _ -> None
+
+let wide_kind typ = Option.map fst (wide_of typ)
+
+(* For each parameter, whether a native int cannot hold all its values: such a
+   parameter keeps its 64 bits in the [int64s] slot. *)
+let params_wide handles =
+  Array.of_list
+    (List.map
+       (fun (Param.Pack p) -> Option.is_some (wide_of p.Types.typ))
+       handles)
+
+(* Bind the codec's formals from the caller's context, and write the mutable
+   ones back after the pass. Written as loops taking everything as arguments
+   rather than as [List.iteri] over a closure: this runs once per sub-codec per
+   element of an enclosing repeat, where the element count is the sender's to
+   choose, and a closure capturing the slots and the context is two heap blocks
+   a validator has no business turning over. *)
+let rec seed_params arr runtime ~wide param_base i = function
+  | [] -> ()
+  | Param.Pack p :: rest ->
+      arr.ints.(param_base + i) <- Types.eval_param runtime p.Types.name;
+      if wide.(i) then
+        arr.int64s.(param_base + i) <- Types.eval_param64 runtime p.Types.name;
+      seed_params arr runtime ~wide param_base (i + 1) rest
+
+let rec writeback_params arr runtime ~wide param_base i = function
+  | [] -> ()
+  | Param.Pack p :: rest ->
+      if p.Types.mutable_ then
+        if wide.(i) then
+          Types.eval_set_param64 runtime p.Types.name
+            arr.int64s.(param_base + i)
+        else Types.eval_set_param runtime p.Types.name arr.ints.(param_base + i);
+      writeback_params arr runtime ~wide param_base (i + 1) rest
+
+type typed_reader =
+  string
+  * packed_typ
+  * (Expr_compiler.wide * (runtime -> Input_end.t -> bytes -> int -> int64))
+    option
+
+(* [prev] with field [name] of [typ], read through [reader] at full width when
+   its type is [wide_kind]; a later field of the same name hides the earlier
+   one. *)
+let extend_typed name typ reader prev =
+  let prev = List.filter (fun (n, _, _) -> not (String.equal n name)) prev in
+  let full =
+    Option.map
+      (fun (kind, int64) ->
+        (kind, fun rt ie buf base -> int64 (reader rt ie buf base)))
+      (wide_of typ)
+  in
+  (name, Pack_typ typ, full) :: prev
+
+(* A [wide_kind] field fills its [int64s] slot with the value it reads at full
+   width, and its int slot with that value when the int holds it. *)
+let max_int64 = Int64.of_int max_int
+let min_int64 = Int64.of_int min_int
+
+let populate_wide idx (kind : Expr_compiler.wide) int64 reader slots runtime
+    input_end buf base =
+  let v = int64 (reader runtime input_end buf base) in
+  set_int64_slot slots idx v;
+  let fits =
+    match kind with
+    | Unsigned -> Int64.compare v 0L >= 0 && Int64.compare v max_int64 <= 0
+    | Signed -> Int64.compare v min_int64 >= 0 && Int64.compare v max_int64 <= 0
+  in
+  if fits then set_int_slot slots idx (Int64.to_int v)
+
 (* Build a populate function that writes a field value into the validator
    array without allocating. Resolves the type at seal time so the hot
    path is a direct arr.(idx) <- reader buf base. *)
-(* Like [Uint64] in [build_populate], on a narrow-int platform the int slot
-   only mirrors values the int can hold; a 64-bit host keeps the direct
-   store. *)
 let populate_uint32 idx reader =
   if Sys.int_size > 32 then fun slots runtime input_end buf base ->
     set_int_slot slots idx (UInt32.to_int (reader runtime input_end buf base))
-  else fun slots runtime input_end buf base ->
-    Option.iter (set_int_slot slots idx)
-      (Int32.unsigned_to_int
-         (UInt32.to_int32 (reader runtime input_end buf base)))
+  else
+    populate_wide idx Unsigned
+      (fun v -> Int64.logand (Int64.of_int32 (UInt32.to_int32 v)) 0xFFFF_FFFFL)
+      reader
 
-(* Same shape as [populate_uint32] on the signed side: the slot is a native
-   [int], so where that int is narrower than the field only the values it can
-   hold are mirrored, and a constraint over the rest reads an unpopulated zero
-   rather than a truncated number. *)
 let populate_sint32 idx reader =
   if Sys.int_size > 32 then fun slots runtime input_end buf base ->
     set_int_slot slots idx (SInt32.to_int (reader runtime input_end buf base))
-  else fun slots runtime input_end buf base ->
-    Option.iter (set_int_slot slots idx)
-      (SInt32.to_int_opt (reader runtime input_end buf base))
+  else
+    populate_wide idx Signed
+      (fun v -> Int64.of_int32 (SInt32.to_int32 v))
+      reader
 
 let populate_uint_var idx reader =
   if Sys.int_size >= 63 then fun slots runtime input_end buf base ->
     set_int_slot slots idx (UInt63.to_int (reader runtime input_end buf base))
-  else fun slots runtime input_end buf base ->
-    Option.iter (set_int_slot slots idx)
-      (Int64.unsigned_to_int
-         (Optint.Int63.to_int64 (reader runtime input_end buf base)))
+  else populate_wide idx Unsigned Optint.Int63.to_int64 reader
 
 let populate_int idx reader slots runtime input_end buf base =
   set_int_slot slots idx (reader runtime input_end buf base)
@@ -146,18 +245,22 @@ let populate_uint8 idx reader slots runtime input_end buf base =
 let populate_uint16 idx reader slots runtime input_end buf base =
   set_int_slot slots idx (UInt16.to_int (reader runtime input_end buf base))
 
-(* Floats store their IEEE 754 bit pattern in the int slot so [Ref name] in a
-   constraint sees the value the 3D side sees; a float64 also fills the int64
-   slot with the full pattern, which its predicates read (the int slot cannot
-   hold bits 52-62 on a narrow-int platform). The user-facing reader still
-   returns the [float], reinterpreted via [Int*.float_of_bits] elsewhere. *)
-let populate_float32 idx read slots _runtime _input_end buf base =
-  set_int_slot slots idx (Int32.to_int (read buf base))
+(* Floats store their IEEE 754 bit pattern, as an unsigned number, so
+   [Ref name] in a constraint sees the value the 3D side sees; a float64 fills
+   the int64 slot with it, which its predicates read. The user-facing reader
+   still returns the [float], reinterpreted via [Int*.float_of_bits]
+   elsewhere. *)
 
-let populate_float64 idx read slots _runtime _input_end buf base =
-  let bits = read buf base in
-  set_int64_slot slots idx bits;
-  set_int_slot slots idx (Int64.to_int bits)
+let populate_float32 idx read =
+  if Sys.int_size > 32 then fun slots _runtime _input_end buf base ->
+    set_int_slot slots idx (Int32.to_int (read buf base) land UInt32.mask32)
+  else
+    populate_wide idx Unsigned float32_bits (fun _runtime _input_end buf base ->
+        read buf base)
+
+let populate_float64 idx read =
+  populate_wide idx Unsigned Fun.id (fun _runtime _input_end buf base ->
+      read buf base)
 
 let rec build_populate : type a.
     a typ ->
@@ -179,21 +282,8 @@ let rec build_populate : type a.
   | Bits _ -> populate_int idx reader
   | Uint_var _ -> populate_uint_var idx reader
   | Uint32 _ -> populate_uint32 idx reader
-  (* [Uint64] / [Int64] populate both slots: the full value in [int64s] for
-     full-width [Field.int64] refs, and the truncated value in [ints] so legacy
-     int-kind [Field.ref] / [Field.int] constraints keep their pre-int64
-     behavior instead of silently reading an unpopulated zero. ([has_int64_slot]
-     gates the int64 ref API to exactly these types.) *)
-  | Uint64 _ ->
-      fun slots runtime input_end buf base ->
-        let v = reader runtime input_end buf base in
-        set_int64_slot slots idx (UInt64.to_int64 v);
-        Option.iter (set_int_slot slots idx) (UInt64.to_int_opt v)
-  | Int64 _ ->
-      fun slots runtime input_end buf base ->
-        let v = reader runtime input_end buf base in
-        set_int64_slot slots idx v;
-        set_int_slot slots idx (Int64.to_int v)
+  | Uint64 _ -> populate_wide idx Unsigned UInt64.to_int64 reader
+  | Int64 _ -> populate_wide idx Signed Fun.id reader
   | Float32 Little -> populate_float32 idx Bytes.get_int32_le
   | Float32 Big -> populate_float32 idx Bytes.get_int32_be
   | Float64 Little -> populate_float64 idx Bytes.get_int64_le
@@ -214,7 +304,7 @@ let rec build_populate : type a.
       build_populate inner idx reader
   | Optional { inner; _ } -> (
       (* The optional decodes as ['inner option]; populate from the inner
-         value when present, leave the slot at 0 when absent. *)
+         value when present, and zero both slots when absent. *)
       let inner_populate =
         build_populate inner idx (fun runtime input_end buf base ->
             match reader runtime input_end buf base with
@@ -224,7 +314,9 @@ let rec build_populate : type a.
       fun slots runtime input_end buf base ->
         match reader runtime input_end buf base with
         | Some _ -> inner_populate slots runtime input_end buf base
-        | None -> ())
+        | None ->
+            set_int_slot slots idx 0;
+            set_int64_slot slots idx 0L)
   | Byte_array _ | Byte_slice _ | All_bytes | Unit ->
       (* A plain byte span (or unit) carries no constrained data, so its reader
          only re-slices the buffer. Running it for effect would allocate a string
@@ -293,6 +385,12 @@ let runtime ?env () =
         ~set_param:(fun name value ->
           let i = find name 0 in
           if i >= 0 then env.slots.(i) <- value)
+        ~param64:(fun name ->
+          let i = find name 0 in
+          if i < 0 then 0L else env.wides.(i))
+        ~set_param64:(fun name value ->
+          let i = find name 0 in
+          if i >= 0 then env.wides.(i) <- value)
         (fun name ->
           let i = find name 0 in
           if i < 0 then 0 else env.slots.(i))
@@ -604,8 +702,10 @@ type field_reader =
    through the operation's immutable evaluation context. *)
 let bytes_leaves
     ?(sizeof_this : runtime -> Input_end.t -> bytes -> int -> int =
-      fun _ _ _ _ -> 0) (env : field_reader list) :
+      fun _ _ _ _ -> 0) ?(wide = []) (env : field_reader list) :
     (runtime, Input_end.t, bytes, int) Expr_compiler.leaves =
+  let find name = List.find_opt (fun (n, _, _) -> String.equal n name) wide in
+  let full name = Option.bind (find name) (fun (_, _, full) -> full) in
   {
     ref_ =
       (fun name ->
@@ -615,11 +715,17 @@ let bytes_leaves
             Fmt.invalid_arg "Codec: unbound field ref %S in size expression"
               name);
     i64 =
-      (fun name _ _ _ _ ->
-        Fmt.invalid_arg
-          "Codec: full-width field ref %S is only available in field \
-           constraints"
-          name);
+      (fun name ->
+        match full name with
+        | Some (_, reader) -> reader
+        | None ->
+            Fmt.invalid_arg
+              "Codec: full-width field ref %S is only available in field \
+               constraints and presence conditions"
+              name);
+    wide = (fun name -> Option.map fst (full name));
+    wide_expr =
+      wide_expr (fun name -> Option.map (fun (_, t, _) -> t) (find name));
     param_ref =
       (fun (Expr_compiler.Pack_param p) rt _ _ _ -> Types.eval_param rt p.name);
     sizeof_typ =
@@ -643,8 +749,8 @@ let compile_expr ?sizeof_this env e =
   fun runtime input_end buf base ->
     eval_buffer_expr f runtime input_end buf base
 
-let compile_bool_expr ?sizeof_this env e =
-  let f = Expr_compiler.compile_bool (bytes_leaves ?sizeof_this env) e in
+let compile_bool_expr ?sizeof_this ?wide env e =
+  let f = Expr_compiler.compile_bool (bytes_leaves ?sizeof_this ?wide env) e in
   fun runtime input_end buf base ->
     eval_buffer_expr f runtime input_end buf base
 
@@ -662,10 +768,23 @@ type compile_ctx = {
          array, filled at seal. Resolution lives here, not on the shared
          handle, so one handle can serve a standalone codec and an embedding
          with different slots. *)
+  slot_typs : (int, Types.packed_typ) Hashtbl.t;
+      (* Per-codec map from the slot of a [wide_kind] field to its kind. *)
 }
 
-let mk_ctx ?(sizeof_this = Stdlib.ref 0) ?(field_pos = 0) ~param_slots idx =
-  { idx; sizeof_this; field_pos; param_slots }
+let mk_ctx ?(sizeof_this = Stdlib.ref 0) ?(field_pos = 0) ~param_slots
+    ~slot_typs idx =
+  { idx; sizeof_this; field_pos; param_slots; slot_typs }
+
+let slot_typ cc name =
+  match cc.idx name with
+  | slot -> Hashtbl.find_opt cc.slot_typs slot
+  | exception Invalid_argument _ -> None
+
+let wide_ref cc name =
+  Option.bind (slot_typ cc name) (fun (Pack_typ t) -> wide_kind t)
+
+let note_typ slot_typs slot typ = Hashtbl.replace slot_typs slot (Pack_typ typ)
 
 let array_leaves (cc : compile_ctx) :
     (slots, unit, unit, unit) Expr_compiler.leaves =
@@ -678,6 +797,8 @@ let array_leaves (cc : compile_ctx) :
       (fun name ->
         let i = cc.idx name in
         fun a () () () -> a.int64s.(i));
+    wide = wide_ref cc;
+    wide_expr = wide_expr (slot_typ cc);
     param_ref =
       (fun (Expr_compiler.Pack_param p) a () () () ->
         (* The per-codec slot map is filled at seal, after these leaves are
@@ -697,6 +818,12 @@ let array_leaves (cc : compile_ctx) :
    are immediate units -- threaded here so callers keep the [arr -> _] shape. *)
 let compile_int_arr cc e =
   let f = Expr_compiler.compile_int (array_leaves cc) e in
+  fun arr -> f arr () () ()
+
+(* [e]'s value as the 64 bits 3D computes it on: at full width when its range
+   passes the native int, else its native value. *)
+let compile_int64_arr cc e =
+  let f = Expr_compiler.compile_bits (array_leaves cc) e in
   fun arr -> f arr () () ()
 
 type cmp = Eq | Ne | Lt | Le | Gt | Ge
@@ -736,10 +863,12 @@ let rec compile_bool_arr cc (e : bool expr) : slots -> bool =
   in
   let cmp : type a. cmp -> a expr -> a expr -> slots -> bool =
    fun op x y ->
+    let narrow a = Option.is_none (wide_ref cc a) in
     match (x, y) with
-    | Ref (I, a), Int n -> cmp_slot_const op (cc.idx a) n
-    | Int n, Ref (I, a) -> cmp_slot_const (flip op) (cc.idx a) n
-    | Ref (I, a), Ref (I, b) -> cmp_slots op (cc.idx a) (cc.idx b)
+    | Ref (I, a), Int n when narrow a -> cmp_slot_const op (cc.idx a) n
+    | Int n, Ref (I, a) when narrow a -> cmp_slot_const (flip op) (cc.idx a) n
+    | Ref (I, a), Ref (I, b) when narrow a && narrow b ->
+        cmp_slots op (cc.idx a) (cc.idx b)
     | _ -> general ()
   in
   match e with
@@ -777,6 +906,14 @@ exception Return_true
 let rec compile_stmt (cc : compile_ctx) (s : Types.action_stmt) :
     compiled_action =
   match s with
+  | Assign (p, e) when Option.is_some (wide_of p.Types.typ) -> (
+      (* An output a native int cannot hold keeps all 64 bits the C stores. *)
+      let fe = compile_int64_arr cc e in
+      fun arr ->
+        let v = fe arr in
+        match Hashtbl.find_opt cc.param_slots p.Types.name with
+        | Some slot -> set_int64_slot arr slot v
+        | None -> Fmt.invalid_arg "Codec: unbound parameter %S" p.Types.name)
   | Assign (p, e) -> (
       let fe = compile_int_arr cc e in
       fun arr ->
@@ -864,6 +1001,31 @@ type step =
 
 type packed_scalar = Ps : 'a scalar -> packed_scalar
 
+let rec bit_length n = if n = 0 then 0 else 1 + bit_length (n lsr 1)
+
+let bits_typ base mask =
+  Pack_typ (Bits { width = bit_length mask; base; bit_order = Msb_first })
+
+(* The type of the field a scalar reads, as its expressions see it. *)
+let scalar_typ : type a. a scalar -> packed_typ = function
+  | Byte _ -> Pack_typ Uint8
+  | U16le _ -> Pack_typ (Uint16 Little)
+  | U16be _ -> Pack_typ (Uint16 Big)
+  | U32le _ -> Pack_typ (Uint32 Little)
+  | U32be _ -> Pack_typ (Uint32 Big)
+  | Sbyte _ -> Pack_typ Int8
+  | I16le _ -> Pack_typ (Int16 Little)
+  | I16be _ -> Pack_typ (Int16 Big)
+  | I32le _ -> Pack_typ (Int32 Little)
+  | I32be _ -> Pack_typ (Int32 Big)
+  | Bits8 { mask; _ } -> bits_typ U8 mask
+  | Bits16le { mask; _ } -> bits_typ (U16 Little) mask
+  | Bits16be { mask; _ } -> bits_typ (U16 Big) mask
+
+let prefix_wide prefix =
+  wide_expr (fun name ->
+      Option.map (fun (Ps s) -> scalar_typ s) (List.assoc_opt name prefix))
+
 (* How a field adds to the record's extent, for the layout pass. *)
 type layout =
   | Lfix of int
@@ -885,7 +1047,7 @@ type _ walk_read =
   | Scalar : 'a scalar -> 'a walk_read
   | String : int * int -> string walk_read
   | Slice : int * int -> Bytesrw.Bytes.Slice.t walk_read
-  | Walk : (Types.cursor -> 'a) -> 'a walk_read
+  | Walk : 'a Types.walk -> 'a walk_read
 
 (* The walk's readers in field order, as [readers]. *)
 type (_, _) walk_readers =
@@ -895,10 +1057,29 @@ type (_, _) walk_readers =
       -> ('full, 'rest) walk_readers
 
 (* A check the walk makes before it reads: a field at a fixed offset within a
-   set, or a condition on such fields. *)
+   set, or a condition on such fields, compiled for the record's frame of
+   [size] bytes. *)
 type walk_check =
   | Within of packed_scalar * (int * int) array
-  | Holds of (Types.cursor -> bool)
+  | Holds of (size:int -> Types.cursor -> bool)
+
+(* How the cursor goes past a field once the record's checks have passed:
+   it stays, for a field at a fixed offset; it moves by the bytes the field
+   takes, a span or a region, with no test of their bounds; or it walks the
+   field, a sub-codec that measures itself. *)
+type walk_move =
+  | Stays
+  | Moves of (Types.cursor -> int)
+  | Walks of (Types.cursor -> unit)
+
+(* A field of the walk: its name, the checks the walk makes of it when it is
+   one the cursor walks, how the cursor goes past it, and its gate. *)
+type walk_place = {
+  pname : string;
+  pskip : (Types.cursor -> unit) option;
+  pmove : walk_move;
+  pgate : (Types.cursor -> bool) option;
+}
 
 type ('full, 'f) walk = {
   wreaders : ('full, 'f) walk_readers;
@@ -907,6 +1088,7 @@ type ('full, 'f) walk = {
       (* Where the first field the cursor moves over starts in the record. *)
   wgates : (bool expr * int) list;
       (* The gates so far, each with its bit of the cursor's [wgates]. *)
+  wplaces_rev : walk_place list; (* Each field, last first. *)
 }
 
 type ('f, 'r) record =
@@ -951,6 +1133,13 @@ type ('f, 'r) record =
         (int (* byte offset *)
         * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
         list;
+      faults_rev :
+        (string list
+        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
+        list;
+          (* Each field's checks, its reads bounded by the input, with the
+             names it brings in scope: what a record that does not fit runs,
+             in field order, for a check that fails before its end. *)
       field_actions_rev : (string * compiled_action) list;
       n_fields : int; (* count of named fields (for field indexing) *)
       n_array_slots : int;
@@ -960,8 +1149,14 @@ type ('f, 'r) record =
       where : bool expr option;
       doc : string option;
       field_readers : field_reader list;
+      typed_readers : typed_reader list;
+          (* The full-width readers of the [wide_kind] fields among
+             [field_readers], for a presence condition. *)
       param_slots : (string, int) Hashtbl.t;
           (* Per-codec param name to decode-array slot, filled at seal. *)
+      slot_typs : (int, Types.packed_typ) Hashtbl.t;
+          (* Per-codec slot of a [wide_kind] field to its kind, filled at
+             seal. *)
     }
       -> ('f, 'r) record
 
@@ -1032,7 +1227,8 @@ type 'r compiled = {
   plain_decode : (bytes -> int -> 'r) option;
       (* [decode] for a codec with no parameters and nothing to check after the
          reads: [Codec.decode] has only the bounds to check. *)
-  walk : (Types.cursor -> 'r) option;
+  walk : 'r Types.walk option;
+  places : (string * (Types.cursor -> int)) list;
       (* The decode that checks and reads each field once, for a codec without
          parameters whose fields all have a walk. *)
   encode : 'r -> runtime -> bytes -> int -> int;
@@ -1049,6 +1245,11 @@ type 'r compiled = {
       (* The frame of a fixed-size codec, or -1: with [plain_pass], what
          [validate] of a codec without parameters runs with no closure call. *)
   plain_pass : pass; (* [validate] for a codec without parameters. *)
+  faults : runtime -> Input_end.t -> bytes -> int -> unit;
+      (* The record's checks in field order, each field checked once it is
+         read within the input: raises the first that fails, or end of input
+         at the first field that does not fit. Run only on a record that does
+         not fit. *)
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
       (* [validate] for a codec embedded in another: the same bounds check and
          the same field pass, with parameters resolved by name against the
@@ -1117,7 +1318,14 @@ let record_start ?where ?doc name make =
       puts_rev = Some [];
       layout_rev = Some [];
       walk =
-        Some { wreaders = WNil; wchecks_rev = []; wstart = None; wgates = [] };
+        Some
+          {
+            wreaders = WNil;
+            wchecks_rev = [];
+            wstart = None;
+            wgates = [];
+            wplaces_rev = [];
+          };
       prefix = [];
       size_of_value_rev = [];
       min_wire_size = 0;
@@ -1126,14 +1334,17 @@ let record_start ?where ?doc name make =
       used_slots = Hashtbl.create 8;
       validators_rev = [];
       checkers_rev = [];
+      faults_rev = [];
       field_actions_rev = [];
       n_fields = 0;
       n_array_slots = 0;
       r_bf = None;
       field_access_rev = [];
       field_readers = [];
+      typed_readers = [];
       where;
       param_slots = Hashtbl.create 4;
+      slot_typs = Hashtbl.create 4;
     }
 
 let bind (f : 'a Field.t) get =

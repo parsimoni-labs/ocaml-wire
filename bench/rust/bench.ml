@@ -298,87 +298,101 @@ let packet_fields acc (packet : Packet_stack.t) =
 
 module H = Headers
 
-(* {2 Wire.Codec: check, then a proof-carrying read per field}
+(* {2 Wire.Codec: a checked view, then a read per field}
 
-   [Codec.check] answers a header that fails its checks with a proof [Codec.ok]
-   refuses, so a bad header costs no exception. *)
+   Each header's codec is named by a type of its own ([V.codec]), as each
+   generated module has its own [View]. The buffer is named once and its
+   length read once; [V.check v b len off] checks a header at [off] and
+   [V.get] turns the result into a view that only [b]'s reads of that codec's
+   fields accept; each [V.read] of a field is then one load with no bounds
+   check, and a view is immediate, so nothing is allocated. *)
 
-let eth_type = Staged.unstage (Codec.read H.eth H.eth_type)
-let ip_ihl = Staged.unstage (Codec.read H.ipv4 H.ipv4_ihl)
-let ip_flags = Staged.unstage (Codec.read H.ipv4 H.ipv4_flags)
-let ip_frag = Staged.unstage (Codec.read H.ipv4 H.ipv4_fragment_offset)
-let ip_len = Staged.unstage (Codec.read H.ipv4 H.ipv4_total_length)
-let ip_ttl = Staged.unstage (Codec.read H.ipv4 H.ipv4_ttl)
-let ip_proto = Staged.unstage (Codec.read H.ipv4 H.ipv4_protocol)
-let ip_src = Staged.unstage (Codec.read H.ipv4 H.ipv4_src)
-let ip_dst = Staged.unstage (Codec.read H.ipv4 H.ipv4_dst)
-let tcp_sp = Staged.unstage (Codec.read H.tcp H.tcp_src_port)
-let tcp_dp = Staged.unstage (Codec.read H.tcp H.tcp_dst_port)
-let tcp_seq = Staged.unstage (Codec.read H.tcp H.tcp_seq)
-let tcp_ack = Staged.unstage (Codec.read H.tcp H.tcp_ack)
-let tcp_off = Staged.unstage (Codec.read H.tcp H.tcp_data_offset)
-let tcp_flags = Staged.unstage (Codec.read H.tcp H.tcp_flags)
-let tcp_win = Staged.unstage (Codec.read H.tcp H.tcp_window)
-let udp_sp = Staged.unstage (Codec.read H.udp H.udp_src_port)
-let udp_dp = Staged.unstage (Codec.read H.udp H.udp_dst_port)
-let udp_len = Staged.unstage (Codec.read H.udp H.udp_length)
+module V = Codec.View
+module Eth = (val V.codec H.eth)
+module Ip = (val V.codec H.ipv4)
+module Tcp = (val V.codec H.tcp)
+module Udp = (val V.codec H.udp)
 
-let codec_tcp base acc buf o ~payload =
-  let t = Codec.check H.tcp buf o in
-  if not (Codec.ok t) then base
+let eth_type = V.field Eth.codec H.eth_type
+let ip_ihl = V.field Ip.codec H.ipv4_ihl
+let ip_flags = V.field Ip.codec H.ipv4_flags
+let ip_frag = V.field Ip.codec H.ipv4_fragment_offset
+let ip_len = V.field Ip.codec H.ipv4_total_length
+let ip_ttl = V.field Ip.codec H.ipv4_ttl
+let ip_proto = V.field Ip.codec H.ipv4_protocol
+let ip_src = V.field Ip.codec H.ipv4_src
+let ip_dst = V.field Ip.codec H.ipv4_dst
+let tcp_sp = V.field Tcp.codec H.tcp_src_port
+let tcp_dp = V.field Tcp.codec H.tcp_dst_port
+let tcp_seq = V.field Tcp.codec H.tcp_seq
+let tcp_ack = V.field Tcp.codec H.tcp_ack
+let tcp_off = V.field Tcp.codec H.tcp_data_offset
+let tcp_flags = V.field Tcp.codec H.tcp_flags
+let tcp_win = V.field Tcp.codec H.tcp_window
+let udp_sp = V.field Udp.codec H.udp_src_port
+let udp_dp = V.field Udp.codec H.udp_dst_port
+let udp_len = V.field Udp.codec H.udp_length
+
+let codec_tcp base acc b len o ~payload =
+  let k = V.check Tcp.codec b len o in
+  if not (V.ok k) then base
   else
-    let off = tcp_off t in
+    let t = V.get k in
+    let off = V.read tcp_off b t in
     if off * 4 > payload then base
     else
       tcp_fields acc
-        ~sp:(UInt16.to_int (tcp_sp t))
-        ~dp:(UInt16.to_int (tcp_dp t))
-        ~seq:(UInt32.to_int (tcp_seq t))
-        ~ack:(UInt32.to_int (tcp_ack t))
-        ~win:(UInt16.to_int (tcp_win t))
-        ~flags:(tcp_flags t) ~off
+        ~sp:(UInt16.to_int (V.read tcp_sp b t))
+        ~dp:(UInt16.to_int (V.read tcp_dp b t))
+        ~seq:(UInt32.to_int (V.read tcp_seq b t))
+        ~ack:(UInt32.to_int (V.read tcp_ack b t))
+        ~win:(UInt16.to_int (V.read tcp_win b t))
+        ~flags:(V.read tcp_flags b t) ~off
 
-let codec_udp base acc buf o ~payload =
-  let u = Codec.check H.udp buf o in
-  if not (Codec.ok u) then base
+let codec_udp base acc b len o ~payload =
+  let k = V.check Udp.codec b len o in
+  if not (V.ok k) then base
   else
-    let len = UInt16.to_int (udp_len u) in
-    if len > payload then base
+    let u = V.get k in
+    let ulen = UInt16.to_int (V.read udp_len b u) in
+    if ulen > payload then base
     else
       udp_fields acc
-        ~sp:(UInt16.to_int (udp_sp u))
-        ~dp:(UInt16.to_int (udp_dp u))
-        ~len
+        ~sp:(UInt16.to_int (V.read udp_sp b u))
+        ~dp:(UInt16.to_int (V.read udp_dp b u))
+        ~len:ulen
 
-let codec_ipv4 base acc buf o ~avail =
-  let ip = Codec.check H.ipv4 buf o in
-  if not (Codec.ok ip) then base
+let codec_ipv4 base acc b len o ~avail =
+  let k = V.check Ip.codec b len o in
+  if not (V.ok k) then base
   else
-    let hlen = ip_ihl ip * 4 and len = UInt16.to_int (ip_len ip) in
-    if len < hlen || len > avail then base
+    let ip = V.get k in
+    let hlen = V.read ip_ihl b ip * 4
+    and tlen = UInt16.to_int (V.read ip_len b ip) in
+    if tlen < hlen || tlen > avail then base
     else
-      let proto = UInt8.to_int (ip_proto ip) in
+      let proto = UInt8.to_int (V.read ip_proto b ip) in
       let acc =
         ip_fields acc
-          ~src:(UInt32.to_int (ip_src ip))
-          ~dst:(UInt32.to_int (ip_dst ip))
-          ~ttl:(UInt8.to_int (ip_ttl ip))
-          ~proto ~len
+          ~src:(UInt32.to_int (V.read ip_src b ip))
+          ~dst:(UInt32.to_int (V.read ip_dst b ip))
+          ~ttl:(UInt8.to_int (V.read ip_ttl b ip))
+          ~proto ~len:tlen
       in
-      if ip_flags ip land 1 <> 0 || ip_frag ip <> 0 then acc
+      if V.read ip_flags b ip land 1 <> 0 || V.read ip_frag b ip <> 0 then acc
       else
-        let payload = len - hlen in
+        let payload = tlen - hlen in
         match proto with
-        | 6 -> codec_tcp base acc buf (o + hlen) ~payload
-        | 17 -> codec_udp base acc buf (o + hlen) ~payload
+        | 6 -> codec_tcp base acc b len (o + hlen) ~payload
+        | 17 -> codec_udp base acc b len (o + hlen) ~payload
         | _ -> acc
 
-let codec_packet ~avail acc buf o =
-  let e = Codec.check H.eth buf o in
-  if not (Codec.ok e) then acc
+let codec_packet ~avail acc b len o =
+  let k = V.check Eth.codec b len o in
+  if not (V.ok k) then acc
   else
-    let ty = UInt16.to_int (eth_type e) in
-    if ty = ipv4 then codec_ipv4 acc (acc + ty) buf (o + 14) ~avail
+    let ty = UInt16.to_int (V.read eth_type b (V.get k)) in
+    if ty = ipv4 then codec_ipv4 acc (acc + ty) b len (o + 14) ~avail
     else acc + ty
 
 (* {2 wire.ocaml: the generated view, then a read per field}
@@ -463,15 +477,13 @@ let oxcaml = Stack_read.oxcaml
 
 (* The frame size comes from the corpus's framing, while all protocol
    dispatch, header lengths and parent-region bounds come from Packet_stack. *)
-let frame_codec stride =
-  Codec.v "BenchmarkFrame"
-    (fun p -> p)
-    Codec.
-      [
-        Field.v "packet"
-          (nested_at_most ~size:(int stride) (codec Packet_stack.codec))
-        $ Fun.id;
-      ]
+let frame_field stride =
+  Codec.(
+    Field.v "packet"
+      (nested_at_most ~size:(int stride) (codec Packet_stack.codec))
+    $ Fun.id)
+
+let frame_codec packet = Codec.v "BenchmarkFrame" (fun p -> p) [ packet ]
 
 let codec ~stride frame_codec buf =
   let acc = ref 0 in
@@ -482,24 +494,109 @@ let codec ~stride frame_codec buf =
   done;
   !acc
 
+(* {2 Wire.Codec: the stack checked once, each layer entered}
+
+   [V.check] of the frame makes every check [decode] makes, building nothing;
+   [V.enter] then finds each layer the check accepted, testing only that its
+   frame lies in the buffer, and refuses an absent one, and [V.read] reads its
+   fields as in the linked rows. *)
+
+module P = Packet_stack
+module Pe = (val V.codec P.codec)
+module Pip = (val V.codec P.ipv4)
+module Ptcp = (val V.codec P.tcp)
+module Pudp = (val V.codec P.udp)
+
+let in_ip = V.sub_option Pe.codec Pip.codec P.eth_ipv4
+let in_tcp = V.sub_option Pip.codec Ptcp.codec P.ipv4_tcp
+let in_udp = V.sub_option Pip.codec Pudp.codec P.ipv4_udp
+let p_type = V.field Pe.codec P.eth_ether_type
+let p_len = V.field Pip.codec P.ipv4_total_length
+let p_ttl = V.field Pip.codec P.ipv4_ttl
+let p_proto = V.field Pip.codec P.ipv4_protocol
+let p_src = V.field Pip.codec P.ipv4_src
+let p_dst = V.field Pip.codec P.ipv4_dst
+let p_tcp_sp = V.field Ptcp.codec P.tcp_src_port
+let p_tcp_dp = V.field Ptcp.codec P.tcp_dst_port
+let p_tcp_seq = V.field Ptcp.codec P.tcp_seq
+let p_tcp_ack = V.field Ptcp.codec P.tcp_ack
+let p_tcp_off = V.field Ptcp.codec P.tcp_data_offset
+let p_tcp_flags = V.field Ptcp.codec P.tcp_flags
+let p_tcp_win = V.field Ptcp.codec P.tcp_window
+let p_udp_sp = V.field Pudp.codec P.udp_src_port
+let p_udp_dp = V.field Pudp.codec P.udp_dst_port
+let p_udp_len = V.field Pudp.codec P.udp_length_field
+
+let stack_transport acc b len ip =
+  let t = V.enter in_tcp b len ip in
+  if V.ok t then
+    let t = V.get t in
+    tcp_fields acc
+      ~sp:(UInt16.to_int (V.read p_tcp_sp b t))
+      ~dp:(UInt16.to_int (V.read p_tcp_dp b t))
+      ~seq:(UInt32.to_int (V.read p_tcp_seq b t))
+      ~ack:(UInt32.to_int (V.read p_tcp_ack b t))
+      ~win:(UInt16.to_int (V.read p_tcp_win b t))
+      ~flags:(V.read p_tcp_flags b t) ~off:(V.read p_tcp_off b t)
+  else
+    let u = V.enter in_udp b len ip in
+    if V.ok u then
+      let u = V.get u in
+      udp_fields acc
+        ~sp:(UInt16.to_int (V.read p_udp_sp b u))
+        ~dp:(UInt16.to_int (V.read p_udp_dp b u))
+        ~len:(UInt16.to_int (V.read p_udp_len b u))
+    else acc
+
+let stack_packet acc b len e =
+  let acc = acc + UInt16.to_int (V.read p_type b e) in
+  let ip = V.enter in_ip b len e in
+  if not (V.ok ip) then acc
+  else
+    let ip = V.get ip in
+    let acc =
+      ip_fields acc
+        ~src:(UInt32.to_int (V.read p_src b ip))
+        ~dst:(UInt32.to_int (V.read p_dst b ip))
+        ~ttl:(UInt8.to_int (V.read p_ttl b ip))
+        ~proto:(UInt8.to_int (V.read p_proto b ip))
+        ~len:(UInt16.to_int (V.read p_len b ip))
+    in
+    stack_transport acc b len ip
+
 (* Each loop names the function it calls on every frame. *)
 
-let codec_linked ~stride buf =
+let codec_stack_view ~stride (type f) (frame : f Codec.t) packet buf =
+  let module F = (val V.codec frame) in
+  let in_frame = V.sub F.codec Pe.codec packet in
+  let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
   let acc = ref 0 in
   for i = 0 to (Bytes.length buf / stride) - 1 do
-    acc := codec_packet ~avail:(stride - 14) !acc buf (i * stride)
+    let k = V.check F.codec b len (i * stride) in
+    if V.ok k then
+      let e = V.enter in_frame b len (V.get k) in
+      if V.ok e then acc := stack_packet !acc b len (V.get e)
+  done;
+  !acc
+
+let codec_linked ~stride buf =
+  let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := codec_packet ~avail:(stride - 14) !acc b len (i * stride)
   done;
   !acc
 
 let view_linked ~stride buf =
-  match Wire_runtime.Buf.v buf with
-  | Wire_runtime.Buf.Any b ->
-      let len = Wire_runtime.Buf.length b in
-      let acc = ref 0 in
-      for i = 0 to (Bytes.length buf / stride) - 1 do
-        acc := view_packet ~avail:(stride - 14) !acc b len (i * stride)
-      done;
-      !acc
+  let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
+  let acc = ref 0 in
+  for i = 0 to (Bytes.length buf / stride) - 1 do
+    acc := view_packet ~avail:(stride - 14) !acc b len (i * stride)
+  done;
+  !acc
 
 let generated ~stride buf =
   let acc = ref 0 in
@@ -533,9 +630,12 @@ let generated_selected ~stride buf =
 let target = if oxcaml then ", OxCaml target" else ""
 
 let rows stride =
-  let frame_codec = frame_codec stride in
+  let packet = frame_field stride in
+  let frame_codec = frame_codec packet in
   [
     ("Wire.Codec stack decode", fun buf -> codec ~stride frame_codec buf);
+    ( "Wire.Codec stack check/enter/read",
+      codec_stack_view ~stride frame_codec packet );
     ("Wire.Codec check/read, linked headers", codec_linked ~stride);
     ("wire.ocaml View.check/view, linked headers" ^ target, view_linked ~stride);
     ("wire.ocaml fused stack" ^ target, generated ~stride);
@@ -784,6 +884,21 @@ let flow_rows =
 let pp_flows ppf (flows, sum) = Fmt.pf ppf "%d flows, %d" flows sum
 let pp_keys ppf (keys, sum) = Fmt.pf ppf "%d keys, %d" keys sum
 
+(* The swap rows, on corpora of their own: one flow counter, flow_swap.ml,
+   over the header modules [Wire.Codec.Make] gives and over the [Global]
+   modules wire.ocaml generates, with the table and without it. Only IPv4
+   makes a flow; the other packets are counted by kind, and every row prints
+   both. *)
+let swap_rows =
+  [
+    ( "swap=interpreted, Wire.Codec.Make",
+      Flow_swap_interpreted.run,
+      Flow_swap_interpreted_parse.run );
+    ("swap=generated, Global" ^ target, Flow_swap.run, Flow_swap_parse.run);
+  ]
+
+let pp_mix pp ppf (r, mix) = Fmt.pf ppf "%a; %a" pp r Flow_mix.pp mix
+
 let flow file runs filter =
   let buf = Bench_lib.read_file file in
   let offs, lens = index buf in
@@ -804,6 +919,24 @@ let flow file runs filter =
       parse ~corpus:(corpus ^ " parse") ~name:(name ^ ", parse only") (fun () ->
           p (Sys.opaque_identity buf) offs lens))
     flow_rows;
+  let with_mix ~pp ~result reset =
+    measure ~pp:(pp_mix pp)
+      ~result:(fun () -> (result (), Flow_mix.state))
+      (fun () ->
+        reset ();
+        Flow_mix.reset ())
+  in
+  let swap = with_mix ~pp:pp_flows ~result:Flow_table.summary Flow_table.reset
+  and swap_parse =
+    with_mix ~pp:pp_keys ~result:Flow_sum.summary Flow_sum.reset
+  in
+  List.iter
+    (fun (name, t, p) ->
+      swap ~corpus:(corpus ^ " swap") ~name (fun () ->
+          t (Sys.opaque_identity buf) offs lens);
+      swap_parse ~corpus:(corpus ^ " swap parse") ~name:(name ^ ", parse only")
+        (fun () -> p (Sys.opaque_identity buf) offs lens))
+    swap_rows;
   let keys =
     lazy
       (Flow_rows_keys.flow_view buf offs lens;

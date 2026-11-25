@@ -1,0 +1,15 @@
+; Prints the planner's plans as Plan.Scan nodes for `make -C proofs/fstar
+; plans`, which checks them with F*. Building it needs no F*.
+
+(executable
+ (name plans)
+ (libraries
+  fmt
+  bytesrw
+  wire
+  wire.ocaml
+  diff_codecs
+  fuzz_gen
+  net
+  schemas
+  wire_fstar_model))

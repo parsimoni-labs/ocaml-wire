@@ -1,6 +1,6 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
        fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
-       bench-clcw bench-rust bench-flow bench-apps-rust bench-apps-count \
+       bench-clcw bench-rust bench-flow bench-flow-swap bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck clean
 
@@ -145,7 +145,7 @@ bench-rust:
 	  BUILD_EVERPARSE=1 dune build --profile=bench \
 	    bench/rust/everparse/everparse.exe && \
 	  $(call bench_rust_each,_build/default/bench/rust/everparse/everparse.exe,everparse); \
-	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
+	else echo "BUILD_EVERPARSE unset: skipping the EverParse C rows"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_RUST)/*.txt
 
 # A MAWI trace (samplepoint-F, 2025-11-15 14:00, 15 minutes), its first
@@ -172,7 +172,9 @@ $(BENCH_FLOW_TRACE):
 	  || { echo "$(BENCH_FLOW_URL): unexpected SHA-256" >&2; exit 1; }
 	mv $@.part $@
 
-bench-flow: $(BENCH_FLOW_TRACE)
+# The harnesses built, the trace checked and its packets cut, for bench-flow
+# and bench-flow-swap.
+define bench_flow_prepare
 	@mkdir -p bench/rust/cargo/src/gen
 	dune build --profile=bench bench/rust/bench.exe bench/rust/gen.exe
 	_build/default/bench/rust/gen.exe --rust bench/rust/cargo/src/gen
@@ -182,6 +184,10 @@ bench-flow: $(BENCH_FLOW_TRACE)
 	  flow-extract $(BENCH_FLOW_PACKETS) $(BENCH_FLOW_PCAP)
 	_build/default/bench/rust/bench.exe flow-mix $(BENCH_FLOW_PCAP)
 	cargo build --quiet --release --manifest-path bench/rust/cargo/Cargo.toml
+endef
+
+bench-flow: $(BENCH_FLOW_TRACE)
+	$(bench_flow_prepare)
 	rm -f $(BENCH_FLOW)/*.txt
 	sh bench/rows.sh bench/rust/cargo/target/release/wire-bench-rust flow \
 	  $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) >> $(BENCH_FLOW)/rust.txt
@@ -199,10 +205,41 @@ bench-flow: $(BENCH_FLOW_TRACE)
 	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_FLOW)/*.txt
 
+# The swap rows of bench-flow alone: one flow counter written against
+# Wire.S (bench/rust/flow_swap.ml), its header modules from Wire.Codec.Make or
+# from the Global modules wire.ocaml generates, on OCaml and on each switch of
+# BENCH_SWITCHES, with smoltcp making the same checks, each with the table
+# (corpus mawi swap) and without it (mawi swap parse). Each row is timed as
+# in bench-flow, into _build/bench-flow/swap/, then counted by bench/count.sh,
+# into _build/bench-flow/swap/counts.tsv: label, instructions and cycles per
+# packet, and the row's result.
+BENCH_FLOW_SWAP = $(BENCH_FLOW)/swap
+# $(1) a harness and its arguments up to the capture, $(2) a label prefix,
+# $(3) a results file: each swap row $(1) lists, timed into $(3), then
+# counted.
+bench_flow_swap_each = $(1) $(BENCH_FLOW_PCAP) 1 --list \
+	  | grep -e '^swap=' -e ', IPv4 flows' | while IFS= read -r r; do \
+	    $(1) $(BENCH_FLOW_PCAP) $(BENCH_FLOW_RUNS) "$$r" >> $(3) || exit 1; \
+	    sh bench/count.sh $(BENCH_FLOW_PACKETS) "$(2)$$r" \
+	      $(1) $(BENCH_FLOW_PCAP) RUNS "$$r" \
+	      >> $(BENCH_FLOW_SWAP)/counts.tsv || exit 1; \
+	  done
+
+bench-flow-swap: $(BENCH_FLOW_TRACE)
+	$(bench_flow_prepare)
+	@mkdir -p $(BENCH_FLOW_SWAP)
+	rm -f $(BENCH_FLOW_SWAP)/*.txt $(BENCH_FLOW_SWAP)/counts.tsv
+	@$(call bench_flow_swap_each,bench/rust/cargo/target/release/wire-bench-rust flow,rust ,$(BENCH_FLOW_SWAP)/rust.txt)
+	@$(call bench_flow_swap_each,bench/rust/cargo/target/release/wire-bench-flow-parse,rust ,$(BENCH_FLOW_SWAP)/rust.txt)
+	@$(call bench_flow_swap_each,_build/default/bench/rust/bench.exe flow,ocaml ,$(BENCH_FLOW_SWAP)/ocaml.txt)
+	@$(call on_switches,bench/rust/bench.exe,$(call bench_flow_swap_each,$$h flow,$$n ,$(BENCH_FLOW_SWAP)/$$n.txt))
+	@_build/default/bench/rust/bench.exe report $(BENCH_FLOW_SWAP)/*.txt
+	@cat $(BENCH_FLOW_SWAP)/counts.tsv
+
 # The instructions and cycles each row of bench-rust spends per packet, as
 # bench-apps-count counts them below, on each corpus of BENCH_RUST_CORPORA
 # with BENCH_RUST_PACKETS packets, and with BUILD_EVERPARSE=1 the EverParse C
-# row too. Results in _build/bench-rust-count/counts.tsv: label, instructions
+# rows too. Results in _build/bench-rust-count/counts.tsv: label, instructions
 # and cycles per packet, and the row's checksum.
 BENCH_RUST_COUNT_DIR = _build/bench-rust-count
 # $(1) a harness and its arguments up to the corpus, $(2) a label prefix: each
@@ -233,7 +270,7 @@ bench-rust-count:
 	  BUILD_EVERPARSE=1 dune build --profile=bench \
 	    bench/rust/everparse/everparse.exe && \
 	  $(call bench_rust_count_rows,_build/default/bench/rust/everparse/everparse.exe,); \
-	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
+	else echo "BUILD_EVERPARSE unset: skipping the EverParse C rows"; fi
 	@cat $(BENCH_RUST_COUNT_DIR)/counts.tsv
 
 # The application benchmarks (bench/routing, bench/gateway, bench/clcw) across

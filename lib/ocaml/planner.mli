@@ -203,14 +203,16 @@ val simplify : facts -> bool T.expr -> bool T.expr
 (** [simplify facts e] is [e] with every part [facts] decides replaced by its
     truth. *)
 
-val may_overflow : 'a T.expr -> bool
-(** [may_overflow e] is [true] when evaluating [e] may overflow, which rejects
-    the record. *)
-
 val fits :
   (int * int) Smap.t -> (int -> int -> int) -> int T.expr -> int T.expr -> bool
 (** [fits ranges op a b] is [true] when [op a b] cannot overflow the native int
     for values in [ranges], so is written as plain arithmetic. *)
+
+val past_native : (int * int) Smap.t -> int T.expr -> bool
+(** [past_native ranges e] is [true] when [e] or one of its subexpressions can
+    take a value past [max_int] for values in [ranges], or shifts by
+    [Sys.int_size] or more. The code computes such an expression on 64 bits, as
+    unsigned integers, as {!Wire.Codec} and 3D do. *)
 
 val refined :
   (int * int) Smap.t -> facts -> bool T.expr list -> (int * int) Smap.t * facts

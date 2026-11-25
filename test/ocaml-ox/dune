@@ -1,7 +1,8 @@
 ; The generator's tests again, on the code it writes for OxCaml. The modules
-; are a library so the compiler checks each [@zero_alloc] they carry. On any
-; other compiler they hold the code for the default target instead, and [dune
-; runtest] says the tests were skipped rather than repeat test/ocaml.
+; are a library so the compiler checks each [@zero_alloc] they carry. Only an
+; OxCaml compiler builds it: on any other, each executable selects a stub, as
+; an executable's enabled_if cannot read %{ocaml-config:ox}, and test.exe says
+; the tests were skipped rather than repeat test/ocaml.
 
 (copy_files
  (files ../ocaml/test_wire_ocaml.{ml,mli}))
@@ -10,7 +11,13 @@
  (files ../ocaml/test_same.{ml,mli}))
 
 (rule
- (copy ../ocaml/test.ml test.ml))
+ (copy ../ocaml/test.ml test.ox.ml))
+
+(rule
+ (with-stdout-to
+  test.std.ml
+  (echo
+   "let () = Fmt.pr \"test/ocaml-ox: skipped, OCaml %s is not an OxCaml compiler@.\" Sys.ocaml_version\n")))
 
 ; On arm64 and amd64 the records that have SIMD lanes get them ([--simd]).
 
@@ -82,8 +89,6 @@
   s_skipped.mli
   s_huge.ml
   s_huge.mli
-  s_bigspan.ml
-  s_bigspan.mli
   s_nested.ml
   s_nested.mli)
  (action
@@ -157,109 +162,26 @@
   s_skipped.mli
   s_huge.ml
   s_huge.mli
-  s_bigspan.ml
-  s_bigspan.mli
   s_nested.ml
   s_nested.mli)
  (action
   (run ../ocaml/gen.exe --oxcaml)))
 
-(rule
- (enabled_if
-  (<> %{ocaml-config:ox} true))
- (targets
-  g_ipv4.ml
-  g_ipv4.mli
-  g_ipv4_wire.ml
-  g_ipv4_wire.mli
-  g_ipv4_record.ml
-  g_ipv4_record.mli
-  g_ipv4_record_wire.ml
-  g_ipv4_record_wire.mli
-  g_checked.ml
-  g_checked.mli
-  g_checked_wire.ml
-  g_checked_wire.mli
-  g_mixed.ml
-  g_mixed.mli
-  g_mixed_wire.ml
-  g_mixed_wire.mli
-  g_small.ml
-  g_small.mli
-  g_small_wire.ml
-  g_small_wire.mli
-  g_eth.ml
-  g_eth.mli
-  g_eth_wire.ml
-  g_eth_wire.mli
-  g_wide.ml
-  g_wide.mli
-  g_wide_wire.ml
-  g_wide_wire.mli
-  g_mapped.ml
-  g_mapped.mli
-  g_mapped_wire.ml
-  g_mapped_wire.mli
-  g_signed.ml
-  g_signed.mli
-  g_signed_wire.ml
-  g_signed_wire.mli
-  g_packed.ml
-  g_packed.mli
-  g_packed_wire.ml
-  g_packed_wire.mli
-  g_refined.ml
-  g_refined.mli
-  g_refined_wire.ml
-  g_refined_wire.mli
-  g_overflow.ml
-  g_overflow.mli
-  g_overflow_wire.ml
-  g_overflow_wire.mli
-  g_lanes.ml
-  g_lanes.mli
-  g_lanes_wire.ml
-  g_lanes_wire.mli
-  s_sized.ml
-  s_sized.mli
-  s_overflow.ml
-  s_overflow.mli
-  s_skipped.ml
-  s_skipped.mli
-  s_huge.ml
-  s_huge.mli
-  s_bigspan.ml
-  s_bigspan.mli
-  s_nested.ml
-  s_nested.mli)
- (action
-  (run ../ocaml/gen.exe)))
-
 ; Whether a 64-bit load of wire.runtime returns a boxed int64 to the code
-; generated: never on OxCaml, whose loads give an int64_u; in the dev profile
-; elsewhere, which compiles wire.runtime with -opaque.
+; generated: never on OxCaml, whose loads give an int64_u.
 
 (rule
  (target boxed_loads.ml)
  (enabled_if
-  (or
-   (= %{ocaml-config:ox} true)
-   (<> %{profile} dev)))
+  (= %{ocaml-config:ox} true))
  (action
   (write-file %{target} "let v = false\n")))
-
-(rule
- (target boxed_loads.ml)
- (enabled_if
-  (and
-   (<> %{ocaml-config:ox} true)
-   (= %{profile} dev)))
- (action
-  (write-file %{target} "let v = true\n")))
 
 (library
  (name gens_ox)
  (wrapped false)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
  (modules
   test_wire_ocaml
   test_same
@@ -293,7 +215,6 @@
   s_overflow
   s_skipped
   s_huge
-  s_bigspan
   s_nested
   boxed_loads)
  (libraries
@@ -313,27 +234,22 @@
 (executable
  (name test)
  (modules test)
- (libraries gens_ox alcotest))
+ (libraries
+  fmt
+  (select
+   test.ml
+   from
+   (gens_ox alcotest -> test.ox.ml)
+   (-> test.std.ml))))
 
 (rule
  (alias runtest)
- (enabled_if
-  (= %{ocaml-config:ox} true))
  (action
   (run ./test.exe)))
 
-(rule
- (alias runtest)
- (enabled_if
-  (<> %{ocaml-config:ox} true))
- (action
-  (echo
-   "test/ocaml-ox: skipped, OCaml %{ocaml_version} is not an OxCaml compiler\n")))
-
 ; The modes of the code for OxCaml: buffers on the stack, local constructors
-; and portable callers. test_modes.ox.ml is OxCaml syntax, so only an OxCaml
-; compiler, which has its unboxed integer library, builds it; any other runs
-; an empty suite.
+; and portable callers. test_modes.ox.ml is OxCaml syntax over its unboxed
+; integer library, so only an OxCaml compiler with that library builds it.
 
 (rule
  (with-stdout-to
@@ -344,12 +260,11 @@
  (name test_modes_main)
  (modules test_modes_main test_modes)
  (libraries
-  gens_ox
   alcotest
   (select
    test_modes.ml
    from
-   (stdlib_upstream_compatible wire.runtime -> test_modes.ox.ml)
+   (gens_ox stdlib_upstream_compatible wire.runtime -> test_modes.ox.ml)
    (-> test_modes.std.ml))))
 
 (rule
@@ -372,25 +287,35 @@
     (= %{architecture} arm64)
     (= %{architecture} amd64))))
  (action
-  (copy test_simd.ml.ox test_simd.ml)))
+  (copy test_simd.ml.ox test_simd.ox.ml)))
 
 (rule
  (enabled_if
-  (or
-   (<> %{ocaml-config:ox} true)
-   (and
-    (<> %{architecture} arm64)
-    (<> %{architecture} amd64))))
+  (and
+   (= %{ocaml-config:ox} true)
+   (<> %{architecture} arm64)
+   (<> %{architecture} amd64)))
  (action
-  (with-stdout-to
-   test_simd.ml
-   (echo
-    "module _ = Wire_runtime.Vec (* empty here *)\nlet suite = (Fmt.str \"simd\", [])\n"))))
+  (copy test_simd.std.ml test_simd.ox.ml)))
+
+(rule
+ (with-stdout-to
+  test_simd.std.ml
+  (echo
+   "module _ = Wire_runtime.Vec (* empty here *)\nlet suite = (Fmt.str \"simd\", [])\n")))
 
 (executable
  (name test_simd_main)
  (modules test_simd_main test_simd)
- (libraries gens_ox wire.runtime fmt alcotest))
+ (libraries
+  wire.runtime
+  fmt
+  alcotest
+  (select
+   test_simd.ml
+   from
+   (gens_ox -> test_simd.ox.ml)
+   (-> test_simd.std.ml))))
 
 (rule
  (alias runtest)

@@ -316,146 +316,43 @@ let test_dep_codec_ref () =
     "ref data[4]" 0x14
     (Bytes.get_uint8 (Bs.bytes data) (Bs.first data + 4))
 
-(* A [byte_slice] sized by a 64-bit length field: an adversarial length that
-   does not fit a native int must fail the parse, not be silently read as a
-   0-length field. *)
-let u64_sized_codec =
-  let f_len = Field.v "Len" uint64be in
-  let f_data = Field.v "Data" (byte_slice ~size:(Field.ref f_len)) in
-  let cf_len = Codec.(f_len $ fun (l, _) -> l) in
-  let cf_data = Codec.(f_data $ fun (_, d) -> d) in
-  Codec.v "U64Size" (fun len data -> (len, data)) [ cf_len; cf_data ]
-
-let u64_len_buf v =
-  (* 8-byte BE length followed by a few payload bytes. *)
-  let b = Bytes.create 16 in
-  Bytes.set_int64_be b 0 v;
-  b
-
-let test_dep_size_in_range () =
-  let _len, data =
-    decode_ok (Codec.decode u64_sized_codec (u64_len_buf 4L) 0)
-  in
-  Alcotest.(check int)
-    "in-range length reads that many bytes" 4 (Bs.length data)
-
-let test_dep_size_out_of_range () =
-  let cases =
-    [
-      ("all-ones", 0xFFFF_FFFF_FFFF_FFFFL);
-      ("2^63", 0x8000_0000_0000_0000L);
-      ("max_int + 1", Int64.add (Int64.of_int max_int) 1L);
-      ("int64 -1 as length", -1L);
-    ]
-  in
-  List.iter
-    (fun (name, v) ->
-      match Codec.decode u64_sized_codec (u64_len_buf v) 0 with
-      | Ok _ -> Alcotest.failf "%s: expected Parse_error, decoded ok" name
-      | Error { kind = Value_out_of_range _; _ } -> ()
-      | Error e ->
-          Alcotest.failf "%s: expected Value_out_of_range, got %a" name
-            pp_parse_error e)
-    cases
-
-let overflowing_span_codec name size =
-  let f_len = Field.v "Len" uint64be in
+(* A size that can pass 64 bits, go below zero, or divide by zero has no 3D
+   projection: 3d.exe cannot verify it, so the codec is refused when it is
+   built. *)
+let span_codec name size () =
+  let f_len = Field.v "Len" uint8 in
   let f_data = Field.v "Data" (byte_array ~size:(size (Field.ref f_len))) in
   Codec.v name (fun len data -> (len, data)) Codec.[ f_len $ fst; f_data $ snd ]
 
 let test_dep_size_arithmetic_overflow () =
   let int = Wire.int in
-  let codecs =
-    [
-      ( "Add",
-        overflowing_span_codec "AddOverflow" (fun n -> Expr.(n + n + int 2)) );
-      ( "Sub",
-        overflowing_span_codec "SubOverflow" (fun n ->
-            Expr.(n - int min_int + int 1)) );
-      ("Mul", overflowing_span_codec "MulOverflow" (fun n -> Expr.(n * n)));
-    ]
-  in
-  let base = 5 in
-  let buf = Bytes.make (base + 9) '\000' in
-  Bytes.set_int64_be buf base (Int64.of_int max_int);
   List.iter
-    (fun (name, codec) ->
-      (match Codec.decode codec buf base with
-      | Error { at; kind = Value_out_of_range _; _ } ->
-          Alcotest.(check int) (name ^ " decode offset") base at
-      | Error e ->
-          Alcotest.failf "%s decode: expected Value_out_of_range, got %a" name
-            pp_parse_error e
-      | Ok _ -> Alcotest.failf "%s decode: accepted the wrapped span" name);
-      match Codec.validate_exn codec buf base with
-      | () -> Alcotest.failf "%s validate: accepted the wrapped span" name
-      | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
-          Alcotest.(check int) (name ^ " validate offset") base at)
-    codecs
+    (fun (name, mk) ->
+      Alcotest.(check bool) (name ^ " refused") true (raises_invalid mk))
+    [
+      ("past 64 bits", span_codec "Wide" (fun n -> Expr.(n * int max_int * n)));
+      ( "negative literal",
+        span_codec "Negative" (fun n -> Expr.(n - int min_int + int 1)) );
+      ("below zero", span_codec "Below" (fun n -> Expr.(int 1 - n)));
+      ("divided by zero", span_codec "DivZero" (fun n -> Expr.(int 8 / n)));
+      ("modulo zero", span_codec "ModZero" (fun n -> Expr.(int 8 mod n)));
+    ]
 
+(* A [where] that adds a literal near [max_int] to two fields passes OCaml's
+   native int: it is computed on 64 bits, as the C computes it. *)
 let test_where_arithmetic_overflow_offset () =
   let f_a = Field.v "a" uint8 in
   let f_b = Field.v "b" uint8 in
-  let codec =
+  let c =
     Codec.v "WhereOverflow"
-      ~where:Expr.(int max_int - Field.ref f_a + Field.ref f_b >= int 0)
+      ~where:Expr.(int max_int + Field.ref f_b + Field.ref f_a > int max_int)
       (fun a b -> (a, b))
       Codec.[ f_a $ fst; f_b $ snd ]
   in
-  let base = 5 in
-  let buf = Bytes.make (base + 2) '\000' in
-  Bytes.set_uint8 buf (base + 1) 1;
-  (match Codec.decode codec buf base with
-  | Error { at; kind = Value_out_of_range _; _ } ->
-      Alcotest.(check int) "decode offset" base at
-  | Error e ->
-      Alcotest.failf "decode: expected Value_out_of_range, got %a"
-        pp_parse_error e
-  | Ok _ -> Alcotest.fail "decode accepted overflowing where expression");
-  match Codec.validate_exn codec buf base with
-  | () -> Alcotest.fail "validate accepted overflowing where expression"
-  | exception Parse_error { at; kind = Value_out_of_range _; _ } ->
-      Alcotest.(check int) "validate offset" base at
-
-let zero_divisor_span_codec name size =
-  let f_divisor = Field.v "Divisor" uint8 in
-  let f_data = Field.v "Data" (byte_array ~size:(size (Field.ref f_divisor))) in
-  Codec.v name
-    (fun divisor data -> (divisor, data))
-    Codec.[ f_divisor $ fst; f_data $ snd ]
-
-let test_dep_size_zero_divisor () =
-  let int = Wire.int in
-  let codecs =
-    [
-      ( "division",
-        zero_divisor_span_codec "DivZero" (fun divisor ->
-            Expr.(int 8 / divisor)) );
-      ( "modulo",
-        zero_divisor_span_codec "ModZero" (fun divisor ->
-            Expr.(int 8 mod divisor)) );
-    ]
-  in
-  let base = 5 in
-  let buf = Bytes.make (base + 2) '\000' in
-  List.iter
-    (fun (name, codec) ->
-      (match Codec.decode codec buf base with
-      | Error { at; kind = Zero_divisor; _ } ->
-          Alcotest.(check int) (name ^ " decode offset") base at
-      | Error e ->
-          Alcotest.failf "%s decode: expected Zero_divisor, got %a" name
-            pp_parse_error e
-      | Ok _ -> Alcotest.failf "%s decode: accepted a zero divisor" name
-      | exception Division_by_zero ->
-          Alcotest.failf "%s decode: leaked Division_by_zero" name);
-      match Codec.validate_exn codec buf base with
-      | exception Parse_error { at; kind = Zero_divisor; _ } ->
-          Alcotest.(check int) (name ^ " validate offset") base at
-      | () -> Alcotest.failf "%s validate: accepted a zero divisor" name
-      | exception Division_by_zero ->
-          Alcotest.failf "%s validate: leaked Division_by_zero" name)
-    codecs
+  let ok s = Result.is_ok (Codec.decode c (Bytes.of_string s) 0) in
+  Alcotest.(check bool) "a + b = 0" false (ok "\000\000");
+  Alcotest.(check bool) "a + b = 1" true (ok "\000\001");
+  Alcotest.(check bool) "a + b = 510" true (ok "\255\255")
 
 let test_dep_ref_size_eval () =
   (* Test that the size expression is evaluated correctly for wire_size_at *)
@@ -581,7 +478,7 @@ type pos_record = { pa : UInt8.t; pb : UInt8.t; pc : UInt8.t }
 type wide_pos_record = { wa : UInt8.t; wb : UInt16.t; wc : UInt8.t }
 
 let test_codec_sizeof_this () =
-  let out = Param.output "out" uint8 in
+  let out = Param.output "out" uint32be in
   let codec =
     let open Codec in
     v "SizeofThisCodec"
@@ -599,31 +496,27 @@ let test_codec_sizeof_this () =
   let buf = Bytes.of_string "\x01\x00\x02\x03" in
   let _v = decode_ok (Codec.decode ~env codec buf 0) in
   (* sizeof_this at field c = 1 (uint8) + 2 (uint16be) = 3 *)
-  Alcotest.(check int) "sizeof_this at c" 4 (UInt8.to_int (Param.get env out))
+  Alcotest.(check int) "sizeof_this at c" 4 (UInt32.to_int (Param.get env out))
 
 let test_codec_field_pos () =
-  let out = Param.output "out" uint8 in
-  let codec =
-    let open Codec in
-    v "FieldPosCodec"
-      (fun a b c -> { pa = a; pb = b; pc = c })
-      [
-        (Field.v "a" uint8 $ fun r -> r.pa);
-        (Field.v "b" uint8 $ fun r -> r.pb);
-        ( Field.v "c"
-            ~action:(Action.on_success [ Action.assign out field_pos ])
-            uint8
-        $ fun r -> r.pc );
-      ]
-  in
-  let env = Codec.env codec in
-  let buf = Bytes.of_string "\x01\x02\x03" in
-  let _v = decode_ok (Codec.decode ~env codec buf 0) in
-  (* field_pos at c = 2 (third field, zero-indexed) *)
-  Alcotest.(check int) "field_pos at c" 2 (UInt8.to_int (Param.get env out))
+  (* 3D reads the field position only into a [var], which the projection does
+     not write: an action assigning it is refused. *)
+  let out = Param.output "out" uint32be in
+  Alcotest.(check bool)
+    "field_pos refused" true
+    (raises_invalid (fun () ->
+         let open Codec in
+         v "FieldPosCodec"
+           (fun a b c -> { pa = a; pb = b; pc = c })
+           [
+             (Field.v "a" uint8 $ fun r -> r.pa);
+             (Field.v "b" uint8 $ fun r -> r.pb);
+             ( Field.v "c"
+                 ~action:(Action.on_success [ Action.assign out field_pos ])
+                 uint8
+             $ fun r -> r.pc );
+           ]))
 
-(* A size that names a mapped field reads the field's wire value, not the
-   mapped one: what the check pass and the 3D projection read. *)
 let test_size_names_mapped_field () =
   let sized typ =
     let f_len = Field.v "len" typ in
@@ -694,22 +587,18 @@ let suite =
       Alcotest.test_case "dep: min_wire_size" `Quick test_dep_min_wire_size;
       Alcotest.test_case "dep: wire_size_at" `Quick test_dep_compute_wire_size;
       Alcotest.test_case "dep: codec ref" `Quick test_dep_codec_ref;
-      Alcotest.test_case "dep: u64 size in range" `Quick test_dep_size_in_range;
-      Alcotest.test_case "dep: u64 size out of range raises" `Quick
-        test_dep_size_out_of_range;
-      Alcotest.test_case "dep: size arithmetic overflow raises" `Quick
+      Alcotest.test_case "dep: size arithmetic 3D cannot verify refused" `Quick
         test_dep_size_arithmetic_overflow;
-      Alcotest.test_case "codec: where arithmetic overflow offset" `Quick
+      Alcotest.test_case "codec: where past the native int on 64 bits" `Quick
         test_where_arithmetic_overflow_offset;
-      Alcotest.test_case "dep: size zero divisor raises" `Quick
-        test_dep_size_zero_divisor;
       Alcotest.test_case "dep: codec ref size eval" `Quick
         test_dep_ref_size_eval;
       Alcotest.test_case "dep: struct_of_codec" `Quick test_struct_of_dep;
       Alcotest.test_case "dep: trailer struct_of_codec" `Quick
         test_struct_of_dep_trailer;
       Alcotest.test_case "codec: sizeof_this" `Quick test_codec_sizeof_this;
-      Alcotest.test_case "codec: field_pos" `Quick test_codec_field_pos;
+      Alcotest.test_case "codec: field_pos in an action refused" `Quick
+        test_codec_field_pos;
       Alcotest.test_case "constraint: int64 signed-magnitude domain" `Quick
         test_int64_field_constraint_accepts_signed_magnitude_domain;
       Alcotest.test_case "constraint: int64 rejects negative zero" `Quick

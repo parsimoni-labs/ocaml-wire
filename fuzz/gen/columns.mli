@@ -51,6 +51,10 @@ val range8_group : lo:int -> hi:int -> group_mk
 (** [range8_group ~lo ~hi] is a [uint8] whose own constraint keeps it between
     [lo] and [hi]: an interval test. *)
 
+val range16s_group : lo:int -> hi:int -> group_mk
+(** [range16s_group ~lo ~hi] is an [int16be] whose own constraint keeps it
+    between [lo] and [hi]. *)
+
 val even8_group : group_mk
 (** [even8_group] is a [uint8] with a constraint no interval states: a general
     check step. *)

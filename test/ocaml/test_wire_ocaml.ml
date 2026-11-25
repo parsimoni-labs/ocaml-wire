@@ -427,8 +427,8 @@ let test_refined () =
 (* A codec the generator cannot specialise is refused when the code is
    generated, naming the field and why, rather than given a module with fewer
    functions. *)
-(* Arithmetic that overflows the native int rejects the record, with the
-   codec's error, where wrapping would accept it. *)
+(* Arithmetic near the top of the native int reads and writes as the codec
+   does. *)
 let test_overflow () =
   let fix buf off =
     Bytes.set_int32_be buf off (Int32.of_int (Random.State.int rand 8));
@@ -447,15 +447,7 @@ let test_overflow () =
         (u32 9l, 0, 0, u32 1l, u32 1l);
         (u32 1l, 0, 9, u32 1l, u32 1l);
         (u32 1l, 0, 0, u32 Int32.min_int, u32 Int32.min_int);
-      ]);
-  let wrapped =
-    Bytes.of_string "\000\000\000\001\000\128\000\000\000\128\000\000\000"
-  in
-  Alcotest.(check bool)
-    "a wrapped product is rejected" true
-    (match G_overflow.decode_exn wrapped 0 with
-    | _ -> false
-    | exception Parse_error { kind = Value_out_of_range _; _ } -> true)
+      ])
 
 let test_refused () =
   let refused ~maps name =
@@ -966,6 +958,37 @@ let test_bigstring () =
     Alcotest.(check string) "write" on_bytes on_big
   done
 
+(* A record that does not fit reports the first field in order that fails a
+   check where it fits, before the end of input, as the validator 3d.exe
+   generates does: [Checked]'s where clause is checked with [Length], the last
+   field it reads. The generated module, on bytes and on a bigarray, answers
+   what the codec does. *)
+let test_short_faults () =
+  let error = function
+    | Ok _ -> "ok"
+    | Error (e : parse_error) -> Fmt.str "%a" pp_parse_error e
+  in
+  List.iter
+    (fun (s, expected) ->
+      let buf = Bytes.of_string s in
+      let check name got =
+        Alcotest.(check string) (Fmt.str "%s %S" name s) expected got
+      in
+      check "codec decode" (error (Codec.decode Schemas.checked buf 0));
+      check "codec validate" (error (Codec.validate Schemas.checked buf 0));
+      check "generated decode" (error (G_checked.decode buf 0));
+      check "generated validate" (error (G_checked.validate buf 0));
+      check "generated bigstring decode"
+        (error (G_checked.Bigstring.decode (bigstring buf) 0));
+      check "generated bigstring validate"
+        (error (G_checked.Bigstring.validate (bigstring buf) 0)))
+    [
+      ("\x55", "Version@0: field constraint violated (value 5)");
+      ("\x45\x00\x00\x00", "@0: where clause violated");
+      ("\x45\x00\x50\x00", "TTL@3: field constraint violated (value 0)");
+      ("\x45\x00\x50\x01", "@0: unexpected EOF: expected 5 bytes, got 4");
+    ]
+
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
    as raising, adds a stack-allocated decode for the generated record, takes
    each buffer it does not keep and the constructor of [decode_with] [local],
@@ -1109,8 +1132,8 @@ let scan_ops name fields decode =
     scan_index = None;
   }
 
-(* The scanner rejects a record whose condition, size or check overflows, as
-   the codec does, and only that one. *)
+(* The scanner accepts what the codec accepts when a condition, size or check
+   computes near the top of its type. *)
 let test_scan_overflow () =
   let sized =
     scan_ops "S_sized" [ "n"; "body_present"; "tail" ] (fun b o n ->
@@ -1161,8 +1184,7 @@ let skipped_reference =
     }
 
 (* A condition that facts decide is still evaluated where the codec
-   evaluates it: when [x = 4] holds, [n * n > 0 && x = 3] is false, but the
-   codec computes [n * n] first and rejects the record where it overflows. *)
+   evaluates it: when [x = 4] holds, [n * n > max_int && x = 3] is false. *)
 let test_scan_skipped () =
   let skipped =
     scan_ops "S_skipped" [ "n"; "x"; "a_present"; "a"; "b_present"; "b" ]
@@ -1213,8 +1235,8 @@ let test_huge_prefix () =
       Codec.
         [
           Field.v "Flag" uint8 $ fst;
-          ( Field.v "Body" (byte_array ~size:(int (Sys.max_string_length - 8)))
-          $ fun _ -> "" );
+          ( Field.v "Body" (byte_array ~size:(int (0xFFFF_FFFF - 8))) $ fun _ ->
+            "" );
           Field.v "Tail" uint8 $ snd;
         ]
   in
@@ -1242,40 +1264,6 @@ let test_scan_deep () =
       | _ -> Alcotest.failf "deep %d %d: scanner generated" depth big
       | exception Invalid_argument _ -> ())
     [ (32, Sys.max_string_length - 1); (3, Sys.max_string_length / 2) ]
-
-let bigspan_reference =
-  Diff_ocaml.Reference
-    {
-      label = "bigspan";
-      codec = Schemas.bigspan;
-      known = None;
-      project =
-        (fun _ (a, b, _, _, t) ->
-          [
-            ("a", UInt8.to_int a); ("b", UInt8.to_int b); ("t", UInt8.to_int t);
-          ]);
-      inputs = (fun b -> [ b ]);
-    }
-
-(* When the ends of two spans sum past the native int, the scanner is still
-   generated and rejects every frame, as the codec does. *)
-let test_scan_bigspan () =
-  let bigspan =
-    scan_ops "S_bigspan" [ "a"; "b"; "t" ] (fun b o n ->
-        let v = S_bigspan.decode b o n in
-        if v.ok then Some [ ("a", v.a); ("b", v.b); ("t", v.t) ] else None)
-  in
-  List.iter
-    (fun s ->
-      Diff_ocaml.check_scan bigspan_reference [ bigspan ] (Bytes.of_string s))
-    [
-      "";
-      "\000";
-      "\000\000";
-      "\000\000\000";
-      "\255\255\255\255";
-      String.make 64 '\001';
-    ]
 
 (* Optional fields are written once each: the code after one is joined, or
    copied into its branches only while it is short, holds no optional field
@@ -1485,16 +1473,17 @@ let test_portable () =
     Codec.v "One" Fun.id
       Codec.
         [
-          Field.v "x" t ~self_constraint:(fun x -> Expr.(x * x >= int 0))
+          Field.v "x" t ~self_constraint:(fun x ->
+              Expr.(x + int 0x3FFF_FF00 >= int 0))
           $ Fun.id;
         ]
   in
   let guarded src = contains src "Sys.int_size <= 32" in
   Alcotest.(check bool)
-    "u8 squared" false
+    "u8 plus 2^30 - 256" false
     (guarded (Wire_ocaml.ml ~codec:"c" (one uint8)));
   Alcotest.(check bool)
-    "u16 squared" true
+    "u16 plus 2^30 - 256" true
     (guarded (Wire_ocaml.ml ~codec:"c" (one uint16be)));
   Alcotest.(check bool)
     "u8 scanner" false
@@ -1616,14 +1605,15 @@ let test_decisions () =
   has ocaml "the payload's bound hoisted in a case" (function
     | Span_bound { bound = Hoisted; window = "stop"; _ } -> true
     | _ -> false);
-  has ocaml "the frame loop" (function
+  has ocaml "four frames an iteration, their dispatch fields read ahead"
+    (function
     | Frame_loop
         {
           name = "fold_frames";
           need = 34;
-          frames = 1;
+          frames = 4;
           short = Some Apart;
-          ahead = [];
+          ahead = [ ("f14_ipv4_protocol", 23, 1) ];
         } ->
         true
     | _ -> false);
@@ -1636,7 +1626,7 @@ let test_decisions () =
           need = 34;
           frames = 4;
           short = Some Inline;
-          ahead = [ "f14_ipv4_protocol" ];
+          ahead = [ ("f14_ipv4_protocol", 23, 1) ];
         } ->
         true
     | _ -> false);
@@ -1647,6 +1637,17 @@ let test_decisions () =
   has ocaml "the IPv4 header cut into a function of its own" (function
     | Cut { name = "fold_ipv4"; window = "stop"; known = 0 } -> true
     | _ -> false);
+  let index frames = function
+    | Frame_loop
+        { name = "fold_index_step"; need = 0; frames = f; short = None; _ } ->
+        f = frames
+    | _ -> false
+  in
+  has (decisions ~step:"Step" c) "the index loop, a frame an iteration"
+    (index 1);
+  has
+    (decisions ~target:`OxCaml ~step:"Step" c)
+    "the index loop, four frames an iteration on OxCaml" (index 4);
   (* The TCP header starts at [ihl * 4 - 20] bytes from 34: its base is the
      term and the constant is in each load. *)
   Alcotest.(check bool)
@@ -1866,14 +1867,14 @@ let test_interfaces () =
 let suite =
   ( "wire_ocaml",
     [
-      Alcotest.test_case "scanned arithmetic that overflows" `Quick
+      Alcotest.test_case "faults before the end of input" `Quick
+        test_short_faults;
+      Alcotest.test_case "scanned arithmetic past the native int" `Quick
         test_scan_overflow;
-      Alcotest.test_case "overflow in a condition the facts decide" `Quick
-        test_scan_skipped;
+      Alcotest.test_case "wide arithmetic in a condition the facts decide"
+        `Quick test_scan_skipped;
       Alcotest.test_case "offsets past the largest buffer" `Quick test_scan_deep;
       Alcotest.test_case "prefix of a huge fixed slice" `Quick test_huge_prefix;
-      Alcotest.test_case "span ends past the largest int" `Quick
-        test_scan_bigspan;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
       Alcotest.test_case "nested optional fields allocate nothing" `Quick
         test_nested_no_alloc;

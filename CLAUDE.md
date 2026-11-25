@@ -134,11 +134,11 @@ from the same Wire DSL definition:
 
 **Never use hand-written C parsers.** Field extraction in C benchmarks must go
 through EverParse-generated validators: stack-allocate the schema's default
-plug struct (`<Name>Fields` from `<Name>_Fields.h`), pass `(WIRECTX *)&ctx` to
+visitor struct (`<Name>Fields` from `<Name>_Fields.h`), pass `(WIRECTX *)&ctx` to
 the validator, read named struct members. No manual bitfield manipulation, no
 index arrays, no hand-rolled `WIRECTX` layouts. C benchmark loops may contain
 application logic (routing, anomaly counting, reassembly) but all field
-access must use the default plug (or a custom plug made by copy-and-trim of
+access must use the default visitor (or a custom visitor made by copy-and-trim of
 the shipped `<Name>_Fields.c`).
 
 **Benchmark loops are what a user of each library writes.** Every

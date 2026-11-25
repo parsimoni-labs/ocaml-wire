@@ -21,8 +21,15 @@ type eval_ctx
 val unbound_eval_ctx : eval_ctx
 (** The context with no parameter bindings. Internal use. *)
 
-val eval_ctx : ?set_param:(string -> int -> unit) -> (string -> int) -> eval_ctx
-(** A context with explicit parameter lookup. Internal use. *)
+val eval_ctx :
+  ?set_param:(string -> int -> unit) ->
+  ?param64:(string -> int64) ->
+  ?set_param64:(string -> int64 -> unit) ->
+  (string -> int) ->
+  eval_ctx
+(** A context with explicit parameter lookup. [param64] and [set_param64] read
+    and write the 64 bits of a parameter whose type a native int cannot hold.
+    Internal use. *)
 
 val checked_eval_ctx : eval_ctx -> eval_ctx
 (** [checked_eval_ctx ctx] is [ctx] for reading bytes a check pass has already
@@ -40,6 +47,14 @@ val eval_set_param : eval_ctx -> string -> int -> unit
 (** Update a bound output parameter, if the context accepts writes. Internal
     use. *)
 
+val eval_param64 : eval_ctx -> string -> int64
+(** {!eval_param} for a parameter whose type a native int cannot hold: its 64
+    bits. Internal use. *)
+
+val eval_set_param64 : eval_ctx -> string -> int64 -> unit
+(** {!eval_set_param} for a parameter whose type a native int cannot hold.
+    Internal use. *)
+
 type cursor = {
   wbuf : bytes;
   mutable wbase : int;  (** Where the record being walked starts. *)
@@ -55,9 +70,24 @@ type cursor = {
     each field is checked and read once, in order, and a sub-codec hands back
     its value and its end together. Internal use. *)
 
+type 'r walk = {
+  wvalue : cursor -> 'r;
+      (** The record at the cursor's {!field-wpos}, within its {!field-wend}:
+          its value, with the cursor moved to its end. *)
+  wskip : cursor -> unit;
+      (** The same walk making only its checks: it builds no value and moves the
+          cursor to the same end. *)
+  wnames : cursor -> 'r;
+      (** {!field-wvalue} with each field it moves over naming the errors under
+          it, as the check pass names them: the walk that finds the error of a
+          record {!field-wvalue} refused. *)
+}
+(** A record's walk in its three modes, all from one plan. Internal use. *)
+
 exception Unwalked
-(** Raised by a walk that does not accept the record, which then goes to the
-    general decode for its answer and its error. Internal use. *)
+(** Raised by a walk that does not accept the record without naming its error:
+    the {!field-wnames} walk then names it, or, when it raises this too, the
+    general decode gives the answer and the error. Internal use. *)
 
 (* The parse-error types are declared here, before {!typ}, so that {!typ}'s own
    [Where] / [Field] constructors win type-directed disambiguation throughout;
@@ -286,6 +316,8 @@ and _ typ =
       size : int expr;
       elt_var : string;
       cond : bool expr;
+      test : (int -> bool) option Atomic.t;
+          (** [cond] compiled on first use, by {!Eval.byte_test}. *)
     }
       -> string typ
       (** Byte span with a per-byte refinement: each decoded byte must satisfy
@@ -337,6 +369,7 @@ and _ typ =
       (** Parameterised type application. *)
   | Codec : {
       codec_name : string;
+      codec_id : int;  (** The id of the codec, which a rename keeps. *)
       codec_decode : eval_ctx -> Input_end.t -> bytes -> int -> 'r;
       codec_validate : eval_ctx -> Input_end.t -> bytes -> int -> unit;
           (** Everything [codec_decode] checks, none of what it builds. Run at
@@ -354,10 +387,7 @@ and _ typ =
               accepts the record with it. A use site with a negative answer runs
               those two, and after [-1] does not try the fast checks of the
               records under it again. *)
-      codec_walk : (cursor -> 'r) option;
-          (** The walk of the record at the cursor's {!field-wpos}, within its
-              {!field-wend}: its value, with the cursor moved to its end. [None]
-              when the codec has none. *)
+      codec_walk : 'r walk option;  (** The codec's walk, if it has one. *)
       codec_encode : 'r -> eval_ctx -> bytes -> int -> int;
       codec_fixed_size : int option;
       codec_min_size : int;
@@ -447,6 +477,12 @@ type param_env = {
   bound : bool array;
       (** Parallel to {!field-slots}; set by [Param.bind] so consumers can
           detect unbound input params. *)
+  wide : bool array;
+      (** Parallel to {!field-slots}: the params whose type a native int cannot
+          hold on this platform. *)
+  wides : int64 array;
+      (** Parallel to {!field-slots}: the 64 bits of a {!field-wide} param,
+          which its int slot cannot always hold. *)
 }
 
 (** {1 Expression Constructors} *)
@@ -730,6 +766,10 @@ val of_int : 'a typ -> int -> 'a
 (** [of_int typ n] is the value [typ] carries for the integer [n]. Raises
     [Invalid_argument] when [n] is outside what the type's field can hold, or
     when the type has no integer view. *)
+
+val of_int64 : 'a typ -> int64 -> 'a
+(** [of_int64 typ n] is the value [typ] carries for the 64-bit pattern [n]: the
+    low 32 bits for a 32-bit type, all of them for a 64-bit one. *)
 
 val is_int_representable : 'a typ -> bool
 (** [is_int_representable typ] is [true] when {!int_of_exn} and {!of_int} have a

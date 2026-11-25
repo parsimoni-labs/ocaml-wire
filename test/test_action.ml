@@ -46,33 +46,32 @@ let test_assign_propagates () =
   Alcotest.(check int) "out" 10 (UInt8.to_int (Param.get env out))
 
 let test_assign_propagates_fail () =
-  (* Assign out = x, then constraint out + y <= 10 fails. *)
+  (* A later constraint reading the output [x] set: 3D holds an output as a
+     pointer, which no constraint reads, so the codec is refused. *)
   let out = Param.output "out" uint8 in
   let f_x = Field.v "x" uint8 in
   let f_y = Field.v "y" uint8 in
-  let codec =
-    let open Codec in
-    v "AssignPropFail"
-      (fun x y -> { x; y })
-      [
-        ( Field.v "x"
-            ~action:(Action.on_success [ Action.assign out (Field.ref f_x) ])
-            uint8
-        $ fun r -> r.x );
-        ( Field.v "y"
-            ~constraint_:Expr.(Param.expr out + Field.ref f_y <= int 10)
-            uint8
-        $ fun r -> r.y );
-      ]
-  in
-  (* x=100, y=200 => out=100, 100+200=300 > 10: FAIL *)
-  let env = Codec.env codec in
-  let buf = Bytes.of_string "\x64\xC8" in
-  expect_constraint_fail (Codec.decode ~env codec buf 0)
+  Alcotest.(check bool)
+    "refused" true
+    (raises_invalid (fun () ->
+         let open Codec in
+         v "AssignPropFail"
+           (fun x y -> { x; y })
+           [
+             ( Field.v "x"
+                 ~action:
+                   (Action.on_success [ Action.assign out (Field.ref f_x) ])
+                 uint8
+             $ fun r -> r.x );
+             ( Field.v "y"
+                 ~constraint_:Expr.(Param.expr out + Field.ref f_y <= int 10)
+                 uint8
+             $ fun r -> r.y );
+           ]))
 
 let test_assign_expr () =
   (* Action assigns computed expression: out = x + 1 *)
-  let out = Param.output "out" uint8 in
+  let out = Param.output "out" uint16be in
   let f_x = Field.v "x" uint8 in
   let f_y = Field.v "y" uint8 in
   let codec =
@@ -93,7 +92,7 @@ let test_assign_expr () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 43 (UInt8.to_int (Param.get env out))
+  Alcotest.(check int) "out" 43 (UInt16.to_int (Param.get env out))
 
 (* -- Return -- *)
 
@@ -178,7 +177,7 @@ let test_abort () =
 
 let test_var_local () =
   (* var tmp = x * 2; assign out = tmp; check out after decode *)
-  let out = Param.output "out" uint8 in
+  let out = Param.output "out" uint16be in
   let f_x = Field.v "x" uint8 in
   let f_tmp = Field.v "tmp" uint8 in
   let f_y = Field.v "y" uint8 in
@@ -203,7 +202,7 @@ let test_var_local () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 84 (UInt8.to_int (Param.get env out))
+  Alcotest.(check int) "out" 84 (UInt16.to_int (Param.get env out))
 
 (* -- If -- *)
 
@@ -360,7 +359,7 @@ let test_on_act () =
 
 let test_stmt_sequencing () =
   (* var a = x; var b = a + 1; assign out = b * 2 *)
-  let out = Param.output "out" uint8 in
+  let out = Param.output "out" uint16be in
   let f_x = Field.v "x" uint8 in
   let f_a = Field.v "a" uint8 in
   let f_b = Field.v "b" uint8 in
@@ -387,7 +386,7 @@ let test_stmt_sequencing () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
   ignore (decode_ok (Codec.decode ~env codec buf 0));
-  Alcotest.(check int) "out" 86 (UInt8.to_int (Param.get env out))
+  Alcotest.(check int) "out" 86 (UInt16.to_int (Param.get env out))
 
 let test_return_short_circuits () =
   (* return true; abort => should succeed (abort never reached) *)
@@ -565,7 +564,7 @@ let suite =
       (* assign *)
       Alcotest.test_case "assign propagates to later field" `Quick
         test_assign_propagates;
-      Alcotest.test_case "assign propagates (fail)" `Quick
+      Alcotest.test_case "a constraint reading an output is refused" `Quick
         test_assign_propagates_fail;
       Alcotest.test_case "assign with expression" `Quick test_assign_expr;
       (* return *)

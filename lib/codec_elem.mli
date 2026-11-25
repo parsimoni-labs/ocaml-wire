@@ -63,6 +63,12 @@ val iter_param_refs_fields :
 (** [iter_param_refs_fields f fields where] calls [f] on every parameter the
     fields and [where] refer to, including those of embedded codecs. *)
 
+val iter_typ_field_refs : (string -> unit) -> 'a Types.typ -> unit
+(** [iter_typ_field_refs f t] calls [f] on every field name the expressions
+    inside [t] read: sizes, counts, presence conditions, tags and [where]
+    conditions. The fields of a sub-codec [t] embeds read their own names, which
+    are not reported. *)
+
 val param_use : Types.field list -> Codec_repr.param_use
 (** [param_use fields] is how the expressions of [fields], and of the codecs
     they embed, read the output parameters their actions assign. *)

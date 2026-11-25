@@ -133,6 +133,10 @@ let rec pp_expr : type a. a expr Fmt.t =
   | And (a, b) -> Fmt.pf ppf "(%a && %a)" pp_expr a pp_expr b
   | Or (a, b) -> Fmt.pf ppf "(%a || %a)" pp_expr a pp_expr b
   | Not a -> Fmt.pf ppf "(!%a)" pp_expr a
+  | Cast (t, (Sizeof _ as e)) ->
+      Fmt.pf ppf "((%a) (%a))" pp_cast_type t pp_expr e
+  | Cast (t, (Sizeof_this as e)) ->
+      Fmt.pf ppf "((%a) (%a))" pp_cast_type t pp_expr e
   | Cast (t, e) -> Fmt.pf ppf "((%a) %a)" pp_cast_type t pp_expr e
   | If_then_else (c, t, e) ->
       Fmt.pf ppf "((%a) ? %a : %a)" pp_expr c pp_expr t pp_expr e
@@ -279,9 +283,25 @@ let rec pp_stmts env ppf = function
       if rest <> [] then Fmt.sp ppf ();
       pp_stmts env ppf rest
 
+(* 3D ends an action at an [if], each branch running to the end of the action,
+   and at a [return]. The statements after an [if] are copied into both of its
+   branches, and a branch ends at its first [return]. An [:on-success] action
+   returns a Bool, so one that runs to its end returns [true], as in OCaml. *)
+let rec terminal_ifs = function
+  | [] -> []
+  | (Return _ as s) :: _ -> [ s ]
+  | If (c, t, e) :: (_ :: _ as rest) ->
+      let branch b = terminal_ifs (b @ rest) in
+      [ If (c, branch t, Some (branch (Option.value ~default:[] e))) ]
+  | [ If (c, t, e) ] -> [ If (c, terminal_ifs t, Option.map terminal_ifs e) ]
+  | s :: rest -> s :: terminal_ifs rest
+
 let pp_action ppf = function
-  | Success stmts -> Fmt.pf ppf "@[<h>{:on-success %a }@]" (pp_stmts []) stmts
-  | Act stmts -> Fmt.pf ppf "@[<h>{:act %a }@]" (pp_stmts []) stmts
+  | Success stmts ->
+      Fmt.pf ppf "@[<h>{:on-success %a }@]" (pp_stmts [])
+        (terminal_ifs (stmts @ [ Return (Bool true) ]))
+  | Act stmts ->
+      Fmt.pf ppf "@[<h>{:act %a }@]" (pp_stmts []) (terminal_ifs stmts)
 
 (* Extract field suffix for arrays - the modifier goes after the field name *)
 type field_suffix =
@@ -572,7 +592,7 @@ let anon_counter = Stdlib.ref 0
 (* The documentation projection renders an enum field as its named 3D enum type
    (e.g. [Status StatusCode;]), which makes EverParse enforce membership through
    the type. The codegen projection keeps the base type plus an explicit
-   membership refinement, because its FFI plug reads the field as the base type.
+   membership refinement, because its FFI visitor reads the field as the base type.
    Toggled around rendering by [to_3d]/[to_3d_file], mirroring [anon_counter]. *)
 let render_enum_as_type = Stdlib.ref false
 
@@ -673,11 +693,11 @@ let lookup_bound_cond raw_name field_typ =
    then accepted bodies the codec rejects. *)
 let render_typ_at : type a.
     name:string ->
-    widenable:string list ->
+    env:Arith_3d.env ->
     own:bool expr option ->
     a typ ->
     (Format.formatter -> unit) * field_suffix * bool expr option =
- fun ~name ~widenable ~own field_typ ->
+ fun ~name ~env ~own field_typ ->
   (* Extract Where constraints from the type so they appear as field
      constraints in the 3D output, not inline in the type. *)
   let where_cond, typ = extract_where_constraint field_typ in
@@ -704,14 +724,8 @@ let render_typ_at : type a.
       (combine_constraints (combine_constraints own where_cond) bound_cond)
       enum_cond
   in
-  (* Rewrite a signed field's ordering refinement to its two's-complement
-     unsigned form (the field projects to an unsigned type), and reject a float
-     ordering refinement, which has no faithful unsigned projection. *)
   let constraint_ =
-    Option.map (project_refinement ~name ~kind:(scalar_kind typ)) constraint_
-  in
-  let constraint_ =
-    Option.map (project_field_arith name widenable) constraint_
+    Option.map (Arith_3d.refinement env ~name typ) constraint_
   in
   let suffix, pp_base = field_suffix typ in
   let pp_base =
@@ -732,7 +746,7 @@ let rec fresh_anon_name () =
   incr anon_counter;
   if List.mem s !named_fields_3d then fresh_anon_name () else s
 
-let pp_field widenable ppf (Field f) =
+let pp_field env ppf (Field f) =
   let raw_name, name =
     match f.field_name with
     | Some name -> (name, escape_3d name)
@@ -741,7 +755,7 @@ let pp_field widenable ppf (Field f) =
         (s, s)
   in
   let pp_base, suffix, constraint_ =
-    render_typ_at ~name:raw_name ~widenable ~own:f.constraint_ f.field_typ
+    render_typ_at ~name:raw_name ~env ~own:f.constraint_ f.field_typ
   in
   Option.iter (pp_field_doc ppf) f.field_doc;
   Fmt.pf ppf "@,%t %s%a" pp_base name pp_field_suffix suffix;
@@ -880,16 +894,77 @@ let pad_reversed_group total used base native reversed =
     :: reversed
   else reversed
 
+let rec stmt_refs = function
+  | Assign (_, e) | Var (_, e) | Field_assign (_, _, e) -> collect_refs e
+  | Return e -> collect_refs e
+  | If (c, t, e) ->
+      collect_refs c
+      @ List.concat_map stmt_refs t
+      @ Option.fold ~none:[] ~some:(List.concat_map stmt_refs) e
+  | Extern_call _ | Abort -> []
+
+let action_refs = function Success l | Act l -> List.concat_map stmt_refs l
+
+(* An action stays on its field, where 3D runs it, so in a reversed group it
+   sees only the bitfields 3D declares before it: refuse one that reads a
+   bitfield of the group the codec declares before it. *)
+let rec check_reversed_actions = function
+  | [] -> ()
+  | Field f :: later ->
+      (match f.action with
+      | None -> ()
+      | Some a ->
+          let later_names =
+            List.filter_map (fun (Field g) -> g.field_name) later
+          in
+          List.iter
+            (fun n ->
+              if List.mem n later_names then
+                Fmt.invalid_arg
+                  "the action of bitfield %S reads bitfield %S of the same \
+                   word, which 3D declares after it: 3D lists a word's \
+                   bitfields from its least significant bit, the reverse of \
+                   their bit order here, and an action reads only the fields \
+                   before its own"
+                  (Option.value ~default:"_" f.field_name)
+                  n)
+            (action_refs a));
+      check_reversed_actions later
+
+(* 3d.exe refuses a word with an [on_success] action, which may fail, beside
+   any other action on its bitfields. *)
+let check_word_actions group =
+  match List.filter (fun (Field f) -> Option.is_some f.action) group with
+  | [] | [ _ ] -> ()
+  | acted ->
+      if
+        List.exists
+          (fun (Field f) ->
+            match f.action with Some (Success _) -> true | _ -> false)
+          acted
+      then
+        Fmt.invalid_arg
+          "bitfields %s of one word carry actions, one of them on_success, \
+           which can fail: 3d.exe supports no other action beside it on a \
+           word's bitfields; use on_act"
+          (String.concat ", "
+             (List.map
+                (fun (Field f) ->
+                  Fmt.str "%S" (Option.value ~default:"_" f.field_name))
+                acted))
+
 let reorder_bit_group base bit_order f0 rest =
   let total = bitfield_base_bits base in
   let native = native_bit_order base in
   let used, group, rest' = collect_bit_group base bit_order total f0 rest in
+  check_word_actions group;
   let emitted =
     if equal_bit_order bit_order native then group
     else
       (* Backward references in reversed order would break: fields now
          come before the values their constraints read. Collapse all
          constraints onto the last reversed field. *)
+      let () = check_reversed_actions (List.rev group) in
       let reversed = collapse_constraints_into_last (List.rev group) in
       pad_reversed_group total used base native reversed
   in
@@ -952,8 +1027,9 @@ let add_guard g (Field f as field) =
   | None -> Field { f with constraint_ = Some g }
   | Some c -> Field { f with constraint_ = Some (And (c, g)) }
 
-(* A byte span sized [a - b] rejects negative lengths in Codec; 3D must prove
-   the subtraction does not underflow. A span sized [f - k], with [f] an
+(* A byte span, [uint] or nested region sized [a - b] rejects negative lengths
+   in Codec; 3D must prove the subtraction does not underflow. One sized
+   [f - k], with [f] an
    unsigned field of at most 32 bits and [k] a nonnegative constant, puts
    [f >= k] on [f] itself, a scalar EverParse can refine. A span sized
    [a - sizeof(this)] puts [a >= sizeof(this)] on the field just before it.
@@ -966,8 +1042,11 @@ let guard_subtraction_sizes fields =
       fields
   in
   let size_guard : type a. a typ -> (string * bool expr) option = function
-    | Byte_array { size } | Byte_slice { size } | Byte_array_where { size; _ }
-      -> (
+    | Byte_array { size }
+    | Byte_slice { size }
+    | Byte_array_where { size; _ }
+    | Uint_var { size; _ }
+    | Single_elem { size; _ } -> (
         match size with
         | Sub ((Ref (I, name) as a), (Int n as b)) when n >= 0 && unsigned name
           ->
@@ -998,6 +1077,39 @@ let guard_subtraction_sizes fields =
   in
   go (List.map on_size_field fields)
 
+(* A struct's fields as 3D checks them, each with the environment its
+   expressions are typed in, and its [where] once the fields it names have
+   taken it: what [pp_struct] prints and what [Codec.v] refuses. *)
+let field_envs ?(params = []) where fields =
+  let fields = reorder_bit_groups_for_3d fields in
+  let where, fields = lower_where_to_field_constraint where fields in
+  let fields = guard_subtraction_sizes fields in
+  let formals = List.map (fun (p : param) -> p.param_name) params in
+  let outer, envs = Arith_3d.envs ~formals ?where fields in
+  (outer, where, List.combine envs fields)
+
+let projected_fields ?params where fields =
+  let outer, where, fields = field_envs ?params where fields in
+  ( Option.map (Arith_3d.condition outer) where,
+    List.map (fun (env, f) -> (env, Arith_3d.field env f)) fields )
+
+(* Each optional region of [fields] under the bounds its use site proves, where
+   its size verifies only under them ({!Arith_3d.bounded}). *)
+let bound_regions ?params where fields =
+  let _, _, envs = field_envs ?params where fields in
+  let env_of name =
+    List.find_map
+      (fun (env, Field f) ->
+        if f.field_name = Some name then Some env else None)
+      envs
+  in
+  List.map
+    (fun (Field f as field) ->
+      match Option.bind f.field_name env_of with
+      | Some env -> Arith_3d.bounded env field
+      | None -> field)
+    fields
+
 let pp_struct ppf (s : struct_) =
   check_3d_names s;
   anon_counter := 0;
@@ -1007,22 +1119,26 @@ let pp_struct ppf (s : struct_) =
       s.fields;
   let name = escape_3d s.name in
   let tag = struct_tag_name s in
-  let fields = reorder_bit_groups_for_3d s.fields in
-  let where, fields = lower_where_to_field_constraint s.where fields in
-  let fields = guard_subtraction_sizes fields in
-  let widenable =
-    List.filter_map
-      (fun (Field f) ->
-        match f.field_name with
-        | Some n when widenable_unsigned f.field_typ -> Some n
-        | _ -> None)
-      fields
-  in
+  let where, fields = projected_fields ~params:s.params s.where s.fields in
   Fmt.pf ppf "typedef struct %s%a" tag (pp_params ?as_enum:None) s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
   Fmt.pf ppf "@,{@[<v 2>";
-  List.iter (pp_field widenable ppf) fields;
+  List.iter (fun (env, field) -> pp_field env ppf field) fields;
   Fmt.pf ppf "@]@,} %s" name
+
+let check_fields where fields =
+  if
+    List.exists
+      (fun (Field f) ->
+        Option.is_some f.action && Option.is_some (unwrap_bits f.field_typ))
+      fields
+  then ignore (reorder_bit_groups_for_3d fields : field list);
+  let _, fields = projected_fields where fields in
+  List.iter
+    (fun (env, Field f) ->
+      let name = Option.value ~default:"_" f.field_name in
+      ignore (render_typ_at ~name ~env ~own:f.constraint_ f.field_typ))
+    fields
 
 (* The integer type an enum declaration names. A [where] on the enum's base is
    a constraint on the field, which the field carries; 3D has no refined base
@@ -1075,7 +1191,7 @@ let pp_casetype_cases : type k.
     (fun i (tag_opt, Pack_typ typ) ->
       let field_name = Fmt.str "v%d" i in
       let pp_base, suffix, constraint_ =
-        render_typ_at ~name:field_name ~widenable:[] ~own:None typ
+        render_typ_at ~name:field_name ~env:Arith_3d.empty ~own:None typ
       in
       let pp_body ppf () =
         Fmt.pf ppf "%t %s%a" pp_base field_name pp_field_suffix suffix;

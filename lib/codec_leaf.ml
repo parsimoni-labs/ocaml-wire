@@ -25,6 +25,51 @@ let[@inline] bytes_from input_end off =
   let stop = Input_end.to_int input_end in
   if off < 0 || off > stop then 0 else stop - off
 
+(* A record of [min_size] bytes at [off] does not fit before [input_end]. *)
+let frame_error min_size input_end off =
+  if off < 0 then Errors.negative_offset off;
+  raise_eof ~at:off ~expected:min_size ~got:(bytes_from input_end off)
+
+(* The structural bounds check decode runs before reading any field: the buffer
+   must hold at least [min_size] bytes, and the codec's resolved wire size must
+   fit. Shared with [validate] so a constraint-free codec is still bounds-checked
+   before a zero-copy [get] reads its fields. [decode] then reads the fixed
+   fields with no check of their own, so the test cannot overflow, and its one
+   call is on the error path, where nothing is live after it. *)
+let check_min_bounds min_size input_end off =
+  if off < 0 || off > Input_end.to_int input_end - min_size then
+    frame_error min_size input_end off
+
+(* The record ending at [end_off] holds [min_size] bytes and ends before
+   [input_end]. *)
+let check_end_bounds min_size input_end off end_off =
+  if end_off < off + min_size then
+    raise_eof ~at:off ~expected:min_size ~got:(bytes_from input_end off);
+  if end_off > Input_end.to_int input_end then
+    raise_eof ~at:off ~expected:(end_off - off) ~got:(bytes_from input_end off)
+
+(* [expected] is a byte count, so a span whose offset overran the buffer cannot
+   report its size: that size comes out negative, and every consumer does
+   arithmetic on the count (the streaming reader's retry target, the corpus
+   seeder's growth target), which a negative turns into a position behind what
+   is already buffered. Report the bytes missing before the read could start
+   instead, and keep the size for the ordinary case of a span that simply
+   reaches too far. *)
+let missing_before ~first ~sz ~len =
+  if sz < 0 || first < 0 then max 0 (first - len) else sz
+
+(* The span [first, first + sz) must end before [input_end]. Both ends derive
+   from length fields, i.e. untrusted input: a span sized past the input, or a
+   negative size from an overrun offset, would crash the read with a raw
+   [Invalid_argument] that escapes the decode result. Report the missing bytes
+   as end-of-input instead. *)
+let[@inline] check_span_bounds input_end ~first ~sz =
+  let len = Input_end.to_int input_end in
+  if sz < 0 || first < 0 || first > len - sz then
+    raise_eof ~at:first
+      ~expected:(missing_before ~first ~sz ~len)
+      ~got:(bytes_from input_end first)
+
 (* A read of [width] bytes at [at] that must stay inside the bytes the parse
    was handed. Reads whose position was itself computed from the buffer can
    land past the end on truncated input; reporting the span here keeps the
@@ -57,13 +102,21 @@ let zeroterm_nul_pos buf ~first ~limit = nul_scan buf ~at:first ~limit first
    path that yields the span runs it, so [Codec.decode] and [Codec.validate_exn]
    reject the same bytes as [Wire.of_string] and as the EverParse validator
    built from the same schema. *)
-let refined_span_check ~elt_var ~cond buf ~first ~len =
-  let bad = Eval.bad_byte ~elt_var ~cond buf ~first ~len in
-  if bad >= 0 then raise_constraint ~at:(first + bad) ~which:Per_byte ()
+let refined_span_check ~elt_var ~cond ~test =
+  let bad_byte = Eval.bad_byte ~elt_var ~cond ~test in
+  fun buf ~first ~len ->
+    let bad = bad_byte buf ~first ~len in
+    if bad >= 0 then raise_constraint ~at:(first + bad) ~which:Per_byte ()
 
-let refined_span_reader ~elt_var ~cond buf ~first ~len =
-  refined_span_check ~elt_var ~cond buf ~first ~len;
+(* The span read with [test] already compiled, for a reader that walks the type
+   on each call. *)
+let refined_span_read test buf ~first ~len =
+  let bad = Eval.first_bad test buf ~first ~len in
+  if bad >= 0 then raise_constraint ~at:(first + bad) ~which:Per_byte ();
   Bytes.sub_string buf first len
+
+let refined_span_reader ~elt_var ~cond ~test =
+  refined_span_read (Eval.byte_test ~elt_var ~cond test)
 
 (* Index of the first byte of [buf.[first .. first + len - 1]] that is not NUL,
    or [-1] when the span is all zeros. Scans the buffer where it lies, so the
@@ -89,9 +142,11 @@ let all_zeros_reader buf ~first ~len =
    bytes its own decoder (and the EverParse validator built from the same
    schema) rejects. One helper per refined type, so the encoder dispatch below
    stays a flat table. *)
-let refined_bytes_encoder n ~elt_var ~cond buf off v =
-  Eval.check_byte_refinement ~elt_var ~cond v;
-  blit_string_exact n buf off v
+let refined_bytes_encoder n ~elt_var ~cond ~test =
+  let check = Eval.check_byte_refinement ~elt_var ~cond ~test in
+  fun buf off v ->
+    check v;
+    blit_string_exact n buf off v
 
 let where_field_encoder cond enc runtime buf off v =
   Types.check_where_encode cond (Eval.expr Eval.empty cond);
@@ -244,8 +299,9 @@ and build_field_encoder_ctx : type a.
       fun _runtime buf off v -> uint_var_field_encoder endian n buf off v
   | Byte_array { size = Int n } ->
       fun _runtime buf off v -> blit_string_exact n buf off v
-  | Byte_array_where { size = Int n; elt_var; cond } ->
-      fun _runtime buf off v -> refined_bytes_encoder n ~elt_var ~cond buf off v
+  | Byte_array_where { size = Int n; elt_var; cond; test } ->
+      let encode = refined_bytes_encoder n ~elt_var ~cond ~test in
+      fun _runtime buf off v -> encode buf off v
   | Byte_slice { size = Int n } ->
       fun _runtime buf off v -> blit_slice_exact n buf off v
   | Where { cond; inner } ->
@@ -409,10 +465,10 @@ let rec build_field_reader_ctx : type a.
   | Byte_array { size = Int n } ->
       const_span_reader ~field_off n (fun _runtime _input_end buf base ->
           Bytes.sub_string buf (base + field_off) n)
-  | Byte_array_where { size = Int n; elt_var; cond } ->
+  | Byte_array_where { size = Int n; elt_var; cond; test } ->
+      let read = refined_span_reader ~elt_var ~cond ~test in
       const_span_reader ~field_off n (fun _runtime _input_end buf base ->
-          refined_span_reader ~elt_var ~cond buf ~first:(base + field_off)
-            ~len:n)
+          read buf ~first:(base + field_off) ~len:n)
   | Byte_slice { size = Int n } ->
       const_span_reader ~field_off n (fun _runtime _input_end buf base ->
           Slice.make_or_eod buf ~first:(base + field_off) ~length:n)

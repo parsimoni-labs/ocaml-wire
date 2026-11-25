@@ -216,7 +216,8 @@ let flow_fields =
   ]
 
 (* The arguments of [add4] and [add6] the outputs of [flow_fields] give, with
-   [i] converting an output to an [int]. *)
+   [i] converting an output to the integer the consumer computes on and
+   [ip6_bytes] adding the IPv6 header to the payload length. *)
 let key4 =
   "~src:(i ipv4_src) ~dst:(i ipv4_dst)\n\
    ~proto:(i ipv4_protocol)\n\
@@ -230,48 +231,63 @@ let key6 =
    ~d3:(i ipv6_dst3) ~proto:(i ipv6_next_header)\n\
    ~ports:(ports ipv6_tcp_present ipv6_tcp_src_port ipv6_tcp_dst_port\n\
    ipv6_udp_present ipv6_udp_src_port ipv6_udp_dst_port)\n\
-   ~bytes:(40 + i ipv6_payload_length)"
+   ~bytes:(ip6_bytes ipv6_payload_length)"
 
 (* The consumer [name] the scanner calls by name in [fold_index_step], whose
    accumulator has type [typ] and is [base] in [valid]: [v4 args] and [v6 args]
    are its next value for an IPv4 and an IPv6 packet whose key [args] gives,
-   [other] for a packet with no key. *)
-let flow_step ~name ~typ ~v4 ~v6 ~other =
-  "module " ^ name ^ " = struct\ntype t = " ^ typ
+   [other] for a packet with no key. With [wide], the key is the [int64]
+   values the scanner hands out, as [Flow_sum] folds it; otherwise [int]s, as
+   [Flow_table] takes them. [i] and [ip6_bytes] are defined beside [valid],
+   not in it: OCaml without flambda inlines no function whose body defines
+   one, and an out-of-line [valid] boxes each [int64] it is passed. *)
+let flow_step ?(wide = false) ~name ~typ ~v4 ~v6 ~other () =
+  let ports =
+    if wide then
+      "if tcp then Int64.logor (Int64.shift_left tsp 16) tdp\n\
+       else if udp then Int64.logor (Int64.shift_left usp 16) udp_\n\
+       else 0L"
+    else
+      "if tcp then (Int64.to_int tsp lsl 16) lor Int64.to_int tdp\n\
+       else if udp then (Int64.to_int usp lsl 16) lor Int64.to_int udp_\n\
+       else 0"
+  and conversions =
+    if wide then "let i x = x\nlet ip6_bytes l = Int64.add 40L l"
+    else "let i = Int64.to_int\nlet ip6_bytes l = 40 + Int64.to_int l"
+  in
+  "module " ^ name ^ " = struct\ntype t = " ^ typ ^ "\n\n" ^ conversions
   ^ "\n\n\
      let[@inline always] invalid base = base\n\n\
-     let[@inline always] ports tcp tsp tdp udp usp udp_ =\n\
-     if tcp then (Int64.to_int tsp lsl 16) lor Int64.to_int tdp\n\
-     else if udp then (Int64.to_int usp lsl 16) lor Int64.to_int udp_\n\
-     else 0\n\n\
-     let[@inline always] valid base "
+     let[@inline always] ports tcp tsp tdp udp usp udp_ =\n" ^ ports
+  ^ "\n\nlet[@inline always] valid base "
   ^ String.concat " " (List.map (fun n -> "~" ^ n) flow_fields)
-  ^ " =\nlet i = Int64.to_int in\nif ipv4_present then " ^ v4 key4
-  ^ "\nelse if ipv6_present then " ^ v6 key6 ^ "\nelse " ^ other ^ "\nend\n\n"
+  ^ " =\nif ipv4_present then " ^ v4 key4 ^ "\nelse if ipv6_present then "
+  ^ v6 key6 ^ "\nelse " ^ other ^ "\nend\n\n"
 
 (* The consumer [name] that hands each key to [sink]. *)
 let sink_step ~name sink =
   flow_step ~name ~typ:"int"
     ~v4:(fun k -> "(" ^ sink ^ ".add4 " ^ k ^ ";\nbase)")
     ~v6:(fun k -> "(" ^ sink ^ ".add6 " ^ k ^ ";\nbase)")
-    ~other:"base"
+    ~other:"base" ()
 
 let table_step = sink_step ~name:"Flow_step" "Flow_table"
 
 (* The consumer of the rows that time the parse alone and its entry, which
-   calls the fold [fold]. On OxCaml it folds each key as [Flow_sum] does in
-   its accumulator, an unboxed pair of the number of keys and their sum, which
-   stays in registers. On OCaml that pair would be allocated for each key,
-   which costs more than [Flow_sum]'s global state, so it hands each key to
-   [Flow_sum]. *)
+   calls the fold [fold]. On OxCaml it computes each key on the [int64] values
+   the scanner hands out, with [Flow_sum]'s key functions, and folds the keys
+   in its accumulator, an unboxed pair of the number of keys and their sum,
+   which stays in registers. On OCaml an [int64] handed to a call would be
+   boxed and that pair allocated for each key, so it hands each key to
+   [Flow_sum] as [int]s. *)
 let parse_step target =
   if target = `OxCaml then
     let next f k =
-      "let #(keys, sum) = base in\n#(keys + 1, sum + Flow_sum." ^ f ^ " " ^ k
-      ^ ")"
+      "let #(keys, sum) = base in\n#(keys + 1, sum + Int64.to_int (Flow_sum."
+      ^ f ^ " " ^ k ^ "))"
     in
-    ( flow_step ~name:"Flow_parse" ~typ:"#(int * int)" ~v4:(next "key4")
-        ~v6:(next "key6") ~other:"base",
+    ( flow_step ~wide:true ~name:"Flow_parse" ~typ:"#(int * int)"
+        ~v4:(next "key4") ~v6:(next "key6") ~other:"base" (),
       fun fold ->
         "let #(keys, sum) = " ^ fold
         ^ " ~init:#(0, 0) in\nFlow_sum.add_pass ~keys ~sum" )

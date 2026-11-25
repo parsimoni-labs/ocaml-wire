@@ -248,7 +248,7 @@ let sampler_name_groups =
     [ "cast" ];
     (* Keywords of 3D, F* and C, escaped apart: accepted by both lanes. *)
     [ "end"; "typeof"; "int"; "string" ];
-    (* Two names one case fold spells alike: refused by both lanes (the plug's
+    (* Two names one case fold spells alike: refused by both lanes (the visitor's
        [_IDX_] macro, the stubs' and the OCaml lane's label). *)
     [ "X"; "x" ];
     (* A keyword next to its escape, which the escape keeps apart ([done_]

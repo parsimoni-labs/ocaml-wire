@@ -161,23 +161,25 @@ let test_scanner () =
   validation " == 6i64) {";
   validation " == 17i64) {"
 
-let one t self =
-  Codec.v "One" Fun.id Codec.[ Field.v "x" t ~self_constraint:self $ Fun.id ]
+(* An optional byte gated by [present] over a field [x] of type [t]. *)
+let gated t present =
+  let x = Field.v "x" t in
+  Codec.v "Gated"
+    (fun x y -> (x, y))
+    Codec.
+      [
+        x $ fst; Field.optional "y" ~present:(present (Field.ref x)) uint8 $ snd;
+      ]
 
 (* Arithmetic is plain where the ranges the plan knows, narrowed by the
-   checks passed, keep it in the 63-bit int, and checked otherwise: a checked
-   operation returns [None] where the codec's overflows, which rejects the
-   record. A size is compared with the tail as [u64], where a negative one is
-   larger than any length: it has no test of its own. The Rust lane runs the
-   sums and products of test/ocaml that do overflow. *)
+   checks passed, keep it in the 63-bit int, and a comparison is on [u64]
+   where they do not, as the codec computes it on 64 bits. A size is compared with the tail as [u64], where a
+   negative one is larger than any length: it has no test of its own. *)
 let test_scanner_arithmetic () =
   let src c = Wire_rust.scanner ~codec:"c" c in
   has "u8 squared"
-    (src (one uint8 (fun x -> Expr.(x * x >= int 0))))
+    (src (gated uint8 (fun x -> Expr.(x * x >= int 0))))
     "(f1_x * f1_x)";
-  let u32 = src (one uint32be (fun x -> Expr.(x * x >= int 0))) in
-  has "u32 squared" u32 "mul(f1_x, f1_x)?";
-  has "u32 squared" u32 "fn mul(a: i64, b: i64) -> Option<i64>";
   let x =
     Field.v "x" uint32be ~self_constraint:(fun x -> Expr.(x <= int 1000))
   in
@@ -187,20 +189,23 @@ let test_scanner_arithmetic () =
       Codec.
         [
           x $ fst;
-          Field.v "m" uint8
-            ~constraint_:Expr.(Field.ref x * Field.ref x * Field.ref x > int 0)
+          Field.optional "m"
+            ~present:Expr.(Field.ref x * Field.ref x * Field.ref x > int 0)
+            uint8
           $ snd;
         ]
   in
   has "u32 below 1000, cubed" (src refined) "((f1_x * f1_x) * f1_x)";
+  has "u32 squared"
+    (src (gated uint32be (fun x -> Expr.(x * x >= int 0))))
+    "(((f1_x as u64) * (f1_x as u64)) >= 0u64)";
   let overflow = src Schemas.overflow in
-  let near_max = Fmt.str "%di64" (max_int - 5) in
-  has "overflow" overflow (Fmt.str "add(f1_a, %s)?" near_max);
-  has "overflow" overflow (Fmt.str "add(f3_lo, %s)?" near_max);
-  has "overflow" overflow "mul(f4_b, f5_c)?";
+  let near_max = Fmt.str "%du64" (max_int - 5) in
+  let max = Fmt.str "%du64" max_int in
+  has "overflow" overflow (Fmt.str "(((f1_a as u64) + %s) != %s)" near_max max);
+  has "overflow" overflow (Fmt.str "(((f3_lo as u64) + %s) != %s)" near_max max);
   let sized = src Schemas.sized in
-  has "sized" sized "if (mul(f1_n, f1_n)? != 1i64) {";
-  has "sized" sized "sub(mul(f1_n, f1_n)?, 1i64)?";
+  has "sized" sized "if (((f1_n >> 16) * (f1_n >> 16)) != 1i64) {";
   has "sized" sized "if (n4 as u64) > (r2.len() as u64) { return None; }";
   Alcotest.(check bool)
     "sized: no test for a negative size" false (contains sized "< 0");

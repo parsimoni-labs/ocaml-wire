@@ -367,6 +367,65 @@ let test_embed_output_param () =
        (decode_ok (Codec.decode ~env outer (Bytes.of_string "\x2A") 0)));
   Alcotest.(check int) "forwarded output" 42 (UInt8.to_int (Param.get env out))
 
+(* An output keeps every bit of the value assigned to it, past the native int:
+   [x] is a [uint64] (and a [uint32] on 32-bit targets) the C stores whole. *)
+let wide_codec name out typ =
+  let x = Field.v "x" typ in
+  Codec.v name Fun.id
+    Codec.
+      [
+        Field.v "x" typ
+          ~action:(Action.on_success [ Action.assign out (Field.ref x) ])
+        $ Fun.id;
+      ]
+
+let wide_out64 = Param.output "wide_out64" uint64be
+let wide_out32 = Param.output "wide_out32" uint32be
+let wide_signed = Param.output "wide_signed" int64be
+let wide64 = wide_codec "WideOut64" wide_out64 uint64be
+let wide32 = wide_codec "WideOut32" wide_out32 uint32be
+
+let wide_embed =
+  Codec.v "WideOutOuter" Fun.id Codec.[ Field.v "sub" (codec wide64) $ Fun.id ]
+
+let wide_bits = [ 0x4000_0000_0000_0000L; 0x8000_0000_0000_0001L; -1L ]
+
+let bytes64 v =
+  let b = Bytes.create 8 in
+  Bytes.set_int64_be b 0 v;
+  b
+
+let test_output_wide () =
+  List.iter
+    (fun v ->
+      let name = Fmt.str "%Lx" v in
+      let env = Codec.env wide64 in
+      let x = decode_ok (Codec.decode ~env wide64 (bytes64 v) 0) in
+      Alcotest.(check int64) (name ^ " decoded") v (UInt64.to_int64 x);
+      Alcotest.(check int64)
+        (name ^ " output") v
+        (UInt64.to_int64 (Param.get env wide_out64));
+      let env = Codec.env wide_embed in
+      ignore (decode_ok (Codec.decode ~env wide_embed (bytes64 v) 0));
+      Alcotest.(check int64)
+        (name ^ " forwarded output")
+        v
+        (UInt64.to_int64 (Param.get env wide_out64));
+      let signed = wide_codec "WideSigned" wide_signed uint64be in
+      let env = Codec.env signed in
+      ignore (decode_ok (Codec.decode ~env signed (bytes64 v) 0));
+      Alcotest.(check int64)
+        (name ^ " signed output") v
+        (Param.get env wide_signed))
+    wide_bits;
+  let env = Codec.env wide32 in
+  ignore
+    (decode_ok
+       (Codec.decode ~env wide32 (Bytes.of_string "\xff\xff\xff\xfe") 0));
+  Alcotest.(check int32)
+    "uint32 output" 0xffff_fffel
+    (UInt32.to_int32 (Param.get env wide_out32))
+
 (* A list of param-constrained sub-records within a byte budget, the param
    forwarded through the repeat (the shape that first exposed the gap). *)
 let test_embed_param_repeat () =
@@ -420,7 +479,7 @@ let test_get_action_output_only () =
 
 let test_get_action_varthen_assign () =
   (* Action with local var computation then assign to output *)
-  let out = Param.output "doubled" uint8 in
+  let out = Param.output "doubled" uint16be in
   let f_ref = Field.v "v" uint8 in
   let cf_v =
     Codec.(
@@ -440,12 +499,12 @@ let test_get_action_varthen_assign () =
   Alcotest.(check int)
     "get value" 21
     (UInt8.to_int (get_v (Bytes.of_string "\x15") 0));
-  Alcotest.(check int) "doubled output" 42 (UInt8.to_int (Param.get env out))
+  Alcotest.(check int) "doubled output" 42 (UInt16.to_int (Param.get env out))
 
 let test_get_action_crossfield_ref () =
   (* Action on field y references field x's value *)
   let f_x = Field.v "x" uint8 in
-  let out = Param.output "sum" uint8 in
+  let out = Param.output "sum" uint16be in
   let cf_x = Codec.(f_x $ fun (x, _) -> x) in
   let cf_y =
     Codec.(
@@ -465,7 +524,7 @@ let test_get_action_crossfield_ref () =
   (* Action computed x + 100 = 10 + 100 = 110 *)
   Alcotest.(check int)
     "cross-field output" 110
-    (UInt8.to_int (Param.get env out))
+    (UInt16.to_int (Param.get env out))
 
 let test_validate_constraint_only () =
   (* Codec with constraint but no where clause *)
@@ -499,7 +558,7 @@ let test_validate_where_only () =
   | () -> Alcotest.fail "expected where failure"
   | exception Parse_error { kind = Constraint_failed _; _ } -> ()
 
-(* -- an output param that sizes a later field -- *)
+(* -- a field that sizes a later one and sets an output -- *)
 
 let sized_out = Param.output "sized_out" uint8
 let sized_slot = Param.input "sized_slot" uint8
@@ -512,21 +571,23 @@ let sized_sub =
     Fun.id
     Codec.[ f_v $ Fun.id ]
 
+let sized_f_n = Field.v "n" uint8
+
 let sized_n =
-  let f_n = Field.v "n" uint8 in
   Codec.(
     Field.v "n"
-      ~action:(Action.on_success [ Action.assign sized_out (Field.ref f_n) ])
+      ~action:
+        (Action.on_success [ Action.assign sized_out (Field.ref sized_f_n) ])
       uint8
     $ fun (n, _, _) -> n)
 
 let sized_pad =
   Codec.(
-    Field.v "pad" (byte_array ~size:(Param.expr sized_out)) $ fun (_, p, _) -> p)
+    Field.v "pad" (byte_array ~size:(Field.ref sized_f_n)) $ fun (_, p, _) -> p)
 
 let sized_last typ = Codec.(Field.v "s" typ $ fun (_, _, s) -> s)
 
-(* [n] sets the param, [pad] is sized by it, then a sub-codec with a [where]. *)
+(* [n] sizes [pad] and sets the output, then a sub-codec with a [where]. *)
 let sized_then_sub =
   Codec.v "SizedThenSub"
     (fun n p s -> (n, p, s))
@@ -541,12 +602,6 @@ let sized_then_own =
       $ fun (_, _, s) -> s)
   in
   Codec.v "SizedThenOwn" (fun n p s -> (n, p, s)) [ sized_n; sized_pad; own ]
-
-(* [pad] reads the param before [n] sets it. *)
-let sized_before_set =
-  Codec.v "SizedBeforeSet"
-    (fun p n s -> (n, p, s))
-    [ sized_pad; sized_n; sized_last (codec sized_sub) ]
 
 let sized_show (n, p, s) =
   Fmt.str "%d %S %d" (UInt8.to_int n) p (UInt8.to_int s)
@@ -634,7 +689,19 @@ let test_output_sizes_later_field () =
   Alcotest.(check int) "output" 1 (UInt8.to_int (Param.get env sized_out));
   check_sized ~exact:true "SizedThenSub" sized_then_sub;
   check_sized ~exact:true "SizedThenOwn" sized_then_own;
-  check_sized ~exact:false "SizedBeforeSet" sized_before_set
+  (* 3D holds an output as a pointer, which no size reads. *)
+  Alcotest.(check bool)
+    "a size reading an output is refused" true
+    (raises_invalid (fun () ->
+         Codec.v "SizedByOutput"
+           (fun n p s -> (n, p, s))
+           [
+             sized_n;
+             Codec.(
+               Field.v "pad" (byte_array ~size:(Param.expr sized_out))
+               $ fun (_, p, _) -> p);
+             sized_last uint8;
+           ]))
 
 let test_get_twostaged_same_field () =
   (* Two staged getters from the same codec+field with different envs *)
@@ -886,6 +953,8 @@ let suite =
         test_embed_output_param;
       Alcotest.test_case "embed: param forwarded through repeat" `Quick
         test_embed_param_repeat;
+      Alcotest.test_case "action: an output holds a 64-bit value" `Quick
+        test_output_wide;
       Alcotest.test_case "action: output only" `Quick
         test_get_action_output_only;
       Alcotest.test_case "action: var then assign" `Quick
@@ -895,8 +964,8 @@ let suite =
       Alcotest.test_case "validate: constraint only" `Quick
         test_validate_constraint_only;
       Alcotest.test_case "validate: where only" `Quick test_validate_where_only;
-      Alcotest.test_case "action: output param sizes a later field" `Quick
-        test_output_sizes_later_field;
+      Alcotest.test_case "action: a field sizes a later one and sets an output"
+        `Quick test_output_sizes_later_field;
       Alcotest.test_case "action: two staged same field" `Quick
         test_get_twostaged_same_field;
       Alcotest.test_case "shared: encode bitfield" `Quick

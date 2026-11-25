@@ -23,6 +23,27 @@ val bytes_from : Input_end.t -> int -> int
 (** [bytes_from input_end off] is the number of input bytes from [off] on, the
     [got] of an end-of-input error; [0] outside the input. *)
 
+val frame_error : int -> Input_end.t -> int -> 'a
+(** [frame_error min_size input_end off] raises the [Parse_error] of a record of
+    [min_size] bytes that does not fit before [input_end] at [off]. *)
+
+val check_min_bounds : int -> Input_end.t -> int -> unit
+(** [check_min_bounds min_size input_end off] raises the [Parse_error] of a
+    record of [min_size] bytes at [off] unless it ends before [input_end]. *)
+
+val check_end_bounds : int -> Input_end.t -> int -> int -> unit
+(** [check_end_bounds min_size input_end off end_off] raises a [Parse_error]
+    unless the record at [off] ending at [end_off] holds [min_size] bytes and
+    ends before [input_end]. *)
+
+val missing_before : first:int -> sz:int -> len:int -> int
+(** [missing_before ~first ~sz ~len] is the [expected] of the end-of-input error
+    of a span of [sz] bytes at [first] in an input of [len] bytes. *)
+
+val check_span_bounds : Input_end.t -> first:int -> sz:int -> unit
+(** [check_span_bounds input_end ~first ~sz] raises an end-of-input
+    {!Types.Parse_error} unless the [sz] bytes at [first] are in the input. *)
+
 val check_read_bounds : Input_end.t -> at:int -> width:int -> unit
 (** [check_read_bounds input_end ~at ~width] raises an end-of-input
     {!Types.Parse_error} unless the [width] bytes at [at] are in the input. *)
@@ -34,21 +55,29 @@ val zeroterm_nul_pos : bytes -> first:int -> limit:int -> int
 val refined_span_check :
   elt_var:string ->
   cond:bool Types.expr ->
+  test:(int -> bool) option Atomic.t ->
   bytes ->
   first:int ->
   len:int ->
   unit
-(** [refined_span_check ~elt_var ~cond buf ~first ~len] raises a per-byte
-    constraint error at the first byte of the span that fails [cond]. *)
+(** [refined_span_check ~elt_var ~cond ~test buf ~first ~len] raises a per-byte
+    constraint error at the first byte of the span that fails [cond], compiled
+    once into [test] ({!Eval.byte_test}). *)
+
+val refined_span_read : (int -> bool) -> bytes -> first:int -> len:int -> string
+(** [refined_span_read test buf ~first ~len] is the span, after raising a
+    per-byte constraint error at its first byte that fails [test]. *)
 
 val refined_span_reader :
   elt_var:string ->
   cond:bool Types.expr ->
+  test:(int -> bool) option Atomic.t ->
   bytes ->
   first:int ->
   len:int ->
   string
-(** [refined_span_reader] runs {!refined_span_check} and copies the span. *)
+(** [refined_span_reader ~elt_var ~cond ~test buf ~first ~len] is
+    {!refined_span_read} of the compiled [cond]. *)
 
 val all_zeros_check : bytes -> first:int -> len:int -> unit
 (** [all_zeros_check buf ~first ~len] raises a non-zero-padding error at the

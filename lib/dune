@@ -14,9 +14,13 @@
   codec_elem
   codec_compile
   codec_intervals
+  codec_sets
+  codec_view
   codec_layout
   codec_walk
+  codec_fault
   codec_seal
+  codec_struct
   codec_words)
  (flags
   (:standard -open Wire_runtime))

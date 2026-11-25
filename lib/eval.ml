@@ -10,14 +10,9 @@
 
 open Types
 
-(* The binding is mutable so a per-byte refinement can be decided in place: a
-   fresh association per byte would make scanning a [byte_array_where] allocate
-   in proportion to the span it is protecting. *)
-type binding = { name : string; mutable value : int }
-type ctx = binding list
+type ctx = (string * int) list
 
 let empty : ctx = []
-let bind name value ctx = { name; value } :: ctx
 
 let rec lookup name = function
   | [] ->
@@ -29,7 +24,7 @@ let rec lookup name = function
         "Eval.expr: unbound field %s (cross-field references are only valid \
          inside a struct)"
         name
-  | b :: tl -> if String.equal b.name name then b.value else lookup name tl
+  | (n, v) :: tl -> if String.equal n name then v else lookup name tl
 
 (* Value-to-int conversion is a fold over the type description, so it is
    decided next to the type definitions; re-exported here because the
@@ -98,30 +93,77 @@ and compare_expr : type a. ctx -> a expr -> a expr -> int =
 and compare_int64_expr : ctx -> int64 expr -> int64 expr -> int =
  fun ctx a b -> Int64.unsigned_compare (expr ctx a) (expr ctx b)
 
+(* A per-byte condition reads the byte [elt_var] alone, and is computed at the
+   width 3D gives it: in the native int, or on 64 bits, unsigned, where its
+   value can leave the native int ({!Types.wide_expr}). *)
+let compile_byte_test ~elt_var cond =
+  let unbound name _ () () () = lookup name [] in
+  let leaves : (int, unit, unit, unit) Expr_compiler.leaves =
+    {
+      ref_ =
+        (fun name ->
+          if String.equal name elt_var then fun b () () () -> b
+          else unbound name);
+      i64 =
+        (fun name _ () () () ->
+          Fmt.invalid_arg
+            "Eval.expr: unbound int64 field %s (cross-field references are \
+             only valid inside a struct)"
+            name);
+      wide = (fun _ -> None);
+      wide_expr =
+        Types.wide_expr (fun name ->
+            if String.equal name elt_var then Some (Pack_typ Uint8) else None);
+      param_ref =
+        (fun (Expr_compiler.Pack_param p) _ () () () ->
+          Fmt.invalid_arg
+            "Eval.expr: parameter %S requires a codec evaluation context" p.name);
+      sizeof_typ =
+        (fun (Pack_typ t) ->
+          let n = Option.value ~default:0 (field_wire_size t) in
+          fun _ () () () -> n);
+      (* The one-byte element struct the condition projects to. *)
+      sizeof_this = (fun _ () () () -> 1);
+      field_pos = (fun _ () () () -> 0);
+    }
+  in
+  let test = Expr_compiler.compile_bool leaves cond in
+  fun b -> test b () () ()
+
 (* [byte_array_where] refines every byte of the span, and every path that reads
    or writes one decides it here: the compiled codec, the direct parser, both
    encoders and the EverParse validator built from the same schema all admit
-   exactly the same bytes. The loop stays at top level rather than closing over
-   the span, so a scan allocates only its single binding. *)
-let rec scan_bytes ctx elt cond buf ~first ~len i =
+   exactly the same bytes. *)
+let byte_test ~elt_var ~cond test =
+  match Atomic.get test with
+  | Some f -> f
+  | None ->
+      let f = compile_byte_test ~elt_var cond in
+      Atomic.set test (Some f);
+      f
+
+let rec scan test buf first len i =
   if i >= len then -1
-  else begin
-    elt.value <- Bytes.get_uint8 buf (first + i);
-    if expr ctx cond then scan_bytes ctx elt cond buf ~first ~len (i + 1) else i
-  end
+  else if test (Bytes.get_uint8 buf (first + i)) then
+    scan test buf first len (i + 1)
+  else i
 
-let bad_byte ~elt_var ~cond buf ~first ~len =
-  let elt = { name = elt_var; value = 0 } in
-  scan_bytes [ elt ] elt cond buf ~first ~len 0
+let first_bad test buf ~first ~len = scan test buf first len 0
 
-let check_byte_refinement ~elt_var ~cond s =
-  let len = String.length s in
-  (* [bad_byte] only reads, so the aliased bytes never escape as mutable. *)
-  let i = bad_byte ~elt_var ~cond (Bytes.unsafe_of_string s) ~first:0 ~len in
-  if i >= 0 then
-    Fmt.invalid_arg
-      "Wire.encode: byte_array_where byte %d = 0x%02x violates its per-byte \
-       constraint %a"
-      i
-      (Char.code s.[i])
-      Types.pp_expr cond
+let bad_byte ~elt_var ~cond ~test =
+  let test = byte_test ~elt_var ~cond test in
+  fun buf ~first ~len -> first_bad test buf ~first ~len
+
+let check_byte_refinement ~elt_var ~cond ~test =
+  let bad = bad_byte ~elt_var ~cond ~test in
+  fun s ->
+    let len = String.length s in
+    (* [bad] only reads, so the aliased bytes never escape as mutable. *)
+    let i = bad (Bytes.unsafe_of_string s) ~first:0 ~len in
+    if i >= 0 then
+      Fmt.invalid_arg
+        "Wire.encode: byte_array_where byte %d = 0x%02x violates its per-byte \
+         constraint %a"
+        i
+        (Char.code s.[i])
+        Types.pp_expr cond

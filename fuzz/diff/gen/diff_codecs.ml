@@ -99,11 +99,11 @@ type compared_field = { name : string; width : int }
      ([Everparse.Raw.int_slots]). A bitfield shares its base word with its
      neighbours, so it has no slot; a float is not an integer; a byte span, an
      array and a nested record are not scalars. None of those are compared.
-   - The default plug must report the field's value. A byte span, a nested
+   - The default visitor must report the field's value. A byte span, a nested
      region and a variable-width integer all route to [<Name>SetBytes], which
      hands back the field's byte offset instead, so there is no value on the C
      side to compare. That drops [uint], the one whole-byte integer the
-     plug does not carry.
+     visitor does not carry.
 
    What is left is the fixed-width scalars -- [uint8] .. [uint64], [int8] ..
    [int64], and the enums, lookups, maps and refinements layered over them. *)
@@ -478,7 +478,7 @@ let optional_scan ~region =
             [ 0; 1; 2; 255 ]);
     }
 
-(* An optional scalar of an embedded codec: the scanners and the plug hand
+(* An optional scalar of an embedded codec: the scanners and the visitor hand
    out its value and its presence by path. *)
 let nested_optional_scan =
   let open Wire in
@@ -742,46 +742,6 @@ let bit_guard_scans =
       ("U32BE", U32be, 32, true);
       ("U32LE", U32, 32, false);
     ]
-
-let signed_shift_scan =
-  let open Wire in
-  let value = Field.v "value" int32be in
-  let x = Field.ref value in
-  let present =
-    Expr.(x lsr int 0 = x && x lsl int 0 = x && lnot x lsr int 0 = lnot x)
-  in
-  let codec =
-    Codec.v "ScanSignedShiftZero"
-      (fun value selected tail -> (value, selected, tail))
-      Codec.
-        [
-          (value $ fun (x, _, _) -> x);
-          (Field.optional "selected" ~present uint8 $ fun (_, x, _) -> x);
-          (Field.v "tail" uint8 $ fun (_, _, x) -> x);
-        ]
-  in
-  Scan
-    {
-      label = "scan_signed_shift_zero";
-      codec;
-      project =
-        (fun (v, s, t) ->
-          [
-            ("value", SInt32.to_int v);
-            ("selected_present", if Option.is_some s then 1 else 0);
-            ("selected", Option.fold ~none:0 ~some:UInt8.to_int s);
-            ("tail", UInt8.to_int t);
-          ]);
-      inputs = (fun b -> [ b ]);
-      corpus =
-        (fun () ->
-          List.concat_map
-            (fun word ->
-              let b = Bytes.init 8 Char.chr in
-              Bytes.set_int32_be b 0 word;
-              List.init 9 (fun n -> Bytes.sub b 0 n))
-            [ Int32.min_int; -1l; 0l; 1l; Int32.max_int ]);
-    }
 
 (* A checked inner size must not refine a same-named outer field. *)
 let refined_size_values =
@@ -1181,7 +1141,7 @@ let capture_corpus () =
   List.rev !cases
 
 let scan_cases =
-  (refined_size_scan :: signed_shift_scan :: bit_guard_scans)
+  (refined_size_scan :: bit_guard_scans)
   @ [
       scan_words;
       branch_scan;

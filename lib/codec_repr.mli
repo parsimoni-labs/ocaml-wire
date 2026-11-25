@@ -187,8 +187,27 @@ val compile_expr :
 (** [compile_expr env e runtime input_end buf base] evaluates [e] for the record
     at [base], resolving field references through [env]. *)
 
+type typed_reader =
+  string
+  * Types.packed_typ
+  * (Expr_compiler.wide * (runtime -> Input_end.t -> bytes -> int -> int64))
+    option
+(** A field declared earlier, under its name: its type, and its full-width
+    reader when its type is {!wide_kind}. *)
+
+val extend_typed :
+  string ->
+  'a Types.typ ->
+  (runtime -> Input_end.t -> bytes -> int -> 'a) ->
+  typed_reader list ->
+  typed_reader list
+(** [extend_typed name typ reader prev] is [prev] with the field [name] of
+    [typ], decoded by [reader], read at full width when {!wide_kind} says it is,
+    and any earlier field [name] hidden. *)
+
 val compile_bool_expr :
   ?sizeof_this:(runtime -> Input_end.t -> bytes -> int -> int) ->
+  ?wide:typed_reader list ->
   field_reader list ->
   bool Types.expr ->
   runtime ->
@@ -196,7 +215,9 @@ val compile_bool_expr :
   bytes ->
   int ->
   bool
-(** [compile_bool_expr] is {!compile_expr} for a condition. *)
+(** [compile_bool_expr] is {!compile_expr} for a condition. A field of [wide] is
+    read at full width, and an expression {!Types.wide_expr} finds over the
+    types of [wide] is evaluated on 64 bits. *)
 
 type idx = string -> int
 (** Slot index of a field or action-local name. *)
@@ -206,6 +227,7 @@ type compile_ctx = {
   sizeof_this : int ref;
   field_pos : int;
   param_slots : (string, int) Hashtbl.t;
+  slot_typs : (int, Types.packed_typ) Hashtbl.t;
 }
 (** What compiling an expression onto the scratch resolves names against. *)
 
@@ -213,9 +235,46 @@ val mk_ctx :
   ?sizeof_this:int ref ->
   ?field_pos:int ->
   param_slots:(string, int) Hashtbl.t ->
+  slot_typs:(int, Types.packed_typ) Hashtbl.t ->
   idx ->
   compile_ctx
-(** [mk_ctx ~param_slots idx] is a compile context. *)
+(** [mk_ctx ~param_slots ~slot_typs idx] is a compile context. *)
+
+val params_wide : Param.packed list -> bool array
+(** [params_wide handles] is, for each parameter, whether a native int cannot
+    hold all its values, so that it keeps its 64 bits in an {!field-int64s}
+    slot. *)
+
+val seed_params :
+  slots ->
+  Types.eval_ctx ->
+  wide:bool array ->
+  int ->
+  int ->
+  Param.packed list ->
+  unit
+(** [seed_params arr ctx ~wide base i handles] binds each parameter of
+    [handles], the [i]th on, to its value in [ctx], at slot [base + i]. *)
+
+val writeback_params :
+  slots ->
+  Types.eval_ctx ->
+  wide:bool array ->
+  int ->
+  int ->
+  Param.packed list ->
+  unit
+(** [writeback_params arr ctx ~wide base i handles] writes each output of
+    [handles], the [i]th on, back to [ctx] from slot [base + i]. *)
+
+val wide_kind : 'a Types.typ -> Expr_compiler.wide option
+(** [wide_kind typ] is how a field of [typ] reads at full width when a native
+    int cannot hold all its values on this platform, [None] when it can. *)
+
+val note_typ : (int, Types.packed_typ) Hashtbl.t -> int -> 'a Types.typ -> unit
+(** [note_typ slot_typs slot typ] records in [slot_typs] that the field at
+    [slot] has type [typ]: it reads at full width when {!wide_kind} says it
+    does. *)
 
 (** A comparison operator. *)
 type cmp = Eq | Ne | Lt | Le | Gt | Ge
@@ -290,6 +349,10 @@ and sub = {
 (** A scalar of any type. *)
 type packed_scalar = Ps : 'a scalar -> packed_scalar
 
+val prefix_wide : (string * packed_scalar) list -> int Types.expr -> bool
+(** [prefix_wide prefix e] is {!Types.wide_expr} over the fields [prefix] reads:
+    whether [e] is evaluated on 64 bits. *)
+
 (** How the walk reads a field: in place at a fixed offset of the record, inside
     the frame the walk has checked, or as the cursor moves over it. *)
 type _ walk_read =
@@ -298,7 +361,8 @@ type _ walk_read =
       (** A byte array of the given offset and length. *)
   | Slice : int * int -> Bytesrw.Bytes.Slice.t walk_read
       (** A byte slice of the given offset and length. *)
-  | Walk : (Types.cursor -> 'a) -> 'a walk_read
+  | Walk : 'a Types.walk -> 'a walk_read
+      (** A field the cursor moves over, read or only checked. *)
 
 (** The walk's readers in field order, as {!readers}. *)
 type (_, _) walk_readers =
@@ -308,16 +372,36 @@ type (_, _) walk_readers =
       -> ('full, 'rest) walk_readers
 
 (** A check the walk makes before it reads: a field at a fixed offset within a
-    set of intervals, or a condition on such fields. *)
+    set of intervals, or a condition on such fields, compiled for the record's
+    frame of [size] bytes. *)
 type walk_check =
   | Within of packed_scalar * (int * int) array
-  | Holds of (Types.cursor -> bool)
+  | Holds of (size:int -> Types.cursor -> bool)
+
+(** How the cursor goes past a field once the record's checks have passed: it
+    stays at a field of fixed offset, moves by the bytes a span or a region
+    takes with no test of their bounds, or walks a sub-codec that measures
+    itself. *)
+type walk_move =
+  | Stays
+  | Moves of (Types.cursor -> int)
+  | Walks of (Types.cursor -> unit)
+
+type walk_place = {
+  pname : string;
+  pskip : (Types.cursor -> unit) option;
+      (** The checks of a field the cursor walks. *)
+  pmove : walk_move;  (** How the cursor goes past it. *)
+  pgate : (Types.cursor -> bool) option;  (** The gate of an optional field. *)
+}
+(** A field of a walk. *)
 
 type ('full, 'f) walk = {
   wreaders : ('full, 'f) walk_readers;
   wchecks_rev : walk_check list;
   wstart : int option;
   wgates : (bool Types.expr * int) list;
+  wplaces_rev : walk_place list;
 }
 (** The walk of a record under construction: its readers, its checks, last
     first, and where the first field the cursor moves over starts in the record,
@@ -343,6 +427,10 @@ type ('f, 'r) record =
       validators_rev : (int * step) list;
       checkers_rev :
         (int * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)) list;
+      faults_rev :
+        (string list
+        * (slots -> runtime -> Input_end.t -> bytes -> int -> unit))
+        list;
       field_actions_rev : (string * compiled_action) list;
       n_fields : int;
       n_array_slots : int;
@@ -351,7 +439,9 @@ type ('f, 'r) record =
       where : bool Types.expr option;
       doc : string option;
       field_readers : field_reader list;
+      typed_readers : typed_reader list;
       param_slots : (string, int) Hashtbl.t;
+      slot_typs : (int, Types.packed_typ) Hashtbl.t;
     }
       -> ('f, 'r) record
 
@@ -413,7 +503,11 @@ type 'r compiled = {
   decode : runtime -> Input_end.t -> bytes -> int -> 'r;
   read : runtime -> Input_end.t -> bytes -> int -> 'r;
   plain_decode : (bytes -> int -> 'r) option;
-  walk : (Types.cursor -> 'r) option;
+  walk : 'r Types.walk option;
+  places : (string * (Types.cursor -> int)) list;
+      (** Where the walk finds each field it walks or gates: the offset of the
+          field in the record at the cursor's [wbase], or [-1] when it is
+          absent. *)
   encode : 'r -> runtime -> bytes -> int -> int;
   wire_size : wire_size_info;
   validate : ?env_slots:int array -> bytes -> int -> unit;
@@ -421,6 +515,7 @@ type 'r compiled = {
   plain_encode : ('r -> bytes -> int -> unit) option;
   fixed_frame : int;
   plain_pass : pass;
+  faults : runtime -> Input_end.t -> bytes -> int -> unit;
   validate_ctx : runtime -> Input_end.t -> bytes -> int -> unit;
   validate_sized : runtime -> Input_end.t -> bytes -> int -> int -> unit;
   check_end : Input_end.t -> bytes -> int -> int;

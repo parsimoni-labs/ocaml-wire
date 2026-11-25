@@ -38,13 +38,14 @@ val add_field : ('a -> 'f, 'r) record -> ('a, 'r) field -> ('f, 'r) record
 
 val compile_where_clause :
   ?used:(int, unit) Hashtbl.t ->
+  slot_typs:(int, Types.packed_typ) Hashtbl.t ->
   (string, int) Hashtbl.t ->
   (string option * 'a) list ->
   bool Types.expr option ->
   (slots -> bool) option
-(** [compile_where_clause ?used param_slots field_readers where] compiles a
-    record's [where] clause onto the scratch, noting in [used] the slots it
-    reads. *)
+(** [compile_where_clause ?used ~slot_typs param_slots field_readers where]
+    compiles a record's [where] clause onto the scratch, noting in [used] the
+    slots it reads. *)
 
 val build_validators :
   ?used:(int, 'a) Hashtbl.t ->
@@ -91,7 +92,7 @@ val validate_runtime_of :
   unit
 (** [validate_runtime_of] runs [validate_arr] on a scratch cleared by [clear]
     and seeded with the context's parameters, then writes the output parameters
-    back. *)
+    back, on 64 bits for those {!Codec_repr.params_wide} marks. *)
 
 val seal :
   struct_fields:Types.field list ->
@@ -106,16 +107,12 @@ val typ_where_conds : 'a Types.typ -> bool Types.expr list
 (** [typ_where_conds t] is the conditions of the [where] wrappers of [t],
     outermost first. *)
 
-val check_decode_bounds :
+val check_extent :
   wire_size_info -> int -> runtime -> Input_end.t -> bytes -> int -> unit
-(** [check_decode_bounds size min_size runtime input_end buf off] checks that
-    the record at [off] lies inside [buf]: [min_size] bytes, then the span
-    [size] computes from the data when it is variable. Raises [Parse_error] on a
-    short buffer. *)
-
-val min_bounds_error : int -> bytes -> int -> 'a
-(** [min_bounds_error min_size buf off] raises the [Parse_error] of a record of
-    [min_size] bytes that does not fit [buf] at [off]. *)
+(** [check_extent size min_size runtime input_end buf off] checks that the
+    record at [off], of the extent [size] computes from the data when it is
+    variable, ends before [input_end]. Raises [Parse_error] otherwise. It runs
+    after the record's checks. *)
 
 val run_plain_pass :
   ?runtime:Types.eval_ctx -> pass -> Input_end.t -> bytes -> int -> unit

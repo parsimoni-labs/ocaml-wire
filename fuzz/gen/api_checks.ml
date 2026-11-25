@@ -64,48 +64,19 @@ let check_all_zeros_semantic label () =
   check_decode_validate_agree label "all_zeros" g
     (Bytes.of_string "\000\001\000")
 
-let signed_slice_semantic_codec () =
+(* 3D reads a signed size as its unsigned bit pattern, so a span sized by an
+   [int8] has no projection that agrees with OCaml, which reads [-1] where the
+   C reads 255: the codec is refused when it is built. *)
+let check_negative_byte_slice_semantic label () =
   let len = Wire.Field.v "Len" Wire.int8 in
   let data = Wire.Field.v "Data" (Wire.byte_slice ~size:(Wire.Field.ref len)) in
-  let cf_data = Wire.Codec.(data $ snd) in
-  let codec =
+  match
     Wire.Codec.v "FuzzSignedSlice"
       (fun l d -> (l, d))
-      Wire.Codec.[ len $ fst; cf_data ]
-  in
-  let g =
-    {
-      codec;
-      typ = Wire.codec codec;
-      positive =
-        Alcobar.const
-          ((Wire.SInt8.v 0, slice_of_string ""), Bytes.of_string "\000");
-      random = bytes_any;
-      adversarial = bytes_any;
-      equal =
-        (fun (l1, s1) (l2, s2) ->
-          Wire.SInt8.equal l1 l2
-          && String.equal (string_of_slice s1) (string_of_slice s2));
-      env = None;
-      fields = [];
-      adversarial_value = None;
-    }
-  in
-  (g, codec, cf_data)
-
-let check_negative_byte_slice_semantic label () =
-  let g, codec, cf_data = signed_slice_semantic_codec () in
-  let bad = Bytes.of_string "\255" in
-  check_decode_validate_agree label "negative byte_slice" g bad;
-  match validate_one g bad with
-  | `Reject | `Crash -> ()
-  | `Ok -> (
-      match (Wire.Staged.unstage (Wire.Codec.get codec cf_data)) bad 0 with
-      | s ->
-          if Bytesrw.Bytes.Slice.length s < 0 then
-            Alcobar.failf "%s validate-then-get produced negative slice" label
-      | exception Invalid_argument m ->
-          Alcobar.failf "%s validate-then-get crashed: %s" label m)
+      Wire.Codec.[ len $ fst; data $ snd ]
+  with
+  | _ -> Alcobar.failf "%s: a span sized by an int8 was accepted" label
+  | exception Invalid_argument _ -> ()
 
 let semantic_invariant_cases label =
   [
@@ -113,7 +84,7 @@ let semantic_invariant_cases label =
       (label ^ " decode/validate all_zeros")
       (check_all_zeros_semantic label);
     const_case
-      (label ^ " decode/validate negative byte_slice")
+      (label ^ " signed byte_slice size refused")
       (check_negative_byte_slice_semantic label);
   ]
 
@@ -148,8 +119,8 @@ let check_string label expected actual =
   if not (String.equal expected actual) then
     Alcobar.failf "%s: expected %S, got %S" label expected actual
 
-let check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo
-    payload_s =
+let check_api_getters (codec : api_access Wire.Codec.t) bf_a bf_hi bf_lo
+    bf_payload buf base a hi lo payload_s =
   let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
   let get_hi = Wire.Codec.get codec bf_hi |> Wire.Staged.unstage in
   let get_lo = Wire.Codec.get codec bf_lo |> Wire.Staged.unstage in
@@ -159,14 +130,14 @@ let check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo
   check_int "Codec.get bitfield lo" lo (get_lo buf base);
   check_string "Codec.get slice" payload_s
     (string_of_slice (get_payload buf base));
-  let slice_offset =
-    Wire.Codec.slice_offset codec bf_payload |> Wire.Staged.unstage
-  in
-  let slice_length =
-    Wire.Codec.slice_length codec bf_payload |> Wire.Staged.unstage
-  in
-  check_int "Codec.slice_offset" (base + 2) (slice_offset buf base);
-  check_int "Codec.slice_length" 3 (slice_length buf base)
+  let module V = (val Wire.Codec.View.codec codec) in
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let k = Wire.Codec.View.check V.codec b (Wire.Buf.length b) base in
+  if not (Wire.Codec.View.ok k) then Alcobar.failf "Codec.View.check refused";
+  let r = Wire.Codec.View.get k in
+  check_string "Codec.View.read slice" payload_s
+    (string_of_slice
+       (Wire.Codec.View.read (Wire.Codec.View.field V.codec bf_payload) b r))
 
 let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
   let bit_hi = Wire.Codec.bitfield codec bf_hi in

@@ -84,28 +84,9 @@ val combine_constraints :
   bool expr option -> bool expr option -> bool expr option
 (** [combine_constraints a b] is the conjunction of the constraints present. *)
 
-val scalar_kind : 'a typ -> [ `Signed of int | `Float | `Other ]
-(** [scalar_kind t] is the scalar a refinement over a field of type [t] compares
-    against, seen through the transparent wrappers. *)
-
-val project_refinement :
-  name:string ->
-  kind:[ `Signed of int | `Float | `Other ] ->
-  bool expr ->
-  bool expr
-(** [project_refinement ~name ~kind cond] rewrites a signed field's refinement
-    to the two's-complement form its unsigned projection reads, and raises
-    [Invalid_argument] for a float or signed 64-bit ordering, which has no
-    faithful projection. *)
-
 val widenable_unsigned : 'a typ -> bool
 (** [widenable_unsigned t] is [true] when [t] is an unsigned scalar at most 32
-    bits wide, so an [Add] over it can be widened without overflow. *)
-
-val project_field_arith : string -> string list -> 'a expr -> 'a expr
-(** [project_field_arith name widenable cond] rejects a field subtraction or
-    multiplication in [cond] (no sound narrow-width projection), then widens
-    each [Add] operand that names a field of [widenable]. *)
+    bits wide, seen through the transparent wrappers. *)
 
 val lower_where_to_field_constraint :
   bool expr option -> field list -> bool expr option * field list
@@ -120,6 +101,9 @@ val primitive_width : 'a typ -> int option
 (** [primitive_width t] is the width in bytes of [t] when it is a primitive
     scalar, whose sized region lowers to a guarded scalar plus padding. *)
 
+val field_wire_size : 'a typ -> int option
+(** Fixed wire size of a field type, if determinable. *)
+
 val inner_wire_size : 'a typ -> int option
 (** [inner_wire_size t] is the fixed byte width of a scalar, bitfield base, unit
     or fixed sub-codec, seen through [map], [enum] and [where]. *)
@@ -131,6 +115,11 @@ val index_bound_of : 'a typ -> int option
 val index_bound_elt : 'a typ -> (string * bool expr) option
 (** [index_bound_elt elem] is [Some (elt_var, cond)] when [elem] is a 1-byte
     element carrying a lookup's index bound: it projects as a refined byte. *)
+
+val region_bound : 'a typ -> bool expr option * 'a typ
+(** [region_bound t] is the bound an optional region's declaration states on the
+    formals it reads, and the region: a [Where] directly over a region is that
+    bound ({!Arith_3d.bounded}). [(None, t)] for any other [t]. *)
 
 val optional_region : 'a typ -> bool
 (** [optional_region t] is [true] when [t] is a single-element region, which

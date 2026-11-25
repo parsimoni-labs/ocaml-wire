@@ -136,8 +136,8 @@ For unusual EverParse constructs that have no codec equivalent yet, use the
 ## Consuming from C
 
 `Wire_3d.run` emits a verified validator (`<Name>.h`/`.c`) alongside a
-default "plug" (`<Name>_Fields.h`/`.c`) that extracts every named field
-into a typed `<Name>Fields` struct. Link the plug, stack-allocate the
+default "visitor" (`<Name>_Fields.h`/`.c`) that extracts every named field
+into a typed `<Name>Fields` struct. Link the visitor, stack-allocate the
 struct, pass it as the context, read the members you care about.
 
 ```c
@@ -160,7 +160,7 @@ position. Compare that position with `len`, as above, when the buffer must hold
 exactly one record. Wire's generated `Check` wrappers perform this
 whole-buffer check themselves.
 
-### Custom plug (hot-path optimisation)
+### Custom visitor (hot-path optimisation)
 
 If profiling says the field stores are hot, copy the shipped `<Name>_Fields.c`
 to your own `my_plug.c`, delete the `case`s for fields you don't need, and
@@ -192,7 +192,7 @@ functions. A family you don't care about reduces to a function whose
 `switch` has no real cases, just the `default`. Usually one or two
 short one-liners.
 
-No weak symbols, no linker magic: whichever plug `.c` you link gets used.
+No weak symbols, no linker magic: whichever visitor `.c` you link gets used.
 
 ## Features
 

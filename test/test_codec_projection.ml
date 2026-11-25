@@ -695,6 +695,149 @@ let test_casetype_reject_unprojectable_tag () =
     (raises_invalid (fun () ->
          one_case ~index:(UInt8.v 1) (enum "TagLe" [ ("A", 0); ("B", 1) ] uint8)))
 
+(* 3D computes a constraint at the field's own width and must prove it does
+   not overflow: [v + 1] over a [UINT64BE] fails to verify, while over a
+   [UINT32BE] the projection widens it to 64 bits and it verifies. 3D has no
+   signed type, so an ordering on an [int64] has no projection, while an
+   equality does. Each refusal comes when the codec is built. *)
+let test_wide_constraint_rejected () =
+  let one typ f () =
+    Codec.v "Wide" Fun.id Codec.[ Field.v "v" ~self_constraint:f typ $ Fun.id ]
+  in
+  let check what want f = Alcotest.(check bool) what want (raises_invalid f) in
+  check "uint64 v + 1 refused" true
+    (one uint64be Expr.(fun v -> v + int 1 <= int 5));
+  check "uint64 (v land 255) + 1 refused" true
+    (one uint64be Expr.(fun v -> (v land int 255) + int 1 <= int 5));
+  check "uint32 v + 1 accepted" false
+    (one uint32be Expr.(fun v -> v + int 1 <= int 5));
+  check "uint64 v <= 5 accepted" false (one uint64be Expr.(fun v -> v <= int 5));
+  let a = Field.v "a" uint8 in
+  check "uint64 v + a refused" true (fun () ->
+      Codec.v "WideCross"
+        (fun a v -> (a, v))
+        Codec.
+          [
+            a $ fst;
+            Field.v "v" uint64be ~self_constraint:(fun v ->
+                Expr.(v + Field.ref a <= int 5))
+            $ snd;
+          ]);
+  check "int64 v < 5 refused" true (one int64be Expr.(fun v -> v < int 5));
+  check "int64 v = 5 accepted" false (one int64be Expr.(fun v -> v = int 5));
+  let s = Field.v "s" int64be in
+  check "int64 ordering in where refused" true (fun () ->
+      Codec.v "WideWhere"
+        ~where:Expr.(Field.ref s >= int 0)
+        Fun.id
+        Codec.[ s $ Fun.id ])
+
+(* 3D reads a signed field as its unsigned bit pattern, whichever field's
+   constraint names it: [a < v] with [a = -1] holds in OCaml and fails in the
+   C. A comparison of the signed field with a literal projects in its
+   two's-complement form, as on the field itself; any other comparison of it is
+   refused when the codec is built. *)
+let test_signed_cross_constraint () =
+  let cross typ f () =
+    let a = Field.v "a" typ in
+    Codec.v "SignedCross"
+      (fun a v -> (a, v))
+      Codec.
+        [
+          a $ fst;
+          Field.v "v" uint8 ~self_constraint:(fun v -> f (Field.ref a) v) $ snd;
+        ]
+  in
+  let check what want f = Alcotest.(check bool) what want (raises_invalid f) in
+  check "int64 a < v refused" true (cross int64be Expr.(fun a v -> a < v));
+  check "int8 a < v refused" true (cross int8 Expr.(fun a v -> a < v));
+  check "int16 a >= v refused" true (cross int16be Expr.(fun a v -> a >= v));
+  check "int8 a = v refused" true (cross int8 Expr.(fun a v -> a = v));
+  check "int64 a = v refused" true (cross int64be Expr.(fun a v -> a = v));
+  check "int8 a + 1 < 5 refused" true
+    (cross int8 Expr.(fun a _ -> a + int 1 < int 5));
+  check "int64 a < 5 refused" true (cross int64be Expr.(fun a _ -> a < int 5));
+  check "int64 a = 5 accepted" false (cross int64be Expr.(fun a _ -> a = int 5));
+  check "int8 a < 5 accepted" false (cross int8 Expr.(fun a _ -> a < int 5));
+  let a = Field.v "a" int8 and b = Field.v "b" uint8 in
+  check "int8 ordering against a field in where refused" true (fun () ->
+      Codec.v "SignedWhere"
+        ~where:Expr.(Field.ref a < Field.ref b)
+        (fun a b -> (a, b))
+        Codec.[ a $ fst; b $ snd ]);
+  let c = cross int8 Expr.(fun a _ -> a < int 5) () in
+  let frame a =
+    let b = Bytes.make 2 '\000' in
+    Bytes.set_int8 b 0 a;
+    b
+  in
+  let ok r = match r with Ok _ -> true | Error _ -> false in
+  Alcotest.(check bool) "a = -1 < 5" true (ok (Codec.decode c (frame (-1)) 0));
+  Alcotest.(check bool) "a = 5 < 5" false (ok (Codec.decode c (frame 5) 0));
+  let s = Everparse.Raw.to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  Alcotest.(check bool)
+    "projects in two's-complement form" true
+    (Re.execp (Re.compile (Re.str "((a ^ 128) < 133)")) s)
+
+(* 3D types a byte size as a 32-bit integer and refuses an expression of a
+   64-bit field there, cast or masked ("Array expression n has type UINT64BE
+   instead of UInt32"); a comparison of one picks between literals and
+   projects. Each refusal comes when the codec is built. *)
+let test_wide_size_rejected () =
+  let sized typ mk () =
+    let n = Field.v "n" typ in
+    Codec.v "WideSize"
+      (fun n d -> (n, d))
+      Codec.[ n $ fst; Field.v "d" (mk (Field.ref n)) $ snd ]
+  in
+  let check what want f = Alcotest.(check bool) what want (raises_invalid f) in
+  let bytes size = byte_array ~size in
+  check "uint64 byte size refused" true (sized uint64be bytes);
+  check "int64 byte size refused" true (sized int64be bytes);
+  check "uint64 masked byte size refused" true
+    (sized uint64be (fun n -> bytes Expr.(n land int 255)));
+  check "uint64 cast byte size refused" true
+    (sized uint64be (fun n -> bytes Expr.(to_uint32 n)));
+  check "uint64 array length refused" true
+    (sized uint64be (fun n -> array ~len:n uint8));
+  check "uint64 nested size refused" true
+    (sized uint64be (fun n -> nested ~size:n uint8));
+  check "uint64 comparison in a size accepted" false
+    (sized uint64be (fun n ->
+         bytes Expr.(if_then_else (n >= int 5) (int 1) (int 0))));
+  check "uint32 byte size accepted" false (sized uint32be bytes)
+
+(* 3D refuses a subtraction that can go below zero and a product past 64 bits,
+   when the codec is built; a product that fits a wider type than its operands'
+   is widened, and constant arithmetic folds. *)
+let test_field_sub_mul_rejected () =
+  let one typ f () =
+    Codec.v "SubMul" Fun.id
+      Codec.[ Field.v "v" ~self_constraint:f typ $ Fun.id ]
+  in
+  let check what want f = Alcotest.(check bool) what want (raises_invalid f) in
+  check "uint8 v - 1 refused" true
+    (one uint8 Expr.(fun v -> v - int 1 >= int 5));
+  check "uint8 v * 2 accepted" false
+    (one uint8 Expr.(fun v -> v * int 2 <= int 5));
+  check "uint64 v - 1 refused" true
+    (one uint64be Expr.(fun v -> v - int 1 <= int 5));
+  check "uint64 v * 2 refused" true
+    (one uint64be Expr.(fun v -> v * int 2 <= int 5));
+  check "constant product accepted" false
+    (one uint8 Expr.(fun v -> v < int 10 * int 5));
+  let a = Field.v "a" uint8 in
+  check "field product in where accepted" false (fun () ->
+      Codec.v "SubMulWhere"
+        ~where:Expr.(Field.ref a * int 4 >= int 20)
+        Fun.id
+        Codec.[ a $ Fun.id ]);
+  check "field subtraction in where refused" true (fun () ->
+      Codec.v "SubWhere"
+        ~where:Expr.(Field.ref a - int 4 >= int 20)
+        Fun.id
+        Codec.[ a $ Fun.id ])
+
 let suite =
   ( "codec_projection",
     [
@@ -761,4 +904,11 @@ let suite =
         test_casetype_case_requires_index;
       Alcotest.test_case "casetype rejects unprojectable tag" `Quick
         test_casetype_reject_unprojectable_tag;
+      Alcotest.test_case "constraint: wide arithmetic and signed ordering"
+        `Quick test_wide_constraint_rejected;
+      Alcotest.test_case "constraint: a signed field read from another" `Quick
+        test_signed_cross_constraint;
+      Alcotest.test_case "size: a 64-bit field" `Quick test_wide_size_rejected;
+      Alcotest.test_case "constraint: field subtraction and multiplication"
+        `Quick test_field_sub_mul_rejected;
     ] )

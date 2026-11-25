@@ -20,6 +20,14 @@ let data_offset =
   Field.v "data_offset" (bits ~width:4 U16be) ~self_constraint:(fun x ->
       Expr.(x >= int 5))
 
+let tcp_src_port = Codec.(Field.v "src_port" uint16be $ fun r -> r.src_port)
+let tcp_dst_port = Codec.(Field.v "dst_port" uint16be $ fun r -> r.dst_port)
+let tcp_seq = Codec.(Field.v "seq" uint32be $ fun r -> r.seq)
+let tcp_ack = Codec.(Field.v "ack" uint32be $ fun r -> r.ack)
+let tcp_data_offset = Codec.(data_offset $ fun r -> r.data_offset)
+let tcp_flags = Codec.(Field.v "flags" (bits ~width:9 U16be) $ fun r -> r.flags)
+let tcp_window = Codec.(Field.v "window" uint16be $ fun r -> r.window)
+
 let tcp =
   Codec.v "StackTCP"
     (fun src_port dst_port seq ack data_offset reserved flags window checksum
@@ -39,14 +47,14 @@ let tcp =
       })
     Codec.
       [
-        (Field.v "src_port" uint16be $ fun r -> r.src_port);
-        (Field.v "dst_port" uint16be $ fun r -> r.dst_port);
-        (Field.v "seq" uint32be $ fun r -> r.seq);
-        (Field.v "ack" uint32be $ fun r -> r.ack);
-        (data_offset $ fun r -> r.data_offset);
+        tcp_src_port;
+        tcp_dst_port;
+        tcp_seq;
+        tcp_ack;
+        tcp_data_offset;
         (Field.v "reserved" (bits ~width:3 U16be) $ fun r -> r.reserved);
-        (Field.v "flags" (bits ~width:9 U16be) $ fun r -> r.flags);
-        (Field.v "window" uint16be $ fun r -> r.window);
+        tcp_flags;
+        tcp_window;
         (Field.v "checksum" uint16be $ fun r -> r.checksum);
         (Field.v "urgent" uint16be $ fun r -> r.urgent);
         ( Field.v "options"
@@ -65,15 +73,19 @@ type udp = {
 let udp_length =
   Field.v "length" uint16be ~self_constraint:(fun x -> Expr.(x >= int 8))
 
+let udp_src_port = Codec.(Field.v "src_port" uint16be $ fun r -> r.src_port)
+let udp_dst_port = Codec.(Field.v "dst_port" uint16be $ fun r -> r.dst_port)
+let udp_length_field = Codec.(udp_length $ fun r -> r.length)
+
 let udp =
   Codec.v "StackUDP"
     (fun src_port dst_port length checksum payload ->
       { src_port; dst_port; length; checksum; payload })
     Codec.
       [
-        (Field.v "src_port" uint16be $ fun r -> r.src_port);
-        (Field.v "dst_port" uint16be $ fun r -> r.dst_port);
-        (udp_length $ fun r -> r.length);
+        udp_src_port;
+        udp_dst_port;
+        udp_length_field;
         (Field.v "checksum" uint16be $ fun r -> r.checksum);
         ( Field.v "payload"
             (byte_slice ~size:Expr.(Field.ref udp_length - int 8))
@@ -140,6 +152,24 @@ let ipv4_of_fields version ihl dscp ecn total_length identification flags
     opaque;
   }
 
+let ipv4_total_length = Codec.(total_length $ fun r -> r.total_length)
+let ipv4_ttl = Codec.(Field.v "ttl" uint8 $ fun r -> r.ttl)
+let ipv4_protocol = Codec.(protocol $ fun r -> r.protocol)
+let ipv4_src = Codec.(Field.v "src" uint32be $ fun r -> r.src)
+let ipv4_dst = Codec.(Field.v "dst" uint32be $ fun r -> r.dst)
+
+let ipv4_tcp =
+  Codec.(
+    Field.optional "tcp" ~present:is_tcp
+      (nested_at_most ~size:payload_size (codec tcp))
+    $ fun r -> r.tcp)
+
+let ipv4_udp =
+  Codec.(
+    Field.optional "udp" ~present:is_udp
+      (nested_at_most ~size:payload_size (codec udp))
+    $ fun r -> r.udp)
+
 let ipv4 =
   Codec.v "StackIPv4" ipv4_of_fields
     Codec.
@@ -150,24 +180,20 @@ let ipv4 =
         (ihl $ fun r -> r.ihl);
         (Field.v "dscp" (bits ~width:6 U8) $ fun r -> r.dscp);
         (Field.v "ecn" (bits ~width:2 U8) $ fun r -> r.ecn);
-        (total_length $ fun r -> r.total_length);
+        ipv4_total_length;
         (Field.v "identification" uint16be $ fun r -> r.identification);
         (flags $ fun r -> r.flags);
         (fragment_offset $ fun r -> r.fragment_offset);
-        (Field.v "ttl" uint8 $ fun r -> r.ttl);
-        (protocol $ fun r -> r.protocol);
+        ipv4_ttl;
+        ipv4_protocol;
         (Field.v "checksum" uint16be $ fun r -> r.checksum);
-        (Field.v "src" uint32be $ fun r -> r.src);
-        (Field.v "dst" uint32be $ fun r -> r.dst);
+        ipv4_src;
+        ipv4_dst;
         ( Field.v "options"
             (byte_slice ~size:Expr.((Field.ref ihl lsl int 2) - int 20))
         $ fun r -> r.options );
-        ( Field.optional "tcp" ~present:is_tcp
-            (nested_at_most ~size:payload_size (codec tcp))
-        $ fun r -> r.tcp );
-        ( Field.optional "udp" ~present:is_udp
-            (nested_at_most ~size:payload_size (codec udp))
-        $ fun r -> r.udp );
+        ipv4_tcp;
+        ipv4_udp;
         ( Field.optional "opaque"
             ~present:Expr.(not (is_tcp || is_udp))
             (byte_slice ~size:payload_size)
@@ -182,6 +208,14 @@ type t = {
 }
 
 let ether_type = Field.v "ether_type" uint16be
+let eth_ether_type = Codec.(ether_type $ fun r -> r.ether_type)
+
+let eth_ipv4 =
+  Codec.(
+    Field.optional "ipv4"
+      ~present:Expr.(Field.ref ether_type = int 0x0800)
+      (codec ipv4)
+    $ fun r -> r.ipv4)
 
 let codec =
   Codec.v "EthernetStack"
@@ -190,11 +224,8 @@ let codec =
       [
         (Field.v "dst" (byte_slice ~size:(int 6)) $ fun r -> r.dst);
         (Field.v "src" (byte_slice ~size:(int 6)) $ fun r -> r.src);
-        (ether_type $ fun r -> r.ether_type);
-        ( Field.optional "ipv4"
-            ~present:Expr.(Field.ref ether_type = int 0x0800)
-            (codec ipv4)
-        $ fun r -> r.ipv4 );
+        eth_ether_type;
+        eth_ipv4;
       ]
 
 let pp ppf (v : t) =

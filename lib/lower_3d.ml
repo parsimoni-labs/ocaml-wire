@@ -579,6 +579,12 @@ let rec optional_region : type a. a typ -> bool = function
 
 let optional_region_name inner = "OptRegion_" ^ wrap_tag inner
 
+let region_bound : type a. a typ -> bool expr option * a typ = function
+  | Where { cond; inner = Single_elem _ as region } -> (Some cond, region)
+  | Map ({ inner = Where { cond; inner = Single_elem _ as region }; _ } as m) ->
+      (Some cond, Map { m with inner = region })
+  | t -> (None, t)
+
 (* Primitive scalars have a fixed extent. Lower their sized regions to a
    guarded scalar plus padding instead of retaining a generic exact-parser
    combinator, whose erased parser-kind metadata can leak into C extraction. *)
@@ -588,6 +594,34 @@ let primitive_width : type a. a typ -> int option = function
   | Uint32 _ | Int32 _ | Float32 _ -> Some 4
   | Uint64 _ | Int64 _ | Float64 _ -> Some 8
   | _ -> None
+
+let rec field_wire_size : type a. a typ -> int option = function
+  | Uint_var { size = Int n; _ } -> Some n
+  | Uint_var _ -> None
+  | Bits { base; _ } -> (
+      match base with U8 -> Some 1 | U16 _ -> Some 2 | U32 _ -> Some 4)
+  | Unit -> Some 0
+  | Byte_array { size = Int n }
+  | Byte_array_where { size = Int n; _ }
+  | Byte_slice { size = Int n }
+  (* A bounded zero-terminated string spans its whole region whatever the
+     terminator's position, as [elem_size_of] already reports it. *)
+  | Zeroterm_at_most { size = Int n } ->
+      Some n
+  | Where { inner; _ } -> field_wire_size inner
+  | Enum { base; _ } -> field_wire_size base
+  | Map { inner; _ } -> field_wire_size inner
+  | Codec { codec_fixed_size; _ } -> codec_fixed_size
+  | Optional { present = Bool true; inner } -> field_wire_size inner
+  | Optional { present = Bool false; _ } -> Some 0
+  | Optional _ -> None
+  | Optional_or { present = Bool true; inner; _ } -> field_wire_size inner
+  | Optional_or { present = Bool false; _ } -> Some 0
+  | Optional_or _ -> None
+  | Repeat _ -> None
+  | Array { len = Int n; elem; _ } -> (
+      match field_wire_size elem with Some k -> Some (n * k) | None -> None)
+  | t -> primitive_width t
 
 let rec inner_wire_size : type a. a typ -> int option = function
   | Bits { base = U8; _ } -> Some 1
@@ -762,12 +796,20 @@ let emit_wrapper seen acc name elem =
     | Some (elt_var, cond) -> emit_refined_byte seen acc elt_var cond
     | None -> ());
     acc :=
-      (let where =
-         match elem with
+      (let bound, region = region_bound elem in
+       let sub =
+         match region with
          | Single_elem { size = Sub (a, b); _ } -> Some (Ge (a, b))
          | _ -> None
        in
-       typedef (param_struct name (wrap_formals elem) ?where [ field "v" elem ]))
+       let where =
+         match (bound, sub) with
+         | Some b, Some s -> Some (And (b, s))
+         | Some c, None | None, Some c -> Some c
+         | None, None -> None
+       in
+       typedef
+         (param_struct name (wrap_formals elem) ?where [ field "v" region ]))
       :: !acc
   end
 
@@ -898,7 +940,7 @@ let casetype_decls_of_struct (s : struct_) : decl list =
 
    The 3D side validates wire framing only; case dispatch is the caller's
    job (OCaml [parse_casetype] already does this on its side, and C
-   consumers receive both spans through the plug and dispatch with their
+   consumers receive both spans through the visitor and dispatch with their
    own [strcmp] table -- exactly what real protocol implementations like
    OpenSSH do). No 3D-side extern, no scratch slot, no runtime helper.
 
@@ -1011,214 +1053,8 @@ let combine_constraints a b =
   | None, x | x, None -> x
   | Some a, Some b -> Some (And (a, b))
 
-(* The scalar a field's refinement compares against, seen through transparent
-   [Map] / [Enum] / [Where] wrappers. 3D has only unsigned integer types, so a
-   signed or float field's ordering refinement needs special projection. *)
-let rec scalar_kind : type a. a typ -> [ `Signed of int | `Float | `Other ] =
-  function
-  | Int8 -> `Signed 8
-  | Int16 _ -> `Signed 16
-  | Int32 _ -> `Signed 32
-  | Int64 _ -> `Signed 64
-  | Float32 _ | Float64 _ -> `Float
-  | Map { inner; _ } -> scalar_kind inner
-  | Enum { base; _ } -> scalar_kind base
-  | Where { inner; _ } -> scalar_kind inner
-  | _ -> `Other
-
-let rec mentions_field : type a. string -> a expr -> bool =
- fun name e ->
-  match e with
-  | Ref (_, n) -> String.equal n name
-  | Add (a, b)
-  | Sub (a, b)
-  | Mul (a, b)
-  | Div (a, b)
-  | Mod (a, b)
-  | Land (a, b)
-  | Lor (a, b)
-  | Lxor (a, b)
-  | Lsl (a, b)
-  | Lsr (a, b) ->
-      mentions_field name a || mentions_field name b
-  | Land64 (a, b) -> mentions_field name a || mentions_field name b
-  | Lsr64 (a, b) -> mentions_field name a || mentions_field name b
-  | Lnot a -> mentions_field name a
-  | Cast (_, a) -> mentions_field name a
-  | Eq (a, b) -> mentions_field name a || mentions_field name b
-  | Ne (a, b) -> mentions_field name a || mentions_field name b
-  | Lt (a, b) -> mentions_field name a || mentions_field name b
-  | Le (a, b) -> mentions_field name a || mentions_field name b
-  | Gt (a, b) -> mentions_field name a || mentions_field name b
-  | Ge (a, b) -> mentions_field name a || mentions_field name b
-  | And (a, b) -> mentions_field name a || mentions_field name b
-  | Or (a, b) -> mentions_field name a || mentions_field name b
-  | Not a -> mentions_field name a
-  | If_then_else (c, t, el) ->
-      mentions_field name c || mentions_field name t || mentions_field name el
-  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
-    ->
-      false
-
-(* Two's-complement: a signed n-bit value compared with an ordering operator
-   equals the unsigned value compared after flipping the sign bit of both
-   operands ([a <_s b] iff [(a ^ 2^(n-1)) <_u (b ^ 2^(n-1))]). The field projects
-   to an unsigned type, so a [width]-bit signed field's ordering refinement
-   ([self OP constant]) is rewritten this way; a comparison with a constant
-   outside the signed range folds to a literal, and anything that is not a plain
-   comparison of the field with an integer literal is rejected (it cannot be
-   projected faithfully). *)
-let rebuild_ordering op (l : int expr) (r : int expr) : bool expr =
-  match op with
-  | `Lt -> Lt (l, r)
-  | `Le -> Le (l, r)
-  | `Gt -> Gt (l, r)
-  | `Ge -> Ge (l, r)
-
-(* Rewrite a signed field's equality refinement. Unlike ordering, equality needs
-   no order-preserving flip: the byte that decodes to signed [k] is just its
-   two's-complement [k land mask]. A constant outside the signed range can never
-   be equal, so it folds to a constant. *)
-let rewrite_signed_eq : type x.
-    name:string ->
-    mask:int ->
-    smin:int ->
-    smax:int ->
-    ne:bool ->
-    x expr ->
-    x expr ->
-    bool expr ->
-    bool expr =
- fun ~name ~mask ~smin ~smax ~ne a b orig ->
-  let fold k : bool expr =
-    match (ne, k >= smin && k <= smax) with
-    | false, true -> Eq (Ref (I, name), Int (k land mask))
-    | false, false -> Bool false
-    | true, true -> Ne (Ref (I, name), Int (k land mask))
-    | true, false -> Bool true
-  in
-  match (a, b) with
-  | Ref (I, n), Int k when String.equal n name -> fold k
-  | Int k, Ref (I, n) when String.equal n name -> fold k
-  | _ ->
-      if mentions_field name a || mentions_field name b then
-        Fmt.invalid_arg
-          "Wire: signed field %S has an equality constraint that is not a \
-           plain comparison with an integer literal, so it cannot be projected \
-           to 3D faithfully; compare the field directly to a constant"
-          name
-      else orig
-
-(* Rewrite a signed field's ordering refinement to the two's-complement form the
-   unsigned projected field reads ([x < 100] over [int8] becomes [(x ^ 128) <
-   228]). A constant outside the signed range folds to a constant. *)
-let rewrite_signed_ordering : type x.
-    name:string ->
-    signbit:int ->
-    mask:int ->
-    smin:int ->
-    smax:int ->
-    [ `Lt | `Le | `Gt | `Ge ] ->
-    x expr ->
-    x expr ->
-    bool expr ->
-    bool expr =
- fun ~name ~signbit ~mask ~smin ~smax op a b orig ->
-  let flip_const k : int expr = Int (k land mask lxor signbit) in
-  let flip_self : int expr = Lxor (Ref (I, name), Int signbit) in
-  let self_op_const k : bool expr =
-    if k > smax then match op with `Lt | `Le -> Bool true | _ -> Bool false
-    else if k < smin then
-      match op with `Lt | `Le -> Bool false | _ -> Bool true
-    else rebuild_ordering op flip_self (flip_const k)
-  in
-  let const_op_self k : bool expr =
-    if k > smax then match op with `Lt | `Le -> Bool false | _ -> Bool true
-    else if k < smin then
-      match op with `Lt | `Le -> Bool true | _ -> Bool false
-    else rebuild_ordering op (flip_const k) flip_self
-  in
-  match (a, b) with
-  | Ref (I, n), Int k when String.equal n name -> self_op_const k
-  | Int k, Ref (I, n) when String.equal n name -> const_op_self k
-  | _ ->
-      if mentions_field name a || mentions_field name b then
-        Fmt.invalid_arg
-          "Wire: signed field %S has an ordering constraint that is not a \
-           plain comparison with an integer literal, so it cannot be projected \
-           to 3D faithfully; compare the field directly to a constant"
-          name
-      else orig
-
-let translate_signed_refinement ~name ~width (cond : bool expr) : bool expr =
-  let signbit = 1 lsl (width - 1) in
-  let mask = (1 lsl width) - 1 in
-  let smax = signbit - 1 and smin = -signbit in
-  (* The helpers are called fully applied at each arm: a partial application
-     would weaken the polymorphic operand type and let the comparison's
-     existential escape. *)
-  let ord op a b e =
-    rewrite_signed_ordering ~name ~signbit ~mask ~smin ~smax op a b e
-  in
-  let rec xform (e : bool expr) : bool expr =
-    match e with
-    | And (a, b) -> And (xform a, xform b)
-    | Or (a, b) -> Or (xform a, xform b)
-    | Not a -> Not (xform a)
-    | Lt (a, b) -> ord `Lt a b e
-    | Le (a, b) -> ord `Le a b e
-    | Gt (a, b) -> ord `Gt a b e
-    | Ge (a, b) -> ord `Ge a b e
-    | Eq (a, b) -> rewrite_signed_eq ~name ~mask ~smin ~smax ~ne:false a b e
-    | Ne (a, b) -> rewrite_signed_eq ~name ~mask ~smin ~smax ~ne:true a b e
-    | _ -> e
-  in
-  xform cond
-
-(* A float ordering refinement has no faithful unsigned projection (IEEE bit
-   patterns do not order as unsigned), so it is rejected; a signed field's
-   ordering or equality refinement is rewritten to the two's-complement form the
-   unsigned projected field reads. *)
-let project_refinement ~name ~kind (cond : bool expr) : bool expr =
-  (* Reject any ordering comparison that mentions this field, with [msg]. Each
-     comparison constructor is matched in its own arm so its existential operand
-     type stays local. *)
-  let reject_orderings msg =
-    let bad : type x. x expr -> x expr -> unit =
-     fun a b ->
-      if mentions_field name a || mentions_field name b then
-        invalid_arg (msg ^ "; field " ^ name)
-    in
-    let rec walk : bool expr -> unit = function
-      | And (a, b) | Or (a, b) ->
-          walk a;
-          walk b
-      | Not a -> walk a
-      | Lt (a, b) -> bad a b
-      | Le (a, b) -> bad a b
-      | Gt (a, b) -> bad a b
-      | Ge (a, b) -> bad a b
-      | _ -> ()
-    in
-    walk cond;
-    cond
-  in
-  match kind with
-  | `Other -> cond
-  | `Float ->
-      reject_orderings
-        "Wire: a float field ordering constraint has no 3D projection (IEEE \
-         bit patterns compare as unsigned)"
-  | `Signed 64 ->
-      reject_orderings
-        "Wire: a signed 64-bit field ordering constraint cannot be projected \
-         to 3D"
-  | `Signed width -> translate_signed_refinement ~name ~width cond
-
 (* A field whose value is an unsigned scalar at most 32 bits wide, seen through
-   the transparent [Map] / [Enum] / [Where] wrappers. The sum of two such fields
-   fits in both OCaml's native int and a 64-bit unsigned, so an [Add] over them
-   can be projected without overflow by widening the operands. *)
+   the transparent [Map] / [Enum] / [Where] wrappers. *)
 let rec widenable_unsigned : type a. a typ -> bool = function
   | Uint8 | Uint16 _ | Uint32 _ -> true
   | Map { inner; _ } -> widenable_unsigned inner
@@ -1226,13 +1062,6 @@ let rec widenable_unsigned : type a. a typ -> bool = function
   | Where { inner; _ } -> widenable_unsigned inner
   | _ -> false
 
-(* EverParse computes a refinement at the field's own (narrow) width, so a plain
-   [a + b] over [UINT8] fields can overflow and F* refuses to verify it, while
-   the OCaml decoder computes the same sum in its wide native int. Widen each
-   [Add] operand that names a <=32-bit unsigned field to [UINT64] so the 3D sum
-   matches the decoder's. Only [Add] is rewritten: [Sub] can underflow (an
-   unsigned wrap the decoder does not do), and a wider or signed operand has no
-   sound widening, so those are left untouched and keep their current behaviour. *)
 (* The field-reference names an expression mentions. [collect_refs_packed] is the
    same walk through a comparison's existentially-typed operands. *)
 let rec collect_refs : type a. a expr -> string list = function
@@ -1267,103 +1096,6 @@ let rec collect_refs : type a. a expr -> string list = function
 
 and collect_refs_packed : type a. a expr -> string list =
  fun e -> collect_refs e
-
-let rec widen_add : type a. string list -> a expr -> a expr =
- fun ws e ->
-  let r e = widen_add ws e in
-  let operand e =
-    match r e with
-    | Ref (I, n) as e when List.mem n ws -> Cast (`U64, e)
-    | e -> e
-  in
-  match e with
-  | Add (a, b) -> Add (operand a, operand b)
-  | Int _ | Int64 _ | Bool _ | Param_ref _ | Sizeof _ | Sizeof_this | Field_pos
-  | Ref _ ->
-      e
-  | Sub (a, b) -> Sub (r a, r b)
-  | Mul (a, b) -> Mul (r a, r b)
-  | Div (a, b) -> Div (r a, r b)
-  | Mod (a, b) -> Mod (r a, r b)
-  | Land (a, b) -> Land (r a, r b)
-  | Land64 (a, b) -> Land64 (r a, r b)
-  | Lsr64 (a, b) -> Lsr64 (r a, r b)
-  | Lor (a, b) -> Lor (r a, r b)
-  | Lxor (a, b) -> Lxor (r a, r b)
-  | Lnot a -> Lnot (r a)
-  | Lsl (a, b) -> Lsl (r a, r b)
-  | Lsr (a, b) -> Lsr (r a, r b)
-  | Eq (a, b) -> Eq (r a, r b)
-  | Ne (a, b) -> Ne (r a, r b)
-  | Lt (a, b) -> Lt (r a, r b)
-  | Le (a, b) -> Le (r a, r b)
-  | Gt (a, b) -> Gt (r a, r b)
-  | Ge (a, b) -> Ge (r a, r b)
-  | And (a, b) -> And (r a, r b)
-  | Or (a, b) -> Or (r a, r b)
-  | Not a -> Not (r a)
-  | Cast (w, x) -> Cast (w, r x)
-  | If_then_else (c, a, b) -> If_then_else (r c, r a, r b)
-
-(* EverParse computes a constraint at the field's own narrow width, so a [Sub] or
-   [Mul] naming a field underflows or overflows there: 3d.exe refuses to verify
-   it ("cannot verify u8 subtraction / multiplication"), leaving the codec with
-   no validator. Unlike [Add], neither has a sound widening: a widened [Sub]
-   wraps on underflow where the OCaml decoder goes negative, and a widened [Mul]
-   of wide operands overflows the decoder's own native int. Reject such a
-   constraint at construction; a [Sub] / [Mul] of constants (which folds) is
-   fine, as is additive field arithmetic. *)
-let rec reject_field_sub_mul : type a. string -> a expr -> unit =
- fun name e ->
-  let both : type x. x expr -> x expr -> unit =
-   fun a b ->
-    reject_field_sub_mul name a;
-    reject_field_sub_mul name b
-  in
-  match e with
-  | (Sub _ | Mul _) when collect_refs e <> [] ->
-      let op = match e with Sub _ -> "subtraction" | _ -> "multiplication" in
-      Fmt.invalid_arg
-        "Wire: field %S has a constraint whose %s over a field has no 3D \
-         projection (it under/overflows the field's narrow width); keep field \
-         arithmetic in a constraint additive, or move it out of the constraint"
-        name op
-  | Sub (a, b) | Mul (a, b) -> both a b
-  | Add (a, b)
-  | Div (a, b)
-  | Mod (a, b)
-  | Land (a, b)
-  | Lor (a, b)
-  | Lxor (a, b)
-  | Lsl (a, b)
-  | Lsr (a, b) ->
-      both a b
-  | Land64 (a, b) -> both a b
-  | Lsr64 (a, b) ->
-      reject_field_sub_mul name a;
-      reject_field_sub_mul name b
-  | Eq (a, b) -> both a b
-  | Ne (a, b) -> both a b
-  | Lt (a, b) -> both a b
-  | Le (a, b) -> both a b
-  | Gt (a, b) -> both a b
-  | Ge (a, b) -> both a b
-  | And (a, b) | Or (a, b) -> both a b
-  | Lnot a -> reject_field_sub_mul name a
-  | Not a -> reject_field_sub_mul name a
-  | Cast (_, a) -> reject_field_sub_mul name a
-  | If_then_else (c, a, b) ->
-      reject_field_sub_mul name c;
-      both a b
-  | Int _ | Int64 _ | Bool _ | Ref _ | Param_ref _ | Sizeof _ | Sizeof_this
-  | Field_pos ->
-      ()
-
-(* The narrow-width arithmetic a projected field constraint needs: reject a field
-   [Sub] / [Mul] (no sound projection), then widen each [Add] operand. *)
-let project_field_arith name widenable cond =
-  reject_field_sub_mul name cond;
-  widen_add widenable cond
 
 (* Collect every [Ref name] occurring in an expression. Used to detect
    field references in struct-level [where] clauses, which 3D's grammar

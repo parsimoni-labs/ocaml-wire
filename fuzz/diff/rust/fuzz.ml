@@ -51,20 +51,16 @@ let scans =
     structured
 
 (* Scanned schemas of test/ocaml, each with its boundary corpus. In [sized],
-   products of a 32-bit [n] overflow the native int for a large [n]: an
-   optional slice's condition and size. In [overflow], checks add to a field
-   near the largest int and the where clause multiplies two 32-bit fields.
-   The codec rejects such a record, and so must the scanner, not test a
-   wrapped value. In [shared], the decision tree of three optional fields
-   reaches a test from two paths. In [bigspan], the ends of two spans sum past
-   the largest int. In [skipped], a condition the facts decide
-   still overflows where the codec evaluates it. *)
+   products of the high half of a 32-bit [n] fill 32 bits: an optional slice's
+   condition and size. In [overflow], checks add to a field near the largest
+   int. In [shared], the decision tree of three optional fields reaches a test
+   from two paths. In [skipped], a condition the facts decide is still
+   evaluated where the codec evaluates it. *)
 let reference label codec project =
   Diff_ocaml.Reference
     { label; codec; known = None; project; inputs = (fun b -> [ b ]) }
 
-(* [n], then each of [rests]: the values around the overflow of [n * n], and
-   of [n * n * 4]. *)
+(* [n], then each of [rests]: the values around the top of a 32-bit [n * n]. *)
 let wrapped rests =
   List.concat_map
     (fun n ->
@@ -140,10 +136,6 @@ let schemas =
           [ ("n", Wire.UInt32.to_int n); ("x", int8 x) ] @ opt "a" a @ opt "b" b),
       ops "skipped",
       skips );
-    ( reference "bigspan" Schemas.bigspan (fun _ (a, b, _, _, t) ->
-          [ ("a", int8 a); ("b", int8 b); ("t", int8 t) ]),
-      ops "bigspan",
-      sizes );
   ]
 
 let sampled =

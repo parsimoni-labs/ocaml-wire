@@ -5,4 +5,5 @@ let () =
       Test_wire_3d_corpus.suite;
       Test_wire_3d_proc.suite;
       Test_wire_3d_shapes.suite;
+      Test_wire_3d_arith.suite;
     ]

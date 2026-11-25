@@ -55,6 +55,27 @@
  (action
   (run ./gen.exe --oxcaml)))
 
+;; The integers Flow_sum computes the flow key on: int64 on OxCaml, which keeps
+;; it unboxed as Rust keeps its u64, and int on OCaml, where an int64 handed
+;; to a call is boxed.
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   flow_int.ml
+   (echo "include Int64\n"))))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   flow_int.ml
+   (echo
+    "include Int\nexternal of_int : int -> int = \"%identity\"\nexternal to_int : int -> int = \"%identity\"\n"))))
+
 ;; flow_rows.ml over the sinks Flow_sum and Flow_keys, as copies in which
 ;; Flow_table stands for the sink: OCaml without flambda calls the sink of a
 ;; functor through a closure, a copy calls it directly.
@@ -79,6 +100,48 @@
 (rule
  (copy flow_rows.mli flow_rows_keys.mli))
 
+;; flow_swap.ml over the interpreted header modules, by replacing the one
+;; line that picks them, and both over the sink Flow_sum, as for flow_rows.ml.
+
+(rule
+ (with-stdout-to
+  flow_swap_interpreted.ml
+  (progn
+   (echo "# 1 \"bench/rust/flow_swap.ml\"\n")
+   (run
+    sed
+    "s/^module H = Swap.Generated$/module H = Swap.Interpreted/"
+    %{dep:flow_swap.ml}))))
+
+(rule
+ (copy flow_swap.mli flow_swap_interpreted.mli))
+
+(rule
+ (with-stdout-to
+  flow_swap_parse.ml
+  (progn
+   (echo "module Flow_table = Flow_sum\n# 1 \"bench/rust/flow_swap.ml\"\n")
+   (cat %{dep:flow_swap.ml}))))
+
+(rule
+ (copy flow_swap.mli flow_swap_parse.mli))
+
+(rule
+ (with-stdout-to
+  flow_swap_interpreted_parse.ml
+  (progn
+   (echo "module Flow_table = Flow_sum\n# 1 \"bench/rust/flow_swap.ml\"\n")
+   (run
+    sed
+    "s/^module H = Swap.Generated$/module H = Swap.Interpreted/"
+    %{dep:flow_swap.ml}))))
+
+(rule
+ (copy flow_swap.mli flow_swap_interpreted_parse.mli))
+
+;; The flow table is flow_table.ox.ml on OxCaml, whose slots hold unboxed
+;; words, and flow_table.std.ml elsewhere.
+
 (executable
  (name bench)
  (modules
@@ -86,15 +149,34 @@
   stack_read
   selected_read
   flow_table
+  flow_int
   flow_sum
   flow_keys
   flow_rows
   flow_rows_parse
   flow_rows_keys
   flow_read
+  flow_mix
+  swap
+  flow_swap
+  flow_swap_interpreted
+  flow_swap_parse
+  flow_swap_interpreted_parse
   g_eth
   g_ipv4
   g_ipv6
   g_tcp
   g_udp)
- (libraries bench_lib headers net wire wire.runtime unix fmt))
+ (libraries
+  bench_lib
+  headers
+  net
+  wire
+  wire.runtime
+  unix
+  fmt
+  (select
+   flow_table.ml
+   from
+   (stdlib_upstream_compatible -> flow_table.ox.ml)
+   (-> flow_table.std.ml))))

@@ -28,17 +28,14 @@ let[@inline always] fold_opaque ~valid ~f3_ether_type ~f5_ipv4_version
     ~ipv4_udp_present:false ~ipv4_udp_src_port:0 ~ipv4_udp_dst_port:0
     ~ipv4_udp_length:0 ~ipv4_udp_checksum:0 ~ipv4_opaque_present:true
 
-let[@inline always] fold_tcp_urgent ~invalid ~valid ~f3_ether_type
-    ~f5_ipv4_version ~f6_ipv4_ihl ~f7_ipv4_dscp ~f8_ipv4_ecn
-    ~f9_ipv4_total_length ~f10_ipv4_identification ~f11_ipv4_flags
-    ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
-    ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst ~n12 ~w26
-    ~f19_ipv4_tcp_src_port ~f20_ipv4_tcp_dst_port ~f21_ipv4_tcp_seq
-    ~f22_ipv4_tcp_ack ~f23_ipv4_tcp_data_offset ~f24_ipv4_tcp_reserved
-    ~f25_ipv4_tcp_flags ~f26_ipv4_tcp_window ~f27_ipv4_tcp_checksum =
-  let f28_ipv4_tcp_urgent =
-    Int64.to_int (Int64.shift_right_logical w26 0) land 0xffff
-  in
+let[@inline always] fold_span ~invalid ~valid ~f3_ether_type ~f5_ipv4_version
+    ~f6_ipv4_ihl ~f7_ipv4_dscp ~f8_ipv4_ecn ~f9_ipv4_total_length
+    ~f10_ipv4_identification ~f11_ipv4_flags ~f12_ipv4_fragment_offset
+    ~f13_ipv4_ttl ~f14_ipv4_protocol ~f15_ipv4_checksum ~f16_ipv4_src
+    ~f17_ipv4_dst ~n12 ~f19_ipv4_tcp_src_port ~f20_ipv4_tcp_dst_port
+    ~f21_ipv4_tcp_seq ~f22_ipv4_tcp_ack ~f23_ipv4_tcp_data_offset
+    ~f24_ipv4_tcp_reserved ~f25_ipv4_tcp_flags ~f26_ipv4_tcp_window
+    ~f27_ipv4_tcp_checksum ~f28_ipv4_tcp_urgent =
   if (f23_ipv4_tcp_data_offset lsl 2 : int) > n12 then invalid ()
   else
     valid ~ether_type:f3_ether_type ~ipv4_present:true
@@ -66,28 +63,25 @@ let[@inline always] fold_tcp_seq ~invalid ~valid ~f3_ether_type ~f5_ipv4_version
     ~f13_ipv4_ttl ~f14_ipv4_protocol ~f15_ipv4_checksum ~f16_ipv4_src
     ~f17_ipv4_dst ~n12 ~w14 ~w22 ~w26 ~bw15 ~f19_ipv4_tcp_src_port
     ~f20_ipv4_tcp_dst_port =
-  let f21_ipv4_tcp_seq =
-    Int64.to_int (Int64.shift_right_logical w14 0) land mask32
-  in
+  let f21_ipv4_tcp_seq = Int64.to_int w14 land mask32 in
   let f22_ipv4_tcp_ack = Int64.to_int (Int64.shift_right_logical w22 32) in
   let f23_ipv4_tcp_data_offset = bw15 lsr 12 in
   if not ((f23_ipv4_tcp_data_offset : int) >= 5) then invalid ()
   else
     let f24_ipv4_tcp_reserved = (bw15 lsr 9) land 0x7 in
     let f25_ipv4_tcp_flags = bw15 land 0x1ff in
-    let f26_ipv4_tcp_window =
-      Int64.to_int (Int64.shift_right_logical w22 0) land 0xffff
-    in
+    let f26_ipv4_tcp_window = Int64.to_int w22 land 0xffff in
     let f27_ipv4_tcp_checksum =
       Int64.to_int (Int64.shift_right_logical w26 16) land 0xffff
     in
-    fold_tcp_urgent ~invalid ~valid ~f3_ether_type ~f5_ipv4_version ~f6_ipv4_ihl
+    let f28_ipv4_tcp_urgent = Int64.to_int w26 land 0xffff in
+    fold_span ~invalid ~valid ~f3_ether_type ~f5_ipv4_version ~f6_ipv4_ihl
       ~f7_ipv4_dscp ~f8_ipv4_ecn ~f9_ipv4_total_length ~f10_ipv4_identification
       ~f11_ipv4_flags ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
-      ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst ~n12 ~w26
-      ~f19_ipv4_tcp_src_port ~f20_ipv4_tcp_dst_port ~f21_ipv4_tcp_seq
-      ~f22_ipv4_tcp_ack ~f23_ipv4_tcp_data_offset ~f24_ipv4_tcp_reserved
-      ~f25_ipv4_tcp_flags ~f26_ipv4_tcp_window ~f27_ipv4_tcp_checksum
+      ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst ~n12 ~f19_ipv4_tcp_src_port
+      ~f20_ipv4_tcp_dst_port ~f21_ipv4_tcp_seq ~f22_ipv4_tcp_ack
+      ~f23_ipv4_tcp_data_offset ~f24_ipv4_tcp_reserved ~f25_ipv4_tcp_flags
+      ~f26_ipv4_tcp_window ~f27_ipv4_tcp_checksum ~f28_ipv4_tcp_urgent
 
 let[@inline always] fold_tcp ~buf ~base ~invalid ~valid ~f3_ether_type
     ~f5_ipv4_version ~f6_ipv4_ihl ~f7_ipv4_dscp ~f8_ipv4_ecn
@@ -120,9 +114,7 @@ let[@inline always] fold_udp_checksum ~invalid ~valid ~f3_ether_type
     ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
     ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst ~n18 ~w14
     ~f30_ipv4_udp_src_port ~f31_ipv4_udp_dst_port ~f32_ipv4_udp_length =
-  let f33_ipv4_udp_checksum =
-    Int64.to_int (Int64.shift_right_logical w14 0) land 0xffff
-  in
+  let f33_ipv4_udp_checksum = Int64.to_int w14 land 0xffff in
   if (f32_ipv4_udp_length : int) > n18 then invalid ()
   else
     valid ~ether_type:f3_ether_type ~ipv4_present:true
@@ -203,12 +195,8 @@ let[@inline always] fold_ipv4_checksum ~buf ~base ~stop ~invalid ~valid
   let f15_ipv4_checksum =
     Int64.to_int (Int64.shift_right_logical w22 32) land 0xffff
   in
-  let f16_ipv4_src =
-    Int64.to_int (Int64.shift_right_logical w22 0) land mask32
-  in
-  let f17_ipv4_dst =
-    Int64.to_int (Int64.shift_right_logical w26 0) land mask32
-  in
+  let f16_ipv4_src = Int64.to_int w22 land mask32 in
+  let f17_ipv4_dst = Int64.to_int w26 land mask32 in
   if (f9_ipv4_total_length : int) > stop - 14 then invalid ()
   else
     fold_tcp_cases ~buf ~base ~invalid ~valid ~f3_ether_type ~bw4
@@ -248,7 +236,7 @@ let[@inline always] fold_ipv4 ~buf ~base ~stop ~invalid ~valid ~f3_ether_type =
     let w26 = Wire_runtime.Unchecked.i64be buf (base + 26) in
     let bw2 = Int64.to_int (Int64.shift_right_logical w14 56) in
     let bw3 = Int64.to_int (Int64.shift_right_logical w14 48) land 0xff in
-    let bw4 = Int64.to_int (Int64.shift_right_logical w14 0) land 0xffff in
+    let bw4 = Int64.to_int w14 land 0xffff in
     let f5_ipv4_version = bw2 lsr 4 in
     let f6_ipv4_ihl = bw2 land 0xf in
     if (bw2 : int) < 69 || (bw2 : int) > 79 then invalid ()
@@ -314,17 +302,14 @@ let[@inline always] frames_opaque ~current ~valid ~f3_ether_type
     ~ipv4_udp_present:false ~ipv4_udp_src_port:0 ~ipv4_udp_dst_port:0
     ~ipv4_udp_length:0 ~ipv4_udp_checksum:0 ~ipv4_opaque_present:true
 
-let[@inline always] frames_tcp_urgent ~current ~invalid ~valid ~f3_ether_type
+let[@inline always] frames_span ~current ~invalid ~valid ~f3_ether_type
     ~f5_ipv4_version ~f6_ipv4_ihl ~f7_ipv4_dscp ~f8_ipv4_ecn
     ~f9_ipv4_total_length ~f10_ipv4_identification ~f11_ipv4_flags
     ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
-    ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst ~n12 ~w26
-    ~f19_ipv4_tcp_src_port ~f20_ipv4_tcp_dst_port ~f21_ipv4_tcp_seq
-    ~f22_ipv4_tcp_ack ~f23_ipv4_tcp_data_offset ~f24_ipv4_tcp_reserved
-    ~f25_ipv4_tcp_flags ~f26_ipv4_tcp_window ~f27_ipv4_tcp_checksum =
-  let f28_ipv4_tcp_urgent =
-    Int64.to_int (Int64.shift_right_logical w26 0) land 0xffff
-  in
+    ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst ~n12 ~f19_ipv4_tcp_src_port
+    ~f20_ipv4_tcp_dst_port ~f21_ipv4_tcp_seq ~f22_ipv4_tcp_ack
+    ~f23_ipv4_tcp_data_offset ~f24_ipv4_tcp_reserved ~f25_ipv4_tcp_flags
+    ~f26_ipv4_tcp_window ~f27_ipv4_tcp_checksum ~f28_ipv4_tcp_urgent =
   if (f23_ipv4_tcp_data_offset lsl 2 : int) > n12 then invalid current
   else
     valid current ~ether_type:f3_ether_type ~ipv4_present:true
@@ -352,29 +337,26 @@ let[@inline always] frames_tcp_seq ~current ~invalid ~valid ~f3_ether_type
     ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
     ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst ~n12 ~w14 ~w22 ~w26 ~bw15
     ~f19_ipv4_tcp_src_port ~f20_ipv4_tcp_dst_port =
-  let f21_ipv4_tcp_seq =
-    Int64.to_int (Int64.shift_right_logical w14 0) land mask32
-  in
+  let f21_ipv4_tcp_seq = Int64.to_int w14 land mask32 in
   let f22_ipv4_tcp_ack = Int64.to_int (Int64.shift_right_logical w22 32) in
   let f23_ipv4_tcp_data_offset = bw15 lsr 12 in
   if not ((f23_ipv4_tcp_data_offset : int) >= 5) then invalid current
   else
     let f24_ipv4_tcp_reserved = (bw15 lsr 9) land 0x7 in
     let f25_ipv4_tcp_flags = bw15 land 0x1ff in
-    let f26_ipv4_tcp_window =
-      Int64.to_int (Int64.shift_right_logical w22 0) land 0xffff
-    in
+    let f26_ipv4_tcp_window = Int64.to_int w22 land 0xffff in
     let f27_ipv4_tcp_checksum =
       Int64.to_int (Int64.shift_right_logical w26 16) land 0xffff
     in
-    frames_tcp_urgent ~current ~invalid ~valid ~f3_ether_type ~f5_ipv4_version
+    let f28_ipv4_tcp_urgent = Int64.to_int w26 land 0xffff in
+    frames_span ~current ~invalid ~valid ~f3_ether_type ~f5_ipv4_version
       ~f6_ipv4_ihl ~f7_ipv4_dscp ~f8_ipv4_ecn ~f9_ipv4_total_length
       ~f10_ipv4_identification ~f11_ipv4_flags ~f12_ipv4_fragment_offset
       ~f13_ipv4_ttl ~f14_ipv4_protocol ~f15_ipv4_checksum ~f16_ipv4_src
-      ~f17_ipv4_dst ~n12 ~w26 ~f19_ipv4_tcp_src_port ~f20_ipv4_tcp_dst_port
+      ~f17_ipv4_dst ~n12 ~f19_ipv4_tcp_src_port ~f20_ipv4_tcp_dst_port
       ~f21_ipv4_tcp_seq ~f22_ipv4_tcp_ack ~f23_ipv4_tcp_data_offset
       ~f24_ipv4_tcp_reserved ~f25_ipv4_tcp_flags ~f26_ipv4_tcp_window
-      ~f27_ipv4_tcp_checksum
+      ~f27_ipv4_tcp_checksum ~f28_ipv4_tcp_urgent
 
 let[@inline always] frames_tcp ~buf ~base ~current ~invalid ~valid
     ~f3_ether_type ~f5_ipv4_version ~f6_ipv4_ihl ~f7_ipv4_dscp ~f8_ipv4_ecn
@@ -408,9 +390,7 @@ let[@inline always] frames_udp_checksum ~current ~invalid ~valid ~f3_ether_type
     ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
     ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst ~n18 ~w14
     ~f30_ipv4_udp_src_port ~f31_ipv4_udp_dst_port ~f32_ipv4_udp_length =
-  let f33_ipv4_udp_checksum =
-    Int64.to_int (Int64.shift_right_logical w14 0) land 0xffff
-  in
+  let f33_ipv4_udp_checksum = Int64.to_int w14 land 0xffff in
   if (f32_ipv4_udp_length : int) > n18 then invalid current
   else
     valid current ~ether_type:f3_ether_type ~ipv4_present:true
@@ -484,19 +464,13 @@ let[@inline always] frames_tcp_cases ~buf ~base ~current ~invalid ~valid
     else c2_j9 ()
   else c2_j9 ()
 
-let[@inline always] frames_ipv4_checksum ~buf ~base ~stop ~current ~invalid
-    ~valid ~f3_ether_type ~w22 ~w26 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl
-    ~f7_ipv4_dscp ~f8_ipv4_ecn ~f9_ipv4_total_length ~f10_ipv4_identification
-    ~f11_ipv4_flags ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol =
-  let f15_ipv4_checksum =
-    Int64.to_int (Int64.shift_right_logical w22 32) land 0xffff
-  in
-  let f16_ipv4_src =
-    Int64.to_int (Int64.shift_right_logical w22 0) land mask32
-  in
-  let f17_ipv4_dst =
-    Int64.to_int (Int64.shift_right_logical w26 0) land mask32
-  in
+let[@inline always] frames_ipv4_src ~buf ~base ~stop ~current ~invalid ~valid
+    ~f3_ether_type ~w22 ~w26 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl ~f7_ipv4_dscp
+    ~f8_ipv4_ecn ~f9_ipv4_total_length ~f10_ipv4_identification ~f11_ipv4_flags
+    ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
+    ~f15_ipv4_checksum =
+  let f16_ipv4_src = Int64.to_int w22 land mask32 in
+  let f17_ipv4_dst = Int64.to_int w26 land mask32 in
   if (f9_ipv4_total_length : int) > stop - 14 then invalid current
   else
     frames_tcp_cases ~buf ~base ~current ~invalid ~valid ~f3_ether_type ~bw4
@@ -505,9 +479,9 @@ let[@inline always] frames_ipv4_checksum ~buf ~base ~stop ~current ~invalid
       ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
       ~f15_ipv4_checksum ~f16_ipv4_src ~f17_ipv4_dst
 
-let[@inline always] frames_ipv4_dscp ~buf ~base ~stop ~current ~invalid ~valid
-    ~f3_ether_type ~w14 ~w22 ~w26 ~bw3 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl =
-  let f7_ipv4_dscp = bw3 lsr 2 in
+let[@inline always] frames_ipv4_ecn ~buf ~base ~stop ~current ~invalid ~valid
+    ~f14_ipv4_protocol ~f3_ether_type ~w14 ~w22 ~w26 ~bw3 ~bw4 ~f5_ipv4_version
+    ~f6_ipv4_ihl ~f7_ipv4_dscp =
   let f8_ipv4_ecn = bw3 land 0x3 in
   let f9_ipv4_total_length =
     Int64.to_int (Int64.shift_right_logical w14 32) land 0xffff
@@ -521,33 +495,38 @@ let[@inline always] frames_ipv4_dscp ~buf ~base ~stop ~current ~invalid ~valid
     let f11_ipv4_flags = bw4 lsr 13 in
     let f12_ipv4_fragment_offset = bw4 land 0x1fff in
     let f13_ipv4_ttl = Int64.to_int (Int64.shift_right_logical w22 56) in
-    let f14_ipv4_protocol =
-      Int64.to_int (Int64.shift_right_logical w22 48) land 0xff
+    let f15_ipv4_checksum =
+      Int64.to_int (Int64.shift_right_logical w22 32) land 0xffff
     in
-    frames_ipv4_checksum ~buf ~base ~stop ~current ~invalid ~valid
-      ~f3_ether_type ~w22 ~w26 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl ~f7_ipv4_dscp
-      ~f8_ipv4_ecn ~f9_ipv4_total_length ~f10_ipv4_identification
-      ~f11_ipv4_flags ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
+    frames_ipv4_src ~buf ~base ~stop ~current ~invalid ~valid ~f3_ether_type
+      ~w22 ~w26 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl ~f7_ipv4_dscp ~f8_ipv4_ecn
+      ~f9_ipv4_total_length ~f10_ipv4_identification ~f11_ipv4_flags
+      ~f12_ipv4_fragment_offset ~f13_ipv4_ttl ~f14_ipv4_protocol
+      ~f15_ipv4_checksum
 
 let[@inline always] frames_ipv4 ~buf ~base ~stop ~current ~invalid ~valid
-    ~f3_ether_type =
+    ~f14_ipv4_protocol ~f3_ether_type =
   let w14 = Wire_runtime.Unchecked.i64be buf (base + 14) in
   let w22 = Wire_runtime.Unchecked.i64be buf (base + 22) in
   let w26 = Wire_runtime.Unchecked.i64be buf (base + 26) in
   let bw2 = Int64.to_int (Int64.shift_right_logical w14 56) in
   let bw3 = Int64.to_int (Int64.shift_right_logical w14 48) land 0xff in
-  let bw4 = Int64.to_int (Int64.shift_right_logical w14 0) land 0xffff in
+  let bw4 = Int64.to_int w14 land 0xffff in
   let f5_ipv4_version = bw2 lsr 4 in
   let f6_ipv4_ihl = bw2 land 0xf in
   if (bw2 : int) < 69 || (bw2 : int) > 79 then invalid current
   else
-    frames_ipv4_dscp ~buf ~base ~stop ~current ~invalid ~valid ~f3_ether_type
-      ~w14 ~w22 ~w26 ~bw3 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl
+    let f7_ipv4_dscp = bw3 lsr 2 in
+    frames_ipv4_ecn ~buf ~base ~stop ~current ~invalid ~valid ~f14_ipv4_protocol
+      ~f3_ether_type ~w14 ~w22 ~w26 ~bw3 ~bw4 ~f5_ipv4_version ~f6_ipv4_ihl
+      ~f7_ipv4_dscp
 
-let[@inline always] frames_record ~buf ~base ~stop ~current ~invalid ~valid =
+let[@inline always] frames_record ~buf ~base ~stop ~current ~invalid ~valid
+    ~f14_ipv4_protocol =
   let f3_ether_type = Wire_runtime.Unchecked.u16be buf (base + 12) in
   if (f3_ether_type : int) = 2048 then
-    frames_ipv4 ~buf ~base ~stop ~current ~invalid ~valid ~f3_ether_type
+    frames_ipv4 ~buf ~base ~stop ~current ~invalid ~valid ~f14_ipv4_protocol
+      ~f3_ether_type
   else
     valid current ~ether_type:f3_ether_type ~ipv4_present:false ~ipv4_version:0
       ~ipv4_ihl:0 ~ipv4_dscp:0 ~ipv4_ecn:0 ~ipv4_total_length:0
@@ -571,17 +550,78 @@ let[@inline always] fold_frames buf off len ~stride ~init ~invalid ~valid =
   let last = off + len - stride in
   if stride < 34 then
     acc := fold_frames_short buf ~stride ~last ~off ~init:!acc ~invalid ~valid
-  else
+  else (
+    (if stride <= len / 4 then
+       let last_4 = off + len - (4 * stride) in
+       let stride_2 = 2 * stride in
+       let stride_3 = 3 * stride in
+       let stride_4 = 4 * stride in
+       while !cursor <= last_4 do
+         let base_1 = !cursor + stride in
+         let base_2 = !cursor + stride_2 in
+         let base_3 = !cursor + stride_3 in
+         let f14_ipv4_protocol_0 =
+           Wire_runtime.Unchecked.u8 buf (!cursor + 23)
+         in
+         let f14_ipv4_protocol_1 =
+           Wire_runtime.Unchecked.u8 buf (base_1 + 23)
+         in
+         let f14_ipv4_protocol_2 =
+           Wire_runtime.Unchecked.u8 buf (base_2 + 23)
+         in
+         let f14_ipv4_protocol_3 =
+           Wire_runtime.Unchecked.u8 buf (base_3 + 23)
+         in
+         let base = !cursor in
+         let f14_ipv4_protocol = f14_ipv4_protocol_0 in
+         let current = !acc in
+         let next =
+           let stop = stride in
+           frames_record ~buf ~base ~stop ~current ~invalid ~valid
+             ~f14_ipv4_protocol
+         in
+         acc := next;
+         let base = base_1 in
+         let f14_ipv4_protocol = f14_ipv4_protocol_1 in
+         let current = !acc in
+         let next =
+           let stop = stride in
+           frames_record ~buf ~base ~stop ~current ~invalid ~valid
+             ~f14_ipv4_protocol
+         in
+         acc := next;
+         let base = base_2 in
+         let f14_ipv4_protocol = f14_ipv4_protocol_2 in
+         let current = !acc in
+         let next =
+           let stop = stride in
+           frames_record ~buf ~base ~stop ~current ~invalid ~valid
+             ~f14_ipv4_protocol
+         in
+         acc := next;
+         let base = base_3 in
+         let f14_ipv4_protocol = f14_ipv4_protocol_3 in
+         let current = !acc in
+         let next =
+           let stop = stride in
+           frames_record ~buf ~base ~stop ~current ~invalid ~valid
+             ~f14_ipv4_protocol
+         in
+         acc := next;
+         cursor := !cursor + stride_4
+       done);
     while !cursor <= last do
       let base = !cursor in
+      let f14_ipv4_protocol = Wire_runtime.Unchecked.u8 buf (base + 23) in
       let current = !acc in
       let next =
         let stop = stride in
         frames_record ~buf ~base ~stop ~current ~invalid ~valid
+          ~f14_ipv4_protocol
       in
       acc := next;
       cursor := !cursor + stride
-    done;
+    done);
   !acc
 
 type t = {

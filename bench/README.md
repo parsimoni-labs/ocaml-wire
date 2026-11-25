@@ -21,7 +21,7 @@ therefore includes different amounts of validation work.
 ## Rules
 
 - **No hand-written C parsers.** All field extraction in C must go through
-  EverParse-generated validators using the default `<Name>_Fields` plug:
+  EverParse-generated validators using the default `<Name>_Fields` visitor:
   stack-allocate `<Name>Fields`, pass `(WIRECTX *)&ctx` to the validator,
   read named struct members. No manual bitfield manipulation, no index
   arrays, no hand-rolled `WIRECTX`.
@@ -181,27 +181,64 @@ values; writing sets lockout, wait and retransmit too, and the crate's CCSDS
 
 The released crates are the reference these rows aim to beat. Against the
 crate row with the fewest instructions on each workload, the OxCaml
-`wire.ocaml` row spends 1.6 to 3.4 times the instructions where both work
-one item at a time, and 9.5 times on `clcw_write`, whose crate loop LLVM
-vectorises. The counts below are one run of `make bench-apps-count` at commit
-`5dc37350` (the parent of the commit that adds them), on the ARM64 macOS host above under a load average of 450 to 600
-with no idle CPU (`top -l 2 -n 12 -o cpu`), so the instructions are the
-figure to compare. The loop lengths are read from `objdump -d` of the
-binaries that run counts, `_build/oxcaml/default/bench/apps/bench.exe`
-(`-O4`) and `bench/apps/cargo/target/release/wire-bench-apps`, with the
-Rust rebuilt once with line tables
-(`CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, the same code) to find each
-row's inlined loop. A loop length counts the
+`wire.ocaml` row spends 1.4 to 3.7 times the instructions where both work
+one item at a time, and about 11 times on `clcw_write`, whose crate loop LLVM
+vectorises. The counts below are the median of three runs of
+`bench/count.sh` on each row, with the inputs of `make bench-apps-count`
+(100,000 items), at the commit before the one that adds them, on the ARM64
+macOS host above under a load average of 150 to 280. The counts of one row
+still moved by up to 5% between runs at that load, so a change of a few
+instructions per item is read from the loop, not from the count. The loop
+lengths are read from `objdump -d` of the binaries that run counts,
+`_build/oxcaml/default/bench/apps/bench.exe` (`-O4`) and
+`bench/apps/cargo/target/release/wire-bench-apps`, with the Rust rebuilt
+once with line tables (`CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`, the
+same code) to find each row's inlined loop. A loop length counts the
 instructions on the path a well-formed item takes:
 
 | Workload | Crate row | Instructions per item, crate / OxCaml | Loop, crate / OxCaml |
 | --- | --- | ---: | ---: |
-| `routing` | `gaia-ccsds-c2a` 1.2 | 25.2 / 45.5 | 24 / 47 |
-| `routing_write` | `ccsds_primary_header` 0.15 | 39.0 / 73.8 | 40 / 75 |
-| `gateway` | `chronus-gateway` + `spacepackets` | 351 / 658 per frame | 22 / 41 per packet |
-| `gateway_write` | `chronus-gateway` + `spacepackets` | 355 / 556 per frame | 21 / 33 per packet |
-| `clcw` | `gaia-ccsds-c2a` 1.2 | 12.4 / 42.2 | 12 / 43 |
-| `clcw_write` | `gaia-ccsds-c2a` 1.2 | 5.4 / 51.3 | 68 per 16 words / 51 |
+| `routing` | `gaia-ccsds-c2a` 1.2 | 24.6 / 41.4 | 24 / 47 |
+| `routing_write` | `ccsds_primary_header` 0.15 | 38.8 / 68.7 | 40 / 71 |
+| `gateway` | `chronus-gateway` + `spacepackets` | 356 / 612 per frame | 22 / 40 per packet |
+| `gateway_write` | `chronus-gateway` + `spacepackets` | 354 / 511 per frame | 21 / 30 per packet |
+| `clcw` | `gaia-ccsds-c2a` 1.2 | 11.5 / 42.1 | 12 / 43 |
+| `clcw_write` | `gaia-ccsds-c2a` 1.2 | 4.5 / 51.5 | 68 per 16 words / 51 |
+
+Each instruction the OxCaml loop runs beyond the crate's falls in one of
+four kinds: what `Wire_ocaml` generates, what the harness writes, what the
+compiler does with both, and what the OCaml 5 runtime asks of every loop
+(a safepoint poll, a barrier before a store to a mutable block). The
+generated reads and writes are not where the gap is: each field is one
+load, a swap and a mask, or one merged store, as in the crates. Two
+differences came from the harness, where the OCaml loops differed from the
+Rust ones, and are gone: the gateway loops took the packet size from
+`Gateway_workload.pkt_size`, which `Codec.wire_size` computes when the
+program starts, where the Rust rows use the constant `space_packet::SIZE +
+64`, so OxCaml added it as a variable and built the data length's bytes
+again per packet (`asr`, `rev16`, `uxth`); and `routing_write` kept each
+route's sequence count as an `int`, so `write_at`'s carrier checked its
+range per packet (`lsr #14`, `orr`, `cmp`, `b.eq`), where it now keeps the
+count in its carrier and wraps it with `seqcount_low`, as the Rust rows
+wrap it with `& 0x3FFF`. The rest is the compiler and the runtime, with the
+open OxCaml issue of each compiler item where one exists:
+
+| Workload | Instructions per item beyond the crate's loop, and the issue |
+| --- | --- |
+| `routing` | route table address reloaded (`adrp`, `add`, `ldr`) and `len - size` recomputed, 4: oxcaml/oxcaml#8175; the 11-bit APID's index into the 2048-entry table checked, 3: oxcaml/oxcaml#2436; the offset untagged and retagged around each load, 2 to 3: oxcaml/oxcaml#8171; the check's answer moved through a join (`mov`, `mov`) before its test, 2: oxcaml/oxcaml#8182; an extra `b` on the back edge, 1: oxcaml/oxcaml#8177; the poll (`ldr`, `cmp`, `b.ls`), 3, and the `dmb ishld` before the count's store, 1: the runtime |
+| `routing_write` | the routing items above; the write's `off < 0` tested again after the read's check of the same offset, 2: oxcaml/oxcaml#8182; the 32-bit store's swap as `rev x` then `asr #32`, 1, and `uxth` after `rev16`, 1: oxcaml/oxcaml#8184; the data length tagged then untagged for its store, 2: oxcaml/oxcaml#8173 |
+| `gateway` | per packet, the FNV prime and basis rebuilt by `mov`/`movk`, 8: oxcaml/oxcaml#8183 and oxcaml/oxcaml#8175; the `ok` flag of the `while` taken through `cset` and `cbnz` twice, 4, and the `or #1` of `hash_int` on a tagged `int`, 2: no issue yet; the poll, 3: the runtime |
+| `gateway_write` | per packet, the store addresses computed from the tagged offset, 2: oxcaml/oxcaml#8171; the 32-bit store's swap, 1: oxcaml/oxcaml#8184; APID and count masked and untagged from the tagged packet number, 4: tagging; `off + 70` and the frame end recomputed, 1: oxcaml/oxcaml#8175; the poll, 3: the runtime. Per frame, the range test of the four computed header fields `write_int_at` takes, 8: oxcaml/oxcaml#2436 |
+| `clcw` | each of three flags as `lsr`, `orr`, `and`, `cmp`, `b.ne` where `gaia-ccsds-c2a` has one `tst` and one `tbnz` for all three, 12: oxcaml/oxcaml#8172; the word zero-extended again after `rev w`, 1: oxcaml/oxcaml#8184; the word tagged, 2; the bounds of each word checked, which `chunks_exact` proves, 5: oxcaml/oxcaml#2436; the offset tagged, 3: oxcaml/oxcaml#8171; the poll, 3: the runtime |
+| `clcw_write` | LLVM vectorises the crate's loop, OxCaml vectorises none (the NEON lanes row is that loop written by hand); one word at a time, the range test of the four computed fields, 7: oxcaml/oxcaml#2436; each field untagged before its shift, 4: tagging; the 32-bit store's swap, 1: oxcaml/oxcaml#8184 |
+
+A flag tested as `w land mask <> 0` instead of `(w lsr k) land 1 <> 0`
+takes one instruction fewer on OxCaml, `mov`, `and`, `cmp`, `b.ne`, as the
+tagged mask is not an arm64 logical immediate, and is no `tst` or `tbnz`
+until oxcaml/oxcaml#8172 is fixed: the `clcw` loop goes from 43 to 40. The generated
+`<field>_of_word` returns the field's `int`, so that form would need a
+boolean reader of a 1-bit field, which no codec here declares (`Wire.bit`
+goes through a named map).
 
 On routing, LLVM reads `gaia-ccsds-c2a`'s `PrimaryHeader` with two `ldrb`
 for the APID and one `ldrh` and `rev16` for the data length; the APID has 11
@@ -226,15 +263,16 @@ On writing, the crates never branch on a field's value:
 `spacepackets`' `u11::new` and `u14::new` assert, which LLVM proves cannot
 fire, so no range branch is left in their loops. The generated OCaml checks
 a value against its field's width wherever the compiler cannot prove it
-fits: on `routing_write`, the sequence count read back from the per-route
-`int array` (`lsr #14`, `cmp`, `b.eq`), where LLVM proves the `[u16; 4]`
-counts stay below 2^14 and drops `ccsds_primary_header`'s mask; on
-`gateway_write`, every field of the frame header `write_int_at` takes; on
-`clcw_write`, the four fields that vary per word. Per packet of `gateway_write`, `spacepackets` stores the
-data length from a register set before the loop and addresses both stores
-from one base, where OxCaml derives the data length again per packet (`asr`,
-`rev16`, `uxth`), computes the second store's address from the tagged offset,
-masks and untags the APID and count from the tagged packet number, and polls.
+fits: on `gateway_write`, every field of the frame header `write_int_at`
+takes; on `clcw_write`, the four fields that vary per word. On
+`routing_write` no range is tested: LLVM proves the `[u16; 4]` counts stay
+below 2^14 and drops `ccsds_primary_header`'s mask, and the OxCaml loop keeps
+them in `Value.seqcount`, whose type proves it. Per packet of
+`gateway_write`, `spacepackets` stores the data length from a register set
+before the loop and addresses both stores from one base, where OxCaml stores
+the constant data length with `orr` and `strh`, computes the second store's
+address from the tagged offset, masks and untags the APID and count from the
+tagged packet number, and polls.
 `gaia-ccsds-c2a`'s `with_<field>` builders vectorise: 68 NEON instructions
 build 16 CLCW words, with the byte order folded into the shifts. Stock OCaml
 also assembles the 32-bit word on tagged integers, with a `sxtw` on each
@@ -247,7 +285,7 @@ generated writes are `str w` and `strh`, and the only `dmb ishld` OxCaml puts
 in a write loop is the one before the per-route sequence count's `int array`
 store of `routing_write`.
 
-On gateway, each packet costs OxCaml 41 instructions against 22: it builds
+On gateway, each packet costs OxCaml 40 instructions against 22: it builds
 the two 64-bit constants each `hash_int` multiplies and adds with again with `mov` and `movk`
 pairs inside the loop, 8 instructions per packet, and a `hash_int` on a
 tagged `int` is `eor`, `orr #1` and `madd`, where LLVM's is `eor` and `mul`
@@ -257,8 +295,8 @@ to two byte loads (`ldurb` of the flags byte, `ldrb` of the report value),
 one `tst #0x30` and one `tbnz #3` for the three flags, and no bounds check,
 which `chunks_exact` proves; OxCaml loads the word (`ldrsw`, `rev`), tags it,
 takes each flag with `lsr`, `orr`, `and`, `cmp` and `b.ne`, checks the word's
-bounds and polls. The NEON lanes row reads a CLCW word in 10.3 instructions,
-below the crate's 12.4, and writes one in 6.6 against the crate's 5.4.
+bounds and polls. The NEON lanes row reads a CLCW word in 10.5 instructions,
+below the crate's 11.5, and writes one in 7.0 against the crate's 4.5.
 
 Every hash the workloads compute (the gateway checksum and the hash of a
 written buffer) is FNV-1a modulo 2^63: OCaml's native `int`, whose
@@ -287,12 +325,14 @@ pick for exactly this work:
 | Row | Implementation | API |
 |---|---|---|
 | `Wire.Codec stack decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of one bounded stack codec |
-| `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | `Codec.check` and `Codec.ok` per header, then a staged `Codec.read` per field; the harness links the layers |
+| `Wire.Codec stack check/enter/read` | interpreted codec (OCaml 5, OxCaml) | `View.check` of the same bounded stack codec, which builds nothing, then `View.enter` of each layer present (a `View.sub` or `View.sub_option` per sub-codec field) and a `View.read` of a `View.field` per field |
+| `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | a `Codec.View.codec` per header codec; `View.check`/`View.ok`/`View.get` per header, then a `View.read` of a `View.field` per field; the harness links the layers |
 | `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the scanner of the stack: `decode`, `fold` and `fold_frames` (batch), on OxCaml also their unboxed forms; `selected outputs` hands out only the checksum's fields |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `View.check`/`View.ok` per header, then a `view_<field>` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
 | `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.scanner` of the stack | `scan` per frame; `selected outputs` hands out only the checksum's fields |
 | `wire.rust, linked headers` | generated Rust of the fixed headers | `Valid::at` per header, then a read per field; the harness links the layers |
-| EverParse C (`BUILD_EVERPARSE=1`) | the verified validator EverParse generates from `Packet_stack.codec` | `EthernetStackValidateWireEthernetStack` per slot, then the members of the default `EthernetStack_Fields` plug, zeroed per slot |
+| `EverParse C, default visitor` (`BUILD_EVERPARSE=1`) | the verified validator EverParse generates from `Packet_stack.codec` | `EthernetStackValidateWireEthernetStack` per slot, then the members of the default `EthernetStack_Fields` visitor, zeroed per slot |
+| `EverParse C, inline visitor` (`BUILD_EVERPARSE=1`) | the same validator, compiled with a custom visitor | the validator per slot, then the same members of a visitor copied from `EthernetStack_Fields.c` and trimmed to them, its setters `static inline` in the validator's translation unit |
 | `etherparse` 0.21 | hand-written | `SlicedPacket::from_ethernet`, its one-call path |
 | `smoltcp` 0.14 | hand-written | `new_checked` per layer (`EthernetFrame`, `Ipv4Packet`, `TcpPacket`/`UdpPacket`) |
 | `pnet_packet` 0.35 | generated by its `#[packet]` derive | `new` per layer, then the field accessors |
@@ -325,13 +365,11 @@ slot and constructs its ordinary nested values. Byte fields are zero-copy
 slices.
 
 The frame loop of the batch rows (`fold_frames` and its unboxed and step
-forms) walks four frames per iteration on OxCaml only, so that it polls
-for signals once per four frames. Each iteration first computes where its
-four frames start and loads the field their transport header is chosen
-on, the IPv4 protocol, then walks the frames: a mispredicted branch of one
-frame does not hold back the next frame's dispatch by a load. On stock OCaml it walks one frame per
-iteration, because four inlined walks cost the stock compiler more in
-spilled registers than the polls they save. The generated Rust has no frame
+forms) walks four frames per iteration, so that it polls for signals once
+per four frames. Each iteration first computes where its four frames start
+and loads the field their transport header is chosen on, the IPv4
+protocol, then walks the frames: a mispredicted branch of one frame does
+not hold back the next frame's dispatch by a load. The generated Rust has no frame
 loop: its rows call `scan` once per slot.
 
 The `linked headers` rows, OCaml and Rust, use the
@@ -348,7 +386,7 @@ Their `ocaml-ox` lanes also compare boxed and unboxed APIs and check
 `decode_unboxed` with `[@zero_alloc]` in release builds. With
 `BUILD_EVERPARSE=1`, the same differential driver compiles the projected
 3D schemas through EverParse and compares C acceptance, consumed length and
-the scalar members of the default plug, nested fields included.
+the scalar members of the default visitor, nested fields included.
 Selected-output and validation-only scanners retain every validation check
 ([execution model](../docs/execution.md#generated-code)).
 
@@ -428,16 +466,23 @@ subtraction that leaves out the process's fixed costs, and `make
 bench-rust-count` runs it on every row of every harness and corpus, as
 `make bench-apps-count` does for the applications.
 
-With `BUILD_EVERPARSE=1` (`make bench-rust BUILD_EVERPARSE=1`), the
-EverParse C row runs too: `bench/rust/everparse` links the validator and
-default plug that `gen_stubs.exe` archives with the other benchmark schemas
+With `BUILD_EVERPARSE=1` (`make bench-rust BUILD_EVERPARSE=1`), the two
+EverParse C rows run too. `EverParse C, default visitor` links the validator and
+default visitor that `gen_stubs.exe` archives with the other benchmark schemas
 (compiled at `-O2`, as dune compiles C stubs), and its C loop calls the
 validator once per slot, bounded by the slot, reads the IPv4, TCP and UDP
-fields as named plug members (`ipv4_src`, `ipv4_tcp_present`, ...; see
-[the FFI plug](../docs/projection.md#the-ffi-plug)) and folds them into the
-same checksum. It times its passes in C as the Rust harness does. Every
-field reaches the plug through an out-of-line setter call, 30 for a TCP
-packet; the measurements do not separate that cost from the validator's.
+fields as named visitor members (`ipv4_src`, `ipv4_tcp_present`, ...; see
+[the FFI visitor](../docs/projection.md#the-ffi-visitor)) and folds them into the
+same checksum. Every field reaches the default visitor through an out-of-line
+setter call in another translation unit, 30 for a TCP packet.
+`EverParse C, inline visitor` (`bench/rust/everparse/stack_inline.c`) compiles
+the same generated validator in one translation unit with a custom visitor,
+copied from the shipped `EthernetStack_Fields.c` and trimmed to the members
+the checksum reads: its setters are `static inline` and write into a local
+struct, so the compiler inlines each into the validator and folds its switch
+on the constant field index, and the row measures the validator itself. Both
+loops read the same members and fold them the same way, and time their
+passes in C as the Rust harness does.
 
 The batch consumers take fixed-stride slots only, so a real capture, with
 frames of every length, is measured per frame by the flow benchmark below.
@@ -534,8 +579,9 @@ length (the IPv4 total length, or 40 plus the IPv6 payload length) in an
 open-addressing table with linear probing. The hash mixes the key's 32-bit
 words, `h = (h xor w) * 0x9E3779B97F4A7C15`, and takes the slot from bits 32
 and up; OCaml's 63-bit `int` keeps the low 63 bits of the same product, so
-the OCaml, Rust and C tables (`flow_table.ml`, `cargo/src/flow.rs`,
-`everparse/stack_c.c`) fill the same slots. A slot belongs to the pass whose epoch it carries, so no
+the OCaml, OxCaml, Rust and C tables (`flow_table.std.ml`,
+`flow_table.ox.ml`, `cargo/src/flow.rs`, `everparse/stack_c.c`) fill the
+same slots. A slot belongs to the pass whose epoch it carries, so no
 pass clears the table. Each row prints the number of flows and a checksum of
 every live slot (its place, key, packets and bytes), read after the timed
 passes and not timed; the report fails unless every row agrees. The default packets hold 342,506 flows.
@@ -547,7 +593,7 @@ passes and not timed; the report fails unless every row agrees. The default pack
 | `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_index_step` over the frames, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
 | `wire.rust scanner, selected outputs` | generated Rust scanner of `Packet_stack.capture` | `scan` per frame |
 | `wire.rust, linked headers` | generated Rust of `headers.ml` | `Valid::at` per header, then a read per field; the harness links the layers |
-| EverParse C (`BUILD_EVERPARSE=1`) | the verified validator of `Packet_stack.capture` | `CapturedStackValidateWireCapturedStack` per frame, then the members of the default `CapturedStack_Fields` plug, zeroed per frame |
+| EverParse C (`BUILD_EVERPARSE=1`) | the verified validator of `Packet_stack.capture` | `CapturedStackValidateWireCapturedStack` per frame, then the members of the default `CapturedStack_Fields` visitor, zeroed per frame |
 | `etherparse 0.21, lax` | hand-written | `LaxSlicedPacket::from_ethernet` |
 | `smoltcp 0.14` | hand-written | `EthernetFrame::new_checked`, `TcpPacket::new_checked`; the IPv4, IPv6 and UDP layers through `new_unchecked` after the adapter's checks, because `new_checked` bounds them by their length fields and rejects a header-only capture |
 | `pnet_packet 0.35` | generated by its `#[packet]` derive | `new` per layer, then the field accessors; the adapter makes the checks beyond the minimum header lengths, as in the header benchmark |
@@ -638,7 +684,7 @@ checkout. Packets per second is the inverse of the best CPU time.
 | wire.ocaml View.check/view, linked headers, OCaml | 84.19 | 86.84 | 11.9 |
 | etherparse 0.21, lax | 91.80 | 94.40 | 10.9 |
 | wire.ocaml View.check/view, linked headers, OCaml flambda | 92.89 | 97.18 | 10.8 |
-| EverParse C, default plug | 95.62 | 99.07 | 10.5 |
+| EverParse C, default visitor | 95.62 | 99.07 | 10.5 |
 | wire.ocaml scanner, selected outputs, fold_step, OCaml | 98.61 | 101.16 | 10.1 |
 | Wire.Codec capture decode, OxCaml | 632.38 | 654.09 | 1.6 |
 | Wire.Codec capture decode, OCaml | 681.18 | 711.91 | 1.5 |
@@ -723,6 +769,33 @@ What the OCaml tables spend beyond the Rust one, read in the disassembly:
 5. tagging: the slot index and the counters stay tagged, a word more per
    arithmetic step.
 
+On OxCaml the table is `flow_table.ox.ml`: each word of a slot an `int64#`
+stored flat in its record, an address two words in the order of Rust's
+`[u32; 4]`, the probe a `while` loop over a `let mutable` index in each of
+`add4` and `add6`, indexing plain and checked. The constant is then built
+once per mix with no tag correction, nothing in a slot is tagged and an IPv4
+slot writes 9 words. Counted at a load average of 251 before and 271 after,
+the table alone falls from 108.6 to 81.9 instructions per packet (149.1 less
+67.2), and on `mawi` the scanner row from 219.2 to 193.1 and the `View` row
+from 309.1 to 283.1. An array of unboxed records `#{ ... }`, the layout of
+Rust's `Vec<Slot>`, read and written through the stdlib's checked array
+primitives declared at any layout, costs 192 instead: reading an element loads its 9 words
+before any is compared, each with its own address, and each bound check
+divides the array's size by 9.
+
+What the OxCaml table spends beyond Rust's 44 is then the compiler's and
+the memory model's: `add4` is still called, not inlined, and reloads the
+table on every key; the constant is built four times per key
+([oxcaml#8183](https://github.com/oxcaml/oxcaml/issues/8183)); the bound
+check decodes the array's header on every probe
+([oxcaml#8175](https://github.com/oxcaml/oxcaml/issues/8175)); the index is
+tagged and each load computes its address apart
+([oxcaml#8171](https://github.com/oxcaml/oxcaml/issues/8171),
+[oxcaml#8178](https://github.com/oxcaml/oxcaml/issues/8178)); the loop's
+exit tests its flag again and polls; and every store of a mutable field
+follows a `dmb ishld`, 2 per counted packet and 9 per claimed slot, which no
+compiler pass removes under OCaml 5's memory model.
+
 The OxCaml scanner parsed in 117.7 instructions where the Rust scanner takes
 68.8: about 25 in the loop over the frames, which reloaded the lengths of
 the buffer (8) and of the array of lengths (3) on every frame and checked
@@ -741,9 +814,88 @@ negative offset (2) and the untagging of the offset and the length (2). On
 OCaml an accumulator of two values would be allocated per key, so
 `Flow_parse` keeps `Flow_sum`'s global state there, and the loop saves less
 (151.9 to 143.2 instructions on OCaml flambda, 308.2 to 298.2 on OCaml;
-256.0 to 245.2 and 405.6 to 392.6 on `mawi`), because the stock and flambda
-register allocators keep the loop's buffer, arrays and lengths on the stack
-around the inlined walk.
+256.0 to 245.2 and 405.6 to 392.6 on `mawi`): the flambda register
+allocator keeps the loop's buffer, arrays and lengths on the stack around the
+inlined walk, and on OCaml the walk called its consumer out of line, as
+below.
+
+On OxCaml `fold_index_step` now walks four frames an iteration, as
+`fold_frames` does, so the poll, the test of the index against the bound
+and the back edge are paid once per four frames. Counted three times at a
+load average between 160 and 285, the parse falls from a median of 92.0 to
+85.2 instructions per packet and the row on `mawi` from 219.1 to 213.1;
+the header benchmark's OxCaml rows, which walk fixed-stride slots with
+`fold_frames`, are unchanged.
+
+The code `Wire_ocaml` writes for OxCaml then spends fewer instructions on
+each header. An indexed frame's bounds are tested on its untagged offset and
+length, as the sign of one `logor`, where the tagged test took two branches
+and their tag fixups. The IPv4 version and header length are one unsigned
+comparison of their byte, which one shift takes from the word already
+loaded, where a 16-bit load, a shift and two comparisons tested them. A
+field inside a loaded word is taken out with two shifts, where OxCaml built
+the mask of a shift and a mask in a register for each use. The TCP data
+offset is read with the 16-bit load that ends on its byte, where a 32-bit
+load, a swap and a mask took four instructions. The first frame of the
+unrolled loop then walks an IPv4 TCP packet in 82 instructions, 6 fewer.
+Counted three times at a load average between 300 and 450, the parse falls
+from a median of 84.7 to 81.4 instructions per packet, against 69.2 for the
+Rust scanner, 66.9 for `pnet_packet` and 64.2 for `smoltcp`, counted alike.
+The header benchmark's OxCaml scanner rows fall by 1.2 to 4.2 instructions
+per packet on every corpus (`selected outputs, batch` from 65.6 to 63.7 on
+`fixed64-random`, where `pnet_packet` takes 113.8).
+
+On OxCaml the key is now computed on `int64`, as `Sum` in Rust computes it
+on `u64`: `Flow_sum` folds it so, and the scanner's consumer `Flow_parse`
+hands it the `int64` values the scanner gives, which stay unboxed. On OCaml
+and OCaml flambda it stays an `int`, the type a user of those compilers
+folds it in, because an `int64` handed to a call is boxed there (`Flow_int`,
+written by `bench/rust/dune`, names the type for each compiler). An IPv4 TCP
+key then takes 17 instructions on OxCaml instead of 24: no tag on each
+value, no constant 1 built for each tag; the code of the other compilers is
+unchanged. Counted three times at a load average between 300 and 450, before
+and after:
+
+| Row on `mawi`, parse only | OCaml | OCaml flambda | OxCaml |
+| --- | ---: | ---: | ---: |
+| scanner | 299.9 to 299.4 | 144.8 to 144.5 | 82.0 to 73.3 |
+| `View` | 223.5 to 222.9 | 249.6 to 250.5 | 200.2 to 198.3 |
+
+The rows with the table do not fold the key. `pnet_packet` takes 66.9 on the
+parse and 108.3 with the table, the Rust scanner 69.2 and 113.5.
+
+On OCaml the scanner then spent more on the parse than `View`, because the
+walk did not inline its consumer. `Flow_step` and `Flow_parse` bound `i` and
+`ip6_bytes` inside `valid`, and OCaml without flambda inlines no function
+whose body defines one, so each of the walk's 8 leaves called `valid`: it
+boxed every `int64` output it passed, a block of 3 words on the minor heap,
+and handed 21 of its 29 arguments through the domain state, where `valid`
+loaded them back and unboxed them. That call was about 150 of the 300
+instructions per packet. The consumers now define both beside `valid`, as
+they define `ports`, and the walk inlines `valid` and the `add4` and `add6`
+of `Flow_sum` behind it; what the loop keeps on the stack is its index and
+bound. The code of the other compilers is unchanged. Counted five times,
+medians, at a load average of 16 before and 23 after on OCaml, 22 and 16
+on the other two:
+
+| Row on `mawi` | Instructions | Cycles |
+| --- | ---: | ---: |
+| scanner, parse only, OCaml | 299.7 to 149.6 | 75.7 to 43.1 |
+| scanner, OCaml | 393.8 to 232.8 | 456.0 to 305.1 |
+| scanner, parse only, OCaml flambda | 145.1 to 145.5 | 47.0 to 45.0 |
+| scanner, OCaml flambda | 248.3 to 248.3 | 245.4 to 258.0 |
+| scanner, parse only, OxCaml | 73.3 to 73.3 | 32.6 to 31.6 |
+| scanner, OxCaml | 185.2 to 185.2 | 201.8 to 191.5 |
+
+In the same counts the `View` row takes 223.0 instructions and 60.2 cycles
+on the OCaml parse; `pnet_packet` takes 67.2 and 26.9 and the Rust scanner
+68.9 and 27.0, counted alike at a load average of 13 and 14.
+
+What the OxCaml parse still spends beyond `pnet_packet` is mostly the
+compiler's: the key's constant part is built again for each key, the loop
+over the index computes the address of each tagged index (2 per frame) and
+untags the offset and the length (2), and the IPv6 key folds 8 words one by
+one where LLVM folds them as vectors.
 
 `Wire.Codec` spends 8236.7 instructions and 1776.7 cycles per packet on the
 parse on OxCaml. macOS `sample`, 10 s of the parse row (7514 samples), puts
@@ -755,6 +907,46 @@ the constraints, 9.0%), 9.9% in the compiled constraint expressions, 7.4% in
 `Codec_layout` (offsets computed per decode) and 7.4% elsewhere. Allocation
 costs little: 51.1 minor words (409 bytes) per packet on OCaml 5.4.1, none
 promoted, and no GC function of the runtime reaches 5 samples.
+
+### One loop, interpreted or generated (`make bench-flow-swap`)
+
+Code written against `Wire.S` runs on the interpreted codec,
+`Wire.Codec.Make`, or on the `Global` module `Wire_ocaml` generates from the
+same codec. `bench/rust/flow_swap.ml` is one flow counter written so: its
+header modules are those of `swap.ml`, and its one line
+`module H = Swap.Generated` picks them; the dune rules build the interpreted
+rows from the same file with that line replaced by
+`module H = Swap.Interpreted`, and the parse-only rows by making `Flow_sum`
+the sink. The generated side is one line per header,
+`module Ipv4 = G_ipv4.Global`; the interpreted side applies `Codec.Make` and
+names the handles the loop reads (`ihl`, `src_addr`, ...) with `field`, since
+`Wire.S` declares the type of a handle but no handle.
+
+Per frame the loop checks Ethernet, IPv4 (its options skipped by IHL) and
+TCP or UDP with the checks of the classifier above, and hands the IPv4
+5-tuple (no ports for a fragment) and total length to the table; IPv6, VLAN
+tags and every other frame are counted, not parsed, as is an IPv4 packet
+failing a check. `smoltcp 0.14, IPv4 flows` makes the same checks in Rust.
+The rows run on corpora of their own, `mawi swap` and `mawi swap parse`, and
+`make bench-flow` runs them with the others; `make bench-flow-swap` times
+and counts them alone, into `_build/bench-flow/swap/`. On the default
+packets every row counts 314,998 flows, checksum `1215103043457353650`, and
+IPv6 178,454, VLAN 0, other 1,286, IPv4 rejected 1 (parse only: 820,259
+keys, `4332859610784037926`).
+
+Measured at commit `4497904b` on the machine above, best CPU ns/packet of
+21 passes and `bench/count.sh` per packet: the OxCaml and Rust rows at a
+load average of 481 before and 415 after, the OCaml 5.4.1 rows at 331 and
+403, when the row `wire.ocaml View.check/view, linked headers, parse only`
+counted 220.9 instructions (222.0 above):
+
+| Row | ns | ns, parse | Instructions | Instructions, parse | Cycles | Cycles, parse |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| swap=interpreted, OCaml 5.4.1 | 186.6 | 59.8 | 880.7 | 809.2 | 535.1 | 159.0 |
+| swap=generated, OCaml 5.4.1 | 105.0 | 20.9 | 258.4 | 190.2 | 286.9 | 58.6 |
+| swap=interpreted, OxCaml | 185.7 | 54.3 | 921.4 | 852.5 | 521.2 | 148.3 |
+| swap=generated, OxCaml | 96.2 | 19.7 | 254.2 | 186.0 | 268.3 | 49.3 |
+| smoltcp 0.14, IPv4 flows | 34.5 | 9.0 | 121.0 | 56.0 | 93.1 | 24.2 |
 
 ## Compiler flags
 

@@ -32,6 +32,19 @@ val single :
 (** [single ~size tests] is [Some (q, l, r, m, lo, hi)] when [tests] is one test
     that a record of [size] bytes runs as {!within}. *)
 
+val holds : int64 -> int -> int -> int -> int -> bool
+(** [holds w s m lo span] is [true] when the field at bit [s] of the word [w],
+    [m + 1] values wide, lies in the [span + 1] values from [lo]. *)
+
+val word_tests :
+  size:int ->
+  (Codec_repr.packed_scalar * (int * int) array) array ->
+  (bool * int * int * int * int * int) list option
+(** [word_tests ~size tests] is each test of [tests] as a test of a word of a
+    record of [size] bytes, at least 8: [(same, q, s, m, lo, span)] tests the
+    word at [q], which is the word of the test before when [same], with
+    {!holds}[ w s m lo span]. [None] where {!staged} is. *)
+
 val staged :
   size:int ->
   (Codec_repr.packed_scalar * (int * int) array) array ->

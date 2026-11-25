@@ -20,8 +20,14 @@
     checks it against the codec when it loads, for a program that links [wire]
     anyway.
 
-    A [+], [-] or [*] in a constraint or a [where] clause is checked as the
-    codec checks it: an overflow rejects the record with the codec's error.
+    An expression in a constraint or a [where] clause that can leave the native
+    int is computed on 64 bits, as unsigned integers, as the codec and 3D
+    compute it. The generator runs with the 63-bit ints of a 64-bit host and
+    decides which expressions can leave them there. That decision holds wherever
+    the module loads: a module that holds a value of more than 31 bits, a 32-bit
+    field or arithmetic past [2^30], raises [Invalid_argument] when it loads on
+    a target whose ints have 32 bits or fewer, and any other computes the same
+    values in every [int].
 
     A generator executable, run by a dune rule, prints the module for a codec
     with [print_string (Wire_ocaml.ml ~codec:"Ipv4.codec" Ipv4.codec)], and its
@@ -39,11 +45,11 @@
     The generated module has [Get.<field> buf off] for each field, which reads
     it as {!Wire.Codec.get} does with one bounds-checked load at a constant
     offset, and [Get.<field>_int] for a 32-bit field's [int] view. [Valid.v buf]
-    validates the record at offset 0, as {!Wire.Codec.check} does, and
+    validates the record at offset 0, as {!Wire.Codec.View.val-check} does, and
     [read_<field>] on what it returns is one load with no check of its own. As
-    for {!Wire.Codec.check}, the promise is memory safety only: a buffer's
-    length never changes, so a read never leaves the buffer, but if its bytes
-    change after [Valid.v], a read may return a value that breaks a constraint.
+    for {!Wire.Codec.View}, the promise is memory safety only: a buffer's length
+    never changes, so a read never leaves the buffer, but if its bytes change
+    after [Valid.v], a read may return a value that breaks a constraint.
     [(v :> bytes)] is the buffer itself, not a copy. For a bitfield,
     [Get.<field>_word] loads the word that holds it and [<field>_of_word] takes
     the field out, so fields packed in one word share one load.
@@ -209,11 +215,14 @@ val scanner :
     differ in length. OCaml without flambda never inlines a function passed as
     an argument, so only these call the consumer with no closure call. They pass
     each integer to [valid] as an [int64], on both targets. Nothing is boxed and
-    no frame allocates where the compiler inlines [valid]. On OCaml the
-    runtime's loads must be inlined too, which dune's dev profile prevents by
-    compiling [wire.runtime] with [-opaque]. Where ints have 32 bits or fewer,
-    an [int64] is a heap value and they run slower than [fold]. The module must
-    be in scope where the generated code is compiled.
+    no frame allocates where the compiler inlines [valid]. OCaml without flambda
+    inlines [valid] only when its body defines no function, a partial
+    application or a primitive used as a value included (docs/execution.md,
+    Generated code). On OCaml the runtime's loads must be inlined too, which
+    dune's dev profile prevents by compiling [wire.runtime] with [-opaque].
+    Where ints have 32 bits or fewer, an [int64] is a heap value and they run
+    slower than [fold]. The module must be in scope where the generated code is
+    compiled.
 
     On OxCaml the outputs are [int64_u] inside, and [fold_unboxed],
     [fold_frames_unboxed] (whose accumulator has layout [bits64]) and
@@ -358,7 +367,6 @@ module Plan : sig
         at : pos;
         window : string;
         size_var : string;  (** The variable its size is bound to. *)
-        overflows : bool;  (** Its size is computed with checked arithmetic. *)
         bound : bound;
       }  (** A span or a region of [size] bytes at [at]. *)
     | Shared_words of {
@@ -390,6 +398,8 @@ module Plan : sig
         at : pos;
         window : string;
         cases : int;
+        conditions : bool Wire.Private.Types.expr list;
+            (** The condition of each case, in order. *)
         choice : choice;
         join : join;
         hoisted : int Wire.Private.Types.expr option;
@@ -405,7 +415,7 @@ module Plan : sig
         need : int;
         frames : int;
         short : short_frames option;
-        ahead : string list;
+        ahead : (string * int * int) list;
       }
         (** The loop [name] over frames walks [frames] frames an iteration, each
             with the [need] bytes of its leading fields known once its stride
@@ -413,7 +423,8 @@ module Plan : sig
             several frames loads the fields [ahead] of each of them before the
             first frame's checks: the fields its optional fields are chosen on,
             so that a mispredicted branch of one frame does not hold back the
-            next frame's choice by a load. *)
+            next frame's choice by a load. Each is the field's variable, its
+            offset from the frame's start and the bytes loaded there. *)
 
   val pp_decision : Format.formatter -> decision -> unit
   (** [pp_decision ppf d] prints [d] on one line, its tests as
@@ -496,11 +507,11 @@ module Plan : sig
     (** [range s e] bounds the values [e] takes, as {!val-range} does with the
         ranges [s] knows. *)
 
-    val checked : t -> int Wire.Private.Types.expr -> bool
-    (** [checked s e] is [true] when [e] is an addition, a subtraction or a
-        product that the ranges of its operands do not keep inside the native
-        int: the code checks it, and rejects the record where it overflows, as
-        the codec does. Any other is plain arithmetic. *)
+    val wide : t -> int Wire.Private.Types.expr -> bool
+    (** [wide s e] is [true] when [e] or one of its subexpressions can take a
+        value past the native int, or shifts by its width or more: the code
+        computes it on 64 bits, as unsigned integers, as the codec and 3D do.
+        Any other is plain arithmetic on the native int. *)
 
     val nonnegative : t -> int Wire.Private.Types.expr -> bool
     (** [nonnegative s e] is [true] when [e] cannot be negative, by its range or

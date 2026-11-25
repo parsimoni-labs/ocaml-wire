@@ -24,6 +24,8 @@ let check_positive_stream ~validate label a g (sample, (other, other_bs))
   check_read_purity label "positive" ?env a g bs;
   check_frame_isolation label "positive" ?env a g bs other_bs;
   check_fast_general label "positive" ?env a g bs;
+  check_staged_intervals label "positive" g bs;
+  check_mutated_fast_general label ?env a g noise bs;
   check_cold_warm label "positive" ?env a g bs;
   check_encode_paths label "positive" ?env a g value;
   if Option.is_none g.env then check_set_paths label a other bs
@@ -55,6 +57,7 @@ let check_safety_stream ~validate label a g kind ?env ~interloper ~noise bs =
   check_read_purity label kind ?env a g bs;
   check_frame_isolation label kind ?env a g bs interloper;
   check_fast_general label kind ?env a g bs;
+  check_staged_intervals label kind g bs;
   check_cold_warm label kind ?env a g bs;
   if validate then begin
     check_validate_safety label kind ?env g bs;
@@ -245,6 +248,8 @@ let check_nested_positive label noise
     check_frame_extent label "positive" ?env g noise bs;
     check_read_purity label "positive" ?env a g bs;
     check_fast_general label "positive" ?env a g bs;
+    check_staged_intervals label "positive" g bs;
+    check_mutated_fast_general label ?env a g noise bs;
     check_cold_warm label "positive" ?env a g bs;
     check_encode_paths label "positive" ?env a g value;
     if Option.is_none g.env then check_set_paths label a other bs
@@ -262,6 +267,7 @@ let check_nested_bytes label kind noise (NB (g, comp, bs, mk)) =
   check_frame_extent label kind ?env g noise bs;
   check_read_purity label kind ?env a g bs;
   check_fast_general label kind ?env a g bs;
+  check_staged_intervals label kind g bs;
   check_cold_warm label kind ?env a g bs
 
 (* An arbitrary nested codec paired with one buffer to read it at: the
