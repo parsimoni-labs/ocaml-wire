@@ -201,7 +201,7 @@ let bytes_setter schema_name : setter_info =
    through [map] / [where]) also gets one slot per scalar of every embedded
    codec and one [<path>_present] flag per optional, at any depth, each named by
    its path: the field names from the entrypoint down, joined with underscores,
-   the names [Wire_ocaml.scanner] gives its outputs. The embedded structs and
+   the names [Wire_ocaml.outputs] gives a fold's outputs. The embedded structs and
    the optional casetypes over them take the [ctx] parameter, and their fields
    call the entrypoint's setters with the slot's index, exactly as the
    entrypoint's own fields do. A codec reached inside an array, a repeat or a
@@ -216,7 +216,7 @@ let bytes_setter schema_name : setter_info =
    a literal no big-endian type ([(UINT16BE) 0] is a [UINT16]), so the
    validator cannot pass a zero to a big-endian setter. Initialising the visitor
    to zero before each validation, as the generated stubs do, makes them read 0,
-   the value [Wire_ocaml.scanner] gives an absent field. *)
+   the value a fold of [Wire_ocaml] gives an absent field. *)
 
 type slot = {
   member : string;

@@ -842,7 +842,7 @@ let digest c = Wire.Private.Gen.digest c
 
 (* {1 Structured scanners}
 
-   The plan is [Wire_ocaml.Plan], the one [Wire_ocaml.scanner] writes out, and
+   The plan is [Wire_ocaml.Plan], the one the folds of [Wire_ocaml] write out, and
    so are its decisions: which variables are bound, which arithmetic is
    computed on [u64], and the decision tree of a run of optional fields. This section
    only spells them in Rust. A region is a

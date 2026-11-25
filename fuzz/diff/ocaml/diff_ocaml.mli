@@ -194,8 +194,8 @@ val scan_corpus :
     good, bad and partial frames joined for [fold_frames]. *)
 
 val scannable : 'r Wire.Codec.t -> bool
-(** [scannable c] is [true] when [c] is in the scope {!Wire_ocaml.scanner}
-    documents. *)
+(** [scannable c] is [true] when [c] is in the scope {!Wire_ocaml.v} documents
+    for a fold. *)
 
 val scan_codecs : (string * Fuzz_gen.packed) list
 (** [scan_codecs] is every sampled codec without parameters, fixed or not, and

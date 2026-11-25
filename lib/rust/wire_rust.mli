@@ -45,11 +45,11 @@ val digest : 'r Wire.Codec.t -> string
 val scanner : ?fields:string list -> codec:string -> 'r Wire.Codec.t -> string
 (** [scanner ?fields ~codec c] is the source of a Rust module that checks a
     record of [c] in a frame of bytes and returns its scalar fields, written
-    from {!Wire_ocaml.Plan}, the plan [Wire_ocaml.scanner] writes, with its
+    from {!Wire_ocaml.Plan}, the plan the folds of [Wire_ocaml] write, with its
     checks in the same order and the same decisions: which values are read,
     which arithmetic is checked and the decision tree of a run of optional
-    fields. It covers what [Wire_ocaml.scanner] covers: integers up to 32 bits,
-    bitfields, byte arrays and slices of any size, nested codecs, optional
+    fields. It covers what a fold of [Wire_ocaml] covers: integers up to 32
+    bits, bitfields, byte arrays and slices of any size, nested codecs, optional
     fields, fields in a sized region, exact or at most, and where clauses.
     [codec] names [c] in the module's header and in its [CODEC] constant.
 
@@ -68,9 +68,9 @@ val scanner : ?fields:string list -> codec:string -> 'r Wire.Codec.t -> string
     optional fields give code linear in [n], whether they follow each other or
     nest, and whatever outputs are selected.
 
-    Raises [Invalid_argument] for what [Wire_ocaml.scanner] refuses (a map among
-    them), for a name in [fields] that is no output, and naming both outputs
-    when two would spell one Rust field ({!ident}). *)
+    Raises [Invalid_argument] for what a fold of [Wire_ocaml] refuses (a map
+    among them), for a name in [fields] that is no output, and naming both
+    outputs when two would spell one Rust field ({!ident}). *)
 
 val rs : codec:string -> 'r Wire.Codec.t -> string
 (** [rs ~codec c] is the source of a module specialised to [c]. [codec] names

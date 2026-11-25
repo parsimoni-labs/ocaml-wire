@@ -221,9 +221,9 @@ bench-flow: $(BENCH_FLOW_TRACE)
 	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_FLOW)/*.txt
 
-# The swap rows of bench-flow alone: one flow counter written against
-# Wire.S (bench/rust/flow_swap.ml), its header modules from Wire.Codec.Make or
-# from the Global modules wire.ocaml generates, on OCaml and on each switch of
+# The swap rows of bench-flow alone: one flow counter (bench/rust/flow_swap.ml)
+# written against the header modules wire.ocaml generates or their
+# interpreted twins, on OCaml and on each switch of
 # BENCH_SWITCHES, with smoltcp making the same checks, each with the table
 # (corpus mawi swap) and without it (mawi swap parse). Each row is timed as
 # in bench-flow, into _build/bench-flow/swap/, then counted by bench/count.sh,

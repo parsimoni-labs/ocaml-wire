@@ -872,8 +872,8 @@ let pp_flows ppf (flows, sum) = Fmt.pf ppf "%d flows, %d" flows sum
 let pp_keys ppf (keys, sum) = Fmt.pf ppf "%d keys, %d" keys sum
 
 (* The swap rows, on corpora of their own: one flow counter, flow_swap.ml,
-   over the header modules [Wire.Codec.Make] gives and over the [Global]
-   modules wire.ocaml generates, with the table and without it. Only IPv4
+   over the modules wire.ocaml generates from the header codecs and over
+   their interpreted twins, with the table and without it. Only IPv4
    makes a flow; the other packets are counted by kind, and every row prints
    both. *)
 let swap_rows =
