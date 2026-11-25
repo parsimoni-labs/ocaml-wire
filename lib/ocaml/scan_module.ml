@@ -49,7 +49,7 @@ let scan_mode ?(decide = ignore) ?(note = ignore) (plan : plan) ~num selected =
          runtime's [Target.Local]. *)
       (match num with
       | Unboxed -> { local_bytes_src with u = "L"; checked = "L" }
-      | Fstar -> fstar_src
+      | Fstar | Fstar64 -> fstar_src
       | Tagged | Boxed -> bytes_src);
     ox = false;
     raw32 = false;
@@ -89,7 +89,7 @@ let to_int (w : w) ~unboxed ~step (o : output) =
    [step], [valid] is the consumer of the step functions and takes [int64]. *)
 let call ?(step = false) s ~unboxed valid (w : w) =
   pf w "%s %a@\n" valid
-    (pp_args ~fstar:(w.m.num = Fstar) ~conv:(to_int w ~unboxed ~step))
+    (pp_args ~fstar:(is_fstar w.m.num) ~conv:(to_int w ~unboxed ~step))
     s.selected
 
 (* The functions cut out of [name] are named after it, without [fold_]. *)
@@ -137,7 +137,7 @@ let scope s names =
   let num, buf =
     match s.m.num with
     | Unboxed -> (Some "int64_u", Some "bytes @ local")
-    | Fstar -> (Some "P.int", Some "P.buf")
+    | Fstar | Fstar64 -> (Some "P.int", Some "P.buf")
     | Tagged | Boxed -> (None, None)
   in
   List.rev ([ ("buf", buf); ("base", num); ("stop", num) ] @ names)
@@ -206,18 +206,22 @@ let pp_unboxed_guard s ~check ~off_tested ~length ~reject =
          rest)
     reject
 
-(* The bounds of an entry on [int]s, or through [P] on [P.length buf] for an
-   F* walk. *)
+(* The bounds of an entry on [int]s, or through [P] on [length] for an F*
+   walk. *)
 let pp_int_guard s ~check ~off_tested ~length ~reject =
   let past =
     if check then Fmt.str "off > %s - len" length
     else Fmt.str "len > %s - off" length
   in
+  let fstar_length =
+    if length = "Bytes.length buf" then "(P.length buf)" else length
+  in
   Fmt.pf s.ppf "if %s then %s else@\n"
-    (match (s.m.num, checks_len s.plan) with
-    | Fstar, true -> "P.lt off 0 || P.gt len (P.sub (P.length buf) off)"
-    | Fstar, false ->
-        "P.lt off 0 || P.lt len 0 || P.gt len (P.sub (P.length buf) off)"
+    (match (is_fstar s.m.num, checks_len s.plan) with
+    | true, true -> Fmt.str "P.lt off 0 || P.gt len (P.sub %s off)" fstar_length
+    | true, false ->
+        Fmt.str "P.lt off 0 || P.lt len 0 || P.gt len (P.sub %s off)"
+          fstar_length
     | _, _ when not off_tested -> past
     | _, true -> "off < 0 || " ^ past
     | _, false -> Fmt.str "off < 0 || len < 0 || %s" past)
@@ -818,14 +822,16 @@ let pp_fold_index_step s ~within ~m =
   end
   else pp_fold_index_step_plain s ~within ~buf
 
-(* [fold_step], which calls the module [m]'s functions by name, and
-   [fold_index_step], which folds it over the frames of an index. Both go
-   through [step_within], whose [length] is that of [buf], so that the loop
-   over the index loads it once. *)
-let pp_fold_step s m =
-  let within = "step_within" and buf = s.m.src.buf in
+(* The walk of one frame of the step functions, which [fold_step] and
+   [fold_index_step] call. *)
+let within = "step_within"
+
+(* [step_within] and [fold_step], which calls it with the length of [buf]. In
+   F*, each parameter is typed and the accumulator is [m]'s [t]. *)
+let pp_step_within ?trace s m =
+  let buf = s.m.src.buf in
   let unboxed = s.m.num = Unboxed in
-  with_cuts s "fold_step" (fun s cuts ->
+  with_cuts ?trace s "fold_step" (fun s cuts ->
       Hashtbl.replace s.taken within ();
       let body = Buffer.create 4096 in
       let ppf = Format.formatter_of_buffer body in
@@ -842,15 +848,37 @@ let pp_fold_step s m =
           let i = String.index buf 'b' in
           String.sub buf 0 i ^ "_" ^ String.sub buf i (String.length buf - i)
       in
-      Fmt.pf s.ppf "let[@inline always] %s %s ~%s off len ~init =@\n%s@\n"
-        within param
-        (if unboxed then "(length : int64_u)" else "length")
-        body);
-  Fmt.pf s.ppf
-    "let[@inline always] fold_step %s off len ~init =@\n\
-     %s buf ~length:(%s) off len ~init@\n\
-     @\n"
-    buf within (length_of s);
+      (* Its callers pass the length of [buf], which F* requires. *)
+      if is_fstar s.m.num then
+        Fmt.pf s.ppf
+          "let %s (%s:P.buf) (length:P.int{length == P.length %s}) (off:P.int) \
+           (len:P.int) (init:%s.t) : %s.t =@\n\
+           %s@\n"
+          within param param m m body
+      else
+        Fmt.pf s.ppf "let[@inline always] %s %s ~%s off len ~init =@\n%s@\n"
+          within param
+          (if unboxed then "(length : int64_u)" else "length")
+          body);
+  if is_fstar s.m.num then
+    Fmt.pf s.ppf
+      "let fold_step (buf:P.buf) (off:P.int) (len:P.int) (init:%s.t) : %s.t =@\n\
+       %s buf (P.length buf) off len init@\n\
+       @\n"
+      m m within
+  else
+    Fmt.pf s.ppf
+      "let[@inline always] fold_step %s off len ~init =@\n\
+       %s buf ~length:(%s) off len ~init@\n\
+       @\n"
+      buf within (length_of s)
+
+(* [fold_step], which calls the module [m]'s functions by name, and
+   [fold_index_step], which folds it over the frames of an index. Both go
+   through [step_within], whose [length] is that of [buf], so that the loop
+   over the index loads it once. *)
+let pp_fold_step s m =
+  pp_step_within s m;
   pp_fold_index_step s ~within ~m
 
 (* [check b length ~off ~len], the walk of [fold] with no output, which
@@ -982,7 +1010,9 @@ let unlocal text =
          else line)
        (String.split_on_char '\n' text))
 
-let fstar ?fields c =
+(* The F* rendering of the function [write] writes, a walk of [plan] held as
+   [num] whose OCaml holds values as [rep num]. *)
+let rendered ?fields c ~num write =
   let plan = scan_plan c in
   no_slots plan;
   let selected = selected plan fields in
@@ -998,7 +1028,7 @@ let fstar ?fields c =
         taken = Hashtbl.create 16;
       }
     in
-    pp_fold ~trace s ~unboxed:false;
+    write ~trace s;
     Format.pp_print_flush ppf ();
     Buffer.contents b
   in
@@ -1009,18 +1039,23 @@ let fstar ?fields c =
     Queue.push b choices;
     b
   in
-  ignore (walk ~trace:record ~num:Tagged ~note:ignore);
+  ignore (walk ~trace:record ~num:(rep num) ~note:ignore);
   let replay _ =
     match Queue.take_opt choices with
     | Some b -> b
     | None -> invalid_arg "Wire_ocaml.fstar: the F* walk left the OCaml one"
   in
   let notes = ref [] in
-  let text =
-    walk ~trace:replay ~num:Fstar ~note:(fun n -> notes := n :: !notes)
-  in
+  let text = walk ~trace:replay ~num ~note:(fun n -> notes := n :: !notes) in
   {
     body = unlocal (without_dead_bindings text);
     notes = List.rev !notes;
     handed_out = selected;
   }
+
+let fstar ?fields c =
+  rendered ?fields c ~num:Fstar (fun ~trace s ->
+      pp_fold ~trace s ~unboxed:false)
+
+let fstar_step ?fields ~step c =
+  rendered ?fields c ~num:Fstar64 (fun ~trace s -> pp_step_within ~trace s step)

@@ -58,6 +58,21 @@ let word_fact (k, m) =
     k m top
 
 let lands = String.concat conj (List.map land_fact masks)
+
+(* The masks of an [int64], which the step walk writes. *)
+let int64_land_fact (_, m) k =
+  Fmt.str
+    "(forall (w:P.int64). {:pattern (P.int64_logand w %d)} P.int64_logand w %d \
+     == w %% %s)"
+    m m (pow2 k)
+
+let int64_lands =
+  String.concat conj (List.map (fun (k, m) -> int64_land_fact (k, m) k) masks)
+
+let int64_land_lits =
+  String.concat seq
+    (List.map (fun (k, m) -> Fmt.str "P.int64_land_lit %d %d" k m) masks)
+
 let word_facts = String.concat conj (List.map word_fact words)
 
 let land_lits =
@@ -103,4 +118,20 @@ let () =
          ") /\\\n    (";
          word_facts;
          "))\n  = pow2_table (); land_table (); word_table ()\n";
+         "\nlet int64_table () : Lemma (\n    ";
+         int64_lands;
+         ")\n  = pow2_table ();\n    ";
+         int64_land_lits;
+         "\n\n\
+          (* The rules a proof of the step walk poses: those of [tables] and the\n";
+         "   masks of an [int64]. *)\n";
+         "let tables64 () : Lemma (\n    (";
+         pw;
+         ") /\\\n    (";
+         lands;
+         ") /\\\n    (";
+         word_facts;
+         ") /\\\n    (";
+         int64_lands;
+         "))\n  = tables (); int64_table ()\n";
        ])

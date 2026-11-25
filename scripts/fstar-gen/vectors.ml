@@ -120,6 +120,75 @@ let int64 ppf =
         (Fmt.str "P.int32_to_int %s == %s" (pattern32 x) (lit (Int32.to_int x))))
     int32s
 
+(* The [Int64] conversions of the step walk. *)
+let conversions64 ppf =
+  List.iter
+    (fun a ->
+      norm ppf
+        (Fmt.str "P.int64_of_int %s == %s" (lit a) (pattern64 (Int64.of_int a))))
+    ints;
+  List.iter
+    (fun x ->
+      norm ppf
+        (Fmt.str "P.int64_of_int32 %s == %s" (pattern32 x)
+           (pattern64 (Int64.of_int32 x))))
+    int32s
+
+let pairs64 =
+  List.concat_map (fun a -> List.map (fun b -> (a, b)) int64s) int64s
+  |> List.filteri (fun i _ -> i mod 3 = 0)
+
+(* The [Int64] arithmetic modulo 2^64 and the signed comparisons. *)
+let arithmetic64 ppf =
+  List.iter
+    (fun (op, f) ->
+      List.iter
+        (fun (a, b) ->
+          norm ppf
+            (Fmt.str "P.int64_%s %s %s == %s" op (pattern64 a) (pattern64 b)
+               (pattern64 (f a b))))
+        pairs64)
+    [ ("add", Int64.add); ("sub", Int64.sub); ("mul", Int64.mul) ];
+  List.iter
+    (fun (op, f) ->
+      List.iter
+        (fun (a, b) ->
+          norm ppf
+            (Fmt.str "P.int64_%s %s %s == %b" op (pattern64 a) (pattern64 b)
+               (f (Int64.compare a b) 0)))
+        pairs64)
+    [
+      ("lt", ( < ));
+      ("le", ( <= ));
+      ("gt", ( > ));
+      ("ge", ( >= ));
+      ("eq", ( = ));
+      ("ne", ( <> ));
+    ]
+
+(* [Int64.shift_left], and [Int64.logand] by the masks the emitter writes. *)
+let bits64 ppf =
+  List.iter
+    (fun w ->
+      List.iter
+        (fun k ->
+          norm ppf
+            (Fmt.str "P.shift_left %s %d == %s" (pattern64 w) k
+               (pattern64 (Int64.shift_left w k))))
+        [ 0; 1; 2; 8; 32; 63 ];
+      List.iter
+        (fun k ->
+          let m = Int64.pred (Int64.shift_left 1L k) in
+          Fmt.pf ppf
+            "let _ = assert_norm (pow2 %d == %s); P.int64_mask %s %d; assert \
+             (P.int64_logand %s %s == %s)@\n"
+            k
+            (pattern64 (Int64.shift_left 1L k))
+            (pattern64 w) k (pattern64 w) (pattern64 m)
+            (pattern64 (Int64.logand w m)))
+        [ 1; 8; 16; 32; 62 ])
+    int64s
+
 (* [land] by the masks the emitter writes, each fact through the lemma that
    reads a mask as a remainder. *)
 let masks ppf =
@@ -198,6 +267,9 @@ let () =
   arithmetic ppf;
   shifts ppf;
   int64 ppf;
+  conversions64 ppf;
+  arithmetic64 ppf;
+  bits64 ppf;
   masks ppf;
   Fmt.pf ppf
     "#pop-options@\n@\n#push-options \"--fuel 9 --ifuel 1 --z3rlimit 20\"@\n";

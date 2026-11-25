@@ -112,6 +112,55 @@ let shift_right_logical (w:int64) (k:nat{k < 64}) : int64 = w / pow2 k
 [@@"opaque_to_smt"]
 let to_int (w:int64) : int = of_pattern (w % pow2 63)
 
+(* {1 Int64 values} as the step functions hold them: the [Int64] operations
+   on 64-bit patterns, with their constants written out (2^63
+   9223372036854775808, 2^64 18446744073709551616), so that a walk is
+   checked without unfolding [pow2]. Each is Plan.Values' operation of the
+   same name (WireGen.Defs proves it). Those that are linear, a conversion,
+   an addition, a subtraction and a signed comparison, Z3 reads as they are;
+   [Int64.mul] and [Int64.logand] are opaque. *)
+
+let pow2_64 () : Lemma (pow2 63 == 9223372036854775808 /\ pow2 64 == 18446744073709551616)
+  = assert_norm (pow2 63 == 9223372036854775808 /\ pow2 64 == 18446744073709551616)
+
+(* The integer an [int64] stands for. *)
+let signed64 (x:int64) : Prims.int =
+  pow2_64 (); if x >= 9223372036854775808 then x - 18446744073709551616 else x
+
+(* [Int64.of_int] sign-extends, [Int64.of_int32] too. *)
+let int64_of_int (x:int) : int64 =
+  pow2_64 (); int_range (); if x >= 0 then x else x + 18446744073709551616
+let int64_of_int32 (x:int32) : int64 =
+  pow2_64 (); if x >= 2147483648 then x + 18446744069414584320 else x
+
+(* [Int64.add] and [Int64.sub] are modulo 2^64. *)
+let int64_add (a b:int64) : int64 =
+  pow2_64 ();
+  if a + b >= 18446744073709551616 then a + b - 18446744073709551616 else a + b
+let int64_sub (a b:int64) : int64 =
+  pow2_64 (); if a - b < 0 then a - b + 18446744073709551616 else a - b
+
+[@@"opaque_to_smt"]
+let int64_mul (a b:int64) : int64 = (a * b) % pow2 64
+
+(* [Int64.shift_left] multiplies the pattern modulo 2^64. *)
+[@@"opaque_to_smt"]
+let shift_left (w:int64) (k:nat{k < 64}) : int64 = (w * pow2 k) % pow2 64
+
+(* A mask that lies in the signed range keeps a pattern between 0 and
+   itself. *)
+[@@"opaque_to_smt"]
+let int64_logand (a b:int64) : r:int64{b < 9223372036854775808 ==> r <= b} =
+  U.logand_le #64 a b; U.logand #64 a b
+
+(* The comparisons are signed. *)
+let int64_lt (a b:int64) : bool = signed64 a < signed64 b
+let int64_le (a b:int64) : bool = signed64 a <= signed64 b
+let int64_gt (a b:int64) : bool = signed64 a > signed64 b
+let int64_ge (a b:int64) : bool = signed64 a >= signed64 b
+let int64_eq (a b:int64) : bool = a = b
+let int64_ne (a b:int64) : bool = a <> b
+
 (* {1 The meaning of the opaque primitives} which WireGen.Defs states as
    rewrite rules. *)
 
@@ -135,6 +184,12 @@ let shift_right_logical_def (w:int64) (k:nat{k < 64})
   = reveal_opaque (`%shift_right_logical) (shift_right_logical w k)
 let to_int_def (w:int64) : Lemma (to_int w == of_pattern (w % pow2 63))
   = reveal_opaque (`%to_int) (to_int w)
+let int64_mul_def (a b:int64) : Lemma (int64_mul a b == (a * b) % pow2 64)
+  = reveal_opaque (`%int64_mul) (int64_mul a b)
+let int64_logand_def (a b:int64) : Lemma (int64_logand a b == U.logand #64 a b)
+  = reveal_opaque (`%int64_logand) (int64_logand a b)
+let shift_left_def (w:int64) (k:nat{k < 64}) : Lemma (shift_left w k == (w * pow2 k) % pow2 64)
+  = reveal_opaque (`%shift_left) (shift_left w k)
 
 (* {1 What the walk reads these as} once proved, as rewrite rules. *)
 
@@ -219,6 +274,29 @@ let land_lit (k:nat) (m:Prims.int)
     FStar.Classical.forall_intro aux;
     FStar.Classical.forall_intro (fun (w:int64) -> land_to_int_mask w k)
 
+(* An [int64] masked to its low [k] bits. *)
+let int64_mask (w:int64) (k:nat)
+  : Lemma (requires 1 <= k /\ k <= 63) (ensures int64_logand w (pow2 k - 1) == w % pow2 k)
+  = int64_logand_def w (pow2 k - 1);
+    M.pow2_le_compat 64 k;
+    U.logand_mask #64 w k
+
+let int64_land_lit (k:nat) (m:Prims.int)
+  : Lemma (requires 1 <= k /\ k <= 63 /\ m == pow2 k - 1)
+          (ensures forall (w:int64). {:pattern (int64_logand w m)} int64_logand w m == w % pow2 k)
+  = FStar.Classical.forall_intro (fun (w:int64) -> int64_mask w k)
+
+(* A 32-bit word sign-extended to 64 bits, then masked to its 32 bits, is
+   the word. *)
+let int64_land_int32 (x:int32) (m:Prims.int)
+  : Lemma (requires m == pow2 32 - 1) (ensures int64_logand (int64_of_int32 x) m == x)
+          [SMTPat (int64_logand (int64_of_int32 x) m)]
+  = pow2_64 ();
+    assert_norm (pow2 32 == 4294967296);
+    int64_mask (int64_of_int32 x) 32;
+    if x >= 2147483648 then M.lemma_mod_plus x 4294967295 4294967296;
+    M.small_mod x (pow2 32)
+
 (* The [m] bytes at [o + k] out of the big-endian word at [o]. *)
 let word_bytes (b:bytes) (o:nat) (k:nat) (m:nat)
   : Lemma (requires 1 <= m /\ m <= 7 /\ k + m <= 8)
@@ -283,3 +361,15 @@ let bits (x:int) (lo:nat) (w:nat) : int =
     if x / pow2 lo < pow2 w then (M.small_mod (x / pow2 lo) (pow2 w); x / pow2 lo)
     else (x / pow2 lo) % pow2 w
   end
+
+(* The [w] bits from bit [lo] up of an [int64] pattern, as the step walk
+   states a bitfield of its word. *)
+let bits64 (x:int64) (lo:nat) (w:nat) : nat = (x / pow2 lo) % pow2 w
+
+(* The step walk hands out a value as its [int64]: a bitfield's is the
+   pattern's bits. *)
+let int64_of_int_bits (x:int) (lo:nat) (w:nat)
+  : Lemma (requires x >= 0) (ensures int64_of_int (bits x lo w) == bits64 x lo w)
+          [SMTPat (int64_of_int (bits x lo w))]
+  = M.lemma_div_le x max_int (pow2 lo);
+    if x / pow2 lo < pow2 w then M.small_mod (x / pow2 lo) (pow2 w)

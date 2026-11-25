@@ -794,7 +794,7 @@ let loads text =
 
 (* A fact Z3 proves on its own: for every position it reads at, each load
    inside the buffer, [fact] holds. It fires where [about] occurs. *)
-let pp_fact ppf i ~about fact =
+let pp_fact ?(tables = "tables") ppf i ~about fact =
   let text = about ^ " " ^ fact in
   let roots =
     List.sort_uniq compare (List.filter is_position (identifiers text))
@@ -810,11 +810,11 @@ let pp_fact ppf i ~about fact =
     (String.concat " " (List.map (Fmt.str "(%s:P.int)") roots))
     (if requires = [] then "True" else String.concat " /\\ " requires);
   Fmt.pf ppf "    (ensures (%s))@\n    [SMTPat (%s)]@\n" fact about;
-  Fmt.pf ppf "  = WireGen.Tables.tables ()@\n@\n"
+  Fmt.pf ppf "  = WireGen.Tables.%s ()@\n@\n" tables
 
 (* The facts the walk notes: the bytes each binding that reads them holds,
    as the emitter states it, and the facts its tests rely on. *)
-let pp_facts ppf (scan : Scan_module.fstar) =
+let pp_facts ?tables ppf (scan : Scan_module.fstar) =
   let facts =
     List.filter_map
       (function
@@ -828,7 +828,7 @@ let pp_facts ppf (scan : Scan_module.fstar) =
     "(* What each binding of the walk holds, in bytes of the buffer, as the@\n\
     \   emitter states it: Z3 proves each on its own. *)@\n\
      #push-options \"--z3rlimit 50 --fuel 1 --ifuel 1\"@\n";
-  List.iteri (fun i (about, fact) -> pp_fact ppf i ~about fact) facts;
+  List.iteri (fun i (about, fact) -> pp_fact ?tables ppf i ~about fact) facts;
   Fmt.pf ppf "#pop-options@\n@\n"
 
 (* [fold] is [flat] on the window's bytes, then [fold_is_3d]. *)
@@ -871,8 +871,164 @@ let proof_implementation ~codec ~m scan =
       pp_theorem ppf ~m)
     ()
 
+(* {2 The step functions}
+
+   [<M>.Visitor] is the module the step functions call by name, [<M>.Step]
+   their walk as the emitter writes it, values held as [int64], and
+   [<M>.StepProof] proves it equal to 3d.exe's parser as [<M>.Proof] does
+   [fold], through the same reading. *)
+
+(* The name the step functions call their module by. *)
+let step = "S"
+
+(* The type of [S.valid]: the accumulator, then an [int64] for each output,
+   a [bool] for a presence. *)
+let visitor_valid_type (scan : Scan_module.fstar) =
+  let outputs =
+    match scan.handed_out with
+    | [] -> [ "unit" ]
+    | outputs ->
+        List.map
+          (fun (o : output) -> if o.is_bool then "bool" else "P.int64")
+          outputs
+  in
+  String.concat " -> " (("t" :: outputs) @ [ "t" ])
+
+(* An interface without an implementation: what is proved of the step
+   functions holds of every module they may call. *)
+let visitor_interface ~codec ~m scan =
+  Fmt.str "%a"
+    (fun ppf () ->
+      header ppf ~codec ~m:(m ^ ".Visitor")
+        "the module its step functions call by name, any one";
+      Fmt.pf ppf
+        "module P = WireGen.OCaml@\n\
+         @\n\
+         val t : Type0@\n\
+         val invalid : t -> t@\n\
+         val valid : %s@\n"
+        (visitor_valid_type scan))
+    ()
+
+let step_module ~codec ~m (scan : Scan_module.fstar) =
+  Fmt.str "%a%s"
+    (fun ppf () ->
+      header ppf ~codec ~m:(m ^ ".Step")
+        "the step functions of its scanner, written as F*";
+      Fmt.pf ppf "module P = WireGen.OCaml@\nmodule %s = %s.Visitor@\n@\n" step
+        m)
+    () scan.body
+
+(* [S.valid init] on the outputs [Flat.answer] reads, each [int] as the
+   [int64] that holds it. *)
+let pp_visit ppf (scan : Scan_module.fstar) =
+  let outputs = List.mapi (fun i o -> (Fmt.str "x%d" i, o)) scan.handed_out in
+  let params, args =
+    match outputs with
+    | [] -> ("()", "()")
+    | outputs ->
+        ( List.map
+            (fun (x, (o : output)) ->
+              Fmt.str "(%s:%s)" x (if o.is_bool then "bool" else "P.int"))
+            outputs,
+          List.map
+            (fun (x, (o : output)) ->
+              if o.is_bool then x else Fmt.str "(P.int64_of_int %s)" x)
+            outputs )
+        |> fun (p, a) -> (String.concat " " p, String.concat " " a)
+  in
+  Fmt.pf ppf
+    "(* [S.valid init] on the outputs, each [int] as the [int64] that holds \
+     it. *)@\n\
+     let visit (init:S.t) %s : S.t = S.valid init %s@\n\
+     @\n"
+    params args
+
+let step_statement ~within =
+  Fmt.str
+    "(if off < 0 || len < 0 || off + len > P.length buf then S.invalid init\n\
+    \            else %s (fun () -> S.invalid init) (visit init)\n\
+    \                   %s)"
+    (if within then "Flat.flat" else "Flat.answer")
+    (if within then "(Seq.slice buf off (off + len))"
+     else "(Flat.spec (Seq.slice buf off (off + len)))")
+
+let step_theorem =
+  Fmt.str
+    "(* The step walk rejects a bad window, and on a good one answers what\n\
+    \   3d.exe's parser answers on the window's bytes, each output as its\n\
+    \   int64. *)\n\
+     val step_within_is_3d (buf:P.buf) (length:P.int{length == P.length buf})\n\
+    \    (off len:P.int) (init:S.t)\n\
+    \  : Lemma (step_within buf length off len init ==\n\
+    \           %s)\n\n\
+     val fold_step_is_3d (buf:P.buf) (off len:P.int) (init:S.t)\n\
+    \  : Lemma (fold_step buf off len init ==\n\
+    \           %s)\n"
+    (step_statement ~within:false)
+    (step_statement ~within:false)
+
+let step_proof_interface ~codec ~m scan =
+  Fmt.str "%a%s"
+    (fun ppf () ->
+      header ppf ~codec ~m:(m ^ ".StepProof")
+        "that the step functions of its scanner are the parser 3d.exe writes";
+      Fmt.pf ppf
+        "open %s.Step@\n\
+         module P = WireGen.OCaml@\n\
+         module S = %s.Visitor@\n\
+         module Flat = %s.Flat@\n\
+         @\n"
+        m m m;
+      pp_visit ppf scan)
+    () step_theorem
+
+(* [step_within] on the buffer's length is [flat] on the window's bytes,
+   then [step_within_is_3d] and [fold_step_is_3d]. *)
+let pp_step_theorem ppf ~m =
+  let flat = step_statement ~within:true in
+  Fmt.pf ppf
+    "#push-options \"--z3rlimit 200 --fuel 1 --ifuel 1\"@\n\
+     let step_is_flat (buf:P.buf) (off len:P.int) (init:S.t)@\n\
+    \  : Lemma (step_within buf (P.length buf) off len init ==@\n\
+    \           %s)@\n\
+    \  = assert (step_within buf (P.length buf) off len init ==@\n\
+    \           %s)@\n\
+    \      by (WireGen.Tac.unfold_step [`%%%s.Step.step_within; \
+     `%%%s.Flat.flat; `%%visit])@\n\
+     #pop-options@\n\
+     @\n\
+     let step_within_is_3d buf length off len init =@\n\
+    \  step_is_flat buf off len init;@\n\
+    \  if off < 0 || len < 0 || off + len > P.length buf then ()@\n\
+    \  else Flat.flat_is_3d (fun () -> S.invalid init) (visit init)@\n\
+    \         (Seq.slice buf off (off + len))@\n\
+     @\n\
+     let fold_step_is_3d buf off len init =@\n\
+    \  step_within_is_3d buf (P.length buf) off len init@\n"
+    flat flat m m
+
+let step_proof_implementation ~codec ~m scan =
+  Fmt.str "%a"
+    (fun ppf () ->
+      header ppf ~codec ~m:(m ^ ".StepProof")
+        "that the step functions of its scanner are the parser 3d.exe writes";
+      Fmt.pf ppf
+        "open WireGen.Lib@\n\
+         open WireGen.Defs@\n\
+         open %s.Step@\n\
+         module P = WireGen.OCaml@\n\
+         module S = %s.Visitor@\n\
+         module Flat = %s.Flat@\n\
+         @\n"
+        m m m;
+      pp_facts ~tables:"tables64" ppf scan;
+      pp_step_theorem ppf ~m)
+    ()
+
 let modules ?fields ~codec c =
   let scan = Scan_module.fstar ?fields c in
+  let stepped = Scan_module.fstar_step ?fields ~step c in
   let st = Gen.to_struct c in
   if st.params <> [] || Option.is_some st.where then
     fail_unsupported "the F* reading of a parameterised struct";
@@ -886,4 +1042,8 @@ let modules ?fields ~codec c =
     (codec ^ ".Flat.fst", flat_implementation ~codec ~m:codec ~tag ~scan items);
     (codec ^ ".Proof.fsti", proof_interface ~codec ~m:codec);
     (codec ^ ".Proof.fst", proof_implementation ~codec ~m:codec scan);
+    (codec ^ ".Visitor.fsti", visitor_interface ~codec ~m:codec stepped);
+    (codec ^ ".Step.fst", step_module ~codec ~m:codec stepped);
+    (codec ^ ".StepProof.fsti", step_proof_interface ~codec ~m:codec stepped);
+    (codec ^ ".StepProof.fst", step_proof_implementation ~codec ~m:codec stepped);
   ]

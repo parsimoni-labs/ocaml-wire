@@ -3,10 +3,13 @@
 # directory, which holds the generated modules, lib/ and ../fstar/.
 #
 #   prove.sh lib FILE...          check the fixed library, in order
-#   prove.sh codec NAME           3d.exe on NAME.3d, then NAME.Scan, NAME.Flat
-#                                 and NAME.Proof must verify
-#   prove.sh refused NAME SED     the same with SED applied to NAME.Scan.fst:
-#                                 Scan and Flat verify, Proof must not
+#   prove.sh codec NAME           3d.exe on NAME.3d, then NAME.Scan, NAME.Flat,
+#                                 NAME.Proof, NAME.Visitor, NAME.Step and
+#                                 NAME.StepProof must verify
+#   prove.sh refused NAME SED [WALK]
+#                                 SED applied to NAME.WALK.fst (Scan, or Step):
+#                                 the walk and Flat verify, its proof (Proof,
+#                                 or StepProof) must not
 #   prove.sh prune USED...        remove from the cache all but the entries
 #                                 the USED files list
 #
@@ -85,16 +88,20 @@ schema() {
   echo "$out"
 }
 
-# work NAME SED: a directory of NAME's modules, SED applied to its Scan.
+# The modules of a codec, in the order F* checks them: the fold and its
+# proof, then the step functions and theirs.
+MODULES="Scan.fst Flat.fsti Flat.fst Proof.fsti Proof.fst Visitor.fsti Step.fst StepProof.fsti StepProof.fst"
+
+# work NAME SED WALK: a directory of NAME's modules, SED applied to its WALK.
 work() {
   dir=$(mktemp -d "${TMPDIR:-/tmp}/wire-prove.XXXXXX")
-  for m in Scan.fst Flat.fsti Flat.fst Proof.fsti Proof.fst; do
+  for m in $MODULES; do
     cp "$HERE/$1.$m" "$dir/"
   done
   chmod u+w "$dir"/*
   if [ -n "$2" ]; then
-    sed "$2" "$HERE/$1.Scan.fst" >"$dir/$1.Scan.fst"
-    if cmp -s "$HERE/$1.Scan.fst" "$dir/$1.Scan.fst"; then
+    sed "$2" "$HERE/$1.$3.fst" >"$dir/$1.$3.fst"
+    if cmp -s "$HERE/$1.$3.fst" "$dir/$1.$3.fst"; then
       echo "FAIL $1: the mutation does not apply" >&2
       exit 1
     fi
@@ -113,9 +120,9 @@ codec)
   USED=$HERE/used.$2
   : >"$USED"
   out=$(schema "$2")
-  dir=$(work "$2" "")
+  dir=$(work "$2" "" Scan)
   # An interface is checked on its own, so that its checked file is kept.
-  for m in Scan.fst Flat.fsti Flat.fst Proof.fsti Proof.fst; do
+  for m in $MODULES; do
     verify "$dir/$2.$m" "$dir" "$out"
   done
   rm -rf "$dir"
@@ -124,17 +131,29 @@ refused)
   USED=$HERE/used.$2
   : >"$USED"
   out=$(schema "$2")
-  dir=$(work "$2" "$3")
-  for m in Scan.fst Flat.fsti Flat.fst Proof.fsti; do
+  walk=${4:-Scan}
+  case $walk in
+  Scan) needed="Scan.fst Flat.fsti Flat.fst Proof.fsti" proof=Proof ;;
+  Step)
+    needed="Visitor.fsti Step.fst Flat.fsti Flat.fst StepProof.fsti"
+    proof=StepProof
+    ;;
+  *)
+    echo "prove.sh: unknown walk $walk" >&2
+    exit 2
+    ;;
+  esac
+  dir=$(work "$2" "$3" "$walk")
+  for m in $needed; do
     verify "$dir/$2.$m" "$dir" "$out"
   done
-  if verify "$dir/$2.Proof.fst" "$dir" "$out" >"$dir/log" 2>&1; then
+  if verify "$dir/$2.$proof.fst" "$dir" "$out" >"$dir/log" 2>&1; then
     cat "$dir/log"
     echo "FAIL $2: the mutant verifies" >&2
     exit 1
   fi
   echo "refused $2: $(grep -m1 -E '^\* Error|timeout' "$dir/log")"
-  grep "^$2.Proof.fst: wall" "$dir/log" >&2
+  grep "^$2.$proof.fst: wall" "$dir/log" >&2
   rm -rf "$dir"
   ;;
 *)

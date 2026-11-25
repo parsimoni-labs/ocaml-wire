@@ -37,6 +37,13 @@ let qualified =
     ("Int64.to_int", "to_int");
     ("Int64.shift_right_logical", "shift_right_logical");
     ("Int32.to_int", "int32_to_int");
+    ("Int64.of_int", "int64_of_int");
+    ("Int64.of_int32", "int64_of_int32");
+    ("Int64.add", "int64_add");
+    ("Int64.sub", "int64_sub");
+    ("Int64.mul", "int64_mul");
+    ("Int64.logand", "int64_logand");
+    ("Int64.shift_left", "shift_left");
     ("Bytes.length", "length");
   ]
 
@@ -44,8 +51,14 @@ let qualified =
    their name. *)
 let loads = "Wire_runtime.Unchecked."
 
-(* What the two texts write alike. *)
-let common = [ "&&"; "||"; "not"; "()"; "true"; "false" ]
+(* What the two texts write alike: the step functions call their module
+   [S] by name in both. *)
+let common =
+  [ "&&"; "||"; "not"; "()"; "true"; "false"; "S.invalid"; "S.valid" ]
+
+(* A comparison of two [int64], whose first operand the OCaml ascribes
+   [(a : int64)]: [P.int64_lt] and the others. *)
+let comparisons = [ "<"; "<="; ">"; ">="; "="; "<>" ]
 
 (* {1 The trees} *)
 
@@ -175,6 +188,24 @@ let rec tree side e =
     when side.ocaml ->
       digits s
   | Pexp_construct ({ txt = Lident c; _ }, None) when List.mem c common -> Id c
+  | Pexp_apply
+      ( { pexp_desc = Pexp_ident { txt = Lident op; _ }; _ },
+        [
+          ( Nolabel,
+            {
+              pexp_desc =
+                Pexp_constraint
+                  ( a,
+                    {
+                      ptyp_desc = Ptyp_constr ({ txt = Lident "int64"; _ }, []);
+                      _;
+                    } );
+              _;
+            } );
+          (Nolabel, b);
+        ] )
+    when side.ocaml && List.mem op comparisons ->
+      App (Id ("P.int64_" ^ List.assoc op infix), [ tree side a; tree side b ])
   | Pexp_apply _ ->
       let f, args = spine e [] in
       (match f.pexp_desc with
@@ -316,10 +347,10 @@ let ocaml_defs side text =
 (* [fold] and the definitions it reads, in the order of the text: those before
    it, as a definition reads only those before it. The views after it may be
    named as a variable of [fold] is. *)
-let reachable defs =
+let reachable ~root defs =
   let rec upto = function
     | [] -> []
-    | ((x, _) as d) :: rest -> if x = "fold" then [ d ] else d :: upto rest
+    | ((x, _) as d) :: rest -> if x = root then [ d ] else d :: upto rest
   in
   let defs = upto defs in
   let rec close seen = function
@@ -330,7 +361,7 @@ let reachable defs =
         let d = Lazy.force (List.assoc x defs) in
         close (x :: seen) (names rest d.body)
   in
-  let seen = close [] [ "fold" ] in
+  let seen = close [] [ root ] in
   List.filter_map
     (fun (x, d) -> if List.mem x seen then Some (Lazy.force d) else None)
     defs
@@ -397,7 +428,9 @@ let fstar_defs side text =
             (String.length rest - String.length name)
         in
         match
-          (suffix ~prefix:" = " after, String.ends_with ~suffix:" : r =" after)
+          ( suffix ~prefix:" = " after,
+            String.ends_with ~suffix:" : r =" after
+            || String.ends_with ~suffix:" : S.t =" after )
         with
         | Some e, _ when List.tl lines = [] ->
             Some
@@ -443,6 +476,12 @@ let labels ~outputs defs calls =
   let declared f =
     match List.find_opt (fun d -> d.name = f) defs with
     | Some d -> Some (List.map fst d.params)
+    | None when f = "S.valid" ->
+        Some
+          (Nolabel
+          ::
+          (if outputs = [] then [ Nolabel ]
+           else List.map (fun o -> Labelled o) outputs))
     | None when f = "valid" ->
         Some
           (if outputs = [] then [ Nolabel ]
@@ -503,11 +542,11 @@ let rec inline ~globals defs = function
 
 (* Whether the OCaml scanner [ocaml] and the F* of its proof, [scan], are
    one tree; if not, where they differ. *)
-let agree ~outputs ~ocaml ~scan =
+let agree ?(root = "fold") ~outputs ~ocaml ~scan () =
   match
     let o = { ocaml = true; calls = ref [] } in
     let f = { ocaml = false; calls = ref [] } in
-    let all = reachable (ocaml_defs o ocaml) in
+    let all = reachable ~root (ocaml_defs o ocaml) in
     let fdefs = fstar_defs f scan in
     let defined d = List.exists (fun e -> e.name = d.name) fdefs in
     let placed =
@@ -583,14 +622,28 @@ let corpus =
         Codec ("sample " ^ label, Fuzz_gen.codec g))
       Diff_codecs.included
 
-(* The texts of a codec the F* flavour accepts. *)
+(* The texts of a codec the F* flavour accepts: the OCaml scanner, with
+   the step functions of a module [S], and the F* of its [fold] and of its
+   step functions. *)
+type texts = { ocaml : string; scan : string; step : string }
+
 let texts c =
   match Wire_ocaml.fstar ~codec:"M" c with
   | exception Invalid_argument _ -> None
   | files ->
-      Some (Wire_ocaml.scanner ~codec:"M" c, List.assoc "M.Scan.fst" files)
+      Some
+        {
+          ocaml = Wire_ocaml.scanner ~step:"S" ~codec:"M" c;
+          scan = List.assoc "M.Scan.fst" files;
+          step = List.assoc "M.Step.fst" files;
+        }
 
 let outputs c = List.map fst (Wire_ocaml.scanner_fields c)
+
+(* Whether both walks of [t] agree with their F*. *)
+let agree_both ~outputs t =
+  Result.bind (agree ~outputs ~ocaml:t.ocaml ~scan:t.scan ()) (fun () ->
+      agree ~root:"fold_step" ~outputs ~ocaml:t.ocaml ~scan:t.step ())
 
 (* The codecs of the corpus the F* flavour accepts today: a change that
    makes it refuse some shows here. *)
@@ -602,8 +655,8 @@ let test_corpus () =
       (fun n (Codec (name, c)) ->
         match texts c with
         | None -> n
-        | Some (ocaml, scan) -> (
-            match agree ~outputs:(outputs c) ~ocaml ~scan with
+        | Some t -> (
+            match agree_both ~outputs:(outputs c) t with
             | Ok _ -> n + 1
             | Error why -> Alcotest.failf "%s: %s" name why))
       0 corpus
@@ -612,19 +665,23 @@ let test_corpus () =
   if compared < at_least then
     Alcotest.failf "%d codecs compared, expected at least %d" compared at_least
 
-(* The IPv4 scanner with one token of its OCaml changed. *)
-let mutant ~from ~into () =
+(* The IPv4 scanner with one token of its OCaml changed, in [fold] or, with
+   [step], in the step functions. *)
+let mutant ?(step = false) ~from ~into () =
   match texts Headers.ipv4 with
   | None -> Alcotest.fail "the F* flavour refuses IPv4"
-  | Some (ocaml, scan) -> (
-      if not (contains ocaml from) then
+  | Some t -> (
+      if not (contains t.ocaml from) then
         Alcotest.failf "no %S in the IPv4 scanner" from;
       let outputs = outputs Headers.ipv4 in
-      (match agree ~outputs ~ocaml ~scan with
+      (match agree_both ~outputs t with
       | Ok () -> ()
       | Error why -> Alcotest.failf "IPv4: %s" why);
-      let ocaml = replace ~from ~into ocaml in
-      match agree ~outputs ~ocaml ~scan with
+      let ocaml = replace ~from ~into t.ocaml in
+      let root, scan =
+        if step then ("fold_step", t.step) else ("fold", t.scan)
+      in
+      match agree ~root ~outputs ~ocaml ~scan () with
       | Ok () -> Alcotest.failf "%S as %S: the trees still agree" from into
       | Error why -> Fmt.pr "%S as %S: %s@." from into why)
 
@@ -639,4 +696,13 @@ let suite =
       Alcotest.test_case "mutant label" `Quick
         (mutant ~from:"~version:f1_version ~ihl:f2_ihl"
            ~into:"~ihl:f1_version ~version:f2_ihl");
+      Alcotest.test_case "step mutant shift" `Quick
+        (mutant ~step:true ~from:"(Int64.shift_right_logical bw1 4)"
+           ~into:"(Int64.shift_right_logical bw1 3)");
+      Alcotest.test_case "step mutant comparison" `Quick
+        (mutant ~step:true ~from:"((bw1 : int64) < 69L)"
+           ~into:"((bw1 : int64) <= 69L)");
+      Alcotest.test_case "step mutant label" `Quick
+        (mutant ~step:true ~from:"init ~version:f1_version ~ihl:f2_ihl"
+           ~into:"init ~ihl:f1_version ~version:f2_ihl");
     ] )

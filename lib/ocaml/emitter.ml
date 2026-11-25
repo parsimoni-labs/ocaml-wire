@@ -19,23 +19,46 @@ open Lines
 (* How the code holds integers. [Tagged] is [int]. [Boxed] is [int64] for
    values and [int] for positions; the stock compiler keeps such an [int64]
    unboxed in a register. [Unboxed] is OxCaml's [int64_u]. [Fstar] is
-   [Tagged] written as F*: the walk takes the same decisions, and writes each
-   operation and load as a call into the module [P] of the F* primitives. *)
-type num = Tagged | Boxed | Unboxed | Fstar
+   [Tagged] written as F*, and [Fstar64] is [Boxed]: the walk takes the same
+   decisions, and writes each operation and load as a call into the module
+   [P] of the F* primitives. *)
+type num = Tagged | Boxed | Unboxed | Fstar | Fstar64
+
+(* How [num] holds values, whether written as OCaml or as F*. *)
+let rep = function Fstar -> Tagged | Fstar64 -> Boxed | num -> num
+
+(* Whether [num] is written as F*. *)
+let is_fstar = function
+  | Fstar | Fstar64 -> true
+  | Tagged | Boxed | Unboxed -> false
 
 (* How the code holds positions, sizes and bounds: a load takes an [int]. *)
-let pos_num = function Boxed -> Tagged | num -> num
+let pos_num = function Boxed -> Tagged | Fstar64 -> Fstar | num -> num
 
 (* The module of the operations on values held as [num], other than [int]. *)
 let i64_ops = function
   | Unboxed -> "U"
   | Boxed | Tagged -> "Int64"
-  | Fstar -> "P"
+  | Fstar | Fstar64 -> "P"
 
 (* A 64-bit literal written as [digits], an OCaml literal without its
-   suffix. *)
+   suffix: an F* [int64] is its pattern. *)
 let lit64 num digits =
-  match num with Unboxed -> "#" ^ digits ^ "L" | _ -> digits ^ "L"
+  match num with
+  | Unboxed -> "#" ^ digits ^ "L"
+  | Fstar | Fstar64 -> digits
+  | Tagged | Boxed -> digits ^ "L"
+
+(* The conversion to [int64] of a value of [from] ([int] or [int32]). *)
+let int64_of num from =
+  if is_fstar num then "P.int64_of_" ^ from else "Int64.of_" ^ from
+
+(* The [int] variable [x] as an [int64]. *)
+let widen_int num x = Fmt.str "(%s %s)" (int64_of num "int") x
+
+(* The [w] bits from bit [lo] up of a word, as an F* walk states a bitfield:
+   of an [int], or of an [int64] pattern. *)
+let bits_of num = if num = Fstar64 then "P.bits64" else "P.bits"
 
 (* The buffer the generated code reads: its type, its unchecked accessors, its
    length, the module of its bounds-checked loads and string copies, the
@@ -120,7 +143,7 @@ type pos = Decision.pos = { var : string option; at : int }
 (* How a walk of [num] holds integer values. *)
 let values : num -> Decision.values = function
   | Tagged | Fstar -> `Int
-  | Boxed -> `Int64
+  | Boxed | Fstar64 -> `Int64
   | Unboxed -> `Int64_u
 
 (* What an F* walk states of the code it writes, in bytes of the buffer:
@@ -315,6 +338,11 @@ let lit num n =
       else if n < 0 then Fmt.str "(%d)" n
       else string_of_int n
   | Boxed -> if n < 0 then Fmt.str "(%dL)" n else Fmt.str "%dL" n
+  | Fstar64 ->
+      (* An [int64] is its pattern, which a negative value is not. *)
+      if n < 0 then
+        fail_unsupported "the F* rendering of %d, a negative int64 literal" n
+      else string_of_int n
   | Unboxed ->
       if n < 0 then Fmt.str "(-#%LdL)" (Int64.neg (Int64.of_int n))
       else Fmt.str "#%dL" n
@@ -342,10 +370,17 @@ let fstar_op = function
   | "<>" -> "ne"
   | op -> fail_unsupported "the F* rendering of %s" op
 
+(* The primitive of [P] an F* walk calls for the [int64] operation of the
+   OCaml operator [op]: that of [Int64], prefixed. *)
+let fstar64_op = function
+  | ("+" | "-" | "*" | "land") as op -> "int64_" ^ unboxed_op op
+  | op -> "int64_" ^ fstar_op op
+
 let binop num op a b =
   match num with
   | Tagged -> Fmt.str "(%s %s %s)" a op b
   | Fstar -> Fmt.str "(P.%s %s %s)" (fstar_op op) a b
+  | Fstar64 -> Fmt.str "(P.%s %s %s)" (fstar64_op op) a b
   | Boxed | Unboxed -> Fmt.str "(%s.%s %s %s)" (i64_ops num) (unboxed_op op) a b
 
 (* The type annotation lets the stock compiler compare two [int64] inline. *)
@@ -353,6 +388,7 @@ let relation num op a b =
   match num with
   | Tagged -> Fmt.str "((%s : int) %s %s)" a op b
   | Fstar -> Fmt.str "(P.%s %s %s)" (fstar_op op) a b
+  | Fstar64 -> Fmt.str "(P.%s %s %s)" (fstar64_op op) a b
   | Boxed -> Fmt.str "((%s : int64) %s %s)" a op b
   | Unboxed -> Fmt.str "(U.compare %s %s %s 0)" a b op
 
@@ -364,7 +400,7 @@ let outside_range num v ~lo ~hi =
   | Unboxed ->
       let d = if lo = 0 then v else binop num "-" v (lit num lo) in
       Fmt.str "(B.unsigned_compare %s %s > 0)" d (lit num (hi - lo))
-  | Tagged | Boxed | Fstar ->
+  | Tagged | Boxed | Fstar | Fstar64 ->
       Fmt.str "%s || %s"
         (relation num "<" v (lit num lo))
         (relation num ">" v (lit num hi))
@@ -372,6 +408,8 @@ let outside_range num v ~lo ~hi =
 (* An [int64] or [int64_u] holds the value of a 63-bit [int]
    sign-extended. *)
 let normalise63 num v =
+  if num = Fstar64 then
+    fail_unsupported "the F* rendering of an int64 normalised to 63 bits";
   let u = i64_ops num in
   Fmt.str "(%s.shift_right (%s.shift_left %s 1) 1)" u u v
 
@@ -405,7 +443,7 @@ let rec expr : type a. w -> a T.expr -> string =
      is. *)
   let distance (b : int T.expr) =
     match (num, b) with
-    | Boxed, T.Int n -> string_of_int n
+    | (Boxed | Fstar64), T.Int n -> string_of_int n
     | _ -> Fmt.str "(%s.to_int %s)" (i64_ops num) (p b)
   in
   let cmp : type b. string -> b T.expr -> b T.expr -> string =
@@ -417,7 +455,7 @@ let rec expr : type a. w -> a T.expr -> string =
       | _ -> false
     in
     if is_bool a then
-      if num = Fstar then Fmt.str "(%s %s %s)" (p a) op (p b)
+      if is_fstar num then Fmt.str "(%s %s %s)" (p a) op (p b)
       else Fmt.str "((%s : bool) %s %s)" (p a) op (p b)
     else
       match (as_int a, as_int b) with
@@ -432,13 +470,12 @@ let rec expr : type a. w -> a T.expr -> string =
       match List.assoc_opt v w.settled with
       | Some _ -> lit num 0
       | None when is_slot w.m v -> slot_read num ~is_bool:false v
-      | None when num = Boxed && Sset.mem v w.ints ->
-          Fmt.str "(Int64.of_int %s)" v
+      | None when rep num = Boxed && Sset.mem v w.ints -> widen_int num v
       | None -> v)
   | T.Add (a, b) -> arith_op "+" a b
   | T.Sub (a, b) -> arith_op "-" a b
   | T.Mul (a, b) -> arith_op "*" a b
-  | (T.Lor _ | T.Lxor _ | T.Cast _) when num = Fstar ->
+  | (T.Lor _ | T.Lxor _ | T.Cast _) when is_fstar num ->
       fail_unsupported "the F* rendering of %a" T.pp_expr e
   | T.Land (a, b) -> binop num "land" (p a) (p b)
   | T.Lor (a, b) -> binop num "lor" (p a) (p b)
@@ -446,13 +483,13 @@ let rec expr : type a. w -> a T.expr -> string =
   | T.Lnot a -> (
       match num with
       | Tagged -> Fmt.str "(lnot %s)" (p a)
-      | Fstar -> fail_unsupported "the F* rendering of lnot"
+      | Fstar | Fstar64 -> fail_unsupported "the F* rendering of lnot"
       | Boxed | Unboxed -> Fmt.str "(%s.lognot %s)" (i64_ops num) (p a))
   | T.Lsl (a, b) -> (
       match num with
       | Tagged -> Fmt.str "(%s lsl %s)" (p a) (p b)
       | Fstar -> binop num "lsl" (p a) (p b)
-      | Boxed | Unboxed ->
+      | Boxed | Unboxed | Fstar64 ->
           let v =
             Fmt.str "(%s.shift_left %s %s)" (i64_ops num) (p a) (distance b)
           in
@@ -461,14 +498,12 @@ let rec expr : type a. w -> a T.expr -> string =
       match num with
       | Tagged -> Fmt.str "(%s lsr %s)" (p a) (p b)
       | Fstar -> binop num "lsr" (p a) (p b)
-      | Boxed | Unboxed ->
+      | Boxed | Unboxed | Fstar64 ->
           let u = i64_ops num in
           let nonnegative = fst (range w.ranges a) >= 0 in
           let input =
             if nonnegative then p a
-            else
-              Fmt.str "(%s.logand %s %s)" u (p a)
-                (lit64 num "0x7fffffffffffffff")
+            else binop num "land" (p a) (lit64 num "0x7fffffffffffffff")
           in
           let v =
             Fmt.str "(%s.shift_right_logical %s %s)" u input (distance b)
@@ -494,7 +529,7 @@ let rec expr : type a. w -> a T.expr -> string =
    stays below [2^64]: its variables are below [2^32], so [Int64]'s operations
    compute it exactly. *)
 and wide w (e : int T.expr) =
-  if w.m.num = Fstar then
+  if is_fstar w.m.num then
     fail_unsupported "the F* rendering of arithmetic past the native int";
   let r = wide w in
   let op f a b = Fmt.str "(Int64.%s %s %s)" f (r a) (r b) in
@@ -502,7 +537,7 @@ and wide w (e : int T.expr) =
     match (w.m.num, b) with
     | _, T.Int n -> string_of_int n
     | (Tagged | Fstar), _ -> expr w b
-    | (Boxed | Unboxed), _ ->
+    | (Boxed | Unboxed | Fstar64), _ ->
         Fmt.str "(%s.to_int %s)" (i64_ops w.m.num) (expr w b)
   in
   match e with
@@ -510,7 +545,7 @@ and wide w (e : int T.expr) =
   | T.Ref _ -> (
       match w.m.num with
       | Tagged | Fstar -> Fmt.str "(Int64.of_int %s)" (expr w e)
-      | Boxed -> expr w e
+      | Boxed | Fstar64 -> expr w e
       | Unboxed -> Fmt.str "(U.to_int64 %s)" (expr w e))
   | T.Add (a, b) -> op "add" a b
   | T.Sub (a, b) -> op "sub" a b
@@ -540,7 +575,7 @@ let addr num o k =
     match num with
     | Tagged | Boxed -> Fmt.str "(%s + %d)" o k
     | Unboxed -> Fmt.str "(U.add %s #%dL)" o k
-    | Fstar -> binop Fstar "+" o (string_of_int k)
+    | Fstar | Fstar64 -> binop Fstar "+" o (string_of_int k)
 
 (* A load at [o + k]. An [int64_u] position is the offset of the wider loads
    as it is: the address is the buffer plus the position, with the distance
@@ -560,13 +595,13 @@ let load m ~o ~k ~bytes ~endian =
       | 2 -> Fmt.str "(%s.u16%s_at buf %s)" m.src.u e at
       | 4 -> Fmt.str "(%s.i32%s_at buf %s)" m.src.u e at
       | _ -> Fmt.str "(%s.i64be_at buf %s)" m.src.u at)
-  | Fstar, (2 | 4) when endian = T.Little ->
+  | (Fstar | Fstar64), (2 | 4) when endian = T.Little ->
       fail_unsupported "the F* rendering of a little-endian load"
-  | (Tagged | Boxed | Fstar), _ | Unboxed, 1 -> (
+  | (Tagged | Boxed | Fstar | Fstar64), _ | Unboxed, 1 -> (
       let at =
         match m.num with
         | Tagged | Boxed -> addr Tagged o k
-        | Fstar -> addr Fstar o k
+        | Fstar | Fstar64 -> addr Fstar o k
         | Unboxed when k = 0 -> Fmt.str "(B.offset %s)" o
         | Unboxed -> Fmt.str "(B.offset %s + %d)" o k
       in
@@ -594,7 +629,7 @@ let u16_in_word m ~lo ~size ~raw ~o ~k ~endian =
   let i32 = i32 m.src in
   let low, high =
     match m.num with
-    | Tagged | Boxed | Fstar ->
+    | Tagged | Boxed | Fstar | Fstar64 ->
         let mask v =
           if raw then Fmt.str "(%s)" v else Fmt.str "(%s land 0xffff)" v
         in
@@ -667,20 +702,24 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
         Fmt.str "(U.shift_right_logical (U.shift_left w%d %d) %d)" a
           (8 * (k - a))
           (64 - (8 * bytes))
-  | Boxed, Some a when bytes = 1 || endian = T.Big ->
+  | (Boxed | Fstar64), Some a when bytes = 1 || endian = T.Big ->
       let shift = 8 * (a + 8 - k - bytes) in
       let shifted =
         if shift = 0 then Fmt.str "w%d" a
-        else Fmt.str "(Int64.shift_right_logical w%d %d)" a shift
+        else Fmt.str "(%s.shift_right_logical w%d %d)" (i64_ops m.num) a shift
       in
       if a = k || raw then shifted
       else
-        Fmt.str "(Int64.logand %s %LdL)" shifted
-          (Int64.pred (Int64.shift_left 1L (8 * bytes)))
-  | Boxed, _ when bytes = 4 ->
-      let v = Fmt.str "(Int64.of_int32 %s)" (load m ~o ~k ~bytes ~endian) in
-      if raw then v else Fmt.str "(Int64.logand %s 0xffffffffL)" v
-  | Boxed, _ -> Fmt.str "(Int64.of_int %s)" (load m ~o ~k ~bytes ~endian)
+        binop m.num "land" shifted
+          (lit64 m.num
+             (Int64.to_string (Int64.pred (Int64.shift_left 1L (8 * bytes)))))
+  | (Boxed | Fstar64), _ when bytes = 4 ->
+      let v =
+        Fmt.str "(%s %s)" (int64_of m.num "int32") (load m ~o ~k ~bytes ~endian)
+      in
+      if raw then v else binop m.num "land" v (lit64 m.num "0xffffffff")
+  | (Boxed | Fstar64), _ ->
+      Fmt.str "(%s %s)" (int64_of m.num "int") (load m ~o ~k ~bytes ~endian)
   | Tagged, _ when bytes = 4 ->
       Fmt.kstr mask32 "%s.to_int %s" (i32 m.src) (load m ~o ~k ~bytes ~endian)
   | Tagged, _ when bytes = 2 -> (
@@ -721,7 +760,7 @@ let unsigned m ?size ?(lo = 0) ?(raw = false) ~o ~words ~k ~bytes ~endian () =
 let value m ?size ?lo ?bitword ~o ~words ~k f =
   let sign v width =
     match m.num with
-    | Fstar -> fail_unsupported "the F* rendering of a signed field"
+    | Fstar | Fstar64 -> fail_unsupported "the F* rendering of a signed field"
     | Tagged ->
         Fmt.str "((%s lsl (Sys.int_size - %d)) asr (Sys.int_size - %d))" v width
           width
@@ -756,7 +795,7 @@ let value m ?size ?lo ?bitword ~o ~words ~k f =
             else binop Fstar "lsr" "mask32" (string_of_int (32 - width))
           in
           if whole then v else binop Fstar "land" v mask
-      | Boxed | Unboxed ->
+      | Boxed | Unboxed | Fstar64 ->
           let u = i64_ops m.num in
           let v =
             if shift = 0 then word
@@ -764,7 +803,7 @@ let value m ?size ?lo ?bitword ~o ~words ~k f =
           in
           if whole then v
           else
-            Fmt.str "(%s.logand %s %s)" u v
+            binop m.num "land" v
               (lit64 m.num
                  (Int64.to_string (Int64.pred (Int64.shift_left 1L width)))))
   | Int { width = 32; signed = true; endian } when m.num = Tagged ->
@@ -772,13 +811,13 @@ let value m ?size ?lo ?bitword ~o ~words ~k f =
         (load m ~o ~k:(k + f.offset) ~bytes:4 ~endian)
   | Int { width; signed; endian } ->
       (* The sign extension drops what an [int64] holds above the field. *)
-      let raw = signed && m.num = Boxed in
+      let raw = signed && rep m.num = Boxed in
       let v =
         unsigned m ?size ?lo ~raw ~o ~words ~k:(k + f.offset) ~bytes:(width / 8)
           ~endian ()
       in
       if signed then sign v width else v
-  | Bytes _ when m.num = Fstar ->
+  | Bytes _ when is_fstar m.num ->
       fail_unsupported "the F* rendering of a byte string"
   | Bytes n ->
       Fmt.str "(%s.sub_string buf %s %d)" m.src.checked
@@ -808,6 +847,7 @@ let num_type w =
   match w.m.num with
   | Unboxed -> Some "int64_u"
   | Fstar -> Some "P.int"
+  | Fstar64 -> Some "P.int64"
   | Tagged | Boxed -> None
 
 let bind ?ty w v = { w with scope = (v, ty) :: w.scope }
@@ -819,7 +859,7 @@ let written_out w rhs = substitute !(w.defs) rhs
 (* [let var = rhs in], noted with the value it [holds] in bytes. *)
 let write_let ?holds w var rhs =
   pf w "let %s = %s in@\n" var rhs;
-  if w.m.num = Fstar then begin
+  if is_fstar w.m.num then begin
     let value = written_out w rhs in
     let holds = Option.map (written_out w) holds in
     w.defs := (var, value) :: !(w.defs);
@@ -897,7 +937,7 @@ let function_name c label =
    in place in an F* walk. *)
 let cut w ~label body =
   match w.cuts with
-  | Some _ when can_cut w && w.m.num = Fstar ->
+  | Some _ when can_cut w && is_fstar w.m.num ->
       scoped w (fun () -> body { w with fn = { chars = 0; decisions = 0 } })
   | Some c when can_cut w ->
       let b = Buffer.create 4096 in
@@ -943,21 +983,20 @@ let nonnegative w e = nonnegative_in w.ranges w.facts e
 
 (* The variable [x] as a value. With [Boxed], an [int] variable is widened. *)
 let widen w x =
-  if w.m.num = Boxed && Sset.mem x w.ints then Fmt.str "(Int64.of_int %s)" x
-  else x
+  if rep w.m.num = Boxed && Sset.mem x w.ints then widen_int w.m.num x else x
 
 (* The bytes of the window after the variable part of [p], and how that
    expression holds integers. With [Boxed], a window whose length is a span's
    size is measured as an [int64]. *)
 let room w p =
   let num =
-    if w.m.num = Boxed && not (Sset.mem w.limit w.ints) then Boxed
+    if rep w.m.num = Boxed && not (Sset.mem w.limit w.ints) then w.m.num
     else pos_num w.m.num
   in
   let room =
     match p.var with
     | None -> w.limit
-    | Some v -> binop num "-" w.limit (if num = Boxed then widen w v else v)
+    | Some v -> binop num "-" w.limit (if rep num = Boxed then widen w v else v)
   in
   (num, room)
 
@@ -1100,7 +1139,7 @@ let load_words w ~o ~k ~size ~constant ~lo ~hi ~later ~fields live =
   let high = high_byte_words w fields live in
   let fresh =
     match m.num with
-    | Boxed ->
+    | Boxed | Fstar64 ->
         let at f = { f with offset = extent k f.offset } in
         let fields = List.map at worded in
         let fresh = Wide_loads.shared_words ~held ~lo ~hi ~later fields in
@@ -1116,11 +1155,13 @@ let load_words w ~o ~k ~size ~constant ~lo ~hi ~later ~fields live =
       (fun w a ->
         let name = Fmt.str "w%d" a in
         write_let w name (load m ~o ~k:a ~bytes:8 ~endian:T.Big);
-        if m.num = Fstar then bind ~ty:"P.int64" w name else bind_num w name)
+        if is_fstar m.num then bind ~ty:"P.int64" w name else bind_num w name)
       w fresh
   in
   let words = held @ fresh in
-  let w = if constant && m.num = Boxed then { w with held = words } else w in
+  let w =
+    if constant && rep m.num = Boxed then { w with held = words } else w
+  in
   let bitwords = load_bitwords w ~o ~k ~size ~words ~high live in
   (List.fold_left bind_bitword w bitwords, words, bitwords)
 
@@ -1168,7 +1209,7 @@ let field ?(checked = true) w ~o ~k ~size ~words ~bitwords f =
         Some (window_bytes ~o ~k:shifted.offset (width / 8))
     | Bits { base; shift; width } ->
         Option.map
-          (fun v -> Fmt.str "P.bits %s %d %d" v shift width)
+          (fun v -> Fmt.str "%s %s %d %d" (bits_of m.num) v shift width)
           (List.assoc_opt (f.offset, base) bitwords)
     | Int _ | Bytes _ -> None
   in
@@ -1243,7 +1284,8 @@ let range_fact w bitwords fields test conditions =
         | Bits { base; shift; width } ->
             Option.map
               (fun v ->
-                (f.id, T.Ref (T.I, Fmt.str "(P.bits %s %d %d)" v shift width)))
+                let bits = bits_of w.m.num in
+                (f.id, T.Ref (T.I, Fmt.str "(%s %s %d %d)" bits v shift width)))
               (List.assoc_opt (f.offset, base) bitwords)
         | _ -> None)
       fields
@@ -1259,7 +1301,7 @@ let range_check w bitwords f g (word, lo, hi) =
   let test = outside_range num word ~lo ~hi in
   pf w "if %s then %s else@\n" test (w.m.fail Bounds);
   let conditions = List.map (fun c -> c.cond) (f.checks @ g.checks) in
-  if num = Fstar then begin
+  if is_fstar num then begin
     let fact = written_out w (range_fact w bitwords [ f; g ] test conditions) in
     w.m.note (Holds { fact; about = written_out w word })
   end;
@@ -1379,8 +1421,8 @@ let outside w ~negative ~cancelled p n =
   let num, room = room w p in
   (* An [int64] size is compared as one. *)
   let num, room =
-    if w.m.num = Boxed && num <> Boxed then
-      (Boxed, Fmt.str "(Int64.of_int %s)" room)
+    if rep w.m.num = Boxed && rep num <> Boxed then
+      (w.m.num, widen_int w.m.num room)
     else (num, room)
   in
   let room = if p.at = 0 then room else binop num "-" room (lit num p.at) in
@@ -1457,7 +1499,10 @@ let span ?(implied = false) w size p =
   | Next | Hoisted -> ());
   let e = w.fresh "e" in
   (* With [Boxed], the end is a position, so an [int]. *)
-  let n_int = if w.m.num = Boxed then Fmt.str "(Int64.to_int %s)" n else n in
+  let n_int =
+    if rep w.m.num = Boxed then Fmt.str "(%s.to_int %s)" (i64_ops w.m.num) n
+    else n
+  in
   pf w "let %s = %s in@\n" e (binop num "+" (pos_expr num p) n_int);
   let w = bind_span w ~implied ~n_range ~ends size p n e in
   ({ w with known = 0; depth = w.depth + 1 }, n, { var = Some e; at = 0 })
@@ -1494,7 +1539,9 @@ let jump w ~j ~exported gates ~fired p =
      a call that is not a tail call may apply: the compiler still makes the
      join a jump. *)
   pf w "%s %a %s%s@\n" j pp_list args (pos_expr num p)
-    (match num with Unboxed -> " [@nontail]" | Tagged | Boxed | Fstar -> "")
+    (match num with
+    | Unboxed -> " [@nontail]"
+    | Tagged | Boxed | Fstar | Fstar64 -> "")
 
 (* The outputs of [gates] a copied continuation reads: those of the case
    [fired], or of none, are absent. A walk cut into functions writes them as
@@ -1713,8 +1760,8 @@ let region_start w p =
           else
             let s = expr w e in
             let s =
-              if w.m.num = Boxed && num <> Boxed then
-                Fmt.str "(Int64.to_int %s)" s
+              if rep w.m.num = Boxed && rep num <> Boxed then
+                Fmt.str "(%s.to_int %s)" (i64_ops w.m.num) s
               else s
             in
             (s, w.disp + c + p.at)
@@ -1739,8 +1786,8 @@ let close_region w ~at_most ~lo ~hi n w'' cp =
   else begin
     pf w'' "if %s then %s else@\n"
       (let at = pos_expr w.m.num cp in
-       if w.m.num = Boxed then
-         relation Boxed "<>" (Fmt.str "(Int64.of_int %s)" at) n
+       if rep w.m.num = Boxed then
+         relation w.m.num "<>" (widen_int w.m.num at) n
        else relation w.m.num "<>" at n)
       (w.m.fail Bounds);
     { w'' with depth = w''.depth + 1 }

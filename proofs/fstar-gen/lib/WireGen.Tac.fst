@@ -75,3 +75,10 @@ let unfold_scan (names:list string) : T.Tac unit =
   ignore (T.pose_lemma (`WireGen.Tables.tables ()));
   T.norm [delta_only names; zeta; iota; primops];
   split_tests ()
+
+(* The same for the step walk, whose values are [int64]: with the rules of
+   its masks too. *)
+let unfold_step (names:list string) : T.Tac unit =
+  ignore (T.pose_lemma (`WireGen.Tables.tables64 ()));
+  T.norm [delta_only names; zeta; iota; primops];
+  split_tests ()

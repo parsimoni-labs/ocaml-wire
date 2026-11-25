@@ -386,7 +386,12 @@ val fstar :
     [fold_is_3d]: on a window inside the buffer,
     [fold buf off len ~invalid ~valid] is [valid] applied to the outputs of the
     value the parser reads from the window's bytes, or [invalid ()] where it
-    reads none.
+    reads none. [<codec>.Step.fst] is [step_within] and [fold_step] of
+    [scanner ~step:"S"], values held as [int64], calling the module
+    [<codec>.Visitor], which [<codec>.Visitor.fsti] declares and leaves
+    abstract; [<codec>.StepProof.fst] proves [fold_step_is_3d], the same
+    statement for [fold_step buf off len init], with [S.invalid init] and
+    [S.valid init] given each output as its [int64].
 
     The proof is checked with the F* and Z3 that ship with EverParse, against
     the F* module [codec] that 3d.exe writes from the [.3d] of

@@ -73,3 +73,8 @@ val fstar : ?fields:string list -> 'a Wire.Codec.t -> fstar
 (** [fstar ?fields c] is the F* rendering of [fold] in the scanner of [c]: the
     walk of the OCaml one, with in place each function the OCaml one cuts out.
     Raises {!Planner.Unsupported} on a codec whose walk needs a slot. *)
+
+val fstar_step : ?fields:string list -> step:string -> 'a Wire.Codec.t -> fstar
+(** [fstar_step ?fields ~step c] is {!fstar} for [step_within] and [fold_step]
+    in the scanner of [c] with [~step], whose values are [int64]: they call the
+    module [step]'s [invalid] and [valid] by name. *)

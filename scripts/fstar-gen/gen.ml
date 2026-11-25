@@ -18,4 +18,7 @@ let () =
   List.iter (fun (Proved.Codec (name, c)) -> write dir name c) Proved.all;
   (* The scanner whose ihl make prove changes to three bits, which must not
      verify. *)
-  write dir "IPv4Mutant" Headers.ipv4
+  write dir "IPv4Mutant" Headers.ipv4;
+  (* The CLCW, whose step walk make prove shifts vcid by 17, which must not
+     verify. *)
+  write dir "ClcwStepMutant" Space.clcw_codec

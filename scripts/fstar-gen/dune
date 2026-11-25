@@ -15,7 +15,7 @@
 (executable
  (name gen)
  (modules gen)
- (libraries proved wire wire.ocaml headers))
+ (libraries proved wire wire.ocaml headers space))
 
 (executable
  (name vectors)
