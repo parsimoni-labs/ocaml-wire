@@ -50,8 +50,38 @@ module Frag (H : FRAG) = struct
     if H.ok c then Some (UInt16.to_int (H.frag b (H.get c))) else None
 end
 
+(* On OxCaml the generated module takes its buffers [local], which a functor
+   argument's signature cannot state for OCaml too: each read is applied in
+   full. *)
+module G_ipv4 = struct
+  type 'b view = 'b G_ipv4_record.view
+  type 'b check = 'b G_ipv4_record.check
+
+  let check b len off = G_ipv4_record.check b len off
+  let ok = G_ipv4_record.ok
+  let get = G_ipv4_record.get
+  let frag b v = G_ipv4_record.frag b v
+  let proto b v = G_ipv4_record.proto b v
+  let src b v = G_ipv4_record.src b v
+  let dst b v = G_ipv4_record.dst b v
+  let set_frag b v x = G_ipv4_record.set_frag b v x
+end
+
+module G_mixed = struct
+  type 'b view = 'b G_mixed_record.view
+  type 'b check = 'b G_mixed_record.check
+
+  let check b len off = G_mixed_record.check b len off
+  let ok = G_mixed_record.ok
+  let get = G_mixed_record.get
+  let b buf v = G_mixed_record.b buf v
+  let e buf v = G_mixed_record.e buf v
+  let f buf v = G_mixed_record.f buf v
+  let h buf v = G_mixed_record.h buf v
+end
+
 let test_swap () =
-  let module G = Frag (G_ipv4_record) in
+  let module G = Frag (G_ipv4) in
   let module I = Frag (Ipv4_twin) in
   for _ = 1 to 3000 do
     let buf, off = input ~size:20 in
@@ -138,14 +168,14 @@ Views (struct
 end)
 
 let test_ipv4 () =
-  let module G = Ipv4_fields (G_ipv4_record) in
+  let module G = Ipv4_fields (G_ipv4) in
   let module I = Ipv4_fields (Ipv4_twin) in
   Alcotest.(check int) "min_size" G_ipv4_record.min_size Ipv4_twin.min_size;
   same ~size:20 ~validate:G_ipv4_record.validate ~validate':Ipv4_twin.validate
     ~views:G.read ~views':I.read
 
 let test_mixed () =
-  let module G = Mixed_fields (G_mixed_record) in
+  let module G = Mixed_fields (G_mixed) in
   let module I = Mixed_fields (Mixed_twin) in
   same ~size:G_mixed_record.min_size ~validate:G_mixed_record.validate
     ~validate':Mixed_twin.validate ~views:G.read ~views':I.read
@@ -164,7 +194,7 @@ struct
 end
 
 let test_set () =
-  let module G = Set (G_ipv4_record) in
+  let module G = Set (G_ipv4) in
   let module I = Set (Ipv4_twin) in
   for _ = 1 to 1000 do
     let buf, off = input ~size:20 in

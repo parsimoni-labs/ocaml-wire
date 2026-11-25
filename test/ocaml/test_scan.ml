@@ -2,7 +2,17 @@
    fold [Scan_step] alike, on a corpus of frames. *)
 
 (* The swap: one line picks the module, the code under it is the same. *)
-module Generated = S_capture_step
+(* On OxCaml the generated folds take their buffer [local], which a functor
+   argument's signature cannot state for OCaml too: each is applied in full. *)
+module Generated = struct
+  let fold_step b off len ~init = S_capture_step.fold_step b off len ~init
+
+  let fold_step_frames b off len ~stride ~init =
+    S_capture_step.fold_step_frames b off len ~stride ~init
+
+  let fold_step_index b ~offs ~lens ~init =
+    S_capture_step.fold_step_index b ~offs ~lens ~init
+end
 
 module Interpreted = S_capture_step_codec.Make (struct
   type r = Packet_stack.capture
