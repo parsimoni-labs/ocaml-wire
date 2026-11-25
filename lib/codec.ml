@@ -1804,7 +1804,11 @@ module Gen = struct
   let other_type c name =
     Fmt.invalid_arg "%s: field %s has another type" c.name name
 
-  type 'a reader = { read : 'b. 'b Wire_runtime.Buf.t -> int -> 'a }
+  type 'a read = { read : 'b. 'b Wire_runtime.Buf.t -> int -> 'a }
+  type 'a reader = Direct of ('a, unit) View.field | Read of 'a read
+
+  let[@inline] read h b r =
+    match h with Direct f -> View.read f b r | Read g -> g.read b r
 
   (* An integer output as a value of the kind [k]. *)
   let of_output : type a. a kind -> int64 -> a =
@@ -1826,11 +1830,12 @@ module Gen = struct
      outputs, which name it by its label. *)
   let output (v : _ View.named) name f =
     let s = to_struct v.codec and label = Names.ocaml_label name in
-    {
-      read =
-        (fun b r ->
-          f (Scan_outputs.read s (b : _ Wire_runtime.Buf.t :> bytes) r) label);
-    }
+    Read
+      {
+        read =
+          (fun b r ->
+            f (Scan_outputs.read s (b : _ Wire_runtime.Buf.t :> bytes) r) label);
+      }
 
   let view_field v name typ =
     match View.field v (record_field v.codec name typ) with
@@ -1843,7 +1848,8 @@ module Gen = struct
       output v name (fun o l -> of_output k (Scan_outputs.int o l))
     in
     let optional f =
-      { read = (fun b r -> Option.value ~default:(zero k) (View.read f b r)) }
+      Read
+        { read = (fun b r -> Option.value ~default:(zero k) (View.read f b r)) }
     in
     match typ with
     | Types.Optional { inner; _ } -> (
@@ -1856,14 +1862,14 @@ module Gen = struct
         match typ_eq inner k with
         | Some Type.Equal -> (
             match view_field v name typ with
-            | Some f -> { read = (fun b r -> View.read f b r) }
+            | Some f -> Direct f
             | None -> by_output ())
         | None -> other_type v.codec name)
     | _ -> (
         match typ_eq typ k with
         | Some Type.Equal -> (
             match view_field v name typ with
-            | Some f -> { read = (fun b r -> View.read f b r) }
+            | Some f -> Direct f
             | None -> by_output ())
         | None -> other_type v.codec name)
 
@@ -1872,7 +1878,8 @@ module Gen = struct
     match typ with
     | Types.Optional _ -> (
         match view_field v name typ with
-        | Some f -> { read = (fun b r -> Option.is_some (View.read f b r)) }
+        | Some f ->
+            Read { read = (fun b r -> Option.is_some (View.read f b r)) }
         | None ->
             output v name (fun o l -> Scan_outputs.bool o (l ^ "_present")))
     | _ -> Fmt.invalid_arg "%s: field %s is not optional" v.codec.name name

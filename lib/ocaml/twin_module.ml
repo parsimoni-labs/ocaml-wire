@@ -82,16 +82,16 @@ let pp_members ppf (t : V.t) (r : V.record) =
       | V.Scalar { name; field } ->
           Fmt.pf ppf
             "let h'%s = %s.field_at %s %d %s.%s@\n\
-             let %s b v = h'%s.%s.read b v@\n"
-            name gen v (by_name r field.name) gen (kind field) name name gen
+             let %s b v = %s.read h'%s b v@\n"
+            name gen v (by_name r field.name) gen (kind field) name gen name
       | V.Present { name; presence } ->
           let label =
             String.sub presence.name 0
               (String.length presence.name - String.length "_present")
           in
           Fmt.pf ppf
-            "let h'%s = %s.present_at %s %d@\nlet %s b v = h'%s.%s.read b v@\n"
-            name gen v (by_label r label) name name gen
+            "let h'%s = %s.present_at %s %d@\nlet %s b v = %s.read h'%s b v@\n"
+            name gen v (by_label r label) name gen name
       | V.Sub { name; sub; _ } ->
           let label = match sub.path with Some [ l ] -> l | _ -> name in
           let m =
@@ -106,17 +106,16 @@ let pp_members ppf (t : V.t) (r : V.record) =
       | V.Bytes { name; label; slice; _ } ->
           Fmt.pf ppf
             "let h'%s = %s.field_at %s %d %s.%s@\n\
-             let %s b v = h'%s.%s.read b v@\n"
+             let %s b v = %s.read h'%s b v@\n"
             name gen v (by_label r label) gen
             (if slice then "Slice" else "String")
-            name name gen)
+            name gen name)
     r.members;
   List.iter
     (fun (name, (field : field)) ->
       Fmt.pf ppf
-        "let s'%s = %s.set_at %s %d %s.%s@\n\
-         let set_%s b v x = s'%s.%s.write b v x@\n"
-        name gen v (by_name r field.name) gen (kind field) name name gen)
+        "let s'%s = %s.set_at %s %d %s.%s@\nlet set_%s = s'%s.%s.write@\n" name
+        gen v (by_name r field.name) gen (kind field) name name gen)
     (V.settable r)
 
 let pp_types ppf name =
