@@ -53,22 +53,21 @@
   `Codec.validate_struct` and the readers of `Codec.field_readers`: match on
   it where the call raised (#492, #566, @samoht)
 
-- The reader `Wire.Codec.get` stages answers `('a, Wire.Error.t) result`: a
+- The reader `Wire.Codec.get c f` answers `('a, Wire.Error.t) result`: a
   field the buffer cuts, a closed enum outside its cases, a lookup past its
   table or an action that aborts is the error `decode` gives the field, not
   an exception. Match on `read buf off` where it gave the value; a negative
   offset still raises `Invalid_argument` (#566, @samoht)
 
-- `Wire.Codec.wire_size_at` answers `(int, Wire.Error.t) result`: a length
-  field the buffer cuts is an end-of-input error, not an exception. Match on
-  the result where the call gave the size; a negative offset raises
-  `Invalid_argument` (#568, @samoht)
+- `Wire.Codec.size_at` (was `wire_size_at`) answers `(int, Wire.Error.t)
+  result`: a length field the buffer cuts is an end-of-input error, not an
+  exception. Match on the result where the call gave the size; a negative
+  offset raises `Invalid_argument` (#568, @samoht)
 
-- The reader `Wire.Codec.load_word` stages, and `Get.<field>_word` of a
-  module `Wire_ocaml` writes, answer a `result`: a buffer that cuts the word
-  is the error `Codec.get` gives the field, and a negative offset raises
-  `Invalid_argument` instead of reading in front of the record. Match on the
-  result before `extract` or `<field>_of_word` (#568, @samoht)
+- `Get.<field>_word` of a module `Wire_ocaml` writes answers a `result`: a
+  buffer that cuts the word is the error `Codec.get` gives the field, and a
+  negative offset raises `Invalid_argument` instead of reading in front of the
+  record. Match on the result before `<field>_of_word` (#568, @samoht)
 
 - `Wire.Codec.word_reader`, `read_word`, `word_part` and `of_word` are
   `Codec.Word.reader`, `check`, `field` and `read`: `check r buf off` never
