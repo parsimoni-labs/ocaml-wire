@@ -681,11 +681,6 @@ let pp_preamble ppf r =
      @\n"
     parse_error
 
-let pp_digest target ppf =
-  pp_val target ppf "digest" "string"
-    "[digest] is the digest of the shape of the codec this module was \
-     generated from."
-
 (* The members of a fixed record: its size, values, record, checks,
    decoders, writes, reads and views, on [bytes] and on a bigarray. *)
 let pp_record ?(views = false) ?(buffer = `Bytes) ppf r =

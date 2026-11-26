@@ -44,10 +44,6 @@
     An absent field is [0]. A scan never raises on bad input: it calls [invalid]
     instead. *)
 
-val digest : string
-(** [digest] is the digest of the shape of the codec this module was generated
-    from. *)
-
 (** {1:scans Scans} *)
 
 val fold :

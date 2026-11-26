@@ -17,8 +17,9 @@
     exceptions are a module generated with [~maps]: a map's functions are a
     [Wire] value, so that module links [wire]; and a module whose codec holds a
     byte slice, which it hands out as a [Bytesrw.Bytes.Slice.t], as the codec
-    does, and so links [bytesrw]. The module carries the digest of its codec's
-    shape, which its interpreted twin ({!to_ml}) checks against the codec.
+    does, and so links [bytesrw]. Its interpreted twin ({!to_ml}) carries the
+    digest of the codec's shape and checks it against the codec it is applied
+    to.
 
     An expression in a constraint or a [where] clause that can leave the native
     int is computed on 64 bits, as unsigned integers, as the codec and 3D

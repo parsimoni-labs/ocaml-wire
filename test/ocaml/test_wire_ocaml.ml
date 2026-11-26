@@ -294,10 +294,10 @@ let test_wide () =
       fun buf off -> G_wide.write buf off ~a ~b ~c ~d ~e ~f)
     (decoded Schemas.wide 200 @ List.init 300 (fun _ -> wild ()))
 
-(* Generated code names the shape of the codec it comes from, and refuses to
-   run against a codec whose shape has changed since. *)
+(* The interpreted twin names the shape of the codec its module comes from,
+   and refuses to run against a codec whose shape has changed since. *)
 let test_stale () =
-  let src = ml Schemas.small in
+  let src = Wire_ocaml.(to_ml ~twin:true (v Schemas.small)) in
   let digest = Wire.Private.Gen.digest Schemas.small in
   Alcotest.(check bool) "digest in source" true (contains src digest);
   Wire.Private.Gen.check Schemas.small digest;

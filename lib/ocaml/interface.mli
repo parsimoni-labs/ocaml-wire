@@ -7,9 +7,6 @@
 
 type target = [ `OCaml | `OxCaml ]
 
-val pp_digest : target -> Format.formatter -> unit
-(** [pp_digest target ppf] states the module's [digest]. *)
-
 val record_preamble :
   Format.formatter ->
   target:target ->

@@ -24,10 +24,6 @@
     and never raises it; a write raises [Invalid_argument] where the codec's
     encoder does. *)
 
-val digest : string
-(** [digest] is the digest of the shape of the codec this module was generated
-    from. *)
-
 val min_size : int
 (** [min_size] is the size of a record in bytes, [4]. *)
 

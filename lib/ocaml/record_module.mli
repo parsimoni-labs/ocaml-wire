@@ -29,12 +29,11 @@ val pp_header :
   Format.formatter ->
   codec:string ->
   name:string ->
-  digest:string ->
   uses:(string -> bool) ->
   unit
-(** [pp_header ppf ~codec ~name ~digest ~uses] writes the head of the generated
-    module: what it links, the [digest] that names the shape of its codec, and
-    the helpers among [codec_name], [cast] and [no_error] the body [uses]. *)
+(** [pp_header ppf ~codec ~name ~uses] writes the head of the generated module:
+    what it links and the helpers among [codec_name], [cast] and [no_error] the
+    body [uses]. *)
 
 val refuse : codec:string -> string -> 'a
 (** [refuse ~codec reason] raises [Invalid_argument]: [codec] cannot be

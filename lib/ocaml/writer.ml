@@ -312,7 +312,7 @@ let ml ?decide t =
   (* No accessor takes a helper's name. *)
   let uses name = uses all name in
   text (fun ppf ->
-      pp_header ppf ~codec:t.codec ~name:t.name ~digest:t.digest ~uses;
+      pp_header ppf ~codec:t.codec ~name:t.name ~uses;
       (* On OxCaml a 32-bit or 64-bit value is held unboxed. *)
       List.iter
         (fun m ->
@@ -345,7 +345,6 @@ let mli t =
             ~maps:t.maps ~codec:t.codec ~plan ~size
       | None, Some w -> Interface.scan_preamble ppf ~codec:t.codec ~plan:w.plan
       | None, None -> ());
-      Interface.pp_digest t.target ppf;
       let views = Option.is_some t.walk in
       Option.iter
         (fun (plan, size) ->
