@@ -115,6 +115,10 @@ let ok = function
   | Ok v -> v
   | Error e -> raise (Wire_runtime.Errors.Parse_error e)
 
+let reader ?env c f =
+  let read = Staged.unstage (Codec.get ?env c f) in
+  fun buf off -> decode_ok (read buf off)
+
 let expect_constraint_fail = function
   | Ok _ -> Alcotest.fail "expected a Constraint_failed parse error"
   | Error { Error.kind = Constraint_failed _; _ } -> ()

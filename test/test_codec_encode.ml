@@ -152,7 +152,7 @@ let test_enum_over_carrier_base () =
   | Ok v -> Alcotest.(check int) "decode listed code" 2 (UInt32.to_int v)
   | Error e -> Alcotest.failf "%a" Error.pp e);
   decode_ok (Codec.validate carrier_enum_codec buf 0);
-  let get = Staged.unstage (Codec.get carrier_enum_codec carrier_enum_field) in
+  let get = reader carrier_enum_codec carrier_enum_field in
   Alcotest.(check int) "get listed code" 2 (UInt32.to_int (get buf 0));
   expect_decode_rejects "unlisted code" carrier_enum_codec "\x00\x00\x00\x63";
   expect_encode_rejects "unlisted code" ~names:[ "Code32"; "got 99" ] (fun () ->
@@ -181,9 +181,7 @@ let test_variants_over_carrier_base () =
   | Ok v -> Alcotest.(check bool) "decode variant" true (v = `Zero)
   | Error e -> Alcotest.failf "%a" Error.pp e);
   decode_ok (Codec.validate carrier_variants_codec buf 0);
-  let get =
-    Staged.unstage (Codec.get carrier_variants_codec carrier_variants_field)
-  in
+  let get = reader carrier_variants_codec carrier_variants_field in
   Alcotest.(check bool) "get variant" true (get buf 0 = `Zero);
   Codec.encode carrier_variants_codec `Pos buf 0;
   Alcotest.(check string) "encode" "\x00\x00\x00\x02" (Bytes.to_string buf);
@@ -205,9 +203,7 @@ let test_lookup_and_bit_over_carrier_base () =
   | Ok v -> Alcotest.(check string) "lookup decode" "c" v
   | Error e -> Alcotest.failf "%a" Error.pp e);
   decode_ok (Codec.validate carrier_lookup_codec buf 0);
-  let get =
-    Staged.unstage (Codec.get carrier_lookup_codec carrier_lookup_field)
-  in
+  let get = reader carrier_lookup_codec carrier_lookup_field in
   Alcotest.(check string) "lookup get" "c" (get buf 0);
   Codec.encode carrier_lookup_codec "b" buf 0;
   Alcotest.(check string)
@@ -317,11 +313,9 @@ let test_decode_rejects_refined_byte () =
      span's own refinement travels with the reader, as a closed enum's does. *)
   let get = Staged.unstage (Codec.get per_byte_codec per_byte_cf) in
   (match get (Bytes.of_string "a\xffb") 0 with
-  | s -> Alcotest.failf "get returned %S past the refinement" s
-  | exception
-      Wire_runtime.Errors.Parse_error
-        { Error.kind = Constraint_failed { which = Per_byte; _ }; _ } ->
-      ());
+  | Ok s -> Alcotest.failf "get returned %S past the refinement" s
+  | Error { Error.kind = Constraint_failed { which = Per_byte; _ }; _ } -> ()
+  | Error e -> Alcotest.failf "get: wrong error %a" Error.pp e);
   (* The direct parser has always rejected this; it must keep doing so. *)
   match of_string per_byte_typ "a\xffb" with
   | Error { Error.kind = Constraint_failed { which = Per_byte; _ }; at; _ } ->
@@ -340,8 +334,7 @@ let test_decode_accepts_conforming_refined_byte () =
        (validate_result per_byte_codec "abc"));
   Alcotest.(check string)
     "get" "abc"
-    ((Staged.unstage (Codec.get per_byte_codec per_byte_cf))
-       (Bytes.of_string "abc") 0)
+    ((reader per_byte_codec per_byte_cf) (Bytes.of_string "abc") 0)
 
 (* The fuzz harness holds [decode] and [validate] to the same verdict; pin that
    here against the verdict the refinement calls for, so a later change can
@@ -700,7 +693,7 @@ let test_set_exact_bits_width () =
       let codec, cf = bits_width_codec ~bit_order ~width base in
       let size = Codec.wire_size codec in
       let set = Staged.unstage (Codec.set codec cf) in
-      let get = Staged.unstage (Codec.get codec cf) in
+      let get = reader codec cf in
       let over = 1 lsl width in
       let buf = Bytes.make size '\x00' in
       let label = Fmt.str "set bits(%d,%s,%s) <- 0x%X" width bname oname over in

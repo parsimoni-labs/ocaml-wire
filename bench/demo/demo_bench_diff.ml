@@ -23,12 +23,14 @@ let of_case (type a) (Read_case c : a read_case) =
   in
   let ocaml_read buf =
     if String.length buf < size then None
-    else Some (c.get (Bytes.of_string buf) 0)
+    else Result.to_option (c.get (Bytes.of_string buf) 0)
   in
   let project v =
     let buf = Bytes.create size in
     Codec.encode c.codec v buf 0;
-    c.get buf 0
+    match c.get buf 0 with
+    | Ok v -> v
+    | Error e -> Fmt.failwith "%s: %a" c.label Error.pp e
   in
   let write _ = None in
   let packed =

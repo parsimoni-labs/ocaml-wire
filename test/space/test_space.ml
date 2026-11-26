@@ -14,7 +14,13 @@ let clcw_word ~status ~cop ~vcid ~no_rf ~no_bitlock ~lockout ~wait ~retransmit
 
 let test_clcw_layout () =
   let buf = Bytes.create Space.clcw_size in
-  let get f = Staged.unstage (Codec.get Space.clcw_codec f) in
+  let get f =
+    let read = Staged.unstage (Codec.get Space.clcw_codec f) in
+    fun buf off ->
+      match read buf off with
+      | Ok v -> v
+      | Error e -> Alcotest.failf "%a" Error.pp e
+  in
   let lockout = get Space.bf_cw_lockout and wait = get Space.bf_cw_wait in
   let retransmit = get Space.bf_cw_retransmit in
   let report = get Space.bf_cw_report in

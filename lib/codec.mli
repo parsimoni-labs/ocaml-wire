@@ -228,7 +228,10 @@ val validate :
     another codec or leaves an input parameter unbound. *)
 
 val get :
-  ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
+  ?env:Param.env ->
+  'r t ->
+  ('a, 'r) field ->
+  (bytes -> int -> ('a, Error.t) result) Staged.t
 (** [get ?env c f] is a staged zero-copy getter for field [f] in codec [c]. If
     [f] has an action, it fires on every read. [env] syncs output parameters
     after each action and supplies parameters for dependent field layouts; omit
@@ -237,8 +240,10 @@ val get :
     codec, or when [f] was not bound from a source {!Field.t} used in [c]: an
     unbound param reads 0, which would stage the reader onto the bytes in front
     of the field, while a same-named lookalike could interpret those bytes with
-    a different wire type. Does not check record-level where-clauses or other
-    fields' constraints. On untrusted input use {!View}. *)
+    a different wire type. The reader answers the error of bytes that make no
+    value of [f], under [f]'s name, and raises [Invalid_argument] on a negative
+    offset. Does not check record-level where-clauses or other fields'
+    constraints. On untrusted input use {!View}. *)
 
 val writer : 'r t -> 'r -> ('f, 'r) args -> (bytes -> int -> 'f) Staged.t
 (** [writer c template fields] is a staged writer of a record of [c]: called
@@ -697,7 +702,9 @@ module Gen : sig
   val check : 'r t -> string -> unit
   (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
 
-  type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+  type 'b field_k = {
+    k : 'a. 'a Types.typ -> (bytes -> int -> ('a, Error.t) result) -> 'b;
+  }
   (** A use of a field's reader, whatever the field's type. *)
 
   val with_field_reader : 'r t -> string -> 'b field_k -> 'b option
@@ -707,8 +714,14 @@ module Gen : sig
 
   (** {2 Maps} *)
 
-  type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
-  (** A map's decoder and encoder over its raw wire value. *)
+  type ('w, 'a) map = {
+    dec : at:int -> 'w -> 'a;
+    get : at:int -> field:string -> 'w -> ('a, Error.t) result;
+    enc : 'a -> 'w;
+  }
+  (** A map's decoder and encoder over its raw wire value. [dec] is for a value
+      the record's check accepted; [get] answers the error of any other, at [at]
+      and under the name it is given. *)
 
   val map_int : 'a Types.typ -> (int, 'a) map
   (** [map_int t] is the map [t] over an integer up to 16 bits wide or a

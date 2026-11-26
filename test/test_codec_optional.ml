@@ -295,7 +295,7 @@ let test_dyn_opt_absent () =
 
 let test_dyn_opt_get_trail () =
   let cf_trail = Codec.(f_do_trail $ fun r -> r.trail) in
-  let get_trail = Staged.unstage (Codec.get dyn_opt_codec cf_trail) in
+  let get_trail = reader dyn_opt_codec cf_trail in
   (* Present: trail at offset 3. *)
   let buf1 = Bytes.create 4 in
   Bytes.set_uint8 buf1 0 1;

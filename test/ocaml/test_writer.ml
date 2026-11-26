@@ -31,6 +31,12 @@ let input () =
 
 (* The check, the fold and the accessors of the module of a fixed record
    accept what its record members accept and read what they read. *)
+(* A result's value, its error raised as a getter raises it, so that the
+   two compare the same. *)
+let ok = function
+  | Ok v -> v
+  | Error e -> raise (Wire_runtime.Errors.Parse_error e)
+
 let test_fixed () =
   for _ = 1 to 2000 do
     let buf, off = input () in
@@ -60,23 +66,17 @@ let test_fixed () =
             ]
           and get =
             [
-              (G_checked.Get.version buf off :> int);
-              (G_checked.Get.ihl buf off :> int);
-              UInt16.to_int (G_checked.Get.length buf off);
-              UInt8.to_int (G_checked.Get.ttl buf off);
-              UInt8.to_int (G_checked.Get.proto buf off);
+              (ok (G_checked.Get.version buf off) :> int);
+              (ok (G_checked.Get.ihl buf off) :> int);
+              UInt16.to_int (ok (G_checked.Get.length buf off));
+              UInt8.to_int (ok (G_checked.Get.ttl buf off));
+              UInt8.to_int (ok (G_checked.Get.proto buf off));
             ]
           in
           Alcotest.(check (list int)) "accessors" get read;
           Alcotest.(check (option (list int))) "fold" (Some get) folded
         end
   done
-
-(* A result's value, its error raised as a getter raises it, so that the
-   two compare the same. *)
-let ok = function
-  | Ok v -> v
-  | Error e -> raise (Wire_runtime.Errors.Parse_error e)
 
 let outcome f =
   match f () with
@@ -115,7 +115,7 @@ let viewed ?(fix = fun _ _ -> ()) codec ~read ~gets =
 let test_accessors () =
   let get codec field show =
     let read = Staged.unstage (Codec.get codec field) in
-    fun buf -> show (read buf 0)
+    fun buf -> show (ok (read buf 0))
   in
   let i32 v = string_of_int (SInt32.to_int v) in
   let u32 v = string_of_int (UInt32.to_int v) in
@@ -226,11 +226,11 @@ let test_record_clash () =
    constraints. *)
 let fields buf off =
   [
-    (G_checked.Get.version buf off :> int);
-    (G_checked.Get.ihl buf off :> int);
-    UInt16.to_int (G_checked.Get.length buf off);
-    UInt8.to_int (G_checked.Get.ttl buf off);
-    UInt8.to_int (G_checked.Get.proto buf off);
+    (ok (G_checked.Get.version buf off) :> int);
+    (ok (G_checked.Get.ihl buf off) :> int);
+    UInt16.to_int (ok (G_checked.Get.length buf off));
+    UInt8.to_int (ok (G_checked.Get.ttl buf off));
+    UInt8.to_int (ok (G_checked.Get.proto buf off));
   ]
 
 (* A setter writes its field in place and leaves the bytes of every other

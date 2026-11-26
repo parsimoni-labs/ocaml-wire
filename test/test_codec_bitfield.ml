@@ -266,10 +266,8 @@ let test_view_get_bitfield () =
     (codec, cf_a, cf_d)
   in
   let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
-  Alcotest.(check int) "get a" 5 ((Staged.unstage (Codec.get codec cf_a)) buf 0);
-  Alcotest.(check int)
-    "get d" 0xAB
-    ((Staged.unstage (Codec.get codec cf_d)) buf 0)
+  Alcotest.(check int) "get a" 5 ((reader codec cf_a) buf 0);
+  Alcotest.(check int) "get d" 0xAB ((reader codec cf_d) buf 0)
 
 let test_view_set_bitfield () =
   let codec, cf_a, cf_d =
@@ -292,17 +290,13 @@ let test_view_set_bitfield () =
   in
   let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
   (Staged.unstage (Codec.set codec cf_a)) buf 0 3;
-  Alcotest.(check int)
-    "get a after set" 3
-    ((Staged.unstage (Codec.get codec cf_a)) buf 0);
+  Alcotest.(check int) "get a after set" 3 ((reader codec cf_a) buf 0);
   let r = decode_ok (Codec.decode codec buf 0) in
   Alcotest.(check int) "b preserved" 20 r.b;
   Alcotest.(check int) "c preserved" 0x1234 r.c;
   Alcotest.(check int) "d preserved" 0xAB r.d;
   (Staged.unstage (Codec.set codec cf_d)) buf 0 0x42;
-  Alcotest.(check int)
-    "get d after set" 0x42
-    ((Staged.unstage (Codec.get codec cf_d)) buf 0);
+  Alcotest.(check int) "get d after set" 0x42 ((reader codec cf_d) buf 0);
   let r = decode_ok (Codec.decode codec buf 0) in
   Alcotest.(check int) "a still 3" 3 r.a;
   Alcotest.(check int) "b still 20" 20 r.b;
@@ -331,8 +325,8 @@ let test_bitfield_extract () =
   let hi = Codec.extract hi w in
   let lo = Codec.extract lo w in
   (* Compare against Codec.get *)
-  let get_hi = Staged.unstage (Codec.get bf_codec bf_cf_hi) in
-  let get_lo = Staged.unstage (Codec.get bf_codec bf_cf_lo) in
+  let get_hi = reader bf_codec bf_cf_hi in
+  let get_lo = reader bf_codec bf_cf_lo in
   Alcotest.(check int) "extract hi = get hi" (get_hi buf 0) hi;
   Alcotest.(check int) "extract lo = get lo" (get_lo buf 0) lo;
   Alcotest.(check int) "hi" 0xA hi;

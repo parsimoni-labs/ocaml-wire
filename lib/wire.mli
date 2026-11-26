@@ -25,7 +25,7 @@
 
     let buf = Codec.to_bytes codec { version = 1; length = UInt16.v 42 }
     let get_version = Staged.unstage (Codec.get codec bf_version)
-    let () = assert (get_version buf 0 = 1)
+    let () = assert (get_version buf 0 = Ok 1)
 
     let () =
       match Codec.decode codec buf 0 with
@@ -1315,16 +1315,26 @@ module Codec : sig
       another codec or leaves an input parameter unbound. *)
 
   val get :
-    ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
-  (** Staged field reader. If the field has an [~action], the action fires on
+    ?env:Param.env ->
+    'r t ->
+    ('a, 'r) field ->
+    (bytes -> int -> ('a, Error.t) result) Staged.t
+  (** Staged field reader. [read buf off] is the value of the field in the
+      record at [off], or the error of its bytes: the field cut by the end of
+      [buf], a closed enum outside its cases, a lookup past its table, an action
+      that aborts. The error is the one {!decode} gives the field, at its offset
+      and under its name. If the field has an [~action], the action fires on
       every read. Pass [~env] to sync output parameters after each action and to
       resolve a dependent layout's parameters; omit it for parameter-free
-      accessors. Raises [Invalid_argument] when the codec has input params and
-      [~env] is omitted, when it was created for another codec, or when the
-      field binding does not share its source {!Field.t} with the field in the
-      codec: an unbound param reads 0, which would stage the reader onto the
-      bytes in front of the field, while a same-named lookalike could interpret
-      those bytes with a different wire type.
+      accessors.
+
+      Raises [Invalid_argument] when the codec has input params and [~env] is
+      omitted, when it was created for another codec, or when the field binding
+      does not share its source {!Field.t} with the field in the codec: an
+      unbound param reads 0, which would stage the reader onto the bytes in
+      front of the field, while a same-named lookalike could interpret those
+      bytes with a different wire type. The reader raises [Invalid_argument] on
+      a negative offset, which is misuse, not input.
 
       Does not check [~where] clauses or other fields' constraints. On untrusted
       input use {!View}. *)
@@ -2168,7 +2178,9 @@ module Private : sig
     val check : 'r Codec.t -> string -> unit
     (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
 
-    type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+    type 'b field_k = {
+      k : 'a. 'a Types.typ -> (bytes -> int -> ('a, Error.t) result) -> 'b;
+    }
     (** A use of a field's reader, whatever the field's type. *)
 
     val with_field_reader : 'r Codec.t -> string -> 'b field_k -> 'b option
@@ -2178,8 +2190,14 @@ module Private : sig
 
     (** {2 Maps} *)
 
-    type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
-    (** A map's decoder and encoder over its raw wire value. *)
+    type ('w, 'a) map = {
+      dec : at:int -> 'w -> 'a;
+      get : at:int -> field:string -> 'w -> ('a, Error.t) result;
+      enc : 'a -> 'w;
+    }
+    (** A map's decoder and encoder over its raw wire value. [dec] is for a
+        value the record's check accepted; [get] answers the error of any other,
+        at [at] and under the name it is given. *)
 
     val map_int : 'a Types.typ -> (int, 'a) map
     (** [map_int t] is the map [t] over an integer up to 16 bits wide or a

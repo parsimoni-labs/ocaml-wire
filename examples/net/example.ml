@@ -7,6 +7,14 @@ open Wire
 open Net
 module Slice = Bytesrw.Bytes.Slice
 
+(* [get c f buf off] is the field [f] of the record of [c] at [off]. *)
+let get c f =
+  let read = Staged.unstage (Codec.get c f) in
+  fun buf off ->
+    match read buf off with
+    | Ok v -> v
+    | Error e -> Fmt.failwith "%a" Error.pp e
+
 let () =
   let buf = (tcp_frame_data 1).(0) in
 
@@ -15,38 +23,24 @@ let () =
   Fmt.pr "Frame: %d bytes in a single buffer\n\n" (Bytes.length buf);
 
   (* Layer 1: Ethernet -- read ethertype, navigate to IPv4 sub-region *)
-  let etype =
-    (Staged.unstage (Codec.get ethernet_codec bf_eth_ethertype)) buf 0
-  in
-  let ip_off =
-    Slice.first
-      ((Staged.unstage (Codec.get ethernet_codec bf_eth_payload)) buf 0)
-  in
+  let etype = (get ethernet_codec bf_eth_ethertype) buf 0 in
+  let ip_off = Slice.first ((get ethernet_codec bf_eth_payload) buf 0) in
   Fmt.pr "Ethernet: ethertype=0x%04X payload_off=%d\n" (UInt16.to_int etype)
     ip_off;
 
   (* Layer 2: IPv4 -- read fields, navigate to TCP sub-region *)
-  let protocol =
-    (Staged.unstage (Codec.get ipv4_codec bf_ip_protocol)) buf ip_off
-  in
-  let src = (Staged.unstage (Codec.get ipv4_codec bf_ip_src)) buf ip_off in
-  let dst = (Staged.unstage (Codec.get ipv4_codec bf_ip_dst)) buf ip_off in
-  let tcp_off =
-    Slice.first
-      ((Staged.unstage (Codec.get ipv4_codec bf_ip_payload)) buf ip_off)
-  in
+  let protocol = (get ipv4_codec bf_ip_protocol) buf ip_off in
+  let src = (get ipv4_codec bf_ip_src) buf ip_off in
+  let dst = (get ipv4_codec bf_ip_dst) buf ip_off in
+  let tcp_off = Slice.first ((get ipv4_codec bf_ip_payload) buf ip_off) in
   Fmt.pr "IPv4:     protocol=%d src=%a dst=%a payload_off=%d\n"
     (UInt8.to_int protocol) pp_ipv4_addr src pp_ipv4_addr dst tcp_off;
 
   (* Layer 3: TCP -- read fields *)
-  let src_port =
-    (Staged.unstage (Codec.get tcp_codec bf_tcp_src_port)) buf tcp_off
-  in
-  let dst_port =
-    (Staged.unstage (Codec.get tcp_codec bf_tcp_dst_port)) buf tcp_off
-  in
-  let syn = (Staged.unstage (Codec.get tcp_codec bf_tcp_syn)) buf tcp_off in
-  let ack = (Staged.unstage (Codec.get tcp_codec bf_tcp_ack)) buf tcp_off in
+  let src_port = (get tcp_codec bf_tcp_src_port) buf tcp_off in
+  let dst_port = (get tcp_codec bf_tcp_dst_port) buf tcp_off in
+  let syn = (get tcp_codec bf_tcp_syn) buf tcp_off in
+  let ack = (get tcp_codec bf_tcp_ack) buf tcp_off in
   Fmt.pr "TCP:      %d -> %d SYN=%b ACK=%b\n\n" (UInt16.to_int src_port)
     (UInt16.to_int dst_port) syn ack;
 
@@ -54,8 +48,7 @@ let () =
   (Staged.unstage (Codec.set tcp_codec bf_tcp_dst_port))
     buf tcp_off (UInt16.v 8080);
   Fmt.pr "After set: TCP dst_port=%d\n"
-    (UInt16.to_int
-       ((Staged.unstage (Codec.get tcp_codec bf_tcp_dst_port)) buf tcp_off));
+    (UInt16.to_int ((get tcp_codec bf_tcp_dst_port) buf tcp_off));
 
   Fmt.pr
     "\n\

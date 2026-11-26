@@ -336,9 +336,17 @@ let cf_lockout = Space.bf_cw_lockout
 let cf_wait = Space.bf_cw_wait
 let cf_retransmit = Space.bf_cw_retransmit
 
+(* A CLCW field of a word the bench wrote itself. *)
+let clcw_field f =
+  let read = Wire.Staged.unstage (Wire.Codec.get clcw_codec f) in
+  fun buf off ->
+    match read buf off with
+    | Ok v -> v
+    | Error e -> Fmt.failwith "CLCW: %a" Wire.Error.pp e
+
 let run_zero_copy () =
   let data = clcw_data n_values in
-  let get_report = Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_report) in
+  let get_report = clcw_field cf_report in
   let set_report = Wire.Staged.unstage (Wire.Codec.set clcw_codec cf_report) in
   Fmt.pr "  CLCW zero-copy get...\n%!";
   for _ = 1 to iterations do
@@ -362,14 +370,10 @@ let run_zero_copy () =
 
 let run_clcw_polling () =
   let data = clcw_data n_values in
-  let get_lockout =
-    Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_lockout)
-  in
-  let get_wait = Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_wait) in
-  let get_retransmit =
-    Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_retransmit)
-  in
-  let get_report = Wire.Staged.unstage (Wire.Codec.get clcw_codec cf_report) in
+  let get_lockout = clcw_field cf_lockout in
+  let get_wait = clcw_field cf_wait in
+  let get_retransmit = clcw_field cf_retransmit in
+  let get_report = clcw_field cf_report in
   Fmt.pr "  CLCW polling (4 bitfield reads per word)...\n%!";
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do

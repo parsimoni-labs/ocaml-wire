@@ -990,9 +990,46 @@ let read_attr target f =
       "[@inline][@zero_alloc]"
   | _ -> "[@inline]"
 
-let pp_getter ~src ppf ~target f =
-  let attr = read_attr target f in
-  Fmt.pf ppf "let%s %s %s off =@\n" attr f.label src.buf;
+(* A getter answers a result, which it allocates: it is inlined, and checked
+   for allocation on neither target. *)
+let getter_attr = "[@inline]"
+
+(* The bytes of [f] from the record's offset to the field's end. *)
+let field_end f =
+  f.offset
+  +
+  match f.store with
+  | Int { width; _ } -> width / 8
+  | Bits { base; _ } -> Bitfield.byte_size base
+  | Bytes n -> n
+
+(* The value a getter answers: through the field's map when it has one, which
+   answers its own error. *)
+let getter_value ~src f =
+  match (f.map, f.store) with
+  | Some _, Int { width = 32; _ } when src.unboxed ->
+      Fmt.str "(%s.get ~at:(off + %d) ~field:%S (Int32_u.to_int32 %s_raw))"
+        (map_var f) f.offset f.name f.id
+  | Some _, Int { width = 32; _ } ->
+      Fmt.str "(%s.get ~at:(off + %d) ~field:%S %s_raw)" (map_var f) f.offset
+        f.name f.id
+  | Some _, _ ->
+      Fmt.str "(%s.get ~at:(off + %d) ~field:%S %s)" (map_var f) f.offset f.name
+        f.id
+  | None, _ -> Fmt.str "Ok %s" (typed_value ~src f)
+
+(* A getter's frame: the field's bytes lie in the buffer, or the getter
+   answers their end-of-input error. *)
+let pp_get_frame ~src ppf f =
+  Fmt.pf ppf
+    "  if off < 0 || off > %s buf - %d then field_eof %S (%s buf) off %d %d@\n\
+    \  else@\n"
+    src.len (field_end f) f.name src.len f.offset
+    (field_end f - f.offset)
+
+let pp_getter ~src ppf f =
+  Fmt.pf ppf "let%s %s %s off =@\n" getter_attr f.label src.buf;
+  pp_get_frame ~src ppf f;
   (match f.store with
   | Int { width = 32; _ } ->
       (* Its typed value is made from the [int32]; only an enum's test reads
@@ -1003,18 +1040,20 @@ let pp_getter ~src ppf ~target f =
   | _ -> Fmt.pf ppf "  let %s = %s in@\n" f.id (checked_read ~src f));
   (match f.enum with
   | Some (_, valid) ->
-      Fmt.pf ppf "  if not %s then enum_failed (off + %d) %s [%a] else@\n"
-        (member f valid) f.offset f.id
+      Fmt.pf ppf "  if not %s then enum_failed %S (off + %d) %s [%a] else@\n"
+        (member f valid) f.name f.offset f.id
         Fmt.(list ~sep:(any "; ") (using int_lit string))
         valid
   | None -> ());
-  Fmt.pf ppf "  %s@\n@\n" (typed_value ~src f);
+  Fmt.pf ppf "  %s@\n@\n" (getter_value ~src f);
   match f.store with
   | Int { width = 32; _ } ->
       (* The [int] view of a 32-bit field, with no conversion through its
          typed form. *)
-      Fmt.pf ppf "let%s %s_int %s off =@\n  let %s_raw = %s in@\n  %s@\n@\n"
-        attr f.label src.buf f.id (checked_read ~src f) (int_view ~src f)
+      Fmt.pf ppf "let%s %s_int %s off =@\n" getter_attr f.label src.buf;
+      pp_get_frame ~src ppf f;
+      Fmt.pf ppf "  let %s_raw = %s in@\n  Ok %s@\n@\n" f.id
+        (checked_read ~src f) (int_view ~src f)
   | _ -> ()
 
 (* A bitfield's word, read once for all the fields packed in it:
@@ -1050,14 +1089,26 @@ let pp_of_word ppf ~target f =
 (* The checked reads are in [Get], named after their fields, so a field's name
    meets none of the module's own. *)
 let pp_getters ?(src = bytes_src) ppf ~target fields =
+  Fmt.pf ppf
+    "let[@inline never] field_eof field len off at width =@\n\
+    \  if off < 0 then %s.negative_offset off@\n\
+    \  else@\n\
+    \    let at = off + at in@\n\
+    \    let got = if at > len then 0 else len - at in@\n\
+    \    Error@\n\
+    \      { %s.at; field = [ field ];@\n\
+    \        kind = Unexpected_eof { expected = width; got } }@\n\
+     @\n"
+    errors error;
   if List.exists (fun f -> Option.is_some f.enum) fields then
     Fmt.pf ppf
-      "let%s enum_failed at value valid =@\n\
-      \  %s.invalid_enum ~at ~field:[] ~value ~valid@\n\
+      "let[@inline never] enum_failed field at value valid =@\n\
+      \  Error { %s.at; field = [ field ]; kind = Invalid_enum { value; valid \
+       } }@\n\
        @\n"
-      (cold_attr target) errors;
+      error;
   Fmt.pf ppf "module Get = struct@\n";
-  List.iter (pp_getter ~src ppf ~target) fields;
+  List.iter (pp_getter ~src ppf) fields;
   List.iter (pp_word_getter ~src ppf ~target) fields;
   Fmt.pf ppf "end@\n@\n";
   List.iter (pp_of_word ppf ~target) fields
@@ -1586,6 +1637,7 @@ let own_names =
     "write_at";
     "write_int_at";
     "enum_failed";
+    "field_eof";
     "Get";
     "v";
     "encode";
@@ -1603,7 +1655,7 @@ let own_names =
 (* The names inside [Get] that its reads call: a getter of one of these
    names would shadow it for the getters after it. *)
 let getters_own fields =
-  "Get.cast" :: "Get.mask32" :: "Get.enum_failed"
+  "Get.cast" :: "Get.mask32" :: "Get.enum_failed" :: "Get.field_eof"
   :: List.filter_map
        (fun f -> Option.map (fun _ -> "Get." ^ map_var f) f.map)
        fields

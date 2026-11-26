@@ -16,7 +16,6 @@ type target = [ `OCaml | `OxCaml ]
 
 let rt = Emitter.rt
 let parse_error = rt ^ ".Error.t"
-let parse_exn = "[" ^ rt ^ ".Errors.Parse_error]"
 
 (* The buffer a function takes: its type, the runtime module that names it,
    and whether the function takes it [local]. *)
@@ -371,29 +370,28 @@ let pp_writes ppf r b =
 let pp_get ppf r b =
   let target = r.target in
   let enums = List.exists (fun f -> Option.is_some f.enum) r.fields in
+  let result t = Fmt.str "(%s, %s) result" t parse_error in
   pp_doc ppf
     (Fmt.str
-       "Reads of one field of the record at [off] in [buf], each one load that \
-        checks its bounds and raises [Invalid_argument] outside them. A read \
-        checks none of the record's constraints%s."
-       (if enums then
-          Fmt.str
-            ", but a value that is no case of its field's closed enum raises %s"
-            parse_exn
+       "Reads of one field of the record at [off] in [buf], as \
+        [Wire.Codec.get] reads it. A read answers the error of a field the \
+        buffer cuts%s, at the field's offset and under its name, and raises \
+        [Invalid_argument] on a negative [off]. It checks none of the record's \
+        constraints."
+       (if enums then " and of a value that is no case of its closed enum"
         else ""));
   Fmt.pf ppf "module Get : sig@\n";
   List.iter
     (fun f ->
       let l = f.label in
-      let zero_alloc = read_checked f in
       let portable = Option.is_none f.map in
-      pp_val ~zero_alloc ~portable target ppf l
-        (arrows [ buf b; "int"; typed ~maps:r.maps f ])
+      pp_val ~zero_alloc:false ~portable target ppf l
+        (arrows [ buf b; "int"; result (typed ~maps:r.maps f) ])
         (Fmt.str "[%s buf off] is %s of the record at [off]." l (read_what f));
       match f.store with
       | Int { width = 32; _ } ->
-          pp_val ~zero_alloc target ppf (l ^ "_int")
-            (arrows [ buf b; "int"; "int" ])
+          pp_val ~zero_alloc:false target ppf (l ^ "_int")
+            (arrows [ buf b; "int"; result "int" ])
             (Fmt.str
                "[%s_int buf off] is %s of the record at [off], as an [int]." l
                (where f))

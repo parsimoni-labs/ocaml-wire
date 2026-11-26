@@ -199,8 +199,8 @@ let test_multi_var_get () =
   Bytes.blit_string "\xFF\x00" 0 buf 7 2;
   let cf_txseq = Codec.(f_cfdp_txseq $ fun r -> r.txseq) in
   let cf_dst = Codec.(f_cfdp_dst $ fun r -> r.dst) in
-  let get_txseq = Staged.unstage (Codec.get cfdp_codec cf_txseq) in
-  let get_dst = Staged.unstage (Codec.get cfdp_codec cf_dst) in
+  let get_txseq = reader cfdp_codec cf_txseq in
+  let get_dst = reader cfdp_codec cf_dst in
   Alcotest.(check string) "get txseq" "\xCC\xDD\xEE" (get_txseq buf 0);
   Alcotest.(check string) "get dst" "\xFF\x00" (get_dst buf 0)
 

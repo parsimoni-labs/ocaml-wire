@@ -192,7 +192,7 @@ let test_lookalike_field_handles () =
   let lookalike_word = Codec.(Field.v "word" uint16 $ Fun.id) in
   let word_codec = Codec.v "WordOwner" Fun.id [ word_field ] in
   let buf = Bytes.of_string "\x12\x34" in
-  let read = Staged.unstage (Codec.get word_codec word_again) in
+  let read = reader word_codec word_again in
   Alcotest.(check int)
     "rebinding the same Field.t works" 0x1234
     (UInt16.to_int (read buf 0));
@@ -397,31 +397,38 @@ let iter_bitpacks f =
       List.iter (fun (fname, field) -> f name word fname field codec) fields)
     bitpack_bases
 
-let test_get_bitfield_word_past_buffer_raises () =
+let test_get_bitfield_word_past_buffer () =
   iter_bitpacks (fun name word fname field codec ->
       let get = Staged.unstage (Codec.get codec field) in
       let load =
         Staged.unstage (Codec.load_word (Codec.bitfield codec field))
       in
-      let expect_refusal reader len off =
-        match reader (Bytes.make len '\xff') off with
-        | v ->
+      let expect_refusal len off =
+        let buf = Bytes.make len '\xff' in
+        (match get buf off with
+        | Error { Error.kind = Unexpected_eof _; _ } -> ()
+        | Error e ->
+            Alcotest.failf "%s field %s: %a at offset %d of a %d-byte buffer"
+              name fname Error.pp e off len
+        | Ok v ->
             Alcotest.failf
               "%s field %s: read %d at offset %d of a %d-byte buffer" name fname
-              v off len
+              v off len);
+        match load buf off with
+        | v ->
+            Alcotest.failf
+              "%s field %s: loaded %d at offset %d of a %d-byte buffer" name
+              fname (Optint.to_int v) off len
         | exception Invalid_argument _ -> ()
       in
-      List.iter
-        (fun reader ->
-          (* No room for the word at all, and room for it but not where the
-             frame starts. *)
-          for len = 0 to word - 1 do
-            expect_refusal reader len 0
-          done;
-          for off = 1 to word do
-            expect_refusal reader word off
-          done)
-        [ get; (fun buf off -> Optint.to_int (load buf off)) ])
+      (* No room for the word at all, and room for it but not where the frame
+         starts. *)
+      for len = 0 to word - 1 do
+        expect_refusal len 0
+      done;
+      for off = 1 to word do
+        expect_refusal word off
+      done)
 
 let test_set_bitfield_word_past_buffer_writes_nothing () =
   iter_bitpacks (fun name word fname field codec ->
@@ -464,7 +471,7 @@ let test_get_static_optional_agrees_with_decode () =
   in
   let buf = Bytes.of_string "\003\009abc" in
   let len, on, off, or_off, _ = decode_ok (Codec.decode c buf 0) in
-  let read f = Staged.unstage (Codec.get c f) buf 0 in
+  let read f = (reader c f) buf 0 in
   Alcotest.(check int)
     "optional_or, gate on" (UInt8.to_int len)
     (UInt8.to_int (read cf_len));
@@ -861,8 +868,8 @@ let suite =
       Alcotest.test_case
         "size_of_value: a casetype value no case projects raises" `Quick
         test_size_of_value_refuses_unmatched_case;
-      Alcotest.test_case "get: a bitfield word past the buffer raises" `Quick
-        test_get_bitfield_word_past_buffer_raises;
+      Alcotest.test_case "get: a bitfield word past the buffer is an error"
+        `Quick test_get_bitfield_word_past_buffer;
       Alcotest.test_case "set: a bitfield word past the buffer writes nothing"
         `Quick test_set_bitfield_word_past_buffer_writes_nothing;
       Alcotest.test_case "get: statically gated optionals agree with decode"

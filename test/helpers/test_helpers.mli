@@ -77,6 +77,11 @@ val ok : ('a, Error.t) result -> 'a
 (** [ok r] is the value of [r], its error raised as the runtime's [Parse_error],
     for a check that compares an answer with what a field reader raises. *)
 
+val reader :
+  ?env:Param.env -> 'r Codec.t -> ('a, 'r) Codec.field -> bytes -> int -> 'a
+(** [reader ?env c f buf off] is what {!Codec.get} of [f] reads at [off] in
+    [buf], its error failing the test. *)
+
 val expect_constraint_fail : ('a, Error.t) result -> unit
 (** [expect_constraint_fail r] asserts [r] is [Error] with a [Constraint_failed]
     kind, failing the test otherwise. *)

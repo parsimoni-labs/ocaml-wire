@@ -183,6 +183,17 @@ let outcome f =
       Fmt.str "parse error %a" Wire.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
+(* A word load raises [Invalid_argument] where its word is not in the buffer,
+   as [Wire.Codec.load_word] does, where the codec's reader answers the field
+   cut: the same answer. A word load takes the word's position, so a negative
+   record offset is no input of it. *)
+let word_outcome f =
+  match f () with
+  | s -> "ok " ^ s
+  | exception (Refused { kind = Unexpected_eof _; _ } | Invalid_argument _) ->
+      "out of the buffer"
+  | exception Refused e -> Fmt.str "parse error %a" Wire.Error.pp e
+
 let view_name name = function
   | Get -> Fmt.str "get %s" name
   | Get_int -> Fmt.str "get %s as an int" name
@@ -192,7 +203,7 @@ let view_name name = function
 let reference codec name =
   let k typ read =
     match show typ with
-    | Some show -> fun buf off -> show (read buf off)
+    | Some show -> fun buf off -> show (ok (read buf off))
     | None ->
         Fmt.failwith "diff: field %s has a type the backend cannot show" name
   in
@@ -267,10 +278,16 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
              ""));
       List.iter
         (fun (name, view, read) ->
-          same case.label
-            (what (view_name name view))
-            (outcome (fun () -> List.assoc name case.refs buf off))
-            (outcome (fun () -> read buf off)))
+          match view with
+          | Of_word when off < 0 -> ()
+          | _ ->
+              let outcome =
+                match view with Of_word -> word_outcome | _ -> outcome
+              in
+              same case.label
+                (what (view_name name view))
+                (outcome (fun () -> List.assoc name case.refs buf off))
+                (outcome (fun () -> read buf off)))
         ops.gets;
       views_at case c ~what ~validated ops buf off)
 
@@ -459,7 +476,7 @@ let of_sampled label (Fuzz_gen.Pack g) =
                        if is_int typ then
                          Some
                            ( Names.ocaml_label name,
-                             fun b -> Eval.int_of_exn typ (read b 0) )
+                             fun b -> Eval.int_of_exn typ (ok (read b 0)) )
                        else None);
                  })))
       (Gen.to_struct c).fields

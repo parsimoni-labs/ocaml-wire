@@ -86,9 +86,7 @@ let test_dep_bslice_get_payload () =
   Bytes.set_uint8 buf 3 0x20;
   Bytes.set_uint8 buf 4 0x30;
   Bytes.set_uint8 buf 5 0x40;
-  let payload =
-    (Staged.unstage (Codec.get dep_slice_codec cf_ds_payload)) buf 0
-  in
+  let payload = (reader dep_slice_codec cf_ds_payload) buf 0 in
   Alcotest.(check int) "get payload first" 2 (Bs.first payload);
   Alcotest.(check int) "get payload length" 4 (Bs.length payload);
   Alcotest.(check int)
@@ -98,9 +96,7 @@ let test_dep_bslice_get_payload () =
 let test_dep_bslice_sub () =
   let buf = Bytes.create 6 in
   Bytes.set_uint16_be buf 0 4;
-  let off =
-    Bs.first ((Staged.unstage (Codec.get dep_slice_codec cf_ds_payload)) buf 0)
-  in
+  let off = Bs.first ((reader dep_slice_codec cf_ds_payload) buf 0) in
   Alcotest.(check int) "sub offset" 2 off
 
 let test_dep_bslice_set_length () =
@@ -109,16 +105,14 @@ let test_dep_bslice_set_length () =
   (Staged.unstage (Codec.set dep_slice_codec cf_ds_length)) buf 0 (UInt16.v 8);
   Alcotest.(check int)
     "set length" 8
-    (UInt16.to_int
-       ((Staged.unstage (Codec.get dep_slice_codec cf_ds_length)) buf 0))
+    (UInt16.to_int ((reader dep_slice_codec cf_ds_length) buf 0))
 
 let test_dep_bslice_get_length () =
   let buf = Bytes.create 6 in
   Bytes.set_uint16_be buf 0 42;
   Alcotest.(check int)
     "get length" 42
-    (UInt16.to_int
-       ((Staged.unstage (Codec.get dep_slice_codec cf_ds_length)) buf 0))
+    (UInt16.to_int ((reader dep_slice_codec cf_ds_length) buf 0))
 
 (* -- Dependent-size byte_array tests -- *)
 
@@ -154,9 +148,7 @@ let test_dep_byte_array_get () =
   let buf = Bytes.create 5 in
   Bytes.set_uint16_be buf 0 3;
   Bytes.blit_string "xyz" 0 buf 2 3;
-  let payload =
-    (Staged.unstage (Codec.get dep_array_codec cf_da_payload)) buf 0
-  in
+  let payload = (reader dep_array_codec cf_da_payload) buf 0 in
   Alcotest.(check string) "get payload" "xyz" payload
 
 (* -- Fixed field after variable field tests -- *)
@@ -183,10 +175,7 @@ let test_dep_trailer_get_checksum () =
   Bytes.set_uint8 buf 3 0x22;
   Bytes.set_uint8 buf 4 0x33;
   Bytes.set_uint16_be buf 5 0xBEEF;
-  let checksum =
-    UInt16.to_int
-      ((Staged.unstage (Codec.get trailer_codec cf_tr_checksum)) buf 0)
-  in
+  let checksum = UInt16.to_int ((reader trailer_codec cf_tr_checksum) buf 0) in
   Alcotest.(check int) "get checksum" 0xBEEF checksum
 
 let test_dep_trailer_set_checksum () =

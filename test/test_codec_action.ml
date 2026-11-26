@@ -33,17 +33,14 @@ let test_action_fires_on_get () =
       $ fun v -> v)
   in
   let codec = Codec.v "ActionGet" (fun v -> v) [ cf_v ] in
-  let get_v = Staged.unstage (Codec.get codec cf_v) in
+  let get_v = reader codec cf_v in
+  let read_v = Staged.unstage (Codec.get codec cf_v) in
   (* Even value: action passes *)
   Alcotest.(check int)
     "get even" 0x42
     (UInt8.to_int (get_v (Bytes.of_string "\x42") 0));
   (* Odd value: action rejects *)
-  match get_v (Bytes.of_string "\x43") 0 with
-  | _ -> Alcotest.fail "expected action to reject odd value"
-  | exception
-      Wire_runtime.Errors.Parse_error { Error.kind = Constraint_failed _; _ } ->
-      ()
+  expect_constraint_fail (read_v (Bytes.of_string "\x43") 0)
 
 let test_action_validate_does_not_writeback () =
   (* validate runs actions in scratch storage but does not expose their output
@@ -73,7 +70,7 @@ let test_get_noaction_zero_overhead () =
   let cf_v = Codec.(Field.v "v" uint8 $ fun v -> v) in
   let codec = Codec.v "NoAction" (fun v -> v) [ cf_v ] in
   let buf = Bytes.of_string "\x42" in
-  let get_v = Staged.unstage (Codec.get codec cf_v) in
+  let get_v = reader codec cf_v in
   Alcotest.(check int) "get returns value" 0x42 (UInt8.to_int (get_v buf 0))
 
 let test_get_with_env () =
@@ -90,7 +87,7 @@ let test_get_with_env () =
   let codec = Codec.v "GetEnv" (fun v -> v) [ cf_v ] in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
-  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let get_v = reader ~env codec cf_v in
   let v = get_v buf 0 in
   Alcotest.(check int) "get returns value" 0x42 (UInt8.to_int v);
   Alcotest.(check int)
@@ -128,8 +125,8 @@ let test_get_action_field_twocodecs () =
   let env1 = Codec.env codec1 in
   let env2 = Codec.env codec2 in
   let buf = Bytes.of_string "\xAA\xBB" in
-  let get1 = Staged.unstage (Codec.get ~env:env1 codec1 cf_v) in
-  let get2 = Staged.unstage (Codec.get ~env:env2 codec2 cf_v2) in
+  let get1 = reader ~env:env1 codec1 cf_v in
+  let get2 = reader ~env:env2 codec2 cf_v2 in
   (* codec1 reads offset 0 = 0xAA *)
   Alcotest.(check int) "codec1 get" 0xAA (UInt8.to_int (get1 buf 0));
   Alcotest.(check int) "codec1 out" 0xAA (UInt8.to_int (Param.get env1 out1));
@@ -152,7 +149,7 @@ let test_get_action_no_env () =
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x42" in
   (* No ~env: action fires (no crash) but output stays 0 *)
-  let get_v = Staged.unstage (Codec.get codec cf_v) in
+  let get_v = reader codec cf_v in
   Alcotest.(check int) "get returns value" 0x42 (UInt8.to_int (get_v buf 0));
   Alcotest.(check int)
     "output not synced without env" 0
@@ -166,19 +163,15 @@ let test_get_action_abort_field () =
       v)
   in
   let codec = Codec.v "AbortGet" (fun v -> v) [ cf_v ] in
-  let get_v = Staged.unstage (Codec.get codec cf_v) in
-  match get_v (Bytes.of_string "\x42") 0 with
-  | _ -> Alcotest.fail "expected abort"
-  | exception
-      Wire_runtime.Errors.Parse_error { Error.kind = Constraint_failed _; _ } ->
-      ()
+  let read_v = Staged.unstage (Codec.get codec cf_v) in
+  expect_constraint_fail (read_v (Bytes.of_string "\x42") 0)
 
 let test_get_noaction_ignores_env () =
   (* Passing ~env to get on a field without action is harmless *)
   let cf_v = Codec.(Field.v "v" uint8 $ fun v -> v) in
   let codec = Codec.v "NoActEnv" (fun v -> v) [ cf_v ] in
   let env = Codec.env codec in
-  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let get_v = reader ~env codec cf_v in
   Alcotest.(check int)
     "get returns value" 0x42
     (UInt8.to_int (get_v (Bytes.of_string "\x42") 0))
@@ -196,7 +189,7 @@ let test_get_action_multiple_calls () =
   in
   let codec = Codec.v "Multi" (fun v -> v) [ cf_v ] in
   let env = Codec.env codec in
-  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let get_v = reader ~env codec cf_v in
   ignore (get_v (Bytes.of_string "\x10") 0);
   Alcotest.(check int) "after first" 0x10 (UInt8.to_int (Param.get env out));
   ignore (get_v (Bytes.of_string "\x20") 0);
@@ -224,18 +217,15 @@ let test_get_action_with_inputparam () =
   let env = Codec.env codec |> Param.bind limit (UInt8.v 50) in
   let buf_ok = Bytes.of_string "\x30" in
   let buf_bad = Bytes.of_string "\x40" in
-  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let get_v = reader ~env codec cf_v in
+  let read_v = Staged.unstage (Codec.get ~env codec cf_v) in
   (* 0x30 = 48 <= 50: passes *)
   Alcotest.(check int)
     "get with input param" 0x30
     (UInt8.to_int (get_v buf_ok 0));
   Alcotest.(check int) "output synced" 0x30 (UInt8.to_int (Param.get env out));
   (* 0x40 = 64 > 50: action rejects *)
-  match get_v buf_bad 0 with
-  | _ -> Alcotest.fail "expected rejection from input param check"
-  | exception
-      Wire_runtime.Errors.Parse_error { Error.kind = Constraint_failed _; _ } ->
-      ()
+  expect_constraint_fail (read_v buf_bad 0)
 
 let test_get_action_inputparam_noenv () =
   (* An action comparing against an input param is a verdict on the bytes, so
@@ -260,15 +250,12 @@ let test_get_action_inputparam_noenv () =
       Alcotest.(check bool)
         "the refusal names the remedy" true (contains ~sub:"?env" msg));
   let env = Param.bind_by_name "lim2" 4 (Codec.env codec) in
-  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let get_v = reader ~env codec cf_v in
+  let read_v = Staged.unstage (Codec.get ~env codec cf_v) in
   Alcotest.(check int)
     "within the bound the value reads back" 4
     (UInt8.to_int (get_v (Bytes.of_string "\x04") 0));
-  match get_v (Bytes.of_string "\x05") 0 with
-  | _ -> Alcotest.fail "expected rejection above the bound"
-  | exception
-      Wire_runtime.Errors.Parse_error { Error.kind = Constraint_failed _; _ } ->
-      ()
+  expect_constraint_fail (read_v (Bytes.of_string "\x05") 0)
 
 (* -- Param forwarding into embedded sub-codecs -- *)
 
@@ -310,7 +297,7 @@ let test_get_embed_param_fixed () =
   let cf_sub = Codec.(f_sub $ Fun.id) in
   let outer = Codec.v "GetEmbedOuter" Fun.id Codec.[ cf_sub ] in
   let env = Codec.env outer |> Param.bind limit (UInt8.v 10) in
-  let get_sub = Staged.unstage (Codec.get ~env outer cf_sub) in
+  let get_sub = reader ~env outer cf_sub in
   Alcotest.(check int)
     "embedded validation sees env" 5
     (UInt8.to_int (get_sub (Bytes.of_string "\x05") 0))
@@ -474,7 +461,7 @@ let test_get_action_output_only () =
   in
   let codec = Codec.v "OutOnly" (fun v -> v) [ cf_v ] in
   let env = Codec.env codec in
-  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let get_v = reader ~env codec cf_v in
   (* Any value should work -- no validation in this action *)
   Alcotest.(check int)
     "get 0xFF" 0xFF
@@ -503,7 +490,7 @@ let test_get_action_varthen_assign () =
   in
   let codec = Codec.v "VarAssign" (fun v -> v) [ cf_v ] in
   let env = Codec.env codec in
-  let get_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let get_v = reader ~env codec cf_v in
   Alcotest.(check int)
     "get value" 21
     (UInt8.to_int (get_v (Bytes.of_string "\x15") 0));
@@ -526,7 +513,7 @@ let test_get_action_crossfield_ref () =
   let codec = Codec.v "CrossRef" (fun x y -> (x, y)) [ cf_x; cf_y ] in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x0A\x14" in
-  let get_y = Staged.unstage (Codec.get ~env codec cf_y) in
+  let get_y = reader ~env codec cf_y in
   let y = get_y buf 0 in
   Alcotest.(check int) "y value" 0x14 (UInt8.to_int y);
   (* Action computed x + 100 = 10 + 100 = 110 *)
@@ -718,8 +705,8 @@ let test_get_twostaged_same_field () =
   let codec = Codec.v "TwoStaged" (fun v -> v) [ cf_v ] in
   let env1 = Codec.env codec in
   let env2 = Codec.env codec in
-  let get1 = Staged.unstage (Codec.get ~env:env1 codec cf_v) in
-  let get2 = Staged.unstage (Codec.get ~env:env2 codec cf_v) in
+  let get1 = reader ~env:env1 codec cf_v in
+  let get2 = reader ~env:env2 codec cf_v in
   (* Each staged getter has its own scratch array and env *)
   ignore (get1 (Bytes.of_string "\xAA") 0);
   ignore (get2 (Bytes.of_string "\xBB") 0);
@@ -776,11 +763,11 @@ let test_same_field_two_codecs () =
   (* codec1 should read x at offset 0 -> 0xAAAA *)
   Alcotest.(check int)
     "codec1 get x" 0xAAAA
-    (UInt16.to_int ((Staged.unstage (Codec.get codec1 cf_x)) buf 0));
+    (UInt16.to_int ((reader codec1 cf_x) buf 0));
   (* codec2 should read x at offset 2 -> 0xBBBB *)
   Alcotest.(check int)
     "codec2 get x" 0xBBBB
-    (UInt16.to_int ((Staged.unstage (Codec.get codec2 cf_x)) buf 0))
+    (UInt16.to_int ((reader codec2 cf_x) buf 0))
 
 let test_samefield_twocodecs_set () =
   (* Same field in two codecs: set via each must write to the correct offset. *)
@@ -880,13 +867,9 @@ let test_same_bitfield_two_codecs () =
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xA3;
   (* codec1: a is first-declared, so top 4 bits -> 0xA. *)
-  Alcotest.(check int)
-    "codec1 get a (top)" 0xA
-    ((Staged.unstage (Codec.get codec1 cf_a)) buf 0);
+  Alcotest.(check int) "codec1 get a (top)" 0xA ((reader codec1 cf_a) buf 0);
   (* codec2: a is second-declared, so bottom 4 bits -> 3. *)
-  Alcotest.(check int)
-    "codec2 get a (bottom)" 3
-    ((Staged.unstage (Codec.get codec2 cf_a)) buf 0)
+  Alcotest.(check int) "codec2 get a (bottom)" 3 ((reader codec2 cf_a) buf 0)
 
 let test_samefield_staged_before_secondseal () =
   (* Stage get from codec1 BEFORE sealing codec2.
@@ -902,7 +885,7 @@ let test_samefield_staged_before_secondseal () =
       [ cf_x; (Field.v "y" uint8 $ fun _ -> UInt8.v 0) ]
   in
   (* Stage get from codec1 *)
-  let get_x_1 = Staged.unstage (Codec.get codec1 cf_x) in
+  let get_x_1 = reader codec1 cf_x in
   (* Now seal codec2 -- this clobbers f_reader *)
   let _codec2 =
     let open Codec in

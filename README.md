@@ -90,7 +90,13 @@ let set_version = Staged.unstage (Codec.set codec bf_version)
 let buf =
   Codec.to_bytes codec
     { version = 1; flags = 2; length = UInt16.v 1024; tag = UInt8.zero }
-let v = get_version buf 0        (* read version without allocating a record *)
+(* Read version without allocating a record; bytes too short for it, or
+   that make no value of it, are an error. *)
+let () =
+  match get_version buf 0 with
+  | Ok v -> assert (v = 1)
+  | Error e -> Fmt.failwith "%a" Error.pp e
+
 let () = set_version buf 0 3     (* mutate version in place *)
 ```
 

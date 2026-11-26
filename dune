@@ -4,4 +4,4 @@
 
 (mdx
  (files README.md)
- (libraries wire wire.runtime wire.3d wire.stubs))
+ (libraries fmt wire wire.runtime wire.3d wire.stubs))

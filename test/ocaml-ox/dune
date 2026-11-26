@@ -8,6 +8,9 @@
  (files ../ocaml/test_wire_ocaml.{ml,mli}))
 
 (copy_files
+ (files ../ocaml/test_get.{ml,mli}))
+
+(copy_files
  (files ../ocaml/test_same.{ml,mli}))
 
 (copy_files
@@ -239,6 +242,7 @@
   (= %{ocaml-config:ox} true))
  (modules
   test_wire_ocaml
+  test_get
   test_view_module
   test_writer
   test_value_module

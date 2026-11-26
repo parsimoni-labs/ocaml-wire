@@ -39,6 +39,10 @@ type ops = {
 type t = { bytes : ops; bigstring : ops }
 (** A generated module: its functions and those of its [Bigstring]. *)
 
+val ok : ('a, Wire.Error.t) result -> 'a
+(** [ok r] is the value of [r], its error raised for {!t}'s getters to compare
+    as the codec's reader answers it. *)
+
 val pp : t Fmt.t
 (** [pp] prints the getters of a generated module. *)
 

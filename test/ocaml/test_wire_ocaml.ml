@@ -295,50 +295,6 @@ let test_wide () =
       fun buf off -> G_wide.write buf off ~a ~b ~c ~d ~e ~f)
     (decoded Schemas.wide 200 @ List.init 300 (fun _ -> wild ()))
 
-(* A field taken out of its word reads what its own getter reads, from a
-   checked load or through a view. *)
-let test_words () =
-  let size = Codec.min_wire_size Schemas.wide in
-  for _ = 1 to 2000 do
-    let buf, off = input ~size ~fix:(fun _ _ -> ()) in
-    let fields =
-      G_wide.
-        [
-          ((fun b o -> (Get.a b o :> int)), Get.a_word, a_of_word);
-          ((fun b o -> (Get.c b o :> int)), Get.c_word, c_of_word);
-          ((fun b o -> (Get.e b o :> int)), Get.e_word, e_of_word);
-          ((fun b o -> (Get.f b o :> int)), Get.f_word, f_of_word);
-        ]
-    in
-    List.iter
-      (fun (get, word, of_word) ->
-        Alcotest.(check string)
-          "word"
-          (outcome (fun () -> string_of_int (get buf off)))
-          (outcome (fun () -> string_of_int (of_word (word buf off)))))
-      fields;
-    (* The same through a view, whose word reads have no check of their own. *)
-    match Wire_runtime.Buf.v buf with
-    | Wire_runtime.Buf.Any b ->
-        let c = G_wide.check b (Wire_runtime.Buf.length b) off in
-        if G_wide.ok c then begin
-          let v = G_wide.get c in
-          let check name get of_view = Alcotest.(check int) name get of_view in
-          check "view a"
-            (G_wide.Get.a buf off :> int)
-            (G_wide.a_of_word (G_wide.view_a_word b v));
-          check "view c"
-            (G_wide.Get.c buf off :> int)
-            (G_wide.c_of_word (G_wide.view_c_word b v));
-          check "view e"
-            (G_wide.Get.e buf off :> int)
-            (G_wide.e_of_word (G_wide.view_e_word b v));
-          check "view f"
-            (G_wide.Get.f buf off :> int)
-            (G_wide.f_of_word (G_wide.view_f_word b v))
-        end
-  done
-
 (* Generated code names the shape of the codec it comes from, and refuses to
    run against a codec whose shape has changed since. *)
 let test_stale () =
@@ -679,8 +635,8 @@ let getter codec field ~get ~show =
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
     Alcotest.(check string)
       "get"
-      (outcome (fun () -> show (read buf off)))
-      (outcome (fun () -> show (get buf off)))
+      (outcome (fun () -> show (ok (read buf off))))
+      (outcome (fun () -> show (ok (get buf off))))
   done
 
 (* Every field under a map: over 16- and 32-bit integers, a lookup whose index
@@ -711,8 +667,8 @@ let int_getter codec field ~get ~to_int =
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
     Alcotest.(check string)
       "get int"
-      (outcome (fun () -> string_of_int (to_int (read buf off))))
-      (outcome (fun () -> string_of_int (get buf off)))
+      (outcome (fun () -> string_of_int (to_int (ok (read buf off)))))
+      (outcome (fun () -> string_of_int (ok (get buf off))))
   done
 
 let test_getters () =
@@ -738,10 +694,12 @@ let test_getters () =
   getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.Get.f ~show:(fun v ->
       string_of_int (SInt32.to_int v));
   getter Schemas.mixed Schemas.mixed_h
-    ~get:(fun b o -> (G_mixed.Get.h b o :> int))
+    ~get:(fun b o ->
+      Result.map (fun v -> (v : G_mixed.Value.h :> int)) (G_mixed.Get.h b o))
     ~show:string_of_int;
   getter Schemas.eth Schemas.eth_src
-    ~get:(fun b o -> (G_eth.Get.src b o :> string))
+    ~get:(fun b o ->
+      Result.map (fun v -> (v : G_eth.Value.src :> string)) (G_eth.Get.src b o))
     ~show:Fun.id
 
 (* [is_valid buf off] holds exactly when [Codec.validate] accepts the
@@ -752,7 +710,7 @@ let test_getters () =
 let test_view () =
   let get codec field show =
     let read = Staged.unstage (Codec.get codec field) in
-    fun buf off -> show (read buf off)
+    fun buf off -> show (ok (read buf off))
   in
   let frag =
     get Schemas.ipv4 Schemas.ipv4_frag (fun v ->
@@ -941,21 +899,24 @@ let test_bigstring () =
   same_on_bigstring Schemas.eth
     ~on_bytes:(fun b o ->
       encoded G_eth.min_size G_eth.encode G_eth.decode b o
-      ^ (G_eth.Get.src b o :> string))
+      ^ (ok (G_eth.Get.src b o) :> string))
     ~on_big:(fun b o ->
       big G_eth_big.min_size G_eth_big.encode G_eth_big.decode b o
-      ^ (G_eth_big.Get.src b o :> string));
+      ^ (ok (G_eth_big.Get.src b o) :> string));
   same_on_bigstring Schemas.ipv4
     ~on_bytes:(fun b o ->
-      string_of_int (G_ipv4.Get.src_int b o + (G_ipv4.Get.proto b o :> int)))
+      string_of_int
+        (ok (G_ipv4.Get.src_int b o) + (ok (G_ipv4.Get.proto b o) :> int)))
     ~on_big:(fun b o ->
       string_of_int
-        (G_ipv4_big.Get.src_int b o + (G_ipv4_big.Get.proto b o :> int)));
+        (ok (G_ipv4_big.Get.src_int b o)
+        + (ok (G_ipv4_big.Get.proto b o) :> int)));
   same_on_bigstring ~fix:fix_checked Schemas.checked
     ~on_bytes:(fun b _ ->
       ok (G_checked.validate b 0);
       string_of_int
-        ((G_checked.Get.proto b 0 :> int) + (G_checked.Get.ihl b 0 :> int)))
+        ((ok (G_checked.Get.proto b 0) :> int)
+        + (ok (G_checked.Get.ihl b 0) :> int)))
     ~on_big:(fun b _ ->
       let v = ok (G_checked_big.Valid.v b) in
       string_of_int
@@ -1037,7 +998,7 @@ let test_oxcaml () =
       "[@zero_alloc assume error] fail";
       "let[@inline] decode_with (make @ local) ~(fail @ local) (buf @ local) \
        off";
-      "let[@inline][@zero_alloc] src (buf @ local) off";
+      "let[@inline] src (buf @ local) off";
       "let[@inline][@zero_alloc] write (buf @ local) off";
       "module Int32_u = Wire_runtime.Target.Int32_u";
     ];
@@ -1957,7 +1918,6 @@ let suite =
       Alcotest.test_case "under one word" `Quick test_small;
       Alcotest.test_case "byte arrays" `Quick test_eth;
       Alcotest.test_case "32-bit bitfields" `Quick test_wide;
-      Alcotest.test_case "fields from their word" `Quick test_words;
       Alcotest.test_case "maps" `Quick test_mapped;
       Alcotest.test_case "write from plain values" `Quick test_write_int;
       Alcotest.test_case "stale code is refused" `Quick test_stale;

@@ -13,6 +13,7 @@
   codec_repr
   codec_elem
   codec_compile
+  codec_access
   codec_intervals
   codec_sets
   codec_view

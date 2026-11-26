@@ -59,8 +59,7 @@ let check_parts codec parts =
   done
 
 let same codec f pp =
-  let get = Staged.unstage (Codec.get codec f)
-  and p = Codec.word_part codec f in
+  let get = reader codec f and p = Codec.word_part codec f in
   fun buf off w ->
     let expected = get buf off and got = Codec.of_word p w in
     if expected <> got then

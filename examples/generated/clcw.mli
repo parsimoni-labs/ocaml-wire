@@ -344,63 +344,71 @@ val write_int_at :
 
 (** {1:reads Reading fields} *)
 
-(** Reads of one field of the record at [off] in [buf], each one load that
-    checks its bounds and raises [Invalid_argument] outside them. A read checks
-    none of the record's constraints. *)
+(** Reads of one field of the record at [off] in [buf], as [Wire.Codec.get]
+    reads it. A read answers the error of a field the buffer cuts, at the
+    field's offset and under its name, and raises [Invalid_argument] on a
+    negative [off]. It checks none of the record's constraints. *)
 module Get : sig
-  val controlwordtype : bytes -> int -> Value.controlwordtype
+  val controlwordtype :
+    bytes -> int -> (Value.controlwordtype, Wire_runtime.Error.t) result
   (** [controlwordtype buf off] is bit 31 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val clcwversion : bytes -> int -> Value.clcwversion
+  val clcwversion :
+    bytes -> int -> (Value.clcwversion, Wire_runtime.Error.t) result
   (** [clcwversion buf off] is bits 29 to 30 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val statusfield : bytes -> int -> Value.statusfield
+  val statusfield :
+    bytes -> int -> (Value.statusfield, Wire_runtime.Error.t) result
   (** [statusfield buf off] is bits 26 to 28 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val copineffect : bytes -> int -> Value.copineffect
+  val copineffect :
+    bytes -> int -> (Value.copineffect, Wire_runtime.Error.t) result
   (** [copineffect buf off] is bits 24 to 25 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val vcid : bytes -> int -> Value.vcid
+  val vcid : bytes -> int -> (Value.vcid, Wire_runtime.Error.t) result
   (** [vcid buf off] is bits 18 to 23 of the big-endian 32-bit word at offset 0
       of the record at [off]. *)
 
-  val spare : bytes -> int -> Value.spare
+  val spare : bytes -> int -> (Value.spare, Wire_runtime.Error.t) result
   (** [spare buf off] is bits 16 to 17 of the big-endian 32-bit word at offset 0
       of the record at [off]. *)
 
-  val norf : bytes -> int -> Value.norf
+  val norf : bytes -> int -> (Value.norf, Wire_runtime.Error.t) result
   (** [norf buf off] is bit 15 of the big-endian 32-bit word at offset 0 of the
       record at [off]. *)
 
-  val nobitlock : bytes -> int -> Value.nobitlock
+  val nobitlock : bytes -> int -> (Value.nobitlock, Wire_runtime.Error.t) result
   (** [nobitlock buf off] is bit 14 of the big-endian 32-bit word at offset 0 of
       the record at [off]. *)
 
-  val lockout : bytes -> int -> Value.lockout
+  val lockout : bytes -> int -> (Value.lockout, Wire_runtime.Error.t) result
   (** [lockout buf off] is bit 13 of the big-endian 32-bit word at offset 0 of
       the record at [off]. *)
 
-  val wait : bytes -> int -> Value.wait
+  val wait : bytes -> int -> (Value.wait, Wire_runtime.Error.t) result
   (** [wait buf off] is bit 12 of the big-endian 32-bit word at offset 0 of the
       record at [off]. *)
 
-  val retransmit : bytes -> int -> Value.retransmit
+  val retransmit :
+    bytes -> int -> (Value.retransmit, Wire_runtime.Error.t) result
   (** [retransmit buf off] is bit 11 of the big-endian 32-bit word at offset 0
       of the record at [off]. *)
 
-  val farmbcounter : bytes -> int -> Value.farmbcounter
+  val farmbcounter :
+    bytes -> int -> (Value.farmbcounter, Wire_runtime.Error.t) result
   (** [farmbcounter buf off] is bits 9 to 10 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val spare2 : bytes -> int -> Value.spare2
+  val spare2 : bytes -> int -> (Value.spare2, Wire_runtime.Error.t) result
   (** [spare2 buf off] is bit 8 of the big-endian 32-bit word at offset 0 of the
       record at [off]. *)
 
-  val reportvalue : bytes -> int -> Value.reportvalue
+  val reportvalue :
+    bytes -> int -> (Value.reportvalue, Wire_runtime.Error.t) result
   (** [reportvalue buf off] is bits 0 to 7 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 

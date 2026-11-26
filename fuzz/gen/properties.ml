@@ -445,10 +445,10 @@ let check_field_get label ?env a value bs =
                   Alcobar.failf
                     "%s field %s: Codec.get raised on a positive: %s" label
                     f.name m
-              | exception Wire.Private.Types.Parse_error e ->
+              | Error e ->
                   Alcobar.failf "%s field %s: Codec.get rejected a positive: %a"
                     label f.name Wire.Error.pp e
-              | got ->
+              | Ok got ->
                   if not (f.equal got (f.proj value)) then
                     Alcobar.failf
                       "%s field %s: Codec.get reads back a value the encoder \
@@ -486,13 +486,13 @@ let check_field_set label ~strict a target bs =
                     "%s field %s: Codec.get raised on bytes Codec.set just \
                      wrote: %s"
                     label f.name m
-              | exception Wire.Private.Types.Parse_error e ->
+              | Error e ->
                   if strict then
                     Alcobar.failf
                       "%s field %s: Codec.get rejects the value Codec.set just \
                        wrote: %a"
                       label f.name Wire.Error.pp e
-              | got ->
+              | Ok got ->
                   if not (f.equal got want) then
                     Alcobar.failf
                       "%s field %s: Codec.set wrote a value Codec.get reads \
@@ -540,18 +540,16 @@ let field_snapshot ?env a buf fc =
       | None -> None
       | Some get -> (
           match get buf 0 with
-          | (exception Invalid_argument _)
-          | (exception Wire.Private.Types.Parse_error _) ->
-              None
-          | before ->
+          | exception Invalid_argument _ -> None
+          | Error _ -> None
+          | Ok before ->
               Some
                 ( f.name,
                   fun after_buf ->
                     match get after_buf 0 with
-                    | (exception Invalid_argument _)
-                    | (exception Wire.Private.Types.Parse_error _) ->
-                        false
-                    | after -> f.equal before after )))
+                    | exception Invalid_argument _ -> false
+                    | Error _ -> false
+                    | Ok after -> f.equal before after )))
 
 (* Write locality, and its mirror, read independence: setting one field must
    not change what any other field reads, and reading a field must not depend
@@ -606,10 +604,9 @@ let check_field_write_back label a bs =
       match (stage_get a f.field, stage_set a f.field) with
       | Some get, Some set -> (
           match get bs 0 with
-          | (exception Invalid_argument _)
-          | (exception Wire.Private.Types.Parse_error _) ->
-              ()
-          | v -> (
+          | exception Invalid_argument _ -> ()
+          | Error _ -> ()
+          | Ok v -> (
               let buf = Bytes.copy bs in
               match set buf 0 v with
               | exception Invalid_argument _ ->
@@ -714,8 +711,8 @@ let check_field_reads label kind ?env a g bs =
                     "%s %s field %s: Codec.get raised on a buffer validate \
                      accepted: %s"
                     label kind f.name m
-            | exception Wire.Private.Types.Parse_error _ -> ()
-            | got ->
+            | Error _ -> ()
+            | Ok got ->
                 Option.iter
                   (fun record ->
                     if not (f.equal got (f.proj record)) then
@@ -826,8 +823,8 @@ let check_offset_invariance label ?env a g pad bs =
             | Some get ->
                 let read buf off =
                   match get buf off with
-                  | v -> Accepted v
-                  | exception Wire.Private.Types.Parse_error e -> Rejected e
+                  | Ok v -> Accepted v
+                  | Error e -> Rejected e
                   | exception Invalid_argument _ -> Crashed
                 in
                 check_shifted
@@ -1167,7 +1164,7 @@ let check_fast_general_core label kind ?env g general bs =
     bs
 
 let field_get ?env c f bs =
-  answer (fun () -> Wire.Staged.unstage (Wire.Codec.get ?env c f) bs 0)
+  answer_result (fun () -> Wire.Staged.unstage (Wire.Codec.get ?env c f) bs 0)
 
 (* [check] then [read] of each field, against [validate] then [get] of the
    general codec, and [get] of each field on both. *)

@@ -13,13 +13,13 @@ let widths = [| 4; 4; 8; 3; 5; 6; 2 |]
 let per_record buf off =
   let open Wire_runtime in
   [
-    (G.Get.a buf off :> int);
-    (G.Get.b buf off :> int);
-    UInt8.to_int (G.Get.c buf off);
-    (G.Get.d buf off :> int);
-    (G.Get.e buf off :> int);
-    (G.Get.f buf off :> int);
-    (G.Get.g buf off :> int);
+    (Result.get_ok (G.Get.a buf off) :> int);
+    (Result.get_ok (G.Get.b buf off) :> int);
+    UInt8.to_int (Result.get_ok (G.Get.c buf off));
+    (Result.get_ok (G.Get.d buf off) :> int);
+    (Result.get_ok (G.Get.e buf off) :> int);
+    (Result.get_ok (G.Get.f buf off) :> int);
+    (Result.get_ok (G.Get.g buf off) :> int);
   ]
 
 let lanes w k =

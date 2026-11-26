@@ -45,7 +45,7 @@ type 'a read_case =
       dataset : dataset;
       struct_ : Everparse.struct_;
       codec : 'r Codec.t;
-      get : bytes -> int -> 'a;
+      get : bytes -> int -> ('a, Wire.Error.t) result;
       set : bytes -> int -> 'a -> unit;
       write_template : bytes;
       write_offset : int;
@@ -135,11 +135,16 @@ let constrained_dataset =
 
 let tcp_frame = (Net.tcp_frame_data 1).(0)
 
-let read_eth_payload =
-  Staged.unstage (Codec.get Net.ethernet_codec Net.bf_eth_payload)
+(* The frame is written by [Net.tcp_frame_data], so its payloads are read. *)
+let payload codec field =
+  let read = Staged.unstage (Codec.get codec field) in
+  fun buf off ->
+    match read buf off with
+    | Ok s -> s
+    | Error e -> Fmt.failwith "the TCP frame: %a" Error.pp e
 
-let read_ip_payload =
-  Staged.unstage (Codec.get Net.ipv4_codec Net.bf_ip_payload)
+let read_eth_payload = payload Net.ethernet_codec Net.bf_eth_payload
+let read_ip_payload = payload Net.ipv4_codec Net.bf_ip_payload
 
 (* Where the TCP header of [buf] starts, read through checked views of the
    Ethernet and IPv4 headers. *)
@@ -597,9 +602,9 @@ let projection_structs =
 let verify_write_case ~label ~template ~offset ~get ~set ~equal value () =
   let bytes = Bytes.copy template in
   set bytes offset value;
-  let actual = get bytes offset in
-  if not (equal actual value) then
-    Fmt.failwith "%s write verification failed" label
+  match get bytes offset with
+  | Ok actual when equal actual value -> ()
+  | Ok _ | Error _ -> Fmt.failwith "%s write verification failed" label
 
 let write_case_of_read ~label (Read_case case) =
   {
@@ -618,9 +623,9 @@ let verify_nested_write ~label ~set ~get ~equal value () =
   let ip = Slice.first (read_eth_payload bytes 0) in
   let tcp = Slice.first (read_ip_payload bytes ip) in
   set bytes tcp value;
-  let actual = get bytes tcp in
-  if not (equal actual value) then
-    Fmt.failwith "%s write verification failed" label
+  match get bytes tcp with
+  | Ok actual when equal actual value -> ()
+  | Ok _ | Error _ -> Fmt.failwith "%s write verification failed" label
 
 let nested_tcp_dst_write_case =
   let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in

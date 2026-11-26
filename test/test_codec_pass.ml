@@ -76,7 +76,7 @@ let test_decode_scalars_agree_with_get () =
         (fun _pad x -> x)
         Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); b ]
     in
-    let get = Staged.unstage (Codec.get c b) in
+    let get = reader c b in
     Alcotest.(check bool)
       name true
       (decode_ok (Codec.decode c buf 0) = get buf 0)
@@ -100,7 +100,7 @@ let test_decode_scalars_agree_with_get () =
           (fun _pad hi lo -> (hi, lo))
           Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); hi; lo ]
       in
-      let get f = Staged.unstage (Codec.get c f) buf 0 in
+      let get f = (reader c f) buf 0 in
       Alcotest.(check (pair int int))
         name
         (get hi, get lo)
@@ -426,7 +426,7 @@ let test_view_read () =
     let k = Codec.View.check V.codec b (Buf.length b) 0 in
     Codec.View.read (Codec.View.field V.codec f) b (Codec.View.get k)
   in
-  let get f = Staged.unstage (Codec.get c f) buf 0 in
+  let get f = (reader c f) buf 0 in
   Alcotest.(check bool) "accepted" true (check buf 0);
   Alcotest.(check bool) "uint8" true (read a = get a);
   Alcotest.(check int) "bits" (get b) (read b);
@@ -470,7 +470,7 @@ let test_view_short_frames () =
           (fun f ->
             Alcotest.(check int)
               (Fmt.str "%s %d" name i)
-              (Staged.unstage (Codec.get c f) buf off)
+              ((reader c f) buf off)
               (Codec.View.read (Codec.View.field V.codec f) b r))
           fields
     done
@@ -765,7 +765,7 @@ let staged_scalars ~d_typ ~f_typ =
   for _ = 1 to 2000 do
     let buf = Bytes.init 15 (fun _ -> Char.chr (Random.State.int rand 256)) in
     let v = decode_ok (Codec.decode codec buf 0) in
-    let get x = Staged.unstage (Codec.get codec x) buf 0 in
+    let get x = (reader codec x) buf 0 in
     let a', b', c', d', e', f', g', h', i', j' = v in
     Alcotest.(check bool) "a" true (a' = get a);
     Alcotest.(check bool) "b" true (b' = get b);
@@ -802,7 +802,7 @@ let test_staged_spans () =
   for _ = 1 to 500 do
     let buf = Bytes.init 11 (fun _ -> Char.chr (Random.State.int rand 256)) in
     let ((a', _, b') as v) = decode_ok (Codec.decode codec buf 0) in
-    let get x = Staged.unstage (Codec.get codec x) buf 0 in
+    let get x = (reader codec x) buf 0 in
     Alcotest.(check string) "a" (get a) a';
     Alcotest.(check string) "b" (get b) b';
     let out = Bytes.make 11 '\x00' in

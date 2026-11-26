@@ -119,12 +119,20 @@ let check_string label expected actual =
   if not (String.equal expected actual) then
     Alcobar.failf "%s: expected %S, got %S" label expected actual
 
+(* [Codec.get] of [f], unstaged, on bytes a positive holds. *)
+let getter codec f =
+  let read = Wire.Codec.get codec f |> Wire.Staged.unstage in
+  fun buf off ->
+    match read buf off with
+    | Ok v -> v
+    | Error e -> Alcobar.failf "Codec.get: %a" Wire.Error.pp e
+
 let check_api_getters (codec : api_access Wire.Codec.t) bf_a bf_hi bf_lo
     bf_payload buf base a hi lo payload_s =
-  let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
-  let get_hi = Wire.Codec.get codec bf_hi |> Wire.Staged.unstage in
-  let get_lo = Wire.Codec.get codec bf_lo |> Wire.Staged.unstage in
-  let get_payload = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
+  let get_a = getter codec bf_a in
+  let get_hi = getter codec bf_hi in
+  let get_lo = getter codec bf_lo in
+  let get_payload = getter codec bf_payload in
   check_int "Codec.get scalar" a (Wire.UInt8.to_int (get_a buf base));
   check_int "Codec.get bitfield hi" hi (get_hi buf base);
   check_int "Codec.get bitfield lo" lo (get_lo buf base);
@@ -151,7 +159,7 @@ let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
    decode must retain an alias to the caller's buffer, in both directions. *)
 let check_api_slice_aliases codec bf_payload buf base =
   let module Slice = Bytesrw.Bytes.Slice in
-  let get = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
+  let get = getter codec bf_payload in
   let payload = get buf base in
   let first = Slice.first payload in
   let original = Bytes.get_uint8 buf first in
@@ -174,10 +182,10 @@ let check_api_slice_aliases codec bf_payload buf base =
 
 let check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
     next_lo next_payload_s =
-  let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
-  let get_hi = Wire.Codec.get codec bf_hi |> Wire.Staged.unstage in
-  let get_lo = Wire.Codec.get codec bf_lo |> Wire.Staged.unstage in
-  let get_payload = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
+  let get_a = getter codec bf_a in
+  let get_hi = getter codec bf_hi in
+  let get_lo = getter codec bf_lo in
+  let get_payload = getter codec bf_payload in
   let set_a = Wire.Codec.set codec bf_a |> Wire.Staged.unstage in
   let set_hi = Wire.Codec.set codec bf_hi |> Wire.Staged.unstage in
   let set_lo = Wire.Codec.set codec bf_lo |> Wire.Staged.unstage in

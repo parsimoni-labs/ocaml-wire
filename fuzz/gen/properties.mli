@@ -71,7 +71,7 @@ val stage_get :
   ?env:Wire.Param.env ->
   'a addressed ->
   ('b, 'a) Wire.Codec.field ->
-  (bytes -> int -> 'b) option
+  (bytes -> int -> ('b, Wire.Error.t) result) option
 (** [stage_get ?env a field] is the staged reader of [field], or [None] where
     the accessor API has none. *)
 

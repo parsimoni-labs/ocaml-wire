@@ -631,90 +631,144 @@ let[@inline] write_at (b : 'b Wire_runtime.Buf.t)
     ()
   end
 
+let[@inline never] field_eof field len off at width =
+  if off < 0 then Wire_runtime.Errors.negative_offset off
+  else
+    let at = off + at in
+    let got = if at > len then 0 else len - at in
+    Error
+      {
+        Wire_runtime.Error.at;
+        field = [ field ];
+        kind = Unexpected_eof { expected = width; got };
+      }
+
 module Get = struct
   let[@inline] controlwordtype buf off =
-    let f1_controlwordtype =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 31) land 0x1
-    in
-    cast Value.controlwordtype_eq f1_controlwordtype
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "ControlWordType" (Bytes.length buf) off 0 4
+    else
+      let f1_controlwordtype =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 31) land 0x1
+      in
+      Ok (cast Value.controlwordtype_eq f1_controlwordtype)
 
   let[@inline] clcwversion buf off =
-    let f2_clcwversion =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 29) land 0x3
-    in
-    cast Value.clcwversion_eq f2_clcwversion
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "CLCWVersion" (Bytes.length buf) off 0 4
+    else
+      let f2_clcwversion =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 29) land 0x3
+      in
+      Ok (cast Value.clcwversion_eq f2_clcwversion)
 
   let[@inline] statusfield buf off =
-    let f3_statusfield =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 26) land 0x7
-    in
-    cast Value.statusfield_eq f3_statusfield
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "StatusField" (Bytes.length buf) off 0 4
+    else
+      let f3_statusfield =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 26) land 0x7
+      in
+      Ok (cast Value.statusfield_eq f3_statusfield)
 
   let[@inline] copineffect buf off =
-    let f4_copineffect =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 24) land 0x3
-    in
-    cast Value.copineffect_eq f4_copineffect
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "COPInEffect" (Bytes.length buf) off 0 4
+    else
+      let f4_copineffect =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 24) land 0x3
+      in
+      Ok (cast Value.copineffect_eq f4_copineffect)
 
   let[@inline] vcid buf off =
-    let f5_vcid =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 18) land 0x3f
-    in
-    cast Value.vcid_eq f5_vcid
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "VCID" (Bytes.length buf) off 0 4
+    else
+      let f5_vcid =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 18) land 0x3f
+      in
+      Ok (cast Value.vcid_eq f5_vcid)
 
   let[@inline] spare buf off =
-    let f6_spare =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 16) land 0x3
-    in
-    cast Value.spare_eq f6_spare
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Spare" (Bytes.length buf) off 0 4
+    else
+      let f6_spare =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 16) land 0x3
+      in
+      Ok (cast Value.spare_eq f6_spare)
 
   let[@inline] norf buf off =
-    let f7_norf =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 15) land 0x1
-    in
-    cast Value.norf_eq f7_norf
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "NoRF" (Bytes.length buf) off 0 4
+    else
+      let f7_norf =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 15) land 0x1
+      in
+      Ok (cast Value.norf_eq f7_norf)
 
   let[@inline] nobitlock buf off =
-    let f8_nobitlock =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 14) land 0x1
-    in
-    cast Value.nobitlock_eq f8_nobitlock
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "NoBitlock" (Bytes.length buf) off 0 4
+    else
+      let f8_nobitlock =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 14) land 0x1
+      in
+      Ok (cast Value.nobitlock_eq f8_nobitlock)
 
   let[@inline] lockout buf off =
-    let f9_lockout =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 13) land 0x1
-    in
-    cast Value.lockout_eq f9_lockout
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Lockout" (Bytes.length buf) off 0 4
+    else
+      let f9_lockout =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 13) land 0x1
+      in
+      Ok (cast Value.lockout_eq f9_lockout)
 
   let[@inline] wait buf off =
-    let f10_wait =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 12) land 0x1
-    in
-    cast Value.wait_eq f10_wait
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Wait" (Bytes.length buf) off 0 4
+    else
+      let f10_wait =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 12) land 0x1
+      in
+      Ok (cast Value.wait_eq f10_wait)
 
   let[@inline] retransmit buf off =
-    let f11_retransmit =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 11) land 0x1
-    in
-    cast Value.retransmit_eq f11_retransmit
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Retransmit" (Bytes.length buf) off 0 4
+    else
+      let f11_retransmit =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 11) land 0x1
+      in
+      Ok (cast Value.retransmit_eq f11_retransmit)
 
   let[@inline] farmbcounter buf off =
-    let f12_farmbcounter =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 9) land 0x3
-    in
-    cast Value.farmbcounter_eq f12_farmbcounter
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "FARMBCounter" (Bytes.length buf) off 0 4
+    else
+      let f12_farmbcounter =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 9) land 0x3
+      in
+      Ok (cast Value.farmbcounter_eq f12_farmbcounter)
 
   let[@inline] spare2 buf off =
-    let f13_spare2 =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 8) land 0x1
-    in
-    cast Value.spare2_eq f13_spare2
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Spare2" (Bytes.length buf) off 0 4
+    else
+      let f13_spare2 =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 8) land 0x1
+      in
+      Ok (cast Value.spare2_eq f13_spare2)
 
   let[@inline] reportvalue buf off =
-    let f14_reportvalue =
-      (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 0) land 0xff
-    in
-    cast Value.reportvalue_eq f14_reportvalue
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "ReportValue" (Bytes.length buf) off 0 4
+    else
+      let f14_reportvalue =
+        (Int32.to_int (Bytes.get_int32_be buf (off + 0)) lsr 0) land 0xff
+      in
+      Ok (cast Value.reportvalue_eq f14_reportvalue)
 
   let[@inline] controlwordtype_word buf off =
     Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32

@@ -185,7 +185,7 @@ let validate_codec, validate_cf_x =
 let test_validate_rejects_bad_where () =
   (* where requires x = 8, set x = 7 *)
   let buf = Bytes.of_string "\x07" in
-  let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
+  let get_x = reader validate_codec validate_cf_x in
   (* get returns raw value without checking *)
   Alcotest.(check int) "get bypasses where" 7 (UInt8.to_int (get_x buf 0));
   (* validate catches the violation *)
@@ -194,7 +194,7 @@ let test_validate_rejects_bad_where () =
 let test_validate_rejects_bad_constraint () =
   (* constraint requires x <= 10, set x = 11 *)
   let buf = Bytes.of_string "\x0B" in
-  let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
+  let get_x = reader validate_codec validate_cf_x in
   Alcotest.(check int) "get bypasses constraint" 11 (UInt8.to_int (get_x buf 0));
   expect_constraint_fail (Codec.validate validate_codec buf 0)
 
@@ -202,7 +202,7 @@ let test_validate_then_get () =
   (* x = 8 satisfies both where (= 8) and constraint (<= 10) *)
   let buf = Bytes.of_string "\x08" in
   decode_ok (Codec.validate validate_codec buf 0);
-  let get_x = Staged.unstage (Codec.get validate_codec validate_cf_x) in
+  let get_x = reader validate_codec validate_cf_x in
   Alcotest.(check int) "validate then get" 8 (UInt8.to_int (get_x buf 0))
 
 (* [Codec.validate] is the safety gate before a zero-copy [get] on untrusted
@@ -1037,7 +1037,7 @@ let test_get_needs_the_param_to_locate_the_field () =
   let c, f_v = param_offset_codec () in
   let buf = Bytes.of_string "AAAA\x12\x34" in
   let env = Param.bind_by_name "n" 4 (Codec.env c) in
-  let read = Staged.unstage (Codec.get ~env c f_v) in
+  let read = reader ~env c f_v in
   Alcotest.(check int)
     "with ?env the field is where the param puts it" 0x1234
     (UInt16.to_int (read buf 0));
@@ -1457,7 +1457,7 @@ let random_frame rand codec =
 (* Each field a decode returns is what [get] reads of it. *)
 let test_decode_words () =
   let rand = Random.State.make [| 42 |] in
-  let get f = Staged.unstage (Codec.get wide_codec f) in
+  let get f = reader wide_codec f in
   let a = get wide_a and b = get wide_b and c = get wide_c in
   let d = get wide_d and e = get wide_e and f = get wide_f in
   let g = get wide_g and h = get wide_h and i = get wide_i in
@@ -1478,7 +1478,7 @@ let test_decode_words () =
     Alcotest.(check int32) "J" (SInt32.to_int32 (j buf off)) r.wj;
     check "K" (SInt16.to_int (k buf off)) r.wk
   done;
-  let get f = Staged.unstage (Codec.get eight_codec f) in
+  let get f = reader eight_codec f in
   let p = get eight_p and q = get eight_q and r = get eight_r in
   let s = get eight_s in
   for _ = 1 to 1000 do
@@ -1517,9 +1517,9 @@ let test_staged_decoder () =
 (* [Codec.get] answers the error of the field it reads where its bytes do not
    make a value, at the field's offset and under its name, as [decode] names
    it, and never raises on them. *)
-let answers_error name read buf off ~expected : unit =
-  ignore (read buf off);
-  Alcotest.failf "%s: read a value, expected %a" name Error.pp expected
+let answers_error name read buf off ~expected =
+  Alcotest.(check (result reject (testable Error.pp Error.equal)))
+    name (Error expected) (read buf off)
 
 let test_get_bad_input () =
   let head () = Codec.(Field.v "h" uint8 $ fst) in
@@ -1613,7 +1613,8 @@ let test_get_bad_input () =
   (* A negative offset is misuse, not input. *)
   Alcotest.check_raises "a negative offset"
     (Invalid_argument "Codec: negative offset -1") (fun () ->
-      ignore (read (Bytes.of_string "\x00\x00\x01") (-1)))
+      match read (Bytes.of_string "\x00\x00\x01") (-1) with
+      | Ok _ | Error _ -> ())
 
 let suite =
   ( "codec",

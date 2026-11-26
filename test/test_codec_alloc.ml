@@ -480,7 +480,8 @@ let test_encode_var_bytes_no_closure () =
 (* [Codec.get] and [Codec.set] resolve a field's type and offset when the
    accessor is staged. Pin the per-call contract separately from functional
    correctness: rebuilding a reader closure returns the right value but still
-   puts pressure on a hot-path minor heap. *)
+   puts pressure on a hot-path minor heap. A read allocates the [Ok] it
+   answers, two words, and nothing else. *)
 type alloc_priority = Low | High
 
 type alloc_accessor = {
@@ -541,7 +542,7 @@ let check_no_per_call_allocation name f =
     (Fmt.str "%s allocates nothing" name)
     0 (per_call_words f)
 
-let test_get_no_allocation () =
+let test_get_allocates_its_answer () =
   skip_unless_gc_counters ();
   let buf = Bytes.make (Codec.wire_size alloc_accessor_codec) '\007' in
   let get f = Staged.unstage (Codec.get alloc_accessor_codec f) in
@@ -550,11 +551,16 @@ let test_get_no_allocation () =
   and get_u16 = get alloc_bf_u16
   and get_i32 = get alloc_bf_i32
   and get_priority = get alloc_bf_priority in
-  check_no_per_call_allocation "get bits" (fun () -> get_hi buf 0);
-  check_no_per_call_allocation "get uint8" (fun () -> get_u8 buf 0);
-  check_no_per_call_allocation "get uint16be" (fun () -> get_u16 buf 0);
-  check_no_per_call_allocation "get int32be" (fun () -> get_i32 buf 0);
-  check_no_per_call_allocation "get map" (fun () -> get_priority buf 0)
+  let check name f =
+    Alcotest.(check int)
+      (Fmt.str "%s allocates its Ok" name)
+      2 (per_call_words f)
+  in
+  check "get bits" (fun () -> get_hi buf 0);
+  check "get uint8" (fun () -> get_u8 buf 0);
+  check "get uint16be" (fun () -> get_u16 buf 0);
+  check "get int32be" (fun () -> get_i32 buf 0);
+  check "get map" (fun () -> get_priority buf 0)
 
 let test_set_no_allocation () =
   skip_unless_gc_counters ();
@@ -1110,8 +1116,8 @@ let suite =
         test_decode_high_arity_roundtrip;
       Alcotest.test_case "encode: var-bytes fields allocate nothing" `Quick
         test_encode_var_bytes_no_closure;
-      Alcotest.test_case "get: immediate fields allocate nothing" `Quick
-        test_get_no_allocation;
+      Alcotest.test_case "get: immediate fields allocate their answer" `Quick
+        test_get_allocates_its_answer;
       Alcotest.test_case "set: immediate fields allocate nothing" `Quick
         test_set_no_allocation;
       Alcotest.test_case "validate: allocation does not scale with the frame"

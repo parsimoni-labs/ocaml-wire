@@ -12,11 +12,11 @@ let size = String.length packet
 (* What the getters read of the header in [b], folded into one [int]. *)
 let[@inline] fields (b @ local) =
   Bool.to_int (G_ipv4.is_valid b 0)
-  + (G_ipv4.Get.versionihl b 0 :> int)
-  + (G_ipv4.Get.ttl b 0 :> int)
-  + (G_ipv4.Get.frag b 0 :> int)
-  + G_ipv4.Get.src_int b 0
-  + G_ipv4.Get.dst_int b 0
+  + (Result.get_ok (G_ipv4.Get.versionihl b 0) :> int)
+  + (Result.get_ok (G_ipv4.Get.ttl b 0) :> int)
+  + (Result.get_ok (G_ipv4.Get.frag b 0) :> int)
+  + Result.get_ok (G_ipv4.Get.src_int b 0)
+  + Result.get_ok (G_ipv4.Get.dst_int b 0)
 
 let stack_fields () =
   let b = Bytes.create__stack size in
@@ -46,8 +46,8 @@ let stack_view () =
 let test_stack_view () =
   Alcotest.(check int)
     "same fields"
-    ((G_ipv4.Get.ttl (Bytes.of_string packet) 0 :> int)
-    + G_ipv4.Get.src_int (Bytes.of_string packet) 0)
+    ((Result.get_ok (G_ipv4.Get.ttl (Bytes.of_string packet) 0) :> int)
+    + Result.get_ok (G_ipv4.Get.src_int (Bytes.of_string packet) 0))
     (stack_view ())
 
 (* What a decoded header holds, folded into one [int]. *)
@@ -108,14 +108,14 @@ let test_bigstring () =
   let local_ b = heap in
   Alcotest.(check int)
     "src"
-    (G_ipv4.Get.src_int (Bytes.of_string packet) 0)
-    (G_ipv4_big.Get.src_int b 0)
+    (Result.get_ok (G_ipv4.Get.src_int (Bytes.of_string packet) 0))
+    (Result.get_ok (G_ipv4_big.Get.src_int b 0))
 
 (* A portable function may call the generated code, as a parallel task does. *)
 let (portable_read @ portable) =
  fun buf ->
   if G_ipv4.is_valid buf 0 then
-    G_ipv4.Get.src_int buf 0 + (G_ipv4.Get.ttl buf 0 :> int)
+    Result.get_ok (G_ipv4.Get.src_int buf 0) + (Result.get_ok (G_ipv4.Get.ttl buf 0) :> int)
   else -1
 
 (* The runtime itself is portable: each module the generated code calls. *)
@@ -135,7 +135,7 @@ let test_portable () =
   let b = Bytes.of_string packet in
   Alcotest.(check int)
     "read"
-    (G_ipv4.Get.src_int b 0 + (G_ipv4.Get.ttl b 0 :> int))
+    (Result.get_ok (G_ipv4.Get.src_int b 0) + (Result.get_ok (G_ipv4.Get.ttl b 0) :> int))
     (portable_read b);
   Alcotest.(check int)
     "runtime"
@@ -144,9 +144,9 @@ let test_portable () =
     + Int32.to_int (Bytes.get_int32_be b 16))
     (portable_runtime b)
 
-(* Neither the reads nor the decodes above allocate on the heap, 32-bit fields
-   included, in any profile: the dev one, which inlines nothing across
-   modules, too. *)
+(* Neither the reads of a view nor the decodes above allocate on the heap,
+   32-bit fields included, in any profile: the dev one, which inlines nothing
+   across modules, too. A getter allocates the result it answers. *)
 let words f =
   let before = Gc.minor_words () in
   for _ = 1 to 1_000 do
@@ -156,7 +156,7 @@ let words f =
 
 let test_no_allocation () =
   let base = words (fun () -> 0) in
-  Alcotest.(check (float 0.)) "reads" base (words stack_fields);
+  Alcotest.(check (float 0.)) "reads" base (words stack_view);
   Alcotest.(check (float 0.)) "decodes" base (words stack_decode)
 
 let suite =
