@@ -24,18 +24,18 @@
 - `Wire.Codec.wire_size_at` answers `(int, Wire.Error.t) result`: a length
   field the buffer cuts is an end-of-input error, not an exception. Match on
   the result where the call gave the size; a negative offset raises
-  `Invalid_argument` (#XXX, @samoht)
+  `Invalid_argument` (#568, @samoht)
 
 - The reader `Wire.Codec.load_word` stages, and `Get.<field>_word` of a
   module `Wire_ocaml` writes, answer a `result`: a buffer that cuts the word
   is the error `Codec.get` gives the field, and a negative offset raises
   `Invalid_argument` instead of reading in front of the record. Match on the
-  result before `extract` or `<field>_of_word` (#XXX, @samoht)
+  result before `extract` or `<field>_of_word` (#568, @samoht)
 
 - `read_<field>` and `view_<field>` of a field under a map, in a module
   `Wire_ocaml` writes, answer `('a, Wire.Error.t) result`: bytes rewritten
   after the check that the map refuses, such as a lookup index past its
-  table, are the map's error, not an exception. Match on the result (#XXX,
+  table, are the map's error, not an exception. Match on the result (#568,
   @samoht)
 
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
