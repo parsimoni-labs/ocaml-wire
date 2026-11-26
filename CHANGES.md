@@ -32,6 +32,12 @@
   `Invalid_argument` instead of reading in front of the record. Match on the
   result before `extract` or `<field>_of_word` (#XXX, @samoht)
 
+- `read_<field>` and `view_<field>` of a field under a map, in a module
+  `Wire_ocaml` writes, answer `('a, Wire.Error.t) result`: bytes rewritten
+  after the check that the map refuses, such as a lookup index past its
+  table, are the map's error, not an exception. Match on the result (#XXX,
+  @samoht)
+
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
   call a sub-codec's constructor on a record it then rejects, so a
   constructor should only build a value: count or log after `decode` returns

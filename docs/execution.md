@@ -101,6 +101,13 @@ codec is built, so no input can break it.
 - **Input never raises `Invalid_argument`.** Bad bytes give a parse error;
   `Invalid_argument` is for misuse of the API (a negative offset, a missing
   `env`).
+- **Bytes rewritten after a check are input.** A read of a checked record
+  (`read_<field>` of a `Valid.t`, `view_<field>` of a view) reads its bytes
+  again with no check of their own, and never raises on them. A field under
+  a map answers `('a, Wire.Error.t) result`: its value, or the error the map
+  gives a value it refuses, such as a lookup index past its table, at the
+  field's offset and under its name, as `Get.<field>` and `Codec.get` answer
+  it. No value is made up for it: a map's type has no absent value.
 - **Field order.** Reads and checks run in declaration order, so the error
   names the first bad field. The walk `decode` runs on a record without
   parameters reports the same error as the check pass: it checks the frame,

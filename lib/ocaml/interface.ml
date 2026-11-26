@@ -233,6 +233,21 @@ let read_what f =
   | Some path -> Fmt.str "%s, read through [%s]" (where f) path
   | None -> where f
 
+(* The type a read of a checked record answers: a field under a map answers
+   its value or the map's error, as bytes rewritten after the check may hold a
+   value the map refuses. *)
+let checked_type ~maps f =
+  match f.map with
+  | Some _ -> Fmt.str "(%s, %s) result" (typed ~maps f) parse_error
+  | None -> typed ~maps f
+
+(* What a read of a checked record answers, in its documentation. *)
+let checked_what f =
+  match f.map with
+  | Some _ ->
+      Fmt.str "%s, or the error of a value the map refuses" (read_what f)
+  | None -> read_what f
+
 let pp_values ppf r =
   match List.filter has_carrier r.fields with
   | [] -> ()
@@ -436,7 +451,8 @@ let pp_valid ppf r b =
     "Buffers whose record at offset 0 passed its checks. A read of one is one \
      load with no check: the buffer's length cannot change, so a read stays in \
      it, but if its bytes change after the check a read may return a value \
-     that breaks a constraint.";
+     that breaks a constraint, and a field under a map answers the map's error \
+     on a value it refuses.";
   Fmt.pf ppf "module Valid : sig@\ntype t = private %s@\n" b.typ;
   pp_doc ppf "The type for buffers whose record at offset 0 passed its checks.";
   Fmt.pf ppf "@\n";
@@ -451,8 +467,8 @@ let pp_valid ppf r b =
       let zero_alloc = read_checked f in
       let portable = Option.is_none f.map in
       pp_val ~zero_alloc ~portable target ppf ("read_" ^ l)
-        (arrows [ "Valid.t"; typed ~maps:r.maps f ])
-        (Fmt.str "[read_%s v] is %s of the record in [v]." l (read_what f));
+        (arrows [ "Valid.t"; checked_type ~maps:r.maps f ])
+        (Fmt.str "[read_%s v] is %s of the record in [v]." l (checked_what f));
       match f.store with
       | Int { width = 32; _ } ->
           pp_val ~zero_alloc target ppf
@@ -517,9 +533,10 @@ let pp_view ?(views = false) ppf r b =
           doc
       in
       if not views then
-        view ~portable:(Option.is_none f.map) "" (typed ~maps:r.maps f)
+        view ~portable:(Option.is_none f.map) ""
+          (checked_type ~maps:r.maps f)
           (Fmt.str "[view_%s b v] is %s of the record [v] in [b]." l
-             (read_what f));
+             (checked_what f));
       match f.store with
       | Int { width = 32; _ } ->
           view "_int" "int"

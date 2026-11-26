@@ -1024,6 +1024,12 @@ let getter_value ~src f =
         f.id
   | None, _ -> Fmt.str "Ok %s" (typed_value ~src f)
 
+(* The value a read of a checked record answers. Bytes rewritten after the
+   check are input, so a field under a map answers as its getter does, the
+   map's error included; any other field answers its value. *)
+let checked_value ~src f =
+  match f.map with Some _ -> getter_value ~src f | None -> typed_value ~src f
+
 (* A getter's frame: the field's bytes lie in the buffer, or the getter
    answers their end-of-input error. *)
 let pp_get_frame ~src ppf f =
@@ -1137,7 +1143,8 @@ let pp_read ~src ~ox ?size ppf f =
 (* [Valid.v buf] validates the record at offset 0. A buffer's length never
    changes, so each [read_<field>] after it is one load at a constant offset
    with no check of its own, and stays in the buffer even if its bytes change;
-   only then may it read a value that breaks a constraint. This is EverParse's
+   only then may it read a value that breaks a constraint, and a field under a
+   map answers the map's error on a value it refuses. This is EverParse's
    validate-then-read, with the proof a type. *)
 let pp_valid ?(src = bytes_src) ppf ~target ~plan =
   let fields = all_fields plan in
@@ -1164,7 +1171,7 @@ let pp_valid ?(src = bytes_src) ppf ~target ~plan =
         pp_read ~src ~ox:false ppf f;
         Fmt.pf ppf "  %s@\n@\n" result
       in
-      read ~suffix:"" ~result:(typed_value ~src f);
+      read ~suffix:"" ~result:(checked_value ~src f);
       match f.store with
       | Int { width = 32; _ } -> read ~suffix:"_int" ~result:(int_view ~src f)
       | _ -> ())
@@ -1291,7 +1298,7 @@ let pp_view ?(src = bytes_src) ?(views = false) ppf ~target ~plan ~size =
         pp_read ~src ~ox ~size ppf f;
         Fmt.pf ppf "  %s@\n@\n" result
       in
-      if not views then view ~suffix:"" ~result:(typed_value ~src f);
+      if not views then view ~suffix:"" ~result:(checked_value ~src f);
       match f.store with
       | Int { width = 32; _ } -> view ~suffix:"_int" ~result:(int_view ~src f)
       | Bits { base; _ } ->

@@ -134,9 +134,14 @@ let test_word_bad_input () =
    the check are input: a field under a map answers the map's error where they
    no longer make a value, here a lookup index past its table, as [Get] does. *)
 let test_mapped_rewritten () =
-  let answers name read ~expected : unit =
-    ignore (read ());
-    Alcotest.failf "%s: read a value, expected %a" name Error.pp expected
+  let error = Alcotest.testable Error.pp Error.equal in
+  let proto =
+    Alcotest.testable
+      (fun ppf _ -> Fmt.string ppf "a protocol")
+      (fun a b -> a = b)
+  in
+  let answers name read ~expected =
+    Alcotest.(check (result proto error)) name (Error expected) (read ())
   in
   let expected = { Error.at = 6; field = [ "Proto" ]; kind = Invalid_tag 7 } in
   let buf = Bytes.of_string "\x00\x01\x00\x00\x00\x00\x01\x00" in
