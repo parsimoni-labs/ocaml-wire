@@ -33,6 +33,9 @@
 - `Wire.Field.action` answers `Wire.Action.t option`, the type `?action`
   takes, where it answered the internal `Types.action` (#570, @samoht)
 
+- The type alias `Wire.codec` is removed: write `Wire.Codec.t`; `Wire.codec`
+  is the value that embeds a codec as a field type (#570, @samoht)
+
 - The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
   `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)

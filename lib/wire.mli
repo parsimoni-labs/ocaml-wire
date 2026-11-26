@@ -1735,10 +1735,6 @@ module Codec : sig
   (** Wire-size info for the validator. *)
 end
 
-type 'r codec = 'r Codec.t
-(** Convenience alias so callers can write [Wire.codec] instead of
-    [Wire.Codec.t]. *)
-
 (** {1 Nested Codec Combinators}
 
     These combinators extend the type language with structured sub-codecs,

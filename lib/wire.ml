@@ -1147,8 +1147,6 @@ let to_bytes typ v =
 
 let to_string typ v = Bytes.unsafe_to_string (to_bytes typ v)
 
-type 'r codec = 'r Codec.t
-
 module UInt64 = UInt64
 module SInt32 = SInt32
 module SInt8 = SInt8
