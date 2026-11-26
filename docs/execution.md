@@ -395,10 +395,11 @@ A region that starts at one term plus a constant, such as the TCP header at
 each of its loads, so the term reaches a load by one addition. A load that
 reads a byte through a wider one never starts before the region's first byte.
 
-`Wire_rust.scanner` writes the same plan out as Rust, from `Wire_ocaml.Plan`,
-which hands it the same decisions. A window is a slice of exactly its bytes:
-a prefix is checked by `split_first_chunk`, whose array its loads index at
-constant offsets, and a size is compared as `u64` with the slice's length,
+The check and the folds of the module `Wire_rust` writes walk the same
+plan in Rust, from `Wire_ocaml.Plan`, which hands them the same decisions.
+A window is a slice of exactly its bytes: a prefix is checked by
+`split_first_chunk`, whose array its loads index at constant offsets, and a
+size is compared as `u64` with the slice's length,
 which also rejects a negative one. The slice's length is the room left, so
 a bound needs no cancelling and every span keeps its check. Two bitfields of
 one word are one range test where `Plan.word_range` finds one. An operation
@@ -407,7 +408,7 @@ the plan checks returns
 optional fields binds the tail it leaves and its immutable outputs in one
 `let`, so the code after it is written once; an output under more than
 `Plan.slot_depth` optional fields is a `let mut` bound to its absent value
-where `scan` starts and assigned where its field is present, so the code is
+where the walk starts and assigned where its field is present, so the code is
 linear in the number of optional fields, as the OCaml is.
 
 The differential lanes compare every generated module with the codec on

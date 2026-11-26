@@ -273,10 +273,10 @@
   four records of four one-byte fields at a time, with NEON or SSE (#493,
   @samoht)
 
-- `wire.rust` (`Wire_rust.rs`): generate safe, `no_std` Rust from a
-  fixed-size codec, and `Wire_rust.scanner`, the same scanners in Rust, with
-  the same single comparison for two adjacent bitfields (#439, #448,
-  #509, @samoht)
+- `wire.rust`: generate safe, `no_std` Rust from a codec, the module
+  `Wire_ocaml` writes under the same names, its folds generic over a visitor
+  trait and its errors the codec's (`Wire_rust.v`, `Wire_rust.main`) (#439,
+  #448, #509, #572, @samoht)
 
 - `wire_hardcaml` (`Wire_hardcaml`), experimental and built only with
   `BUILD_HARDCAML=1`: generate a Hardcaml hardware decoder for a bounded

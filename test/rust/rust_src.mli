@@ -14,3 +14,7 @@ val rs :
   string
 (** [rs ?folds ?visitors c] is the source of the module of [c], its folds
     visited by [visitors]. *)
+
+val section : string -> string -> string
+(** [section src name] is the function [name] of [src]: from its signature to
+    the end of its body. *)

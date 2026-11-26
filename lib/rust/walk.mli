@@ -68,14 +68,6 @@ val load : string -> int -> int -> Wire.Private.Types.endian -> string -> string
 val mask : int -> string
 (** [mask width] is the mask of the [width] low bits. *)
 
-val of_word :
-  base:Wire.Private.Types.bitfield_base ->
-  shift:int ->
-  width:int ->
-  string ->
-  string
-(** [of_word ~base ~shift ~width w] is the bitfield out of its word [w]. *)
-
 val read_at : string -> int -> Wire.Private.Layout.store -> string
 (** [read_at b k s] is the value of a field stored as [s] whose bytes start at
     [k] of the array [b], in its Rust type. *)
