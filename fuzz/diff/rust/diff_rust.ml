@@ -18,6 +18,7 @@ let op_fold = 5
 let op_frames = 6
 let op_index = 7
 let op_raw = 8
+let op_set_last = 9
 
 external call : bytes -> bytes -> bytes -> bytes -> bytes -> int
   = "wire_rs_call_stub"
@@ -323,10 +324,44 @@ let raw label c m v =
   encodes label c m ~op:op_raw src v
     [ (size + 3, 3); (size + 2, 1); (size, 0); (size + 1, 2); (size - 1, 0) ]
 
+(* The last field a setter of [c] writes, if any. *)
+let last_settable c =
+  match
+    List.rev (Wire_ocaml.Plan.settable (Wire_ocaml.Plan.records c).root)
+  with
+  | (_, f) :: _ -> Some f
+  | [] -> None
+
+(* The setter of [f] at [off] in [size] bytes: a field past the end of the
+   address space is past the end of the buffer, at the largest [usize] (-1
+   here), as the codec saturates an offset past the native int. *)
+let set_past_the_end label m size (f : Wire_ocaml.Plan.field) off =
+  let at = if off + f.offset >= 0 then -1 else off + f.offset in
+  let expected : Wire.Error.t =
+    {
+      at;
+      field = (if f.name = "" then [] else [ f.name ]);
+      kind =
+        Unexpected_eof
+          { expected = Wire.Private.Layout.width_bytes f.store; got = 0 };
+    }
+  in
+  let got =
+    match
+      run m ~op:op_set_last ~off ~out:(Bytes.make size '\000') Bytes.empty
+    with
+    | 0, _ -> Ok ()
+    | 1, res -> Error (error res)
+    | n, _ -> Alcobar.failf "%s: set_%s: outcome %d" label f.name n
+  in
+  same_result label
+    (Fmt.str "set_%s at offset usize::MAX - %d" f.name (-off - 1))
+    Fmt.nop (Error expected) got
+
 (* An offset the address space ends before: [-k] reaches Rust as
    [usize::MAX - k + 1]. Every decoder must find the buffer too short, and
-   none may wrap or overflow on the way. *)
-let past_the_end label m size buf =
+   none may wrap or overflow on the way; nor may the last setter. *)
+let past_the_end label c m size buf =
   List.iter
     (fun off ->
       let short what = function
@@ -339,7 +374,10 @@ let past_the_end label m size buf =
               (-off - 1)
       in
       short "validate" (validate m buf off);
-      short "decode" (decode m buf off))
+      short "decode" (decode m buf off);
+      Option.iter
+        (fun f -> set_past_the_end label m size f off)
+        (last_settable c))
     [ -1; -size; -size - 1 ]
 
 let check label (Fuzz_gen.Pack g) m =
@@ -355,4 +393,4 @@ let check label (Fuzz_gen.Pack g) m =
           encodes_at label c m buf off
         end)
       (List.sort_uniq compare [ 0; 1; n - size; n - size + 1; max_int ]);
-    past_the_end label m size buf
+    past_the_end label c m size buf

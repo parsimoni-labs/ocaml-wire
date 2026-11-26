@@ -389,6 +389,7 @@ let pp_case ppf c =
      Err(e) => err(e, res, txt) },@\n\
     \                None => -4,@\n\
     \            },@\n\
+    \            9 => %s,@\n\
     \            4 => {@\n\
     \                if neg { return 0; }@\n\
     \                let c = %s;@\n\
@@ -399,6 +400,12 @@ let pp_case ppf c =
     \                    None => 0,@\n\
     \                }@\n\
     \            }@\n"
+    (match List.rev c.settable with
+    | (_, set) :: _ ->
+        Fmt.str
+          "match m::%s(out, off, 0) { Ok(()) => 0, Err(e) => err(e, res, txt) }"
+          set
+    | [] -> "-5")
     check c.view;
   let fold_call i (f, _) =
     Fmt.pf ppf
