@@ -430,6 +430,43 @@ let test_get_bitfield_word_past_buffer () =
         expect_refusal word off
       done)
 
+(* [Codec.load_word] takes the record's offset from the application. A buffer
+   that cuts the word is input: the load answers the error [Codec.get] answers
+   for the field. A negative offset is misuse and raises, even where it puts
+   the word inside the buffer, in front of the record. *)
+let test_load_word_bad_input () =
+  let h = Codec.(Field.v "h" uint8 $ fun (h, _, _) -> h) in
+  let a = Codec.(Field.v "a" (bits ~width:4 U16be) $ fun (_, a, _) -> a) in
+  let b = Codec.(Field.v "b" (bits ~width:12 U16be) $ fun (_, _, b) -> b) in
+  let c = Codec.v "LoadWord" (fun h a b -> (h, a, b)) Codec.[ h; a; b ] in
+  let load = Staged.unstage (Codec.load_word (Codec.bitfield c a)) in
+  let answers name buf off ~expected : unit =
+    ignore (load buf off);
+    Alcotest.failf "%s: loaded a word, expected %a" name Error.pp expected
+  in
+  answers "a word the buffer cuts"
+    (Bytes.of_string "\x00\x12")
+    0
+    ~expected:
+      {
+        at = 1;
+        field = [ "a" ];
+        kind = Unexpected_eof { expected = 2; got = 1 };
+      };
+  answers "a word past the buffer"
+    (Bytes.of_string "\x00\x12\x34")
+    2
+    ~expected:
+      {
+        at = 3;
+        field = [ "a" ];
+        kind = Unexpected_eof { expected = 2; got = 0 };
+      };
+  match load (Bytes.of_string "\x00\x12\x34") (-1) with
+  | _ ->
+      Alcotest.fail "a negative offset loaded the word in front of the record"
+  | exception Invalid_argument _ -> ()
+
 let test_set_bitfield_word_past_buffer_writes_nothing () =
   iter_bitpacks (fun name word fname field codec ->
       let set = Staged.unstage (Codec.set codec field) in
@@ -870,6 +907,8 @@ let suite =
         test_size_of_value_refuses_unmatched_case;
       Alcotest.test_case "get: a bitfield word past the buffer is an error"
         `Quick test_get_bitfield_word_past_buffer;
+      Alcotest.test_case "load_word: bad input is an error, misuse raises"
+        `Quick test_load_word_bad_input;
       Alcotest.test_case "set: a bitfield word past the buffer writes nothing"
         `Quick test_set_bitfield_word_past_buffer_writes_nothing;
       Alcotest.test_case "get: statically gated optionals agree with decode"

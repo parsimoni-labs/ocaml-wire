@@ -113,9 +113,30 @@ let test_words () =
         end
   done
 
+(* A word load takes its record's offset from the caller: a buffer that cuts
+   the word is input, answered as the field's getter answers it, and a negative
+   offset is misuse, refused even where it puts the word inside the buffer. *)
+let test_word_bad_input () =
+  let answers name load buf off ~expected : unit =
+    ignore (load buf off);
+    Alcotest.failf "%s: loaded a word, expected %a" name Error.pp expected
+  in
+  answers "a word the buffer cuts" G_wide.Get.f_word (Bytes.make 10 '\x00') 0
+    ~expected:
+      {
+        at = 8;
+        field = [ "F" ];
+        kind = Unexpected_eof { expected = 4; got = 2 };
+      };
+  match G_wide.Get.f_word (Bytes.make 12 '\x00') (-4) with
+  | _ ->
+      Alcotest.fail "a negative offset loaded the word in front of the record"
+  | exception Invalid_argument _ -> ()
+
 let suite =
   ( "get",
     [
       Alcotest.test_case "getter errors" `Quick test_getter_errors;
       Alcotest.test_case "fields from their word" `Quick test_words;
+      Alcotest.test_case "word loads on bad input" `Quick test_word_bad_input;
     ] )
