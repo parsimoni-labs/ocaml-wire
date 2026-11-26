@@ -408,6 +408,15 @@ let compare64 loc a b =
     (Smt.ite (Smt.slt a b) (Smt.int63 (-1))
        (Smt.ite (Smt.eq a b) (Smt.int63 0) (Smt.int63 1)))
 
+(* [Int64.unsigned_compare] and the runtime's [unsigned_compare], OxCaml's
+   [%int64#_unsigned_compare]: -1, 0 or 1 as [a] is below, equal to or above
+   [b], both read as unsigned 64-bit integers. *)
+let unsigned_compare64 loc a b =
+  let a = i64 loc a and b = i64 loc b in
+  Int
+    (Smt.ite (Smt.ult a b) (Smt.int63 (-1))
+       (Smt.ite (Smt.eq a b) (Smt.int63 0) (Smt.int63 1)))
+
 let int64_prims prefix =
   let p n = prefix ^ "." ^ n in
   [
@@ -428,6 +437,9 @@ let int64_prims prefix =
     shift (p "shift_right") 64 Smt.ashr i64 (fun t -> I64 t);
     binary (p "compare") 2 (fun loc -> function
       | [ a; b ] -> compare64 loc a b
+      | _ -> assert false);
+    binary (p "unsigned_compare") 2 (fun loc -> function
+      | [ a; b ] -> unsigned_compare64 loc a b
       | _ -> assert false);
     binary (p "equal") 2 (fun loc -> function
       | [ a; b ] -> Bool (Smt.eq (i64 loc a) (i64 loc b))
@@ -512,9 +524,17 @@ let conversion_prims =
         "Wire_runtime.SInt16";
       ]
 
+(* The OxCaml runtime's comparison of two int64_u. *)
+let runtime_prims =
+  [
+    binary "Wire_runtime.Target.unsigned_compare" 2 (fun loc -> function
+      | [ a; b ] -> unsigned_compare64 loc a b
+      | _ -> assert false);
+  ]
+
 let prims =
   let l =
-    step_continuations @ ref_prims @ conversion_prims
+    step_continuations @ ref_prims @ conversion_prims @ runtime_prims
     @ [
         int_op "+" Smt.add;
         int_op "-" Smt.sub;
