@@ -516,3 +516,50 @@ jobs:
 
       - name: Prove the scanners against 3d.exe
         run: WIRE_FSTAR_CACHE=$HOME/.cache/wire-fstar opam exec -- make prove
+
+  # verify/ executes the generated scanners and record modules symbolically
+  # and has Z3, the one EverParse ships, prove their reads in bounds and
+  # their answers equal to those of 3d.exe's specification, refuse the
+  # defects planted in mutants (stride_threshold_ox among them, the
+  # positive control of the OxCaml frame loop) and classify every check of
+  # the scanners as needed for safety or for semantics. These rules took
+  # 2.7 hours of CPU, and 88 minutes two at a time on an 18-core machine
+  # under a load of 100 to 200, against 3 to 7 minutes for prove here; the
+  # job runs beside everparse-3d, which takes 80 to 130 minutes, so it
+  # should not lengthen the run. The OxCaml frame loop's bounds
+  # (@verify/bounds-ox, in make verify) took 1.7 hours of CPU more and are
+  # not run here. One rule at a time: each runs four Z3 processes, one per
+  # core of the runner.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+
+      - run: opam install . --deps-only
+
+      - name: Install EverParse
+        run: |
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+          z3=$(sed -n 's/^EVERPARSE_Z3_VERSION ?= //p' \
+            "$HOME/.local/everparse/lib/everparse/z3-version.Makefile")
+          z3=$HOME/.local/everparse/lib/fstar/z3-$z3/bin
+          test -x "$z3/z3"
+          echo "$z3" >> "$GITHUB_PATH"
+
+      # The rules are skipped, and the lane green, when z3 is not in PATH.
+      - run: z3 --version
+
+      - name: Verify the generated code against 3d.exe
+        run: opam exec -- dune build -j 1 @verify/runtest @verify/classify
+        env:
+          BUILD_EVERPARSE: 1
