@@ -12,3 +12,4 @@ lib/runtime/vec.sse.ml
 lib/runtime/vec.sse.mli
 test/ocaml-ox/test_modes.ox.ml
 bench/rust/flow_table.ox.ml
+bench/rust/flow_parse.ox.ml

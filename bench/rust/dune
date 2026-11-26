@@ -15,21 +15,6 @@
  (modules gen)
  (libraries headers net wire wire.ocaml wire.rust))
 
-; The harness around the generated modules: the visitors their folds call by
-; name and the readers over those folds.
-
-(rule
- (targets
-  stack_step.ml
-  selected_step.ml
-  stack_read.ml
-  selected_read.ml
-  flow_step.ml
-  flow_parse.ml
-  flow_read.ml)
- (action
-  (run ./gen.exe --harness %{targets})))
-
 ; The generated modules, one rule each, for the compiler that builds them.
 
 (rule
@@ -168,7 +153,9 @@
  (copy flow_swap.mli flow_swap_interpreted_parse.mli))
 
 ;; The flow table is flow_table.ox.ml on OxCaml, whose slots hold unboxed
-;; words, and flow_table.std.ml elsewhere.
+;; words, and flow_table.std.ml elsewhere; the visitor of the fold [parse] is
+;; flow_parse.ox.ml on OxCaml, which folds the keys in an unboxed pair, and
+;; flow_parse.std.ml elsewhere.
 
 (executable
  (name bench)
@@ -221,4 +208,9 @@
    flow_table.ml
    from
    (stdlib_upstream_compatible -> flow_table.ox.ml)
-   (-> flow_table.std.ml))))
+   (-> flow_table.std.ml))
+  (select
+   flow_parse.ml
+   from
+   (stdlib_upstream_compatible -> flow_parse.ox.ml)
+   (-> flow_parse.std.ml))))

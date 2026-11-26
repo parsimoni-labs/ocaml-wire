@@ -467,7 +467,8 @@ let view_packet ~avail acc b len o =
     if ty = ipv4 then view_ipv4 acc (acc + ty) b len (o + 14) ~avail
     else acc + ty
 
-let oxcaml = Stack_read.oxcaml
+let oxcaml =
+  match Sys.ocaml_release.extra with Some (_, "ox") -> true | _ -> false
 
 (* The rows take the slot's stride at run time, as a reader of fixed-size
    frames that learns their size from its input does. *)
