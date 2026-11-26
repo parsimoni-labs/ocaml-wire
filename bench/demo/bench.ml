@@ -11,7 +11,9 @@ open Demo_bench_cases
 let read_row (C rc) =
   let (Read_case case) = rc in
   let stubs =
-    C_stubs.stubs_of_name (Wire.Everparse.Raw.struct_name case.struct_)
+    C_stubs.stubs_of_name
+      (Wire.Everparse.Raw.struct_name case.struct_)
+      case.codec
   in
   let ocaml_fn, ocaml_reset =
     cycling ~data:case.dataset.packed ~n_items:case.dataset.n_items

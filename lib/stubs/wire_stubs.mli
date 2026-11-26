@@ -4,13 +4,21 @@
     OCaml code can call EverParse-generated validators. Each stub stack-
     allocates the schema's default visitor struct ([<Name>Fields] from
     {!Wire_3d}), runs the EverParse validator against it, then marshals the
-    populated struct members into an OCaml record. A record the validator
-    refuses is input: [<name>_parse] answers [(record, Wire.Error.t) result],
-    and [Error e] places the refusal at the validator's position. EverParse
-    reports a kind and a position only, so [e] names no field and no value, and
-    an end of input expects the bytes up to the end of a record of constant
-    size, or one more than it had. A negative offset is misuse and raises
-    [Invalid_argument].
+    populated struct members into an OCaml record.
+
+    The stubs of a codec [Name] are the module [Stubs.Name]: its record type
+    [t], the type [CODEC] of the codec value and a functor [Make] over it, whose
+    [parse] answers [(t, Wire.Error.t) result]. The validator only accepts or
+    refuses, and a refused record is input: its error is the one
+    {!Wire.Codec.validate} answers for the codec, the bytes and the offset,
+    computed in OCaml out of the validator's path. Where [Wire.Codec.validate]
+    accepts a record the validator refused, the two disagree, a defect of one of
+    them, and [parse] answers that the record fails as a whole: a
+    [Constraint_failed { which = Where; value = None }] at the offset, with no
+    field. A negative offset is misuse and raises [Invalid_argument].
+
+    [Make] raises [Invalid_argument] when applied to a codec other than the one
+    {!generate} wrote the stubs from (the codec's digest differs).
 
     {b Typical usage} (in a code-generation executable):
     {[
@@ -32,6 +40,10 @@
         [ Wire_stubs.C codec ]
     ]}
 
+    The program that links the stubs applies their functor to the same codec,
+    [module H = Stubs.Header.Make (struct type r = header let codec = codec
+     end)], and calls [H.parse buf off].
+
     This writes [wire_ffi.c] + [stubs.ml] into [outdir]. The [WIRECTX] socket
     and the [<Name>_Fields] visitor come from {!Wire_3d}; this module is just
     one particular consumer of that visitor. *)
@@ -43,7 +55,8 @@ val generate : schema_dir:string -> outdir:string -> packed_codec list -> unit
 
 val of_structs :
   schema_dir:string -> outdir:string -> Wire.Everparse.Raw.struct_ list -> unit
-(** Same as {!generate} but takes raw structs directly. *)
+(** Same as {!generate} but takes raw structs directly. With no codec to take a
+    digest of, the stubs' [Make] does not check the codec it is applied to. *)
 
 val check_names : Wire.Everparse.Raw.struct_ -> unit
 (** [check_names s] raises [Invalid_argument] naming both fields when
@@ -77,15 +90,22 @@ val build_codec_archive :
     [cc] and [ar]. *)
 
 val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
-(** Generate OCaml external declarations and record types for all structs. A
-    struct's record type is its name lower-cased, escaped when a keyword ([Type]
-    gives [type_]).
+(** Generate the OCaml stubs of all structs, each the module {!module_name}
+    names, holding its record type [t] and its functor [Make], which checks no
+    digest.
 
     @raise Invalid_argument
-      naming both codecs when two names give one type, as [foo] and [FOO] do. *)
+      naming both codecs when two names give one stub, as [foo] and [FOO] do, or
+      naming a codec whose name gives no module. *)
 
 val to_ml_stub : Wire.Everparse.Raw.struct_ -> string
-(** Generate a standalone OCaml module with parse and parse_k for one struct. *)
+(** Generate the contents of a standalone OCaml module, its record type [t] and
+    its functor [Make], for one struct. *)
+
+val module_name : Wire.Everparse.Raw.struct_ -> string
+(** [module_name s] is the module of [s]'s stubs in {!to_ml_stubs}: its name,
+    capitalised. Raises [Invalid_argument] if the name does not start with a
+    letter or is not an identifier. *)
 
 val to_ml_stub_name : Wire.Everparse.Raw.struct_ -> string
 (** Derive the OCaml snake_case module name from a struct's CamelCase name. *)

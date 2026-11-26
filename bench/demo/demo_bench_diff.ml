@@ -10,7 +10,9 @@ open Demo_bench_cases
 type case = { id : Demo_bench_cases.id; label : string; packed : Wire_diff.t }
 
 let of_case (type a) (Read_case c : a read_case) =
-  let stubs = C_stubs.stubs_of_name (Everparse.Raw.struct_name c.struct_) in
+  let stubs =
+    C_stubs.stubs_of_name (Everparse.Raw.struct_name c.struct_) c.codec
+  in
   let size = Codec.min_size c.codec in
   let c_parse : bytes -> a =
     match c.of_c_field with
@@ -46,7 +48,9 @@ let verify_of_id id =
   let (C (Read_case r)) =
     List.find (fun (C (Read_case r)) -> r.id = id) projection_cases
   in
-  let stubs = C_stubs.stubs_of_name (Everparse.Raw.struct_name r.struct_) in
+  let stubs =
+    C_stubs.stubs_of_name (Everparse.Raw.struct_name r.struct_) r.codec
+  in
   fun () ->
     Array.iteri
       (fun i item ->

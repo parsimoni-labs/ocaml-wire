@@ -7,7 +7,7 @@
 open Wire
 
 module Header = struct
-  type r = int * int
+  type r = UInt8.t * UInt16.t
 
   let codec =
     Codec.v "DiffHeader"
@@ -20,7 +20,7 @@ module Header = struct
 end
 
 module Limits = struct
-  type r = int * int
+  type r = UInt8.t * UInt16.t
 
   let codec =
     Codec.v "DiffLimits"
@@ -35,7 +35,7 @@ module Limits = struct
 end
 
 module Bits = struct
-  type r = int * int * int
+  type r = int * int * UInt16.t
 
   let codec =
     Codec.v "DiffBits"
@@ -55,7 +55,7 @@ module Bits = struct
 end
 
 module Pair = struct
-  type r = int * int
+  type r = UInt8.t * UInt8.t
 
   let f_a = Field.v "a" uint8
   let f_b = Field.v "b" uint8
@@ -68,7 +68,7 @@ module Pair = struct
 end
 
 module Kind = struct
-  type r = int * int
+  type r = UInt8.t * UInt16.t
 
   let codec =
     Codec.v "DiffKind"
@@ -83,7 +83,7 @@ module Kind = struct
 end
 
 module Sized = struct
-  type r = int * string * int
+  type r = UInt8.t * string * UInt8.t
 
   let f_len = Field.v "len" uint8
 
@@ -100,10 +100,99 @@ module Sized = struct
 end
 
 module Padded = struct
-  type r = int * string
+  type r = UInt8.t * string
 
   let codec =
     Codec.v "DiffPadded"
       (fun x pad -> (x, pad))
       Codec.[ Field.v "x" uint8 $ fst; Field.v "pad" all_zeros $ snd ]
+end
+
+(* The codecs of the other end-to-end tests. *)
+
+let named name =
+  Codec.v name
+    (fun version length -> (version, length))
+    Codec.
+      [
+        (Field.v "version" uint8 $ fun (v, _) -> v);
+        (Field.v "length" uint16be $ fun (_, l) -> l);
+      ]
+
+module Offset_header = struct
+  type r = UInt8.t * UInt16.t
+
+  let codec = named "OffsetHeader"
+end
+
+module Constrained = struct
+  type r = UInt8.t
+
+  let codec =
+    Codec.v "Constrained"
+      (fun x -> x)
+      Codec.
+        [
+          ( Field.v "x" ~self_constraint:(fun x -> Expr.(x <= int 100)) uint8
+          $ fun x -> x );
+        ]
+end
+
+module Refused = struct
+  type r = UInt8.t * UInt16.t
+
+  let codec =
+    Codec.v "Refused"
+      (fun x y -> (x, y))
+      Codec.
+        [
+          Field.v "x" ~self_constraint:(fun x -> Expr.(x <= int 100)) uint8
+          $ fst;
+          Field.v "y" uint16be $ snd;
+        ]
+end
+
+module Bf_header = struct
+  type r = int * int * UInt16.t
+
+  let codec =
+    Codec.v "BfHeader"
+      (fun version flags length -> (version, flags, length))
+      Codec.
+        [
+          (Field.v "version" (bits ~width:4 U8) $ fun (v, _, _) -> v);
+          (Field.v "flags" (bits ~width:4 U8) $ fun (_, f, _) -> f);
+          (Field.v "length" uint16be $ fun (_, _, l) -> l);
+        ]
+end
+
+module Gc_quad = struct
+  type r = UInt64.t * UInt64.t * UInt64.t * UInt64.t
+
+  let f n = Field.v n uint64be
+
+  let codec =
+    Codec.v "GcQuad"
+      (fun a b c d -> (a, b, c, d))
+      Codec.
+        [
+          (f "a" $ fun (a, _, _, _) -> a);
+          (f "b" $ fun (_, b, _, _) -> b);
+          (f "c" $ fun (_, _, c, _) -> c);
+          (f "d" $ fun (_, _, _, d) -> d);
+        ]
+end
+
+module Test_parse = struct
+  type r = UInt32.t * UInt16.t * UInt8.t
+
+  let codec =
+    Codec.v "TestParse"
+      (fun id len tag -> (id, len, tag))
+      Codec.
+        [
+          (Field.v "Id" uint32be $ fun (id, _, _) -> id);
+          (Field.v "Length" uint16be $ fun (_, l, _) -> l);
+          (Field.v "Tag" uint8 $ fun (_, _, t) -> t);
+        ]
 end

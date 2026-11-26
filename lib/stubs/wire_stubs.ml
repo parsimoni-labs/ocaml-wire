@@ -18,35 +18,18 @@ let pp_c_stub_error_handler ppf lower =
     "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;@\n";
   Fmt.pf ppf "}@\n"
 
+(* The validator decides whether it accepts the record, and only that: the
+   OCaml side computes the error of a record it refused ([pp_ml_make]). *)
 let c_stub_validate ppf ~lower ~ep ~validator =
   Fmt.pf ppf "  %sFields fields = {0};@\n" ep;
   Fmt.pf ppf
     "  uint64_t r = %s((WIRECTX *) &fields, NULL, %s_err, data, len, 0);@\n"
-    validator lower;
-  (* A refused record is input: [Error (kind, pos)], EverParse's error kind
-     and the position it stopped at, which the OCaml side makes a
-     [Wire.Error.t] of ([pp_ml_error]). *)
-  Fmt.pf ppf "  if (!EverParseIsSuccess(r)) {@\n";
-  Fmt.pf ppf "    v_err = caml_alloc_small(2, 0);@\n";
-  Fmt.pf ppf
-    "    Field(v_err, 0) = Val_long(EverParseGetValidatorErrorKind(r));@\n";
-  Fmt.pf ppf
-    "    Field(v_err, 1) = Val_long(EverParseGetValidatorErrorPos(r));@\n";
-  Fmt.pf ppf "    v_result = caml_alloc_small(1, 1);@\n";
-  Fmt.pf ppf "    Field(v_result, 0) = v_err;@\n";
-  Fmt.pf ppf "    CAMLreturn(v_result);@\n";
-  Fmt.pf ppf "  }@\n"
-
-(* [Ok v]: the record the validator accepted, as [v]. *)
-let c_stub_ok ppf v =
-  Fmt.pf ppf "  v_result = caml_alloc_small(1, 0);@\n";
-  Fmt.pf ppf "  Field(v_result, 0) = %s;@\n" v;
-  Fmt.pf ppf "  CAMLreturn(v_result);@\n"
+    validator lower
 
 (* [off] is caller-supplied and may carry attacker-controlled data (a length or
    offset parsed from the input). A negative one is misuse and raises
    [Invalid_argument]; one past the end of the buffer is input, and the
-   validator reads it as no bytes, so it answers the end of input rather than
+   validator reads it as no bytes, so it refuses the record rather than
    underflowing [len] into a span past the buffer. *)
 let pp_c_stub_bounds ppf ~lower =
   Fmt.pf ppf "  intnat off = Int_val(v_off);@\n";
@@ -78,16 +61,16 @@ let pp_c_stub_output ppf ~lower ~ep ~validator (s : Wire.Everparse.Raw.struct_)
   let n_fields = List.length kinds in
   (* Single C entry point per schema: [caml_wire_<name>_parse_k] takes a
      continuation and applies it to the parsed field values via
-     [caml_callbackN]. The OCaml side derives the record-returning
-     [<name>_parse] from [<name>_parse_k] with a constructor continuation
-     (see [to_ml_stubs] below); both flavours share this one C function. *)
+     [caml_callbackN]. The OCaml side derives the record-returning [parse]
+     from [parse_k] with a constructor continuation (see [pp_ml_body] below);
+     both share this one C function. *)
   if n_fields > 0 then begin
     Fmt.pf ppf
       "CAMLprim value caml_wire_%s_parse_k(value v_k, value v_buf, value \
        v_off) {@\n"
       lower;
     Fmt.pf ppf "  CAMLparam3(v_k, v_buf, v_off);@\n";
-    Fmt.pf ppf "  CAMLlocal3(v_result, v_err, v_ok);@\n";
+    Fmt.pf ppf "  CAMLlocal2(v_result, v_ok);@\n";
     (* [args] collects boxed values ([caml_copy_int64], [caml_copy_double]).
        Each of those allocations can trigger a minor collection that moves or
        reclaims the boxes already stored, and a bare [value args[N]] is
@@ -95,41 +78,53 @@ let pp_c_stub_output ppf ~lower ~ep ~validator (s : Wire.Everparse.Raw.struct_)
        receives garbage field values. [CAMLlocalN] registers the array as a
        root block and pre-fills it with [Val_unit], so every slot is a valid
        root from the declaration on. It comes after the [CAMLparam3] /
-       [CAMLlocal3] declarations and before the first allocation, and the
+       [CAMLlocal2] declarations and before the first allocation, and the
        single [CAMLreturn] unwinds all three root blocks. *)
     Fmt.pf ppf "  CAMLlocalN(args, %d);@\n" n_fields;
     pp_c_stub_bounds ppf ~lower;
     c_stub_validate ppf ~lower ~ep ~validator;
+    (* [Some v] on a record the validator accepted, [None] otherwise. *)
+    Fmt.pf ppf "  if (!EverParseIsSuccess(r)) CAMLreturn(Val_none);@\n";
     List.iteri
       (fun i kind -> Fmt.pf ppf "  args[%d] = %a;@\n" i pp_field_value kind)
       kinds;
     Fmt.pf ppf "  v_ok = caml_callbackN(v_k, %d, args);@\n" n_fields;
-    c_stub_ok ppf "v_ok";
+    Fmt.pf ppf "  v_result = caml_alloc_small(1, 0);@\n";
+    Fmt.pf ppf "  Field(v_result, 0) = v_ok;@\n";
+    Fmt.pf ppf "  CAMLreturn(v_result);@\n";
     Fmt.pf ppf "}@\n@\n"
   end
   else begin
-    (* Zero-field schema: no callback needed, just validate and answer [Ok ()]. *)
+    (* Zero-field schema: no callback, the validator's verdict. *)
     Fmt.pf ppf
       "CAMLprim value caml_wire_%s_parse(value v_buf, value v_off) {@\n" lower;
     Fmt.pf ppf "  CAMLparam2(v_buf, v_off);@\n";
-    Fmt.pf ppf "  CAMLlocal2(v_result, v_err);@\n";
     pp_c_stub_bounds ppf ~lower;
     c_stub_validate ppf ~lower ~ep ~validator;
-    c_stub_ok ppf "Val_unit";
+    Fmt.pf ppf "  CAMLreturn(Val_bool(EverParseIsSuccess(r)));@\n";
     Fmt.pf ppf "}@\n@\n"
   end
 
-(* A codec's name, lower-cased, is the record type and the C symbol of its
-   stubs: [Type] is escaped as a label is, and [foo] and [FOO] would define
-   both twice. *)
-let ml_type_name s =
-  Wire.Private.Names.ocaml_label (Wire.Everparse.Raw.struct_name s)
+(* A codec's name, capitalised, is the OCaml module of its stubs, and,
+   lower-cased, their C symbol: [foo] and [FOO] would define both twice. *)
+let module_name s =
+  let name = Wire.Everparse.Raw.struct_name s in
+  let letter = function 'A' .. 'Z' | 'a' .. 'z' -> true | _ -> false in
+  if Wire.Private.Names.is_identifier name && letter name.[0] then
+    String.capitalize_ascii name
+  else
+    Fmt.invalid_arg
+      "Wire_stubs: codec %S names no OCaml module; start its name with a letter"
+      name
 
 let check_codec_names structs =
+  List.iter (fun s -> ignore (module_name s : string)) structs;
   match
     Wire.Private.Names.clash
       (List.map
-         (fun s -> (Wire.Everparse.Raw.struct_name s, ml_type_name s))
+         (fun s ->
+           let name = Wire.Everparse.Raw.struct_name s in
+           (name, String.lowercase_ascii name))
          structs)
   with
   | None -> ()
@@ -262,11 +257,8 @@ let pp_ml_k_type ppf kinds =
   List.iter (fun (_, kind) -> Fmt.pf ppf "%s -> " (ml_kind_string kind)) kinds;
   Fmt.pf ppf "'r)"
 
-(* Emit [<name>_parse] as an OCaml-side wrapper over the single C
-   [<name>_parse_k]. The continuation is a record constructor; the OCaml
-   compiler eliminates it when the caller only wants the record (the
-   record is built directly from the field values). Single C codepath
-   per schema; both record-returning and CPS ergonomics preserved. *)
+(* The continuation [parse] passes to [parse_k]: the record constructor, so
+   the record is built directly from the field values. *)
 let pp_ml_record_constructor ppf kinds =
   Fmt.pf ppf "(fun ";
   List.iteri (fun i _ -> Fmt.pf ppf "v%d " i) kinds;
@@ -278,79 +270,136 @@ let pp_ml_record_constructor ppf kinds =
     kinds;
   Fmt.pf ppf " })"
 
-(* The bytes of every record of [s], or [0] when they vary. *)
-let constant_size s = Option.value ~default:0 (Wire.Everparse.Raw.struct_size s)
-
-(* The [Wire.Error.t] of a record the C validator refused: its error kind
-   ([EVERPARSE_VALIDATOR_ERROR_*]) and the position it stopped at, [pos] bytes
-   from [off]. EverParse names no field and no value, so the path is empty and
-   a constraint carries no value. The end of input expects the bytes up to
-   the end of a record of constant [size], and one more than it had otherwise. *)
-let pp_ml_error ppf () =
-  Fmt.pf ppf "let wire_error ~size buf off (kind, pos) : Wire.Error.t =@\n";
-  Fmt.pf ppf "  let at = off + pos in@\n";
-  Fmt.pf ppf "  let got = max 0 (Bytes.length buf - at) in@\n";
-  Fmt.pf ppf "  let kind : Wire.Error.kind =@\n";
-  Fmt.pf ppf "    match kind with@\n";
-  Fmt.pf ppf "    | 2 ->@\n";
+(* The type of the functor's parameter, the codec. The signature and the
+   structure both name it, so that the [codec] it declares is used. *)
+let pp_ml_codec_type ppf =
   Fmt.pf ppf
-    "        let expected = if size - pos > got then size - pos else got + 1 in@\n";
-  Fmt.pf ppf "        Unexpected_eof { expected; got }@\n";
-  Fmt.pf ppf "    | 5 -> Constraint_failed { which = Action; value = None }@\n";
-  Fmt.pf ppf "    | 7 -> Non_zero_padding@\n";
-  Fmt.pf ppf "    | _ -> Constraint_failed { which = Field; value = None }@\n";
-  Fmt.pf ppf "  in@\n";
-  Fmt.pf ppf "  { at; field = []; kind }@\n@\n"
+    "module type CODEC = sig@\n\
+    \  type r@\n\
+     @\n\
+    \  val codec : r Wire.Codec.t@\n\
+     end@\n\
+     @\n"
 
-(* The stubs of [s]: the C entry point, answering [Error (kind, pos)] on a
-   refused record, and its [Wire.Error.t] form, [parse_k] applying a
-   continuation to the field values and [parse] building the record. *)
-let pp_ml_stub ppf ~parse ~parse_k ~type_name s =
-  let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
-  let kinds = Wire.Everparse.Raw.field_kinds s in
-  check_labels s kinds;
-  let size = constant_size s in
+(* The interface of the stubs of a codec: its record type [t], when it has
+   fields, the type [CODEC] of the codec value and the functor over it. *)
+let pp_ml_sig ppf kinds =
+  if kinds <> [] then gen_ml_record ppf ~type_name:"t" kinds;
+  pp_ml_codec_type ppf;
+  Fmt.pf ppf "module Make (_ : CODEC) : sig@\n";
   if kinds <> [] then begin
-    gen_ml_record ppf ~type_name kinds;
     Fmt.pf ppf
-      "external %s_raw : %a -> bytes -> int -> ('r, int * int) result@\n"
-      parse_k
-      (fun ppf () -> pp_ml_k_type ppf kinds)
-      ();
-    Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n@\n" lower;
-    Fmt.pf ppf "let %s k buf off =@\n" parse_k;
-    Fmt.pf ppf "  match %s_raw k buf off with@\n" parse_k;
-    Fmt.pf ppf "  | Ok v -> Ok v@\n";
-    Fmt.pf ppf "  | Error e -> Error (wire_error ~size:%d buf off e)@\n@\n" size;
-    Fmt.pf ppf "let %s buf off =@\n" parse;
-    Fmt.pf ppf "  %s@\n" parse_k;
-    Fmt.pf ppf "    %a@\n" pp_ml_record_constructor kinds;
-    Fmt.pf ppf "    buf off@\n@\n"
+      "  val parse_k : %a -> bytes -> int -> ('r, Wire.Error.t) result@\n"
+      pp_ml_k_type kinds;
+    Fmt.pf ppf
+      "  (** [parse_k k buf off] applies [k] to the fields of the record at \
+       [off]@\n\
+      \      in [buf], or answers the error [Wire.Codec.validate] answers for \
+       the@\n\
+      \      codec, [buf] and [off]. Raises [Invalid_argument] if [off] is@\n\
+      \      negative. *)@\n\
+       @\n";
+    Fmt.pf ppf "  val parse : bytes -> int -> (t, Wire.Error.t) result@\n";
+    Fmt.pf ppf "  (** [parse] is [parse_k] building the record. *)@\n"
   end
   else begin
-    Fmt.pf ppf "external %s_raw : bytes -> int -> (unit, int * int) result@\n"
-      parse;
-    Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
-    Fmt.pf ppf "let %s buf off =@\n" parse;
-    Fmt.pf ppf "  match %s_raw buf off with@\n" parse;
-    Fmt.pf ppf "  | Ok () -> Ok ()@\n";
-    Fmt.pf ppf "  | Error e -> Error (wire_error ~size:%d buf off e)@\n@\n" size
-  end
+    Fmt.pf ppf "  val parse : bytes -> int -> (unit, Wire.Error.t) result@\n";
+    Fmt.pf ppf
+      "  (** [parse buf off] checks the record at [off] in [buf], or answers \
+       the@\n\
+      \      error [Wire.Codec.validate] answers for the codec, [buf] and \
+       [off].@\n\
+      \      Raises [Invalid_argument] if [off] is negative. *)@\n"
+  end;
+  Fmt.pf ppf "end@\n"
 
-let to_ml_stubs (structs : Wire.Everparse.Raw.struct_ list) =
-  let buf = Buffer.create 256 in
+(* The stubs of a codec. The C entry point only accepts or refuses, which is
+   the verified fast path; the error of a refused record is the one
+   [Wire.Codec.validate] answers for the codec the functor takes, computed out
+   of line. [digest], when the codec is known, checks once, when the functor is
+   applied, that the codec is the one the stubs come from. *)
+let pp_ml_body ppf ~digest s kinds =
+  let symbol = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
+  if kinds <> [] then begin
+    gen_ml_record ppf ~type_name:"t" kinds;
+    Fmt.pf ppf
+      "external validate_k : %a -> bytes -> int -> 'r option@\n\
+      \  = \"caml_wire_%s_parse_k\"@\n\
+       @\n"
+      pp_ml_k_type kinds symbol
+  end
+  else
+    Fmt.pf ppf
+      "external validate : bytes -> int -> bool = \"caml_wire_%s_parse\"@\n@\n"
+      symbol;
+  pp_ml_codec_type ppf;
+  Fmt.pf ppf "module Make (C : CODEC) = struct@\n";
+  Option.iter
+    (fun d -> Fmt.pf ppf "  let () = Wire.Private.Gen.check C.codec %S@\n@\n" d)
+    digest;
+  (* The validator refused the record. Where the codec accepts it, the two
+     disagree, a defect of one of them; the record is then refused as a whole,
+     as a [~where] that fails. *)
+  Fmt.pf ppf
+    "  let[@@inline never] error buf off =@\n\
+    \    match Wire.Codec.validate C.codec buf off with@\n\
+    \    | Error e -> e@\n\
+    \    | Ok () ->@\n\
+    \        {@\n\
+    \          Wire.Error.at = off;@\n\
+    \          field = [];@\n\
+    \          kind = Constraint_failed { which = Where; value = None };@\n\
+    \        }@\n\
+     @\n";
+  if kinds <> [] then begin
+    Fmt.pf ppf
+      "  let parse_k k buf off =@\n\
+      \    match validate_k k buf off with@\n\
+      \    | Some v -> Ok v@\n\
+      \    | None -> Error (error buf off)@\n\
+       @\n";
+    Fmt.pf ppf "  let parse buf off = parse_k %a buf off@\n"
+      pp_ml_record_constructor kinds
+  end
+  else
+    Fmt.pf ppf
+      "  let parse buf off =@\n\
+      \    if validate buf off then Ok () else Error (error buf off)@\n";
+  Fmt.pf ppf "end@\n"
+
+(* [text] without its final newline, each line indented. *)
+let indent text =
+  let text =
+    if String.ends_with ~suffix:"\n" text then
+      String.sub text 0 (String.length text - 1)
+    else text
+  in
+  String.split_on_char '\n' text
+  |> List.map (fun l -> if l = "" then l else "  " ^ l)
+  |> String.concat "\n"
+
+let to_string pp =
+  let buf = Buffer.create 1024 in
   let ppf = Format.formatter_of_buffer buf in
-  check_codec_names structs;
-  Fmt.pf ppf "(* Generated by wire (do not edit) *)@\n@\n";
-  pp_ml_error ppf ();
-  List.iter
-    (fun (s : Wire.Everparse.Raw.struct_) ->
-      let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
-      pp_ml_stub ppf ~parse:(lower ^ "_parse") ~parse_k:(lower ^ "_parse_k")
-        ~type_name:(ml_type_name s) s)
-    structs;
+  pp ppf;
   Format.pp_print_flush ppf ();
   Buffer.contents buf
+
+let ml_stubs entries =
+  check_codec_names (List.map fst entries);
+  to_string (fun ppf ->
+      Fmt.pf ppf "(* Generated by wire (do not edit) *)@\n";
+      List.iter
+        (fun (s, digest) ->
+          let kinds = Wire.Everparse.Raw.field_kinds s in
+          check_labels s kinds;
+          Fmt.pf ppf "@\nmodule %s : sig@\n%s@\nend = struct@\n%s@\nend@\n"
+            (module_name s)
+            (indent (to_string (fun ppf -> pp_ml_sig ppf kinds)))
+            (indent (to_string (fun ppf -> pp_ml_body ppf ~digest s kinds))))
+        entries)
+
+let to_ml_stubs structs = ml_stubs (List.map (fun s -> (s, None)) structs)
 
 let to_ml_stub_name (s : Wire.Everparse.Raw.struct_) =
   let name = Wire.Everparse.Raw.struct_name s in
@@ -364,13 +413,22 @@ let to_ml_stub_name (s : Wire.Everparse.Raw.struct_) =
   Buffer.contents buf
 
 let to_ml_stub (s : Wire.Everparse.Raw.struct_) =
-  let buf = Buffer.create 256 in
-  let ppf = Format.formatter_of_buffer buf in
-  Fmt.pf ppf "(* Generated by wire (do not edit) *)@\n@\n";
-  pp_ml_error ppf ();
-  pp_ml_stub ppf ~parse:"parse" ~parse_k:"parse_k" ~type_name:"t" s;
-  Format.pp_print_flush ppf ();
-  Buffer.contents buf
+  let kinds = Wire.Everparse.Raw.field_kinds s in
+  check_labels s kinds;
+  to_string (fun ppf ->
+      Fmt.pf ppf
+        "(* Generated by wire (do not edit) *)@\n\
+         @\n\
+         include (@\n\
+        \  struct@\n\
+         %s@\n\
+        \  end :@\n\
+        \  sig@\n\
+         %s@\n\
+        \  end)@\n"
+        (indent
+           (indent (to_string (fun ppf -> pp_ml_body ppf ~digest:None s kinds))))
+        (indent (indent (to_string (fun ppf -> pp_ml_sig ppf kinds)))))
 
 let write_file path content =
   let oc = open_out path in
@@ -379,14 +437,18 @@ let write_file path content =
 
 type packed_codec = C : _ Wire.Codec.t -> packed_codec
 
-let of_structs ~schema_dir ~outdir structs =
+let write ~schema_dir ~outdir entries =
+  let structs = List.map fst entries in
   let schemas =
     List.map (Wire.Everparse.Raw.project_struct ~mode:`Ffi) structs
   in
   Wire_3d.write_external_typedefs ~outdir:schema_dir schemas;
   Wire_3d.write_fields ~outdir:schema_dir schemas;
   write_file (Filename.concat outdir "wire_ffi.c") (to_c_stubs structs);
-  write_file (Filename.concat outdir "stubs.ml") (to_ml_stubs structs)
+  write_file (Filename.concat outdir "stubs.ml") (ml_stubs entries)
+
+let of_structs ~schema_dir ~outdir structs =
+  write ~schema_dir ~outdir (List.map (fun s -> (s, None)) structs)
 
 let check_names s =
   let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi s in
@@ -395,7 +457,8 @@ let check_names s =
   check_labels s (Wire.Everparse.Raw.field_kinds s)
 
 let generate ~schema_dir ~outdir codecs =
-  let structs =
-    List.map (fun (C c) -> Wire.Everparse.Raw.struct_of_codec c) codecs
-  in
-  of_structs ~schema_dir ~outdir structs
+  write ~schema_dir ~outdir
+    (List.map
+       (fun (C c) ->
+         (Wire.Everparse.Raw.struct_of_codec c, Some (Wire.Private.Gen.digest c)))
+       codecs)

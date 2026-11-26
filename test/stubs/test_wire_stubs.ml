@@ -40,8 +40,12 @@ let check_struct s =
   let multi = Wire_stubs.to_ml_stubs [ s ] in
   compile_ml_stub single;
   compile_ml_stub multi;
-  Alcotest.(check bool) "single has parse" true (contains ~sub:"parse" single);
-  Alcotest.(check bool) "multi has parse" true (contains ~sub:"_parse" multi)
+  Alcotest.(check bool)
+    "single has parse" true
+    (contains ~sub:"val parse :" single);
+  Alcotest.(check bool)
+    "multi has parse" true
+    (contains ~sub:"val parse :" multi)
 
 (* -- No params -- *)
 
@@ -175,9 +179,9 @@ let test_multiple_structs () =
   let s3 = param_struct "Baz" [ param "limit" uint8 ] [ field "z" uint32be ] in
   let ml = Wire_stubs.to_ml_stubs [ s1; s2; s3 ] in
   compile_ml_stub ml;
-  Alcotest.(check bool) "has foo" true (contains ~sub:"foo_parse" ml);
-  Alcotest.(check bool) "has bar" true (contains ~sub:"bar_parse" ml);
-  Alcotest.(check bool) "has baz" true (contains ~sub:"baz_parse" ml)
+  Alcotest.(check bool) "has foo" true (contains ~sub:"module Foo :" ml);
+  Alcotest.(check bool) "has bar" true (contains ~sub:"module Bar :" ml);
+  Alcotest.(check bool) "has baz" true (contains ~sub:"module Baz :" ml)
 
 (* -- C stubs (string checks, cannot compile without EverParse headers) -- *)
 
@@ -391,16 +395,19 @@ let test_keyword_fields () =
         (contains ~sub:("fields." ^ m ^ ")") c))
     [ "done"; "effect"; "local_"; "int_"; "typeof_" ]
 
-(* A codec's name gives the record type of its stubs, lower-cased: [Type]
-   would declare [type type]. It is escaped as a label is. *)
+(* A codec's name, capitalised, is the module of its stubs, which no keyword
+   spells: [Type] is the module [Type]. A name that starts with no letter
+   gives no module. *)
 let test_keyword_codec_name () =
   let s = struct_ "Type" [ field "x" uint8 ] in
   check_struct s;
   Alcotest.(check bool)
-    "type name escaped" true
-    (contains ~sub:"type type_ = {" (Wire_stubs.to_ml_stubs [ s ]))
+    "module Type" true
+    (contains ~sub:"module Type :" (Wire_stubs.to_ml_stubs [ s ]));
+  rejects "_type" [ "\"_type\"" ] (fun () ->
+      Wire_stubs.to_ml_stubs [ struct_ "_type" [ field "x" uint8 ] ])
 
-(* Two codecs whose names fold to one are one record type and one C stub. *)
+(* Two codecs whose names fold to one are one stub module and one C stub. *)
 let test_codec_names_clash () =
   let both a b =
     let structs = List.map (fun n -> struct_ n [ field "x" uint8 ]) [ a; b ] in
@@ -413,14 +420,14 @@ let test_codec_names_clash () =
   in
   both "foo" "FOO";
   both "FooBar" "Foobar";
-  (* The keyword escape is injective, so [Type] and [Type_] stay apart. *)
   let structs =
     List.map (fun n -> struct_ n [ field "x" uint8 ]) [ "Type"; "Type_" ]
   in
   let ml = Wire_stubs.to_ml_stubs structs in
+  compile_ml_stub ml;
   Alcotest.(check bool)
     "Type and Type_ apart" true
-    (contains ~sub:"type type_ = {" ml && contains ~sub:"type type__ = {" ml);
+    (contains ~sub:"module Type :" ml && contains ~sub:"module Type_ :" ml);
   ignore (Wire_stubs.to_c_stubs structs)
 
 (* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
@@ -459,24 +466,29 @@ let has_debug_runtime =
   | None -> false
 
 (** End-to-end: .3d -> EverParse -> C stubs -> ML stubs -> compile -> call.
-    [test_ml] is the OCaml source that calls the generated stubs and exits 0 on
-    success, non-zero on failure. [ocamlopt_flags] are appended to the link
-    command and [run_env] prefixes the run of the resulting binary, so a test
-    can select a runtime variant and its parameters. *)
-let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~structs ~module_ ~test_ml
-    () =
+    [test_ml] is the OCaml source that calls the stubs {!Wire_stubs.generate}
+    writes for [codecs] and exits 0 on success, non-zero on failure; it links
+    [stub_codecs.ml], so it applies the stubs' functors to its codecs.
+    [ocamlopt_flags] are appended to the link command and [run_env] prefixes the
+    run of the resulting binary, so a test can select a runtime variant and its
+    parameters. *)
+let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~codecs ~test_ml () =
   if not has_3d then ()
   else begin
     let dir = Filename.temp_dir ("wire_e2e_" ^ name) "" in
     (* 1. Generate .3d and run EverParse *)
-    let schema =
-      Wire.Everparse.Raw.of_module ~name ~module_ ~wire_size:0
-      (* wire_size unused for generation *)
+    let schemas =
+      List.map
+        (fun (Wire_stubs.C c) -> Wire.Everparse.project ~mode:`Ffi c)
+        codecs
     in
-    Wire_3d.generate_3d ~outdir:dir [ schema ];
-    Wire_3d.run_everparse ~outdir:dir [ schema ];
+    Wire_3d.generate_3d ~outdir:dir schemas;
+    Wire_3d.run_everparse ~outdir:dir schemas;
     (* 2. Generate C and ML stubs *)
-    Wire_stubs.of_structs ~schema_dir:dir ~outdir:dir structs;
+    Wire_stubs.generate ~schema_dir:dir ~outdir:dir codecs;
+    write_file
+      (Filename.concat dir "stub_codecs.ml")
+      (In_channel.with_open_bin "stub_codecs.ml" In_channel.input_all);
     write_file (Filename.concat dir "main.ml") test_ml;
     (* 3. Compile. [wire_ffi.c] includes only the headers; the EverParse
        validators ([<Name>.c]) and [_Fields] visitors are compiled as their own
@@ -487,8 +499,8 @@ let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~structs ~module_ ~test_ml
     let cmd =
       Fmt.str
         "cd %s && ocamlfind ocamlopt -package wire,wire.stubs -linkpkg %s \
-         -ccopt '-I %s' $(ls *.c | grep -v Wrapper) stubs.ml main.ml -o \
-         test_e2e 2>&1"
+         -ccopt '-I %s' $(ls *.c | grep -v Wrapper) stub_codecs.ml stubs.ml \
+         main.ml -o test_e2e 2>&1"
         dir ocamlopt_flags dir
     in
     run cmd;
@@ -501,125 +513,111 @@ let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~structs ~module_ ~test_ml
 let test_e2e_no_params () =
   List.iter
     (fun label ->
-      let f_version = Wire.Field.v "version" uint8 in
-      let f_length = Wire.Field.v "length" uint16be in
-      let codec =
-        let open Wire.Codec in
-        v label
-          (fun version length -> (version, length))
-          [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
-      in
-      let schema = Wire.Everparse.project ~mode:`Ffi codec in
-      let s = Wire.Everparse.Raw.struct_of_codec codec in
-      e2e ~name:label ~structs:[ s ] ~module_:schema.module_
+      e2e ~name:label
+        ~codecs:[ Wire_stubs.C (Stub_codecs.named label) ]
         ~test_ml:
           (Fmt.str
-             {|let () =
+             {|module S = Stubs.%s.Make (struct
+  type r = Wire.UInt8.t * Wire.UInt16.t
+
+  let codec = Stub_codecs.named %S
+end)
+
+let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
-  let r = Result.get_ok (Stubs.%s_parse buf 0) in
-  assert (r.Stubs.version = 1);
-  assert (r.Stubs.length = 42)
+  let r = Result.get_ok (S.parse buf 0) in
+  assert (r.Stubs.%s.version = 1);
+  assert (r.Stubs.%s.length = 42)
 |}
-             (String.lowercase_ascii label))
+             (String.capitalize_ascii label)
+             label
+             (String.capitalize_ascii label)
+             (String.capitalize_ascii label))
         ())
     [ "TestHeader"; "Foo2Bar"; "myField" ]
 
 let test_e2e_offset_bounds () =
-  let f_version = Wire.Field.v "version" uint8 in
-  let f_length = Wire.Field.v "length" uint16be in
-  let codec =
-    let open Wire.Codec in
-    v "OffsetHeader"
-      (fun version length -> (version, length))
-      [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
-  in
-  let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.struct_of_codec codec in
-  e2e ~name:"OffsetHeader" ~structs:[ s ] ~module_:schema.module_
+  e2e ~name:"OffsetHeader"
+    ~codecs:[ Wire_stubs.C Stub_codecs.Offset_header.codec ]
     ~test_ml:
-      {|let () =
+      {|module S = Stubs.OffsetHeader.Make (Stub_codecs.Offset_header)
+
+let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
   (* in-range parse still works *)
-  let r = Result.get_ok (Stubs.offsetheader_parse buf 0) in
-  assert (r.Stubs.version = 1);
-  assert (r.Stubs.length = 42);
+  let r = Result.get_ok (S.parse buf 0) in
+  assert (r.Stubs.OffsetHeader.version = 1);
+  assert (r.Stubs.OffsetHeader.length = 42);
   (* off past the end is input: the end of input, not an OOB read *)
-  (match Stubs.offsetheader_parse buf 4 with
+  (match S.parse buf 4 with
    | Error { Wire.Error.at = 4; _ } -> ()
    | _ -> assert false);
   (* a negative off is misuse *)
-  (match Stubs.offsetheader_parse buf (-1) with
+  (match S.parse buf (-1) with
    | _ -> assert false
    | exception Invalid_argument _ -> ())
 |}
     ()
 
 let test_e2e_with_constraint () =
-  let f_x_ref = Wire.Field.v "x" uint8 in
-  let f_x =
-    Wire.Field.v "x" ~constraint_:Expr.(Wire.Field.ref f_x_ref <= int 100) uint8
-  in
-  let codec =
-    let open Wire.Codec in
-    v "Constrained" (fun x -> x) [ (f_x $ fun x -> x) ]
-  in
-  let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.struct_of_codec codec in
-  e2e ~name:"Constrained" ~structs:[ s ] ~module_:schema.module_
+  e2e ~name:"Constrained"
+    ~codecs:[ Wire_stubs.C Stub_codecs.Constrained.codec ]
     ~test_ml:
-      {|let () =
+      {|module S = Stubs.Constrained.Make (Stub_codecs.Constrained)
+
+let () =
   let buf = Bytes.create 1 in
   (* x=50 <= 100: passes *)
   Bytes.set_uint8 buf 0 50;
-  let r = Result.get_ok (Stubs.constrained_parse buf 0) in
-  assert (r.Stubs.x = 50);
+  let r = Result.get_ok (S.parse buf 0) in
+  assert (r.Stubs.Constrained.x = 50);
   (* x=200 > 100: refused, an error *)
   Bytes.set_uint8 buf 0 200;
-  assert (Result.is_error (Stubs.constrained_parse buf 0))
+  assert (Result.is_error (S.parse buf 0))
 |}
     ()
 
-(* A record the validator refuses is input, so a stub answers its error, at
-   the position the validator stopped at, and never raises on the bytes: a
-   constraint that fails (EverParse stops past the field), a buffer that cuts
-   the record, an offset past its end. *)
+(* A record the validator refuses is input, so a stub answers its error, the
+   one [Codec.validate] answers, and never raises on the bytes: a constraint
+   that fails, a buffer that cuts the record, an offset past its end. The
+   functor refuses a codec other than the one the stubs come from. *)
 let test_e2e_refused_is_error () =
-  let f_x_ref = Wire.Field.v "x" uint8 in
-  let f_x =
-    Wire.Field.v "x" ~constraint_:Expr.(Wire.Field.ref f_x_ref <= int 100) uint8
-  in
-  let f_y = Wire.Field.v "y" uint16be in
-  let codec =
-    let open Wire.Codec in
-    v "Refused" (fun x y -> (x, y)) [ f_x $ fst; f_y $ snd ]
-  in
-  let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.struct_of_codec codec in
-  e2e ~name:"Refused" ~structs:[ s ] ~module_:schema.module_
+  e2e ~name:"Refused"
+    ~codecs:[ Wire_stubs.C Stub_codecs.Refused.codec ]
     ~test_ml:
-      {|let () =
+      {|module S = Stubs.Refused.Make (Stub_codecs.Refused)
+
+let () =
   let buf = Bytes.of_string "\x32\x00\x2a" in
-  (match Stubs.refused_parse buf 0 with
-   | Ok r -> assert (r.Stubs.x = 50 && r.Stubs.y = 42)
+  (match S.parse buf 0 with
+   | Ok r -> assert (r.Stubs.Refused.x = 50 && r.Stubs.Refused.y = 42)
    | Error _ -> assert false);
   Bytes.set_uint8 buf 0 200;
-  (match Stubs.refused_parse buf 0 with
-   | Error { Wire.Error.at = 1; kind = Wire.Error.Constraint_failed _; _ } -> ()
-   | _ -> assert false);
-  (match Stubs.refused_parse buf 1 with
+  (match S.parse buf 0 with
    | Error
-       { Wire.Error.at = 2;
-         kind = Wire.Error.Unexpected_eof { expected = 2; got = 1 }; _ } -> ()
+       { Wire.Error.at = 0; field = [ "x" ];
+         kind = Wire.Error.Constraint_failed { which = Field; value = Some 200L } } -> ()
    | _ -> assert false);
-  (match Stubs.refused_parse buf 4 with
+  (match S.parse buf 1 with
    | Error
-       { Wire.Error.at = 4;
-         kind = Wire.Error.Unexpected_eof { expected = 3; got = 0 }; _ } -> ()
-   | _ -> assert false)
+       { Wire.Error.at = 1; field = [];
+         kind = Wire.Error.Unexpected_eof { expected = 3; got = 2 } } -> ()
+   | _ -> assert false);
+  (match S.parse buf 4 with
+   | Error
+       { Wire.Error.at = 4; field = [];
+         kind = Wire.Error.Unexpected_eof { expected = 3; got = 0 } } -> ()
+   | _ -> assert false);
+  match
+    let module M = Stubs.Refused.Make (Stub_codecs.Limits) in
+    ()
+  with
+  | () -> assert false
+  | exception Invalid_argument _ -> ()
 |}
     ()
 
@@ -629,32 +627,20 @@ let test_e2e_bitfields () =
      [version] land at the top nibble (=4) and [flags] at the bottom (=5).
      This is the end-to-end interop witness: if Wire and EverParse disagree
      on bit placement, this test breaks. *)
-  let f_version = Wire.Field.v "version" (bits ~width:4 U8) in
-  let f_flags = Wire.Field.v "flags" (bits ~width:4 U8) in
-  let f_length = Wire.Field.v "length" uint16be in
-  let codec =
-    let open Wire.Codec in
-    v "BfHeader"
-      (fun version flags length -> (version, flags, length))
-      [
-        (f_version $ fun (v, _, _) -> v);
-        (f_flags $ fun (_, f, _) -> f);
-        (f_length $ fun (_, _, l) -> l);
-      ]
-  in
-  let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.struct_of_codec codec in
-  e2e ~name:"BfHeader" ~structs:[ s ] ~module_:schema.module_
+  e2e ~name:"BfHeader"
+    ~codecs:[ Wire_stubs.C Stub_codecs.Bf_header.codec ]
     ~test_ml:
-      {|let () =
+      {|module S = Stubs.BfHeader.Make (Stub_codecs.Bf_header)
+
+let () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 0x45;
   Bytes.set_uint16_be buf 1 100;
-  let r = Result.get_ok (Stubs.bfheader_parse buf 0) in
+  let r = Result.get_ok (S.parse buf 0) in
   (* Default Msb_first: version = top nibble (4), flags = bottom nibble (5). *)
-  assert (r.Stubs.version = 4);
-  assert (r.Stubs.flags = 5);
-  assert (r.Stubs.length = 100)
+  assert (r.Stubs.BfHeader.version = 4);
+  assert (r.Stubs.BfHeader.flags = 5);
+  assert (r.Stubs.BfHeader.length = 100)
 |}
     ()
 
@@ -668,25 +654,14 @@ let test_e2e_bitfields () =
    survive. *)
 let test_e2e_gc_stress () =
   if not has_debug_runtime then ()
-  else begin
-    let f n = Wire.Field.v n Wire.uint64be in
-    let codec =
-      let open Wire.Codec in
-      v "GcQuad"
-        (fun a b c d -> (a, b, c, d))
-        [
-          (f "a" $ fun (a, _, _, _) -> a);
-          (f "b" $ fun (_, b, _, _) -> b);
-          (f "c" $ fun (_, _, c, _) -> c);
-          (f "d" $ fun (_, _, _, d) -> d);
-        ]
-    in
-    let schema = Wire.Everparse.project ~mode:`Ffi codec in
-    let s = Wire.Everparse.Raw.struct_of_codec codec in
+  else
     e2e ~ocamlopt_flags:"-runtime-variant d" ~run_env:"OCAMLRUNPARAM=s=1k,v=0"
-      ~name:"GcQuad" ~structs:[ s ] ~module_:schema.module_
+      ~name:"GcQuad"
+      ~codecs:[ Wire_stubs.C Stub_codecs.Gc_quad.codec ]
       ~test_ml:
-        {|let () =
+        {|module S = Stubs.GcQuad.Make (Stub_codecs.Gc_quad)
+
+let () =
   let buf = Bytes.create 32 in
   Bytes.set_int64_be buf 0 0x1122334455667788L;
   Bytes.set_int64_be buf 8 0x2233445566778899L;
@@ -694,11 +669,11 @@ let test_e2e_gc_stress () =
   Bytes.set_int64_be buf 24 0x445566778899aabbL;
   let bad = ref 0 in
   for _ = 1 to 200_000 do
-    let r = Result.get_ok (Stubs.gcquad_parse buf 0) in
-    if r.Stubs.a <> 0x1122334455667788L
-       || r.Stubs.b <> 0x2233445566778899L
-       || r.Stubs.c <> 0x33445566778899aaL
-       || r.Stubs.d <> 0x445566778899aabbL
+    let r = Result.get_ok (S.parse buf 0) in
+    if r.Stubs.GcQuad.a <> 0x1122334455667788L
+       || r.Stubs.GcQuad.b <> 0x2233445566778899L
+       || r.Stubs.GcQuad.c <> 0x33445566778899aaL
+       || r.Stubs.GcQuad.d <> 0x445566778899aabbL
     then incr bad
   done;
   if !bad <> 0 then begin
@@ -707,7 +682,6 @@ let test_e2e_gc_stress () =
   end
 |}
       ()
-  end
 
 (* -- The stub's error is the codec's --
 
@@ -739,9 +713,12 @@ let diff_codecs =
   ]
 
 (* The stub of [codec], as [bytes -> int -> (unit, Wire.Error.t) result]. *)
-let diff_stub ppf (D { codec; _ }) =
-  let lower = String.lowercase_ascii (Wire.Codec.name codec) in
-  Fmt.pf ppf "(fun b off -> Result.map ignore (Stubs.%s_parse b off))" lower
+let diff_stub ppf (D { module_; codec; _ }) =
+  Fmt.pf ppf
+    "(let module S = Stubs.%s.Make (Stub_codecs.%s) in@\n\
+    \     fun b off -> Result.map ignore (S.parse b off))"
+    (Wire_stubs.module_name (Wire.Everparse.Raw.struct_of_codec codec))
+    module_
 
 let diff_main =
   {|let bytes_near =
@@ -796,40 +773,17 @@ let () =
 |}
 
 let test_e2e_differential () =
-  if not has_3d then ()
-  else begin
-    let dir = Filename.temp_dir "wire_e2e_diff" "" in
-    let schemas =
-      List.map
-        (fun (D { codec; _ }) -> Wire.Everparse.project ~mode:`Ffi codec)
-        diff_codecs
-    in
-    Wire_3d.generate_3d ~outdir:dir schemas;
-    Wire_3d.run_everparse ~outdir:dir schemas;
-    Wire_stubs.generate ~schema_dir:dir ~outdir:dir
-      (List.map (fun (D { codec; _ }) -> Wire_stubs.C codec) diff_codecs);
-    write_file
-      (Filename.concat dir "stub_codecs.ml")
-      (In_channel.with_open_bin "stub_codecs.ml" In_channel.input_all);
-    let main =
-      Fmt.str "%s%a  ] in@\n  if bad > 0 then exit 1@\n" diff_main
-        Fmt.(
-          list ~sep:nop (fun ppf (D { name; module_; _ } as d) ->
-              pf ppf "    compare %S Stub_codecs.%s.codec@\n      %a;@\n" name
-                module_ diff_stub d))
-        diff_codecs
-    in
-    write_file (Filename.concat dir "main.ml") main;
-    let cmd =
-      Fmt.str
-        "cd %s && ocamlfind ocamlopt -package wire,wire.stubs -linkpkg -ccopt \
-         '-I %s' $(ls *.c | grep -v Wrapper) stub_codecs.ml stubs.ml main.ml \
-         -o test_diff 2>&1"
-        dir dir
-    in
-    run cmd;
-    run (Filename.concat dir "test_diff")
-  end
+  let test_ml =
+    Fmt.str "%s%a  ] in@\n  if bad > 0 then exit 1@\n" diff_main
+      Fmt.(
+        list ~sep:nop (fun ppf (D { name; module_; _ } as d) ->
+            pf ppf "    compare %S Stub_codecs.%s.codec@\n      %a;@\n" name
+              module_ diff_stub d))
+      diff_codecs
+  in
+  e2e ~name:"diff"
+    ~codecs:(List.map (fun (D { codec; _ }) -> Wire_stubs.C codec) diff_codecs)
+    ~test_ml ()
 
 (* -- Output pattern invariants --
 
@@ -1032,19 +986,7 @@ let test_e2e_output_parse () =
   else begin
     let dir = Filename.temp_dir "wire_e2e_output" "" in
     (* 1. Build a codec *)
-    let f_id = Wire.Field.v "Id" Wire.uint32be in
-    let f_len = Wire.Field.v "Length" Wire.uint16be in
-    let f_tag = Wire.Field.v "Tag" Wire.uint8 in
-    let codec =
-      let open Wire.Codec in
-      v "TestParse"
-        (fun id len tag -> (id, len, tag))
-        [
-          (f_id $ fun (id, _, _) -> id);
-          (f_len $ fun (_, l, _) -> l);
-          (f_tag $ fun (_, _, t) -> t);
-        ]
-    in
+    let codec = Stub_codecs.Test_parse.codec in
     let s = Wire.Everparse.Raw.struct_of_codec codec in
     let name = Wire.Everparse.Raw.struct_name s in
     (* 2. Generate 3D with output pattern and run EverParse *)
@@ -1064,17 +1006,21 @@ let test_e2e_output_parse () =
     (* 6. Write test program *)
     write_file
       (Filename.concat dir "main.ml")
-      {|let () =
+      {|module S = Stubs.TestParse.Make (Stub_codecs.Test_parse)
+
+let () =
   let buf = Bytes.create 7 in
   Bytes.set_int32_be buf 0 0x12345678l;
   Bytes.set_uint16_be buf 4 1000;
   Bytes.set_uint8 buf 6 42;
-  let r = Result.get_ok (Stubs.testparse_parse buf 0) in
-  assert (r.Stubs.id = 0x12345678);
-  assert (r.Stubs.length = 1000);
-  assert (r.Stubs.tag = 42);
-  Printf.printf "OK: id=0x%x length=%d tag=%d\n" r.Stubs.id r.Stubs.length r.Stubs.tag
+  let r = Result.get_ok (S.parse buf 0) in
+  assert (r.Stubs.TestParse.id = 0x12345678);
+  assert (r.Stubs.TestParse.length = 1000);
+  assert (r.Stubs.TestParse.tag = 42)
 |};
+    write_file
+      (Filename.concat dir "stub_codecs.ml")
+      (In_channel.with_open_bin "stub_codecs.ml" In_channel.input_all);
     (* 7. Compile everything. [wire_ffi.c] is headers-only; the validator and
        [_Fields] visitor compile as separate translation units and link (the
        [<Name>Wrapper.c] convenience entry, which needs a user-supplied
@@ -1082,8 +1028,8 @@ let test_e2e_output_parse () =
     let cmd =
       Fmt.str
         "cd %s && ocamlfind ocamlopt -package wire,wire.stubs -linkpkg -ccopt \
-         '-I %s' $(ls *.c | grep -v Wrapper) stubs.ml main.ml -o test_output \
-         2>&1"
+         '-I %s' $(ls *.c | grep -v Wrapper) stub_codecs.ml stubs.ml main.ml \
+         -o test_output 2>&1"
         dir dir
     in
     run cmd;

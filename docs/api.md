@@ -689,8 +689,39 @@ val build_codec_archive :
                                                      (** Archives the validators for dune. *)
 ```
 
-A generated stub answers `(record, Wire.Error.t) result` where the tip raises
-`Failure` on a refused record (§ Gaps).
+The stubs `generate` writes hold, for each codec `Name`, a module:
+
+```ocaml
+module Name : sig
+  type t = { (* the codec's fields *) }              (** The record of a codec with fields. *)
+  module type CODEC = sig
+    type r                                           (** The codec's records. *)
+    val codec : r Wire.Codec.t                       (** The codec the stubs came from. *)
+  end
+  module Make (_ : CODEC) : sig
+    val parse_k : (... -> 'a) -> bytes -> int -> ('a, Wire.Error.t) result
+                                                     (** The fields to a continuation. *)
+    val parse : bytes -> int -> (t, Wire.Error.t) result
+                                                     (** The record. *)
+  end
+end
+```
+
+The C validator decides only whether it accepts the record, the verified fast
+path. On a refusal `parse` answers the error `Codec.validate` answers for the
+codec, the bytes and the offset, computed in OCaml out of the validator's path,
+so the C tier and the OCaml tier answer one error for the same bytes.
+EverParse's own error, a kind and the position it stopped at, cannot fill a
+`Wire.Error.t`: it names no field and no value, its position is past the
+failing field, and four of its kinds have no constructor.
+
+The generated module cannot name the user's codec, so the stubs take it as
+the functor's argument, as the interpreted twin does, and check its digest
+once, when `Make` is applied: a different codec raises `Invalid_argument`.
+Where `Codec.validate` accepts a record the validator refused, the tiers
+disagree, a defect of one of them; `parse` then answers that the record fails
+as a whole, `Constraint_failed { which = Where; value = None }` at the offset
+with no field, and the differential test of `test/stubs` fails on it.
 
 ### Internal
 
@@ -1060,9 +1091,7 @@ The lane's `wire_rust.mli` (uncommitted in its worktree) has `v`, `fold`,
    reading a 64-bit field needs (Q3).
 6. `Buf.local`: hidden in the agreed design, but OxCaml names a buffer held
    `local` with it (`test/ocaml-ox`); `Buf.v` must take a local buffer first.
-7. `Wire_stubs`: a stub raises `Failure` on a refused record (wire_stubs.mli
-   preamble), which Untrusted input forbids: answer a result. Take
-   `Wire_3d.packed` in place of `packed_codec`.
+7. `Wire_stubs`: take `Wire_3d.packed` in place of `packed_codec`.
 8. Documents: CLAUDE.md (Benchmarking principles name the word reads and
    `Codec.writer`; the pipeline names `Wire_stubs.generate ... [ C codec ]`),
    docs/projection.md (`Wire_3d.generate_dune_standalone`), and the README,
