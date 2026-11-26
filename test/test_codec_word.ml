@@ -105,6 +105,73 @@ let test_out_of_bounds () =
     ignore (read buf 4 : hdr Codec.word)
   end
 
+(* A word read takes its record's offset from the caller: a buffer that cuts
+   the record is input, answered with the error [get] answers for the first
+   field the buffer cuts, at that field's offset and under its name. *)
+let test_short_buffer () =
+  if Sys.int_size >= 63 then begin
+    let read = Codec.read_word (Codec.word_reader hdr_codec) in
+    let answers name buf off ~expected : unit =
+      ignore (read buf off : hdr Codec.word);
+      Alcotest.failf "%s: read a word, expected %a" name Error.pp expected
+    in
+    answers "a record the buffer cuts" (Bytes.make 4 '\000') 0
+      ~expected:
+        {
+          at = 3;
+          field = [ "Len" ];
+          kind = Unexpected_eof { expected = 2; got = 1 };
+        };
+    answers "a record whose last byte the buffer cuts" (Bytes.make 10 '\000') 5
+      ~expected:
+        {
+          at = 10;
+          field = [ "Hi" ];
+          kind = Unexpected_eof { expected = 1; got = 0 };
+        };
+    answers "a record past the buffer" (Bytes.make 10 '\000') 12
+      ~expected:
+        {
+          at = 12;
+          field = [ "Ver" ];
+          kind = Unexpected_eof { expected = 2; got = 0 };
+        }
+  end
+
+(* At every offset of every buffer shorter than 8 bytes from it, a word read
+   fails exactly where [get] fails on a field, with the error of the first
+   field [get] fails on. *)
+let test_short_buffer_agrees_with_get () =
+  if Sys.int_size >= 63 then begin
+    let read = Codec.read_word (Codec.word_reader hdr_codec) in
+    let get f =
+      let get = Staged.unstage (Codec.get hdr_codec f) in
+      fun buf off -> Result.map ignore (get buf off)
+    in
+    let gets =
+      [ get h_ver; get h_id; get h_seq; get h_len; get h_hi; get h_lo ]
+    in
+    for len = 0 to 9 do
+      let buf = Bytes.make len '\042' in
+      for off = 0 to len + 2 do
+        let expected =
+          List.find_map
+            (fun get ->
+              match get buf off with Ok () -> None | Error e -> Some e)
+            gets
+        in
+        match (read buf off, expected) with
+        | _, None -> ()
+        | _, Some e ->
+            Alcotest.failf "offset %d of %d bytes: read a word, expected %a" off
+              len Error.pp e
+        | exception Invalid_argument _ ->
+            Alcotest.failf "offset %d of %d bytes: raised Invalid_argument" off
+              len
+      done
+    done
+  end
+
 type wide = { a : UInt32.t; b : UInt32.t }
 
 let w_a = Codec.(Field.v "A" uint32be $ fun r -> r.a)
@@ -170,6 +237,9 @@ let suite =
       Alcotest.test_case "signed and 32-bit word: of_word = get" `Quick
         test_signed_equals_get;
       Alcotest.test_case "out of bounds" `Quick test_out_of_bounds;
+      Alcotest.test_case "a short buffer is an error" `Quick test_short_buffer;
+      Alcotest.test_case "a short buffer: the error get answers" `Quick
+        test_short_buffer_agrees_with_get;
       Alcotest.test_case "staging refusals" `Quick test_staging_refusals;
       Alcotest.test_case "word allocates nothing" `Quick test_no_allocation;
     ] )
