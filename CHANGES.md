@@ -4,22 +4,22 @@
 
 - The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
-  `pp_parse_error`, and a record for `parse_error` and `eof` (#PR, @samoht)
+  `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)
 
 - `Wire.Parse_error`, `of_string_exn`, `of_bytes_exn`, `of_reader_exn` and
   `Codec.decode_exn` are removed, so no decoder raises on bad input: match
-  on the result of `of_string`, `of_bytes`, `of_reader` or `decode` (#PR,
+  on the result of `of_string`, `of_bytes`, `of_reader` or `decode` (#566,
   @samoht)
 
 - `Wire.Codec.validate` returns a `result`, as `decode` does, and so do
   `Codec.validate_struct` and the readers of `Codec.field_readers`: match on
-  it where the call raised (#492, #PR, @samoht)
+  it where the call raised (#492, #566, @samoht)
 
 - The reader `Wire.Codec.get` stages answers `('a, Wire.Error.t) result`: a
   field the buffer cuts, a closed enum outside its cases, a lookup past its
   table or an action that aborts is the error `decode` gives the field, not
   an exception. Match on `read buf off` where it gave the value; a negative
-  offset still raises `Invalid_argument` (#PR, @samoht)
+  offset still raises `Invalid_argument` (#566, @samoht)
 
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
   call a sub-codec's constructor on a record it then rejects, so a
@@ -127,7 +127,7 @@
   packet this way takes about 530 instructions and allocates nothing.
   `View.field` reads a field with no check; `View.checked_field` reads any
   other as `Codec.get` does and answers its error, so no read raises on bytes
-  written after the check (#435, #496, #525, #PR, @samoht)
+  written after the check (#435, #496, #525, #566, @samoht)
 
 - `Wire.Codec.View.enter`: reach a sub-record of a checked view, such as the
   IPv4 packet of an Ethernet frame, without checking it again. Make the
@@ -152,16 +152,16 @@
   js_of_ocaml, wasm_of_ocaml and OxCaml. A generator declares each module with
   `Wire_ocaml.v` and `Wire_ocaml.main` writes the files one dune rule names,
   for the compiler that builds it (#436, #459, #488, #492, #501, #503, #504,
-  #562, #PR, @samoht)
+  #562, #566, @samoht)
 
 - A generated module decodes, validates and encodes its codec with the
   codec's errors into a record of its own, sized by `size r` and `min_size`;
   a fixed record adds a getter per field and `write buf off ~field ...`, with
   each field under its label, a field under a map in the map's type (#436,
-  #492, #562, #PR, @samoht)
+  #492, #562, #566, @samoht)
 
 - `Wire_ocaml.v ~buffer:`Bigstring` generates the module on a bigarray of
-  bytes instead of `bytes`: generate one module per buffer kind (#562, #PR,
+  bytes instead of `bytes`: generate one module per buffer kind (#562, #566,
   @samoht)
 
 - `Wire_ocaml.Plan.decisions`: the decisions a scanner takes beyond its
@@ -176,7 +176,7 @@
   source file the dune rule names (`--visitor n=%{dep:v.ml}`) calls it by
   name, with no closure call, as `n`, `n_frames` and `n_index`, which folds
   frames of any length, such as the packets of a capture, with the
-  accumulator in a register, on OxCaml an unboxed tuple too (#539, #PR,
+  accumulator in a register, on OxCaml an unboxed tuple too (#539, #566,
   @samoht)
 
 - A generated module checks a record once (`check`, `ok`, `get`), then reads
@@ -184,21 +184,21 @@
   check and no allocation. An accessor never raises: a field that bytes
   written after the check move out of the buffer reads as absent, and
   `Get.<field>` answers a result as `Wire.Codec.get` does (#442, #492, #493,
-  #562, #PR, @samoht)
+  #562, #566, @samoht)
 
 - A generated module of constant size checks its record at an offset,
   `check b length off`, as `Wire.Codec.View.check` does; any other shape
   checks a window, `check b length ~off ~len` (#562, @samoht)
 
 - `Wire_ocaml.to_mli`: a documented interface for each generated module.
-  `examples/generated` has two modules with their interfaces (#501, #PR,
+  `examples/generated` has two modules with their interfaces (#501, #566,
   @samoht)
 
 - The interpreted twin of a generated module, the unit `<name>_codec` beside
   it: `Make (struct type r = ... let codec = ... end)` reads the codec value
   with the module's views, `validate` and folds, so code moves between the
   two by changing one line; it checks the codec's shape when applied and
-  links `wire` (#492, #PR, @samoht)
+  links `wire` (#492, #566, @samoht)
 
 - A fold of a generated module checks a record with nested codecs, optional
   fields and variable sizes, and hands out the fields chosen with `~outputs`
