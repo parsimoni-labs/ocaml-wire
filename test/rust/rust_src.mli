@@ -6,3 +6,11 @@ val contains : string -> string -> bool
 val has : string -> string -> string -> unit
 (** [has what src sub] checks that [sub] occurs in [src], [what] naming [src].
 *)
+
+val rs :
+  ?folds:Wire_rust.fold list ->
+  ?visitors:(string * string) list ->
+  'r Wire.Codec.t ->
+  string
+(** [rs ?folds ?visitors c] is the source of the module of [c], its folds
+    visited by [visitors]. *)

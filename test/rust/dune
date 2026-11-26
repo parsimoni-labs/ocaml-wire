@@ -5,7 +5,7 @@
 
 (test
  (name test)
- (modules test test_wire_rust test_walk rust_src)
+ (modules test test_wire_rust test_rust_module test_walk rust_src)
  (libraries schemas net wire wire.rust fmt alcotest))
 
 ; The modules generated from the schemas, and the scanners of the structured

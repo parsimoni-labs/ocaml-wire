@@ -10,3 +10,5 @@ let contains s sub =
 
 let has what src sub =
   Alcotest.(check bool) (Fmt.str "%s: %S" what sub) true (contains src sub)
+
+let rs ?folds ?visitors c = Wire_rust.(to_rs ?visitors (v ?folds c))
