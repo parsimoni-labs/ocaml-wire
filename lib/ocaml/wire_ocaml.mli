@@ -58,21 +58,12 @@
     views, and reads its fields instead with [Get.<field> buf off], one
     bounds-checked load at a constant offset, and, for a bitfield,
     [Get.<field>_word] and [<field>_of_word], so fields packed in one word share
-    one load.
-
-    With [~buffer:`Bigstring] the module reads and writes a bigarray of bytes
-    instead, with the same functions and the same errors, and no walk: it has no
-    views, and reads its fields with [Get]. *)
+    one load. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
     checks on the checks, [write] and the reads, and takes the buffers it does
     not keep [local]. *)
-
-type buffer = [ `Bytes | `Bigstring ]
-(** The buffer a generated module reads and writes: [bytes], or a bigarray of
-    bytes ([Wire_runtime.Unchecked.Bigstring.t]). The buffer is chosen when the
-    module is generated; a program that reads both generates two modules. *)
 
 val ident : string -> string
 (** [ident name] is the OCaml name a generated module derives from the field
@@ -142,18 +133,17 @@ type t
 val v :
   ?name:string ->
   ?target:target ->
-  ?buffer:buffer ->
   ?simd:bool ->
   ?folds:fold list ->
   ?maps:map list ->
   'r Wire.Codec.t ->
   t
-(** [v ?name ?target ?buffer ?simd ?folds ?maps c] is the module of [c], named
-    [name] (default: the codec's name, split at its words and lower-cased:
+(** [v ?name ?target ?simd ?folds ?maps c] is the module of [c], named [name]
+    (default: the codec's name, split at its words and lower-cased:
     [CapturedIPv4] is [captured_ipv4]), for [target] (default: the compiler the
-    generator runs on), on [buffer] (default [`Bytes]), with [folds] (default:
-    one fold [fold] of every output, without a visitor, when the module has
-    folds). The module never refers to [c].
+    generator runs on), with [folds] (default: one fold [fold] of every output,
+    without a visitor, when the module has folds). The module never refers to
+    [c].
 
     A field under a {!Wire.map} is specialised when [maps] names the map: the
     record holds the map's OCaml type, and the module calls the map's functions

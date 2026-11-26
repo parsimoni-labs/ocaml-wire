@@ -1,6 +1,6 @@
 (* The getters of a generated module with no views, on bytes that make no
-   value of their field, against [Codec.get]: the module of a record on a
-   bigarray. *)
+   value of their field, against [Codec.get]: the module of a record with
+   fields under maps. *)
 
 open Wire
 
@@ -23,87 +23,73 @@ let outcome f =
   | s -> "ok " ^ s
   | exception Invalid_argument m -> "invalid " ^ m
 
-let big = Diff_ocaml.big
+let error = Alcotest.testable Error.pp Error.equal
 
 (* A generated getter answers the error [Codec.get] answers where the bytes
-   make no value of its field: a closed enum outside its cases, a field the
+   make no value of its field: a lookup index past its table, a field the
    buffer cuts. *)
 let test_getter_errors () =
-  let error = Alcotest.testable Error.pp Error.equal in
-  let answers name get codec field buf off ~expected =
-    Alcotest.(check (result reject error)) name (Error expected) (get buf off);
-    Alcotest.(check (result reject error))
+  let proto = Alcotest.testable (fun ppf _ -> Fmt.string ppf "a protocol") ( = )
+  and len = Alcotest.int in
+  let answers name value get field buf off ~expected =
+    Alcotest.(check (result value error)) name (Error expected) (get buf off);
+    Alcotest.(check (result value error))
       (name ^ ", as Codec.get") (Error expected)
-      (Codec.get codec field buf off)
+      (Codec.get Schemas.mapped field buf off)
   in
-  answers "a closed enum outside its cases"
-    (fun b o -> G_checked_big.Get.proto (big b) o)
-    Schemas.checked Schemas.checked_proto
-    (Bytes.of_string "\x45\x00\x14\x40\x07")
+  answers "a lookup index past its table" proto G_mapped.Get.proto
+    Schemas.mapped_proto
+    (Bytes.of_string "\x00\x01\x00\x00\x00\x00\x07\x00")
     0
+    ~expected:{ at = 6; field = [ "Proto" ]; kind = Invalid_tag 7 };
+  answers "a field the buffer cuts" len G_mapped.Get.len Schemas.mapped_len
+    (Bytes.of_string "\x00") 0
     ~expected:
       {
-        at = 4;
-        field = [ "Proto" ];
-        kind = Invalid_enum { value = 7; valid = [ 1; 6; 17 ] };
-      };
-  answers "a field the buffer cuts"
-    (fun b o -> G_ipv4_big.Get.frag (big b) o)
-    Schemas.ipv4 Schemas.ipv4_frag
-    (Bytes.of_string "\x00\x45\x00\x00\x14\x00\x00\x40")
-    1
-    ~expected:
-      {
-        at = 7;
-        field = [ "Frag" ];
+        at = 0;
+        field = [ "Len" ];
         kind = Unexpected_eof { expected = 2; got = 1 };
       }
 
-(* A field taken out of its word reads what its own getter reads. *)
+(* A field taken out of its word reads what its own getter reads, and what
+   [Codec.get] reads. *)
 let test_words () =
-  let size = Codec.min_size Schemas.wide in
+  let size = Codec.min_size Schemas.mapped in
+  let show = function
+    | Ok v -> string_of_int v
+    | Error e -> Fmt.str "%a" Error.pp e
+  in
+  let codec_rest = Codec.get Schemas.mapped Schemas.mapped_rest in
   for _ = 1 to 2000 do
     let buf, off = input ~size in
-    let buf = big buf in
-    let fields =
-      G_wide_big.
-        [
-          (Get.a, Get.a_word, a_of_word);
-          (Get.c, Get.c_word, c_of_word);
-          (Get.e, Get.e_word, e_of_word);
-          (Get.f, Get.f_word, f_of_word);
-        ]
-    in
-    let show = function
-      | Ok v -> string_of_int v
-      | Error e -> Fmt.str "%a" Error.pp e
-    in
-    List.iter
-      (fun (get, word, of_word) ->
-        Alcotest.(check string)
-          "word"
-          (outcome (fun () -> show (get buf off)))
-          (outcome (fun () -> show (Result.map of_word (word buf off)))))
-      fields
+    let open G_mapped in
+    let rest = outcome (fun () -> show (Get.rest buf off)) in
+    Alcotest.(check string)
+      "rest from its word" rest
+      (outcome (fun () ->
+           show (Result.map rest_of_word (Get.rest_word buf off))));
+    Alcotest.(check string)
+      "rest as Codec.get" rest
+      (outcome (fun () -> show (codec_rest buf off)));
+    Alcotest.(check string)
+      "flag from its word"
+      (outcome (fun () -> show (Result.map Bool.to_int (Get.flag buf off))))
+      (outcome (fun () ->
+           show (Result.map flag_of_word (Get.flag_word buf off))))
   done
 
 (* A word load takes its record's offset from the caller: a buffer that cuts
    the word is input, answered as the field's getter answers it, and a negative
    offset is misuse, refused even where it puts the word inside the buffer. *)
 let test_word_bad_input () =
-  let error = Alcotest.testable Error.pp Error.equal in
-  let answers name load buf off ~expected =
-    Alcotest.(check (result int error)) name (Error expected) (load buf off)
-  in
-  let f_word b o = G_wide_big.Get.f_word (big b) o in
-  answers "a word the buffer cuts" f_word (Bytes.make 10 '\x00') 0
-    ~expected:
-      {
-        at = 8;
-        field = [ "F" ];
-        kind = Unexpected_eof { expected = 4; got = 2 };
-      };
-  match f_word (Bytes.make 12 '\x00') (-4) with
+  let short = Bytes.make 7 '\x00' in
+  Alcotest.(check (result int error))
+    "a word the buffer cuts"
+    (G_mapped.Get.rest short 0)
+    (G_mapped.Get.rest_word short 0);
+  if Result.is_ok (G_mapped.Get.rest_word short 0) then
+    Alcotest.fail "a word the buffer cuts was loaded";
+  match G_mapped.Get.rest_word (Bytes.make 12 '\x00') (-4) with
   | _ ->
       Alcotest.fail "a negative offset loaded the word in front of the record"
   | exception Invalid_argument _ -> ()

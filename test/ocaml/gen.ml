@@ -36,7 +36,6 @@ let () =
       | f -> failwith ("gen: no visitor " ^ f))
   | _ ->
       let simd = Sys.getenv_opt "WIRE_SIMD" = Some "1" in
-      let big name c = Wire_ocaml.v ~name ~buffer:`Bigstring c in
       let scanner name ?(step = false) c =
         let folds =
           Wire_ocaml.(
@@ -60,11 +59,6 @@ let () =
             v ~name:"g_refined" Schemas.refined;
             v ~name:"g_overflow" Schemas.overflow;
             v ~name:"g_lanes" ~simd Schemas.lanes;
-            big "g_ipv4_big" Schemas.ipv4;
-            big "g_checked_big" Schemas.checked;
-            big "g_mixed_big" Schemas.mixed;
-            big "g_eth_big" Schemas.eth;
-            big "g_wide_big" Schemas.wide;
             scanner "s_sized" Schemas.sized;
             scanner "s_overflow" Schemas.overflow;
             scanner "s_skipped" Schemas.skipped;

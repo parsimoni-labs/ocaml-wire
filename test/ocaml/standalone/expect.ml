@@ -43,18 +43,6 @@ let round_trip what ~size ~decode ~encode good =
     (decode (Bytes.sub buf 0 (size - 1)) 0);
   invalid (what ^ ": negative offset") (fun () -> decode buf (-1))
 
-(* The same on a bigarray. *)
-let big_round_trip what ~size ~decode ~encode good =
-  let buf = bytes_of good in
-  let big =
-    Bigarray.Array1.init Bigarray.char Bigarray.c_layout size (Bytes.get buf)
-  in
-  let big_out = Bigarray.Array1.create Bigarray.char Bigarray.c_layout size in
-  encode (ok what (decode big 0)) big_out 0;
-  check
-    (what ^ ": bigarray round trip")
-    (Bytes.equal buf (Bytes.init size (fun i -> big_out.{i})))
-
 (* The generated sources in the current directory name nothing of wire's but
    wire.runtime. *)
 let sources () =

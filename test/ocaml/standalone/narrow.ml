@@ -10,10 +10,6 @@ let checked () =
     ~decode:(fun b o -> S_checked.decode b o)
     ~encode:(fun t b o -> S_checked.encode t b o)
     [ 0x45; 0; 20; 64; 6 ];
-  big_round_trip "checked" ~size:S_checked_big.min_size
-    ~decode:(fun b o -> S_checked_big.decode b o)
-    ~encode:(fun t b o -> S_checked_big.encode t b o)
-    [ 0x45; 0; 20; 64; 6 ];
   parse_error "checked: version" ~field:[ "Version" ] ~at:0
     (Constraint_failed { which = Field; value = Some 5L })
     (S_checked.validate (bytes_of [ 0x55; 0; 20; 64; 6 ]) 0);

@@ -1249,15 +1249,8 @@ let pp_x4 ~src ppf ~plan ~size =
       pp_x4_store ~src ppf fields;
       pp_x4_write ~src ppf fields
 
-(* The buffer a module reads, [bytes] or a bigarray of bytes, held [local]
-   on OxCaml. *)
-let src_of ~target = function
-  | `Bytes -> (
-      match target with `OxCaml -> local_bytes_src | `OCaml -> bytes_src)
-  | `Bigstring -> (
-      match target with
-      | `OxCaml -> local_bigstring_src
-      | `OCaml -> bigstring_src)
+(* The buffer a module reads, [bytes], held [local] on OxCaml. *)
+let src_of = function `OxCaml -> local_bytes_src | `OCaml -> bytes_src
 
 (* The checks, decoders and writes of a fixed record on [src], and with
    [getters] its reads. *)
@@ -1269,14 +1262,13 @@ let pp_codec ~src ~getters ppf ~target ~plan ~size =
   pp_write ~src ppf ~target ~plan;
   if getters then pp_getters ~src ppf ~target (all_fields plan)
 
-let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
-    ~size =
+let pp_body ?(simd = false) ?accessor ~maps ppf ~target ~plan ~size =
   let views = Option.is_some accessor in
   let fields = all_fields plan in
   Fmt.pf ppf "let min_size = %d@\n@\n" size;
   pp_record ~maps ppf fields;
   pp_printer ppf fields;
-  let src = src_of ~target buffer in
+  let src = src_of target in
   (* Beside the module's views, [Get] would be second reads of each field: a
      module without views keeps them as its reads. *)
   pp_codec ~src ~getters:(not views) ppf ~target ~plan ~size;

@@ -19,9 +19,6 @@ type map = { path : string; ocaml : string; typ : Planner.typ }
 let map path ~typ m = { path; ocaml = typ; typ = Typ m }
 let ident = ident
 let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
-
-type buffer = [ `Bytes | `Bigstring ]
-
 let outputs = scanner_fields
 
 type view = { module_name : string option; members : view_member list }
@@ -99,7 +96,6 @@ type t =
   | T : {
       name : string;
       target : target;
-      buffer : buffer;
       simd : bool;
       folds : fold list option;
       maps : map list option;
@@ -138,11 +134,10 @@ let writer ?(visitors = []) (T t) =
     if t.simd || Option.is_some t.maps then `Record
     else match t.folds with Some (_ :: _) -> `Walk | _ -> `Any
   in
-  Writer.v ~target:t.target ~buffer:t.buffer ~simd:t.simd ?maps:(named t.maps)
-    ?folds ~require ~codec:(Gen.to_struct t.codec).name t.codec
+  Writer.v ~target:t.target ~simd:t.simd ?maps:(named t.maps) ?folds ~require
+    ~codec:(Gen.to_struct t.codec).name t.codec
 
-let v ?name ?(target = building) ?(buffer = `Bytes) ?(simd = false) ?folds ?maps
-    codec =
+let v ?name ?(target = building) ?(simd = false) ?folds ?maps codec =
   let name =
     match name with
     | Some n -> n
@@ -150,7 +145,7 @@ let v ?name ?(target = building) ?(buffer = `Bytes) ?(simd = false) ?folds ?maps
         String.lowercase_ascii
           (View_module.module_of_codec (Gen.to_struct codec).name)
   in
-  let t = T { name; target; buffer; simd; folds; maps; codec } in
+  let t = T { name; target; simd; folds; maps; codec } in
   (* Refused when declared, not when printed. *)
   ignore (writer t : Writer.t);
   t

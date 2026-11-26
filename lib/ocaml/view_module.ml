@@ -97,7 +97,6 @@ let reserved_modules =
     "View";
     "Field";
     "Global";
-    "Bigstring";
     "X4";
   ]
 

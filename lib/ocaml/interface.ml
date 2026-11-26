@@ -24,13 +24,6 @@ type buf = { typ : string; brand : string; local : bool }
 let bytes_buf target =
   { typ = "bytes"; brand = rt ^ ".Buf"; local = target = `OxCaml }
 
-let bigstring_buf target =
-  {
-    typ = rt ^ ".Unchecked.Bigstring.t";
-    brand = rt ^ ".Buf.Bigstring";
-    local = target = `OxCaml;
-  }
-
 let local_mode local = if local then " @ local" else ""
 let buf b = b.typ ^ local_mode b.local
 let named b = Fmt.str "'b %s.t%s" b.brand (local_mode b.local)
@@ -464,22 +457,17 @@ let pp_preamble ppf r =
      @\n"
     parse_error
 
-(* The members of a fixed record: its size, values, record, checks,
-   decoders, writes, reads and views, on [bytes] and on a bigarray. *)
-let pp_record ?(views = false) ?(buffer = `Bytes) ppf r =
+(* The members of a fixed record: its size, record, checks, decoders,
+   writes, and without views its reads. *)
+let pp_record ?(views = false) ppf r =
   pp_val r.target ppf "min_size" "int"
     (Fmt.str "[min_size] is the size of a record in bytes, [%d]." r.size);
   pp_record_type ppf r;
   pp_val r.target ppf "size" "t -> int"
     (Fmt.str "[size r] is {!min_size}: every record takes %d bytes." r.size);
-  match buffer with
-  | `Bigstring -> pp_buffer ppf r (bigstring_buf r.target)
-  | `Bytes -> (
-      pp_buffer ~views ppf r (bytes_buf r.target);
-      if r.simd then
-        match lanes r.plan ~size:r.size with
-        | Some l -> pp_x4 ppf r l
-        | None -> ())
+  pp_buffer ~views ppf r (bytes_buf r.target);
+  if r.simd then
+    match lanes r.plan ~size:r.size with Some l -> pp_x4 ppf r l | None -> ()
 
 let record ~target ~simd ~maps ~codec ~plan ~size =
   let fields = all_fields plan in
@@ -497,8 +485,8 @@ let record ~target ~simd ~maps ~codec ~plan ~size =
 let record_preamble ppf ~target ~simd ~maps ~codec ~plan ~size =
   pp_preamble ppf (record ~target ~simd ~maps ~codec ~plan ~size)
 
-let record_members ?views ?buffer ppf ~target ~simd ~maps ~codec ~plan ~size =
-  pp_record ?views ?buffer ppf (record ~target ~simd ~maps ~codec ~plan ~size)
+let record_members ?views ppf ~target ~simd ~maps ~codec ~plan ~size =
+  pp_record ?views ppf (record ~target ~simd ~maps ~codec ~plan ~size)
 
 (* {2 The scanner} *)
 

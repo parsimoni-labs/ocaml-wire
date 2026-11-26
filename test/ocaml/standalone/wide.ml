@@ -10,10 +10,6 @@ let run () =
     ~decode:(fun b o -> S_ipv4.decode b o)
     ~encode:(fun t b o -> S_ipv4.encode t b o)
     (List.init 20 (fun i -> 255 - (i * 11)));
-  big_round_trip "ipv4" ~size:S_ipv4_big.min_size
-    ~decode:(fun b o -> S_ipv4_big.decode b o)
-    ~encode:(fun t b o -> S_ipv4_big.encode t b o)
-    (List.init 20 (fun i -> 255 - (i * 11)));
   round_trip "mixed" ~size:S_mixed.min_size
     ~decode:(fun b o -> S_mixed.decode b o)
     ~encode:(fun t b o -> S_mixed.encode t b o)

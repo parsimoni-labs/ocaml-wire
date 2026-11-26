@@ -28,8 +28,8 @@ let outcome f =
 (* The module of [c] and its interface, for the OCaml target unless [target]
    says otherwise; [scanner] declares its folds, [fold] of [fields] and with
    [step] [fold_step], whose visitor is [Step]. *)
-let ml ?(target = `OCaml) ?simd ?buffer c =
-  Wire_ocaml.(to_ml (v ~target ?simd ?buffer c))
+let ml ?(target = `OCaml) ?simd ?maps c =
+  Wire_ocaml.(to_ml (v ~target ?simd ?maps c))
 
 let mli ?(target = `OCaml) c = Wire_ocaml.(to_mli (v ~target c))
 let step_visitors = [ ("fold_step", "step.ml") ]
@@ -519,8 +519,8 @@ let test_clash () =
       (fun a b -> (a, b))
       Codec.[ Field.v n1 t1 $ fst; Field.v n2 t2 $ snd ]
   in
-  let refused ?(target = `OCaml) ?buffer what c names =
-    match ml ~target ?buffer c with
+  let refused ?(target = `OCaml) ?maps what c names =
+    match ml ~target ?maps c with
     | _ -> Alcotest.failf "%s: generated" what
     | exception Invalid_argument m ->
         List.iter
@@ -531,14 +531,36 @@ let test_clash () =
           names
   in
   (* [Get.x_int] and [Get.x_word] exist only in a module whose views do not
-     read the fields, on a bigarray. *)
-  let x_int = pair "x_int" uint8 "x" uint32be in
-  ignore (ml x_int : string);
-  refused ~buffer:`Bigstring "a 32-bit x and x_int" x_int
+     read the fields: one with a field under a map. *)
+  let m = map ~decode:UInt8.to_int ~encode:UInt8.v uint8 in
+  let maps = [ Wire_ocaml.map "M" ~typ:"int" m ] in
+  let mapped = Codec.(Field.v "m" m $ fun () -> 0) in
+  let one n =
+    Codec.v "C"
+      (fun _ _ -> ())
+      Codec.[ (Field.v n (bits ~width:8 U8) $ fun () -> 0); mapped ]
+  in
+  ignore (ml (pair "x_int" uint8 "x" uint32be) : string);
+  refused ~maps "a 32-bit x and x_int"
+    (Codec.v "C"
+       (fun _ _ _ -> ())
+       Codec.
+         [
+           (Field.v "x_int" uint8 $ fun () -> UInt8.zero);
+           (Field.v "x" uint32be $ fun () -> UInt32.zero);
+           mapped;
+         ])
     [ "\"x_int\""; "\"x\"" ];
-  let x_word = pair "x" (bits ~width:3 U8) "x_word" uint8 in
-  ignore (ml x_word : string);
-  refused ~buffer:`Bigstring "a bitfield x and x_word" x_word
+  ignore (ml (pair "x" (bits ~width:3 U8) "x_word" uint8) : string);
+  refused ~maps "a bitfield x and x_word"
+    (Codec.v "C"
+       (fun _ _ _ -> ())
+       Codec.
+         [
+           (Field.v "x" (bits ~width:3 U8) $ fun () -> 0);
+           (Field.v "x_word" (bits ~width:5 U8) $ fun () -> 0);
+           mapped;
+         ])
     [ "\"x\""; "\"x_word\"" ];
   refused "X and x" (pair "X" uint8 "x" uint8) [ "\"X\""; "\"x\"" ];
   refused "a-b and a_b" (pair "a-b" uint8 "a_b" uint8) [ "\"a-b\""; "\"a_b\"" ];
@@ -550,14 +572,11 @@ let test_clash () =
     "end and end_ apart" true
     (contains src "  end_ :" && contains src "  end__ :");
   (* A getter in [Get] would shadow a helper the getters after it call. *)
-  refused ~buffer:`Bigstring "cast"
-    (Codec.v "C" Fun.id Codec.[ Field.v "cast" uint8 $ Fun.id ])
-    [ "\"cast\""; "Get.cast" ];
+  refused ~maps "cast" (one "cast") [ "\"cast\""; "Get.cast" ];
   (* Outside [Get], a field may take a name the module uses for itself. *)
-  let c = Codec.v "C" Fun.id Codec.[ Field.v "size" uint8 $ Fun.id ] in
   Alcotest.(check bool)
     "size getter" true
-    (contains (ml ~buffer:`Bigstring c) "let[@inline] size buf off");
+    (contains (ml ~maps (one "size")) "let[@inline] size buf off");
   (* An OxCaml keyword is escaped for the default target too, so its code
      compiles on an OxCaml compiler. *)
   let c = Codec.v "C" Fun.id Codec.[ Field.v "local_" uint8 $ Fun.id ] in
@@ -668,52 +687,16 @@ let test_mapped () =
   | () -> Alcotest.fail "a different map of the same shape was accepted"
   | exception Invalid_argument _ -> ()
 
-(* A plain-[int] getter reads the [int] view of what [Codec.get] reads. *)
-let int_getter codec field ~get ~to_int =
-  let read = Codec.get codec field in
-  let size = Codec.min_size codec in
-  for _ = 1 to 2000 do
-    let buf, off = input ~size ~fix:(fun _ _ -> ()) in
-    Alcotest.(check string)
-      "get int"
-      (outcome (fun () -> string_of_int (to_int (ok (read buf off)))))
-      (outcome (fun () -> string_of_int (ok (get buf off))))
-  done
-
 (* A module with no views reads its fields with [Get]: the module of a record
-   on a bigarray, here read from a copy of the bytes. *)
+   with fields under maps. *)
 let test_getters () =
-  let big get b o = get (Diff_ocaml.big b) o in
-  let u8 v = string_of_int (UInt8.to_int v)
-  and u16 v = string_of_int (UInt16.to_int v) in
-  getter Schemas.ipv4 Schemas.ipv4_frag ~get:(big G_ipv4_big.Get.frag) ~show:u16;
-  getter Schemas.ipv4 Schemas.ipv4_proto ~get:(big G_ipv4_big.Get.proto)
-    ~show:u8;
-  getter Schemas.ipv4 Schemas.ipv4_src ~get:(big G_ipv4_big.Get.src)
-    ~show:(fun v -> string_of_int (SInt32.to_int v));
-  getter Schemas.ipv4 Schemas.ipv4_dst ~get:(big G_ipv4_big.Get.dst)
-    ~show:(fun v -> string_of_int (UInt32.to_int v));
-  int_getter Schemas.ipv4 Schemas.ipv4_src
-    ~get:(big G_ipv4_big.Get.src_int)
-    ~to_int:SInt32.to_int;
-  int_getter Schemas.ipv4 Schemas.ipv4_dst
-    ~get:(big G_ipv4_big.Get.dst_int)
-    ~to_int:UInt32.to_int;
-  int_getter Schemas.mixed Schemas.mixed_f
-    ~get:(big G_mixed_big.Get.f_int)
-    ~to_int:SInt32.to_int;
-  getter Schemas.checked Schemas.checked_proto
-    ~get:(big G_checked_big.Get.proto)
-    ~show:u8;
-  getter Schemas.mixed Schemas.mixed_b ~get:(big G_mixed_big.Get.b)
-    ~show:(fun v -> string_of_int (SInt16.to_int v));
-  getter Schemas.mixed Schemas.mixed_e ~get:(big G_mixed_big.Get.e)
-    ~show:(fun v -> string_of_int (UInt32.to_int v));
-  getter Schemas.mixed Schemas.mixed_f ~get:(big G_mixed_big.Get.f)
-    ~show:(fun v -> string_of_int (SInt32.to_int v));
-  getter Schemas.mixed Schemas.mixed_h ~get:(big G_mixed_big.Get.h)
-    ~show:string_of_int;
-  getter Schemas.eth Schemas.eth_src ~get:(big G_eth_big.Get.src) ~show:Fun.id
+  getter Schemas.mapped Schemas.mapped_proto ~get:G_mapped.Get.proto
+    ~show:(function
+    | `Icmp -> "icmp"
+    | `Tcp -> "tcp"
+    | `Udp -> "udp");
+  getter Schemas.mapped Schemas.mapped_rest ~get:G_mapped.Get.rest
+    ~show:string_of_int
 
 (* In the buffer named [b] of length [len], [check b len off] passes
    exactly when [Codec.validate] accepts the record at [off], and each accessor
@@ -804,8 +787,7 @@ let test_view () =
     Alcotest.(check string) "checked view" expected got
   done
 
-(* A check that failed gives no view: [get] refuses it, and on a bigarray,
-   where the module has no views, [validate] answers the codec's error. *)
+(* A check that failed gives no view: [get] refuses it. *)
 let test_failed_views () =
   let short = Bytes.make 3 '\xff' in
   let (Buf.Any b) = Buf.v short in
@@ -816,17 +798,6 @@ let test_failed_views () =
     (match G_ipv4.get c with
     | _ -> false
     | exception Invalid_argument _ -> true);
-  let big =
-    Bigarray.Array1.init Bigarray.char Bigarray.c_layout 3 (fun _ -> '\xff')
-  in
-  Alcotest.(check string)
-    "bigstring: validate answers the codec's error"
-    (outcome (fun () ->
-         ok (Codec.validate Schemas.ipv4 short 0);
-         ""))
-    (outcome (fun () ->
-         ok (G_ipv4_big.validate big 0);
-         ""));
   let off_end = Bytes.make 40 '\x45' in
   let (Buf.Any b) = Buf.v off_end in
   let len = Buf.length b in
@@ -851,96 +822,10 @@ let test_failed_views () =
       (max_int, false);
     ]
 
-(* The module generated on a bigarray, on a bigarray copy of a buffer,
-   returns what the module on [bytes] returns on the buffer, or raises the
-   same error. *)
-let bigstring buf =
-  Bigarray.Array1.init Bigarray.char Bigarray.c_layout (Bytes.length buf)
-    (Bytes.get buf)
-
-let same_on_bigstring ?(fix = fun _ _ -> ()) codec ~on_bytes ~on_big =
-  let size = Codec.min_size codec in
-  for _ = 1 to 2000 do
-    let buf, off = input ~size ~fix in
-    Alcotest.(check string)
-      "bigstring"
-      (outcome (fun () -> on_bytes buf off))
-      (outcome (fun () -> on_big (bigstring buf) off))
-  done
-
-let test_bigstring () =
-  let of_big bb =
-    String.init (Bigarray.Array1.dim bb) (Bigarray.Array1.get bb)
-  in
-  let big size encode decode b o =
-    let r = ok (decode b o) in
-    let out = bigstring (Bytes.make size '\000') in
-    encode r out 0;
-    of_big out
-  in
-  same_on_bigstring Schemas.ipv4
-    ~on_bytes:(fun b o ->
-      encoded G_ipv4.min_size G_ipv4.encode G_ipv4.decode b o)
-    ~on_big:(fun b o ->
-      big G_ipv4_big.min_size G_ipv4_big.encode G_ipv4_big.decode b o);
-  same_on_bigstring ~fix:fix_checked Schemas.checked
-    ~on_bytes:(fun b o ->
-      ok (G_checked.validate b o);
-      "")
-    ~on_big:(fun b o ->
-      ok (G_checked_big.validate b o);
-      "");
-  same_on_bigstring ~fix:fix_checked Schemas.checked
-    ~on_bytes:(fun b o ->
-      encoded G_checked.min_size G_checked.encode G_checked.decode b o)
-    ~on_big:(fun b o ->
-      big G_checked_big.min_size G_checked_big.encode G_checked_big.decode b o);
-  same_on_bigstring Schemas.mixed
-    ~on_bytes:(fun b o ->
-      encoded G_mixed.min_size G_mixed.encode G_mixed.decode b o)
-    ~on_big:(fun b o ->
-      big G_mixed_big.min_size G_mixed_big.encode G_mixed_big.decode b o);
-  same_on_bigstring Schemas.eth
-    ~on_bytes:(fun b o -> encoded G_eth.min_size G_eth.encode G_eth.decode b o)
-    ~on_big:(fun b o ->
-      big G_eth_big.min_size G_eth_big.encode G_eth_big.decode b o);
-  same_on_bigstring ~fix:fix_checked Schemas.checked
-    ~on_bytes:(fun b _ ->
-      let r = ok (G_checked.decode b 0) in
-      string_of_int (UInt8.to_int r.proto + r.ihl))
-    ~on_big:(fun b _ ->
-      let r = ok (G_checked_big.decode b 0) in
-      string_of_int (UInt8.to_int r.proto + r.ihl));
-  let size = Codec.min_size Schemas.checked in
-  for _ = 1 to 2000 do
-    let w k = Random.State.int rand (k + 40) - 20 in
-    let a = w 16 and b = w 16 and c = w 0x10000 and d = w 256 in
-    let e = List.nth [ 1; 6; 17; 9 ] (Random.State.int rand 4) in
-    let len = size + Random.State.int rand 3 in
-    let off = Random.State.int rand (len + 2) - 1 in
-    let on_bytes =
-      outcome (fun () ->
-          let buf = Bytes.make len '\xaa' in
-          let c = UInt16.v c and d = UInt8.v d and e = UInt8.v e in
-          G_checked.write buf off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e;
-          Bytes.to_string buf)
-    in
-    let on_big =
-      outcome (fun () ->
-          let buf = bigstring (Bytes.make len '\xaa') in
-          let c = UInt16.v c and d = UInt8.v d and e = UInt8.v e in
-          G_checked_big.write buf off ~version:a ~ihl:b ~length:c ~ttl:d
-            ~proto:e;
-          Diff_ocaml.string_of_big buf)
-    in
-    Alcotest.(check string) "write" on_bytes on_big
-  done
-
 (* A record that does not fit reports the first field in order that fails a
    check where it fits, before the end of input, as the validator 3d.exe
    generates does: [Checked]'s where clause is checked with [Length], the last
-   field it reads. The generated module, on bytes and on a bigarray, answers
-   what the codec does. *)
+   field it reads. The generated module answers what the codec does. *)
 let test_short_faults () =
   let error = function
     | Ok _ -> "ok"
@@ -955,11 +840,7 @@ let test_short_faults () =
       check "codec decode" (error (Codec.decode Schemas.checked buf 0));
       check "codec validate" (error (Codec.validate Schemas.checked buf 0));
       check "generated decode" (error (G_checked.decode buf 0));
-      check "generated validate" (error (G_checked.validate buf 0));
-      check "generated bigstring decode"
-        (error (G_checked_big.decode (bigstring buf) 0));
-      check "generated bigstring validate"
-        (error (G_checked_big.validate (bigstring buf) 0)))
+      check "generated validate" (error (G_checked.validate buf 0)))
     [
       ("\x55", "Version@0: field constraint violated (value 5)");
       ("\x45\x00\x00\x00", "@0: where clause violated");
@@ -1911,6 +1792,5 @@ let suite =
       Alcotest.test_case "NEON lanes" `Quick test_simd;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "view at an offset" `Quick test_view;
-      Alcotest.test_case "bigstring buffers" `Quick test_bigstring;
       Alcotest.test_case "failed views share nothing" `Quick test_failed_views;
     ] )

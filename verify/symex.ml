@@ -564,13 +564,11 @@ let prims =
         raising "failwith";
         raising "raise";
         length "Bytes.length";
-        length "Wire_runtime.Unchecked.Bigstring.length";
       ]
     @ int64_prims "Int64"
     @ int64_prims "Wire_runtime.Target.Int64_u"
     @ int64_prims "Stdlib_upstream_compatible.Int64_u"
     @ loads "Wire_runtime.Unchecked" ~at:false
-    @ loads "Wire_runtime.Unchecked.Bigstring" ~at:false
     @ loads "Wire_runtime.Target.Local" ~at:false
     @ loads "Wire_runtime.Target.Local" ~at:true
     @ checked_loads "Bytes"

@@ -216,13 +216,8 @@
   codec's errors into a record of its own, sized by `size r` and `min_size`;
   a fixed record adds `write buf off ~field ...`, each field under its label
   and of the type its accessor returns, a field under a map in the map's
-  type. A module with no views, a fixed record with a map or an integer wider
-  than 32 bits and any module on a bigarray, reads its fields with
-  `Get.<field>` (#436, #492, #562, #566, #571, @samoht)
-
-- `Wire_ocaml.v ~buffer:`Bigstring` generates the module on a bigarray of
-  bytes instead of `bytes`: generate one module per buffer kind (#562, #566,
-  @samoht)
+  type. A module with no views, a fixed record with a map, reads its fields
+  with `Get.<field>` (#436, #492, #562, #566, #571, @samoht)
 
 - `Wire_ocaml.Plan.decisions`: the decisions a scanner takes beyond its
   plan, as data: which bounds it tests and which it leaves to a later

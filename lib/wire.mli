@@ -419,8 +419,7 @@ module Buf = Buf
     [let (Buf.Any b) = Buf.v bytes in ...] gives [bytes] a type ['b Buf.t] that
     no other buffer has, and [Buf.length b] is its length, read once.
     {!Codec.View} checks and reads records in such a buffer, and a view checked
-    in one buffer reads no other. [Buf.Bigstring] names bigarrays for the
-    modules [Wire_ocaml] generates; {!Codec.View} takes [bytes] only. *)
+    in one buffer reads no other. *)
 
 module Field : sig
   type 'a t

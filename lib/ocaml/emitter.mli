@@ -64,18 +64,11 @@ val error : string
 val bytes_src : src
 (** [bytes_src] reads [bytes]. *)
 
-val bigstring_src : src
-(** [bigstring_src] reads a bigarray of bytes. *)
-
 val fstar_src : src
 (** [fstar_src] reads a sequence of bytes, in F*. *)
 
 val local_bytes_src : src
 (** [local_bytes_src] reads [bytes] the caller may hold [local], on OxCaml. *)
-
-val local_bigstring_src : src
-(** [local_bigstring_src] reads a bigarray of bytes the caller may hold [local],
-    on OxCaml. *)
 
 (** Where a walk failed: a bound, a field's check, or a where clause. *)
 type failure = Bounds | Check of field * check | Where

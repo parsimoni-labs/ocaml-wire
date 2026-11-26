@@ -151,9 +151,7 @@ codec is one. The views read the fields: a fixed record has no second check
 (`Valid`, `View`) nor second reads (`Get`, `read_<field>`, `view_<field>`,
 a word and its fields) beside them. A fixed record the walk does not cover,
 one with a map or an integer wider than 32 bits, reads its fields with `Get`.
-A module reads one buffer, chosen when it is generated: `~buffer:`Bigstring`
-writes a fixed record's members on a bigarray, with no walk, where `Get`
-remains its reads. `Wire_ocaml.v` declares the
+`Wire_ocaml.v` declares the
 module, `Wire_ocaml.main` writes it, one dune rule per module.
 
 A fold `n` without a visitor takes its consumer as arguments (`n`,

@@ -11,7 +11,6 @@ open Record_module
 
 type target = [ `OCaml | `OxCaml ]
 type require = [ `Record | `Walk | `Any ]
-type buffer = [ `Bytes | `Bigstring ]
 
 type fold = {
   name : string;
@@ -30,7 +29,6 @@ type t = {
   name : string;
   digest : string;
   target : target;
-  buffer : buffer;
   simd : bool;
   maps : (string * string * typ) list;
   record : (plan * int) option;
@@ -163,16 +161,10 @@ let checked_walk ~codec ~record ~folds c = function
       clash ~codec (accessors @ fields);
       Some { plan; folds; views }
 
-let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?(maps = []) ?folds
-    ~require ~codec c =
+let v ?(target = `OCaml) ?(simd = false) ?(maps = []) ?folds ~require ~codec c =
   let typs = List.map (fun (path, _, typ) -> (path, typ)) maps in
   let record = record_part ~maps:typs c in
-  (* The walk reads [bytes]: a module on a bigarray is a fixed record's. *)
-  let require, walk =
-    match buffer with
-    | `Bytes -> (require, walk_part ~maps c)
-    | `Bigstring -> (`Record, Error "the walk reads bytes")
-  in
+  let walk = walk_part ~maps c in
   (match (require, record, walk) with
   | `Record, Error reason, _ | `Walk, _, Error reason -> refuse ~codec reason
   | `Any, Error _, Error reason -> refuse ~codec reason
@@ -207,7 +199,6 @@ let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?(maps = []) ?folds
     name = plan.record;
     digest = Gen.digest c;
     target;
-    buffer;
     simd;
     maps;
     record;
@@ -266,8 +257,8 @@ let body ?decide t =
         let maps = List.map (fun (path, ocaml, _) -> (path, ocaml)) t.maps in
         text (fun ppf ->
             pp_maps ppf (all_fields plan);
-            pp_body ~simd:t.simd ?accessor ~buffer:t.buffer ~maps ppf
-              ~target:t.target ~plan ~size)
+            pp_body ~simd:t.simd ?accessor ~maps ppf ~target:t.target ~plan
+              ~size)
   in
   let walk, views, views_mask32 =
     match t.walk with
@@ -348,8 +339,8 @@ let mli t =
       let views = Option.is_some t.walk in
       Option.iter
         (fun (plan, size) ->
-          Interface.record_members ~views ~buffer:t.buffer ppf ~target:t.target
-            ~simd:t.simd ~maps:t.maps ~codec:t.codec ~plan ~size)
+          Interface.record_members ~views ppf ~target:t.target ~simd:t.simd
+            ~maps:t.maps ~codec:t.codec ~plan ~size)
         t.record;
       Option.iter
         (fun w ->

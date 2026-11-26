@@ -112,16 +112,6 @@ let stack_write () =
 
 let test_stack_write () = Alcotest.(check bool) "written" true (stack_write ())
 
-(* The module on a bigarray takes its buffer [local] too. *)
-let test_bigstring () =
-  let heap = Bigarray.(Array1.create char c_layout size) in
-  String.iteri (fun i c -> heap.{i} <- c) packet;
-  let local_ b = heap in
-  Alcotest.(check int)
-    "src"
-    (Wire_runtime.SInt32.to_int (decoded ()).src)
-    (Result.get_ok (G_ipv4_big.Get.src_int b 0))
-
 (* A portable function may call the generated code, as a parallel task does. *)
 let (portable_read @ portable) =
  fun buf ->
@@ -179,7 +169,6 @@ let suite =
       Alcotest.test_case "decodes a buffer on the stack" `Quick
         test_stack_decode;
       Alcotest.test_case "writes a buffer on the stack" `Quick test_stack_write;
-      Alcotest.test_case "bigstring takes a local buffer" `Quick test_bigstring;
       Alcotest.test_case "portable" `Quick test_portable;
       Alcotest.test_case "no allocation" `Quick test_no_allocation;
     ] )

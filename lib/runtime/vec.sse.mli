@@ -16,19 +16,6 @@ external store : bytes @ local -> int -> t -> unit @@ portable = "%caml_bytes_se
 (** [store buf off v] writes the 16 bytes of [v] at [off], with no bounds
     check. *)
 
-external load_bigstring :
-  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t @ local ->
-  int ->
-  t @@ portable = "%caml_bigstring_getu128u"
-(** [load_bigstring buf off] is {!load} on a bigarray of bytes. *)
-
-external store_bigstring :
-  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t @ local ->
-  int ->
-  t ->
-  unit @@ portable = "%caml_bigstring_setu128u"
-(** [store_bigstring buf off v] is {!store} on a bigarray of bytes. *)
-
 external add : t -> t -> t @@ portable = "caml_vec128_unreachable" "caml_sse2_int32x4_add"
 [@@noalloc] [@@unboxed] [@@builtin]
 (** [add a b] adds lane by lane, modulo [2{^32}]. *)

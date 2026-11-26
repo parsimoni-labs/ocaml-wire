@@ -14,10 +14,8 @@ let target =
 
 type field = {
   name : string;
-  ident : string;
   plain : string;  (** The show of its value. *)
   acc : string;  (** Its accessor in the module's views. *)
-  views : Diff_ocaml.view list;
 }
 
 (* The accessor of the field [ident] in the views of [c]: its name, or that
@@ -51,115 +49,15 @@ let fields c =
         | None ->
             Fmt.failwith "gen: field %s has a type the backend cannot show" name
       in
-      {
-        name;
-        ident;
-        plain;
-        acc = acc ident;
-        views = Diff_ocaml.views f.field_typ;
-      })
+      { name; plain; acc = acc ident })
     (Gen.to_struct c).fields
 
-let view = function
-  | Diff_ocaml.Get -> "Diff_ocaml.Get"
-  | Get_int -> "Diff_ocaml.Get_int"
-  | Of_word -> "Diff_ocaml.Of_word"
-
-(* Each getter of [f] in module [m], on the buffer [buf] makes from [b]. *)
-let pp_gets ~m ~buf ppf f =
-  List.iter
-    (fun v ->
-      let read =
-        match v with
-        | Diff_ocaml.Get ->
-            Fmt.str "%s (Diff_ocaml.ok (%s.Get.%s (%s) o))" f.plain m f.ident
-              buf
-        | Get_int ->
-            Fmt.str "string_of_int (Diff_ocaml.ok (%s.Get.%s_int (%s) o))" m
-              f.ident buf
-        | Of_word ->
-            Fmt.str
-              "string_of_int (%s.%s_of_word (Diff_ocaml.ok (%s.Get.%s_word \
-               (%s) o)))"
-              m f.ident m f.ident buf
-      in
-      Fmt.pf ppf "        (%S, %s, fun b o -> %s);@\n" f.name (view v) read)
-    f.views
-
-(* The reads after [Valid.v]: a [read_<f>] for every field, and a
-   [read_<f>_int] for a 32-bit one. *)
-let reads fields =
-  List.concat_map
-    (fun f ->
-      List.filter_map
-        (function
-          | Diff_ocaml.Get -> Some (f, Diff_ocaml.Get)
-          | Get_int -> Some (f, Get_int)
-          | Of_word -> None)
-        f.views)
-    fields
-
-(* A read of the field [f] at [o] in [bb] with the getter of [v] of [m]. *)
-let pp_get ~m ppf (f, v) =
-  match v with
-  | Diff_ocaml.Get ->
-      Fmt.pf ppf "%s (Diff_ocaml.ok (%s.Get.%s bb o))" f.plain m f.ident
-  | _ ->
-      Fmt.pf ppf "string_of_int (Diff_ocaml.ok (%s.Get.%s_int bb o))" m f.ident
-
-(* The glue over [m], a module with no views, whose buffer [buf] makes from
-   the bytes [b]; [back] wraps a write so its bytes land in [b]. Its reads
-   after a check are [validate] then its getters. *)
-let pp_ops ppf ~m ~buf ~back fields =
-  let reads = reads fields in
-  let pp_reads = Fmt.(list ~sep:(any "; ") (pp_get ~m)) in
-  Fmt.pf ppf
-    "{@\n\
-    \      Diff_ocaml.decode =@\n\
-    \        (fun b o ->@\n\
-    \          Result.map (fun r ->@\n\
-    \              let out = Diff_ocaml.big (Bytes.create %s.min_size) in@\n\
-    \              %s.encode r out 0;@\n\
-    \              Diff_ocaml.string_of_big out)@\n\
-    \            (%s.decode (%s) o));@\n\
-    \      validate = (fun b o -> %s.validate (%s) o);@\n\
-    \      encode =@\n\
-    \        (fun s b o ->@\n\
-    \          let r = Result.get_ok (%s.decode (Diff_ocaml.big \
-     (Bytes.of_string s)) 0) in@\n\
-    \          %a);@\n\
-    \      gets = [@\n\
-     %a      ];@\n\
-    \      reads = [ %a ];@\n\
-    \      valid =@\n\
-    \        (fun b ->@\n\
-    \          let bb = %s and o = 0 in@\n\
-    \          Result.map (fun () -> [ %a ]) (%s.validate bb o));@\n\
-    \      view =@\n\
-    \        (fun b o ->@\n\
-    \          let bb = %s in@\n\
-    \          Result.map (fun () -> [ %a ]) (%s.validate bb o));@\n\
-    \      checked =@\n\
-    \        (fun b o ->@\n\
-    \          let bb = %s in@\n\
-    \          if o >= 0 && Result.is_ok (%s.validate bb o) then (true, [ %a ])@\n\
-    \          else (false, []));@\n\
-    \    }"
-    m m m buf m buf m back (Fmt.str "%s.encode r" m)
-    Fmt.(list ~sep:nop (pp_gets ~m ~buf))
-    fields
-    Fmt.(
-      list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
-    reads buf pp_reads reads m buf pp_reads reads m buf m pp_reads reads
-
 (* A read of the view [v] of [bb] through the module's accessor of [f]. *)
-let pp_access ppf (f, _) = Fmt.pf ppf "%s (M.%s bb v)" f.plain f.acc
+let pp_access ppf f = Fmt.pf ppf "%s (M.%s bb v)" f.plain f.acc
 
-(* The glue over [M] whose views are the module's: [check], [ok], [get] and
-   an accessor per field, which read the fields where [Get], [Valid.v] and
-   [View] would. *)
-let pp_ops_views ppf fields =
-  let reads = List.filter (fun (_, v) -> v = Diff_ocaml.Get) (reads fields) in
+(* The glue over [M]: its decoder, validator and encoder, and its views,
+   [check], [ok], [get] and an accessor per field. *)
+let pp_ops ppf fields =
   Fmt.pf ppf
     "{@\n\
     \      Diff_ocaml.decode =@\n\
@@ -174,7 +72,6 @@ let pp_ops_views ppf fields =
     \        (fun s b o ->@\n\
     \          let r = Result.get_ok (M.decode (Bytes.of_string s) 0) in@\n\
     \          M.encode r b o);@\n\
-    \      gets = [];@\n\
     \      reads = [ %a ];@\n\
     \      valid =@\n\
     \        (fun b ->@\n\
@@ -204,20 +101,17 @@ let pp_ops_views ppf fields =
     \                (true, [ %a ])@\n\
     \              else (false, []));@\n\
     \    }"
-    Fmt.(
-      list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
-    reads
+    Fmt.(list ~sep:(any "; ") (fun ppf f -> pf ppf "%S" f.name))
+    fields
     Fmt.(list ~sep:(any "; ") pp_access)
-    reads
+    fields
     Fmt.(list ~sep:(any "; ") pp_access)
-    reads
+    fields
     Fmt.(list ~sep:(any "; ") pp_access)
-    reads
+    fields
 
-(* The module generated from [c] under its interface, and the module of [c]
-   on a bigarray. *)
+(* The module generated from [c] under its interface. *)
 let pp_case ppf (label, c, (src, intf)) =
-  let fields = fields c in
   Fmt.pf ppf
     "let %s : Fuzz_gen.packed -> Diff_ocaml.t = function@\n\
     \  | Fuzz_gen.Pack _ ->@\n\
@@ -226,26 +120,9 @@ let pp_case ppf (label, c, (src, intf)) =
     \  end = struct@\n\
      %s@\n\
     \  end in@\n\
-    \  let module MB : sig@\n\
-     %s@\n\
-    \  end = struct@\n\
-     %s@\n\
-    \  end in@\n\
-    \  {@\n\
-    \    Diff_ocaml.bytes =@\n\
-    \      %a;@\n\
-    \    bigstring =@\n\
-    \      %a;@\n\
-    \  }@\n\
+    \  %a@\n\
      @\n"
-    label intf src
-    (Wire_ocaml.to_mli (Wire_ocaml.v ~target ~buffer:`Bigstring c))
-    (Wire_ocaml.to_ml (Wire_ocaml.v ~target ~buffer:`Bigstring c))
-    pp_ops_views fields
-    (pp_ops ~m:"MB" ~buf:"Diff_ocaml.big b" ~back:(fun ppf w ->
-         Fmt.pf ppf
-           "let bb = Diff_ocaml.big b in %s bb o; Diff_ocaml.blit_back bb b" w))
-    fields
+    label intf src pp_ops (fields c)
 
 (* {1 Scanners}
 
@@ -589,11 +466,7 @@ let cases () =
     List.partition_map
       (fun (label, Fuzz_gen.Pack g) ->
         let c = Fuzz_gen.codec g in
-        (* The case compares the module on bytes and on a bigarray. *)
-        match
-          ignore (Wire_ocaml.v ~target ~buffer:`Bigstring c : Wire_ocaml.t);
-          Wire_ocaml.to_ml (Wire_ocaml.v ~target c)
-        with
+        match Wire_ocaml.to_ml (Wire_ocaml.v ~target c) with
         | src when has_record src ->
             let intf = Wire_ocaml.to_mli (Wire_ocaml.v ~target c) in
             Left (label, Fuzz_gen.Pack g, (src, intf))

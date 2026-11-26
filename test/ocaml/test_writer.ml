@@ -212,16 +212,11 @@ let test_escaped () =
     (Wire_ocaml.outputs (pair "ok" "b"))
 
 (* A record with views has no getters, so a field named as a getter's helper
-   defines nothing twice; on a bigarray, whose module reads with [Get], it
-   refuses the module. *)
+   defines nothing twice. *)
 let test_record_clash () =
-  let c = pair "cast" "b" in
-  let src = ml c in
+  let src = ml (pair "cast" "b") in
   Alcotest.(check bool) "folds" true (contains src "fold ");
-  Alcotest.(check bool) "no getters" false (contains src "module Get");
-  match Wire_ocaml.(to_ml (v ~buffer:`Bigstring c)) with
-  | _ -> Alcotest.fail "a bigarray module with a field Get.cast"
-  | exception Invalid_argument _ -> ()
+  Alcotest.(check bool) "no getters" false (contains src "module Get")
 
 (* The fields of the record [v] in [b], read with no check of its
    constraints. *)

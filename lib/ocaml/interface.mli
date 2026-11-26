@@ -23,7 +23,6 @@ val record_preamble :
 
 val record_members :
   ?views:bool ->
-  ?buffer:[ `Bytes | `Bigstring ] ->
   Format.formatter ->
   target:target ->
   simd:bool ->
@@ -32,10 +31,10 @@ val record_members :
   plan:Planner.plan ->
   size:int ->
   unit
-(** [record_members ?views ?buffer ppf ~target ~simd ~maps ~codec ~plan ~size]
-    states the members a fixed record adds: its size, record, decoders, writes,
-    and, unless [views], its reads and views, on [buffer] (default [`Bytes]).
-    With [views], the module's views read the fields. *)
+(** [record_members ?views ppf ~target ~simd ~maps ~codec ~plan ~size] states
+    the members a fixed record adds: its size, record, decoders, writes, and,
+    unless [views], its reads. With [views], the module's views read the fields.
+*)
 
 val scan_preamble :
   Format.formatter -> codec:string -> plan:Planner.plan -> unit

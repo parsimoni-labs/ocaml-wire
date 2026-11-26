@@ -29,48 +29,6 @@ external swap32 : int32 -> int32 @@ portable = "%bswap_int32"
 external swap64 : int64 -> int64 @@ portable = "%bswap_int64"
 (** [swap64 v] is [v] with its bytes in reverse order. *)
 
-(** The same on a bigarray of bytes, with [length] and the checked reads. *)
-module Bigstring : sig
-  type t =
-    (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
-
-  external length : t -> int @@ portable = "%caml_ba_dim_1"
-  (** [length buf] is the number of bytes of [buf]. *)
-
-  external get : t -> int -> char @@ portable = "%caml_ba_unsafe_ref_1"
-  (** [get buf off] is the byte at [off]. *)
-
-  external set : t -> int -> char -> unit @@ portable = "%caml_ba_unsafe_set_1"
-  (** [set buf off c] stores [c] at [off]. *)
-
-  external get16 : t -> int -> int @@ portable = "%caml_bigstring_get16u"
-  (** [get16] is {!Prims.get16} on {!type-t}. *)
-
-  external get32 : t -> int -> int32 @@ portable = "%caml_bigstring_get32u"
-  (** [get32] is {!Prims.get32} on {!type-t}. *)
-
-  external get64 : t -> int -> int64 @@ portable = "%caml_bigstring_get64u"
-  (** [get64] is {!Prims.get64} on {!type-t}. *)
-
-  external set16 : t -> int -> int -> unit @@ portable = "%caml_bigstring_set16u"
-  (** [set16] is {!Prims.set16} on {!type-t}. *)
-
-  external set32 : t -> int -> int32 -> unit @@ portable = "%caml_bigstring_set32u"
-  (** [set32] is {!Prims.set32} on {!type-t}. *)
-
-  external set64 : t -> int -> int64 -> unit @@ portable = "%caml_bigstring_set64u"
-  (** [set64] is {!Prims.set64} on {!type-t}. *)
-
-  external safe_get : t -> int -> char @@ portable = "%caml_ba_ref_1"
-  (** [safe_get] is {!val-get}, raising [Invalid_argument] out of bounds. *)
-
-  external safe_get16 : t -> int -> int @@ portable = "%caml_bigstring_get16"
-  (** [safe_get16] is {!val-get16}, raising [Invalid_argument] out of bounds. *)
-
-  external safe_get32 : t -> int -> int32 @@ portable = "%caml_bigstring_get32"
-  (** [safe_get32] is {!val-get32}, raising [Invalid_argument] out of bounds. *)
-end
-
 (** The identity on [int], which a carrier that is an [int] includes as its
     [unsafe_of_int]: a primitive, so the compiler keeps no binding for it. *)
 module Identity : sig

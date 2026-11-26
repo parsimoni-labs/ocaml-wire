@@ -1,27 +1,15 @@
 open Wire.Private
 module T = Types
 
-type view = Get | Get_int | Of_word
-
-type ops = {
+type t = {
   decode : bytes -> int -> (string, Wire.Error.t) result;
   validate : bytes -> int -> (unit, Wire.Error.t) result;
   encode : string -> bytes -> int -> unit;
-  gets : (string * view * (bytes -> int -> string)) list;
-  reads : (string * view) list;
+  reads : string list;
   valid : bytes -> (string list, Wire.Error.t) result;
   view : bytes -> int -> (string list, Wire.Error.t) result;
   checked : bytes -> int -> bool * string list;
 }
-
-type t = { bytes : ops; bigstring : ops }
-
-let big b =
-  Bigarray.Array1.init Bigarray.char Bigarray.c_layout (Bytes.length b)
-    (Bytes.get b)
-
-let blit_back bb b = Bytes.iteri (fun i _ -> Bytes.set b i bb.{i}) b
-let string_of_big bb = String.init (Bigarray.Array1.dim bb) (fun i -> bb.{i})
 
 (* {1 Rendering}
 
@@ -54,13 +42,6 @@ let rec show : type a. a T.typ -> (a -> string) option = function
   | T.Where { inner; _ } -> show inner
   | T.Enum { base; _ } -> show base
   | _ -> None
-
-let rec views : type a. a T.typ -> view list = function
-  | T.Uint32 _ | T.Int32 _ -> [ Get; Get_int ]
-  | T.Bits _ -> [ Get; Of_word ]
-  | T.Where { inner; _ } -> views inner
-  | T.Enum { base; _ } -> views base
-  | _ -> [ Get ]
 
 (* {1 What the generator handles}
 
@@ -181,11 +162,6 @@ let outcome f =
   | exception Refused e -> Fmt.str "parse error %a" Wire.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
-let view_name name = function
-  | Get -> Fmt.str "get %s" name
-  | Get_int -> Fmt.str "get %s as an int" name
-  | Of_word -> Fmt.str "get %s from its word" name
-
 (* The reader [Codec.get] stages for a field, its value shown. *)
 let reference codec name =
   let k typ read =
@@ -211,36 +187,30 @@ type case = {
   refs : (string * (bytes -> int -> string)) list;
 }
 
-let both case f =
-  f "bytes" case.m.bytes;
-  f "bigstring" case.m.bigstring
-
-(* [validate] then the view's reads, and [View.check] at [off],
-   against [Codec.validate] and each field's reader there. *)
-let views_at case c ~what ops buf off =
+(* [validate] then the accessors, and [check] at [off], against
+   [Codec.validate] and each field's reader there. *)
+let views_at case c ~what m buf off =
   let expected =
     outcome (fun () ->
         ok (Wire.Codec.validate c buf off);
         String.concat ","
-          (List.map
-             (fun (name, _) -> List.assoc name case.refs buf off)
-             ops.reads))
+          (List.map (fun name -> List.assoc name case.refs buf off) m.reads))
   in
   same case.label
     (what "validate then each view read")
     expected
-    (outcome (fun () -> String.concat "," (ok (ops.view buf off))));
+    (outcome (fun () -> String.concat "," (ok (m.view buf off))));
   let checked =
     outcome (fun () ->
-        match ops.checked buf off with
+        match m.checked buf off with
         | true, reads -> String.concat "," reads
         | false, _ ->
             ok (Wire.Codec.validate c buf off);
             "")
   in
-  same case.label (what "View.check then each read") expected checked
+  same case.label (what "check then each read") expected checked
 
-(* Decode, validate and every getter at [off]. *)
+(* Decode, validate and the accessors at [off]. *)
 let reads_at case (Fuzz_gen.Pack g) buf off =
   let c = Fuzz_gen.codec g in
   let decoded =
@@ -252,22 +222,15 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
         ok (Wire.Codec.validate c buf off);
         "")
   in
-  both case (fun kind ops ->
-      let what w = Fmt.str "%s %s at offset %d" kind w off in
-      same case.label (what "decode") decoded
-        (outcome (fun () -> ok (ops.decode buf off)));
-      same case.label (what "validate") validated
-        (outcome (fun () ->
-             ok (ops.validate buf off);
-             ""));
-      List.iter
-        (fun (name, view, read) ->
-          same case.label
-            (what (view_name name view))
-            (outcome (fun () -> List.assoc name case.refs buf off))
-            (outcome (fun () -> read buf off)))
-        ops.gets;
-      views_at case c ~what ops buf off)
+  let m = case.m in
+  let what w = Fmt.str "%s at offset %d" w off in
+  same case.label (what "decode") decoded
+    (outcome (fun () -> ok (m.decode buf off)));
+  same case.label (what "validate") validated
+    (outcome (fun () ->
+         ok (m.validate buf off);
+         ""));
+  views_at case c ~what m buf off
 
 (* The record [buf] holds at [off], when it decodes, encoded into buffers
    around it, too short, and at an offset out of range. *)
@@ -286,11 +249,10 @@ let encodes_at case (Fuzz_gen.Pack g) buf off =
               Bytes.to_string out)
         in
         let expected = run (fun out off -> Wire.Codec.encode c v out off) in
-        both case (fun kind ops ->
-            same case.label
-              (Fmt.str "%s encode into %d bytes at offset %d" kind len off)
-              expected
-              (run (ops.encode canonical)))
+        same case.label
+          (Fmt.str "encode into %d bytes at offset %d" len off)
+          expected
+          (run (case.m.encode canonical))
       in
       List.iter into
         [
@@ -301,30 +263,24 @@ let encodes_at case (Fuzz_gen.Pack g) buf off =
           (size, -1);
         ]
 
-(* [Valid.v] on the buffer and each read, against [Codec.validate] and each
-   field's reader at offset 0. *)
+(* [check] at offset 0 and each accessor, against [Codec.validate] and each
+   field's reader there. *)
 let valid case (Fuzz_gen.Pack g) buf =
   let c = Fuzz_gen.codec g in
-  let expected keys =
+  let expected =
     outcome (fun () ->
         ok (Wire.Codec.validate c buf 0);
         String.concat ","
-          (List.map (fun (name, _) -> List.assoc name case.refs buf 0) keys))
+          (List.map (fun name -> List.assoc name case.refs buf 0) case.m.reads))
   in
-  both case (fun kind ops ->
-      same case.label
-        (Fmt.str "%s Valid.v then each read" kind)
-        (expected ops.reads)
-        (outcome (fun () -> String.concat "," (ok (ops.valid buf)))))
+  same case.label "check at 0 then each read" expected
+    (outcome (fun () -> String.concat "," (ok (case.m.valid buf))))
 
 let check label (Fuzz_gen.Pack g as codec) m =
   let c = Fuzz_gen.codec g in
   let size = Wire.Codec.min_size c in
   let refs =
-    List.sort_uniq compare
-      (List.map (fun (n, _, _) -> n) m.bigstring.gets
-      @ List.map fst m.bytes.reads)
-    |> List.map (fun n -> (n, reference c n))
+    List.sort_uniq compare m.reads |> List.map (fun n -> (n, reference c n))
   in
   let case = { label; m; refs } in
   fun buf ->
@@ -336,10 +292,7 @@ let check label (Fuzz_gen.Pack g as codec) m =
       (List.sort_uniq compare [ 0; 1; -1; n - size; n - size + 1 ]);
     valid case codec buf
 
-let pp ppf m =
-  Fmt.pf ppf "@[<h>%a@]"
-    Fmt.(list ~sep:sp (fun ppf (n, v, _) -> string ppf (view_name n v)))
-    m.bigstring.gets
+let pp ppf m = Fmt.pf ppf "@[<h>%a@]" Fmt.(list ~sep:sp string) m.reads
 
 (* {1 Refusals} *)
 

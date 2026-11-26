@@ -1,6 +1,6 @@
 (* Writes the generated modules the tests here compile without wire, each with
    its interface: each codec's own record, so no module names the codec or its
-   schema, two of them also on a bigarray. [--oxcaml] generates for the OxCaml
+   schema. [--oxcaml] generates for the OxCaml
    target. *)
 
 let write file s =
@@ -38,15 +38,13 @@ let () =
   let target =
     if Array.exists (String.equal "--oxcaml") Sys.argv then `OxCaml else `OCaml
   in
-  let g ?buffer name c =
-    let m = Wire_ocaml.v ~target ?buffer c in
+  let g name c =
+    let m = Wire_ocaml.v ~target c in
     write name (Wire_ocaml.to_ml m);
     write (name ^ "i") (Wire_ocaml.to_mli m)
   in
   g "s_ipv4.ml" Schemas.ipv4;
-  g ~buffer:`Bigstring "s_ipv4_big.ml" Schemas.ipv4;
   g "s_checked.ml" Schemas.checked;
-  g ~buffer:`Bigstring "s_checked_big.ml" Schemas.checked;
   g "s_mixed.ml" Schemas.mixed;
   g "s_eth.ml" Schemas.eth;
   g "s_wide.ml" Schemas.wide;

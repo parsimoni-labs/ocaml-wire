@@ -187,15 +187,21 @@ type mapped = int * int32 * [ `Icmp | `Tcp | `Udp ] * bool * int
 let mapped_make len addr proto flag rest = (len, addr, proto, flag, rest)
 let mapped_len = Codec.(Field.v "Len" u16be_int $ fun (x, _, _, _, _) -> x)
 
+let mapped_proto =
+  Codec.(Field.v "Proto" proto_lookup $ fun (_, _, x, _, _) -> x)
+
+let mapped_rest =
+  Codec.(Field.v "Rest" (bits ~width:7 U8) $ fun (_, _, _, _, x) -> x)
+
 let mapped =
   Codec.v "Mapped" mapped_make
     Codec.
       [
         mapped_len;
         (Field.v "Addr" i32be_int $ fun (_, x, _, _, _) -> x);
-        (Field.v "Proto" proto_lookup $ fun (_, _, x, _, _) -> x);
+        mapped_proto;
         (Field.v "Flag" flag_bit $ fun (_, _, _, x, _) -> x);
-        (Field.v "Rest" (bits ~width:7 U8) $ fun (_, _, _, _, x) -> x);
+        mapped_rest;
       ]
 
 type signed = SInt8.t * SInt16.t

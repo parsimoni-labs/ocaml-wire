@@ -53,17 +53,6 @@ let bytes_src =
     unboxed = false;
   }
 
-let bigstring_src =
-  {
-    typ = rt ^ ".Unchecked.Bigstring.t";
-    u = rt ^ ".Unchecked.Bigstring";
-    len = rt ^ ".Unchecked.Bigstring.length";
-    checked = rt ^ ".Unchecked.Bigstring";
-    brand = rt ^ ".Buf.Bigstring";
-    buf = "buf";
-    unboxed = false;
-  }
-
 (* An F* walk reads a sequence of bytes through the primitives of [P]. *)
 let fstar_src =
   {
@@ -83,16 +72,6 @@ let local_bytes_src =
     bytes_src with
     u = rt ^ ".Target.Local";
     checked = rt ^ ".Target.Local";
-    buf = "(buf @ local)";
-    unboxed = true;
-  }
-
-let local_bigstring_src =
-  {
-    bigstring_src with
-    u = rt ^ ".Target.Local.Bigstring";
-    len = rt ^ ".Target.Local.Bigstring.length";
-    checked = rt ^ ".Target.Local.Bigstring";
     buf = "(buf @ local)";
     unboxed = true;
   }
