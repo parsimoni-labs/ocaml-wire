@@ -604,7 +604,7 @@ module Field : sig
   val constraint_ : 'a t -> bool expr option
   (** Field constraint, if any. *)
 
-  val action : 'a t -> Types.action option
+  val action : 'a t -> Action.t option
   (** Field action attached via {!v}'s [?action], if any. *)
 
   val doc : 'a t -> string option
