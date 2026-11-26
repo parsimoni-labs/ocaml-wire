@@ -581,6 +581,45 @@ let test_e2e_with_constraint () =
 |}
     ()
 
+(* A record the validator refuses is input, so a stub answers its error as
+   [Codec.validate] places it, and never raises on the bytes: a constraint
+   that fails, a buffer that cuts the record, an offset past its end. *)
+let test_e2e_refused_is_error () =
+  let f_x_ref = Wire.Field.v "x" uint8 in
+  let f_x =
+    Wire.Field.v "x" ~constraint_:Expr.(Wire.Field.ref f_x_ref <= int 100) uint8
+  in
+  let f_y = Wire.Field.v "y" uint16be in
+  let codec =
+    let open Wire.Codec in
+    v "Refused" (fun x y -> (x, y)) [ f_x $ fst; f_y $ snd ]
+  in
+  let schema = Wire.Everparse.project ~mode:`Ffi codec in
+  let s = Wire.Everparse.Raw.struct_of_codec codec in
+  e2e ~name:"Refused" ~structs:[ s ] ~module_:schema.module_
+    ~test_ml:
+      {|let () =
+  let buf = Bytes.of_string "\x32\x00\x2a" in
+  (match Stubs.refused_parse buf 0 with
+   | Ok r -> assert (r.Stubs.x = 50 && r.Stubs.y = 42)
+   | Error _ -> assert false);
+  Bytes.set_uint8 buf 0 200;
+  (match Stubs.refused_parse buf 0 with
+   | Error { Wire.Error.at = 0; kind = Wire.Error.Constraint_failed _; _ } -> ()
+   | _ -> assert false);
+  (match Stubs.refused_parse buf 1 with
+   | Error
+       { Wire.Error.at = 1;
+         kind = Wire.Error.Unexpected_eof { expected = 3; got = 2 }; _ } -> ()
+   | _ -> assert false);
+  (match Stubs.refused_parse buf 4 with
+   | Error
+       { Wire.Error.at = 4;
+         kind = Wire.Error.Unexpected_eof { expected = 3; got = 0 }; _ } -> ()
+   | _ -> assert false)
+|}
+    ()
+
 let test_e2e_bitfields () =
   (* Adversarial: drive the EverParse-generated C parser on a real IPv4-style
      byte [0x45] and check that Wire's default [bit_order = Msb_first] makes
@@ -1127,6 +1166,8 @@ let suite =
       Alcotest.test_case "e2e: no params" `Slow test_e2e_no_params;
       Alcotest.test_case "e2e: offset bounds" `Slow test_e2e_offset_bounds;
       Alcotest.test_case "e2e: constraint" `Slow test_e2e_with_constraint;
+      Alcotest.test_case "e2e: a refused record is an error" `Slow
+        test_e2e_refused_is_error;
       Alcotest.test_case "e2e: bitfields" `Slow test_e2e_bitfields;
       Alcotest.test_case "e2e: output parse" `Slow test_e2e_output_parse;
       Alcotest.test_case "e2e: full stack (eth+ipv4+tcp linked)" `Slow
