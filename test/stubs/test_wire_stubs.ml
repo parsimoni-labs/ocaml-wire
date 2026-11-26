@@ -246,11 +246,14 @@ let test_c_stubs_bounds_check () =
   in
   let c = Wire_stubs.to_c_stubs [ s ] in
   Alcotest.(check bool)
-    "rejects an out-of-range offset" true
-    (contains ~sub:"caml_invalid_argument" c);
+    "rejects a negative offset" true
+    (contains ~sub:"if (off < 0) caml_invalid_argument" c);
   Alcotest.(check bool)
-    "guards both the sign and the upper bound of off" true
-    (contains ~sub:"off < 0 || (mlsize_t) off > buf_len" c);
+    "reads an offset past the end as no bytes" true
+    (contains ~sub:"(mlsize_t) off > buf_len ? buf_len : (mlsize_t) off" c);
+  Alcotest.(check bool)
+    "answers a refused record, never raises Failure" false
+    (contains ~sub:"caml_failwith" c);
   Alcotest.(check bool)
     "no unchecked length subtraction remains" false
     (contains ~sub:"caml_string_length(v_buf) - Int_val(v_off)" c)
@@ -515,7 +518,7 @@ let test_e2e_no_params () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
-  let r = Stubs.%s_parse buf 0 in
+  let r = Result.get_ok (Stubs.%s_parse buf 0) in
   assert (r.Stubs.version = 1);
   assert (r.Stubs.length = 42)
 |}
@@ -541,14 +544,14 @@ let test_e2e_offset_bounds () =
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 42;
   (* in-range parse still works *)
-  let r = Stubs.offsetheader_parse buf 0 in
+  let r = Result.get_ok (Stubs.offsetheader_parse buf 0) in
   assert (r.Stubs.version = 1);
   assert (r.Stubs.length = 42);
-  (* off past the end must be rejected, not underflow into an OOB read *)
+  (* off past the end is input: the end of input, not an OOB read *)
   (match Stubs.offsetheader_parse buf 4 with
-   | _ -> assert false
-   | exception Invalid_argument _ -> ());
-  (* a negative off must be rejected too *)
+   | Error { Wire.Error.at = 4; _ } -> ()
+   | _ -> assert false);
+  (* a negative off is misuse *)
   (match Stubs.offsetheader_parse buf (-1) with
    | _ -> assert false
    | exception Invalid_argument _ -> ())
@@ -572,18 +575,18 @@ let test_e2e_with_constraint () =
   let buf = Bytes.create 1 in
   (* x=50 <= 100: passes *)
   Bytes.set_uint8 buf 0 50;
-  let r = Stubs.constrained_parse buf 0 in
+  let r = Result.get_ok (Stubs.constrained_parse buf 0) in
   assert (r.Stubs.x = 50);
-  (* x=200 > 100: fails -- parse raises *)
+  (* x=200 > 100: refused, an error *)
   Bytes.set_uint8 buf 0 200;
-  (try ignore (Stubs.constrained_parse buf 0); assert false
-   with Failure _ -> ())
+  assert (Result.is_error (Stubs.constrained_parse buf 0))
 |}
     ()
 
-(* A record the validator refuses is input, so a stub answers its error as
-   [Codec.validate] places it, and never raises on the bytes: a constraint
-   that fails, a buffer that cuts the record, an offset past its end. *)
+(* A record the validator refuses is input, so a stub answers its error, at
+   the position the validator stopped at, and never raises on the bytes: a
+   constraint that fails (EverParse stops past the field), a buffer that cuts
+   the record, an offset past its end. *)
 let test_e2e_refused_is_error () =
   let f_x_ref = Wire.Field.v "x" uint8 in
   let f_x =
@@ -605,12 +608,12 @@ let test_e2e_refused_is_error () =
    | Error _ -> assert false);
   Bytes.set_uint8 buf 0 200;
   (match Stubs.refused_parse buf 0 with
-   | Error { Wire.Error.at = 0; kind = Wire.Error.Constraint_failed _; _ } -> ()
+   | Error { Wire.Error.at = 1; kind = Wire.Error.Constraint_failed _; _ } -> ()
    | _ -> assert false);
   (match Stubs.refused_parse buf 1 with
    | Error
-       { Wire.Error.at = 1;
-         kind = Wire.Error.Unexpected_eof { expected = 3; got = 2 }; _ } -> ()
+       { Wire.Error.at = 2;
+         kind = Wire.Error.Unexpected_eof { expected = 2; got = 1 }; _ } -> ()
    | _ -> assert false);
   (match Stubs.refused_parse buf 4 with
    | Error
@@ -647,7 +650,7 @@ let test_e2e_bitfields () =
   let buf = Bytes.create 3 in
   Bytes.set_uint8 buf 0 0x45;
   Bytes.set_uint16_be buf 1 100;
-  let r = Stubs.bfheader_parse buf 0 in
+  let r = Result.get_ok (Stubs.bfheader_parse buf 0) in
   (* Default Msb_first: version = top nibble (4), flags = bottom nibble (5). *)
   assert (r.Stubs.version = 4);
   assert (r.Stubs.flags = 5);
@@ -691,7 +694,7 @@ let test_e2e_gc_stress () =
   Bytes.set_int64_be buf 24 0x445566778899aabbL;
   let bad = ref 0 in
   for _ = 1 to 200_000 do
-    let r = Stubs.gcquad_parse buf 0 in
+    let r = Result.get_ok (Stubs.gcquad_parse buf 0) in
     if r.Stubs.a <> 0x1122334455667788L
        || r.Stubs.b <> 0x2233445566778899L
        || r.Stubs.c <> 0x33445566778899aaL
@@ -944,7 +947,7 @@ let test_e2e_output_parse () =
   Bytes.set_int32_be buf 0 0x12345678l;
   Bytes.set_uint16_be buf 4 1000;
   Bytes.set_uint8 buf 6 42;
-  let r = Stubs.testparse_parse buf 0 in
+  let r = Result.get_ok (Stubs.testparse_parse buf 0) in
   assert (r.Stubs.id = 0x12345678);
   assert (r.Stubs.length = 1000);
   assert (r.Stubs.tag = 42);

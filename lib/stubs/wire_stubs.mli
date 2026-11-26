@@ -4,8 +4,13 @@
     OCaml code can call EverParse-generated validators. Each stub stack-
     allocates the schema's default visitor struct ([<Name>Fields] from
     {!Wire_3d}), runs the EverParse validator against it, then marshals the
-    populated struct members into an OCaml record. On validation failure,
-    [Failure] is raised.
+    populated struct members into an OCaml record. A record the validator
+    refuses is input: [<name>_parse] answers [(record, Wire.Error.t) result],
+    and [Error e] places the refusal at the validator's position. EverParse
+    reports a kind and a position only, so [e] names no field and no value, and
+    an end of input expects the bytes up to the end of a record of constant
+    size, or one more than it had. A negative offset is misuse and raises
+    [Invalid_argument].
 
     {b Typical usage} (in a code-generation executable):
     {[

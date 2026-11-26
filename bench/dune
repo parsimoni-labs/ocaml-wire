@@ -99,7 +99,8 @@
 
 (library
  (name c_stubs)
- (modules c_stubs))
+ (modules c_stubs)
+ (libraries wire))
 
 ; C foreign stubs -- gated (provides the C implementations for c_stubs externals)
 

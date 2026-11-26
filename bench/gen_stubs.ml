@@ -83,8 +83,9 @@ let generate_stub_registry ppf structs projection_structs =
       in
       let cont = noop_continuation ~n_args in
       pr
-        "  | %S -> { check = %s_check; ffi_parse = (fun b off -> %s_parse_k %s \
-         b off); loop = %s_loop; projected_int = %s; projected_int64 = %s }\n"
+        "  | %S -> { check = %s_check; ffi_parse = (fun b off -> ignore \
+         (%s_parse_k %s b off)); loop = %s_loop; projected_int = %s; \
+         projected_int64 = %s }\n"
         name lower lower cont lower proj_int proj_int64)
     structs;
   pr "  | name -> failwith (\"C_stubs: unknown schema \" ^ name)\n"
@@ -112,10 +113,15 @@ let generate_ml oc =
       let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
       match Wire.Everparse.Raw.field_kinds s with
       | [ (_, kind) ] ->
-          let suffix =
-            match kind with Wire.Everparse.Raw.Int64 -> "_int64" | _ -> "_int"
+          let suffix, zero =
+            match kind with
+            | Wire.Everparse.Raw.Int64 -> ("_int64", "0L")
+            | _ -> ("_int", "0")
           in
-          pr "let %s_projected%s = %s_parse_k Fun.id\n\n" lower suffix lower
+          pr
+            "let %s_projected%s b off =\n\
+            \  Result.value ~default:%s (%s_parse_k Fun.id b off)\n\n"
+            lower suffix zero lower
       | _ -> ())
     projection_structs;
   pr "\n(* Per-schema stub registry *)\n\n";

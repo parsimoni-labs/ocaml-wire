@@ -23,21 +23,40 @@ let c_stub_validate ppf ~lower ~ep ~validator =
   Fmt.pf ppf
     "  uint64_t r = %s((WIRECTX *) &fields, NULL, %s_err, data, len, 0);@\n"
     validator lower;
+  (* A refused record is input: [Error (kind, pos)], EverParse's error kind
+     and the position it stopped at, which the OCaml side makes a
+     [Wire.Error.t] of ([pp_ml_error]). *)
+  Fmt.pf ppf "  if (!EverParseIsSuccess(r)) {@\n";
+  Fmt.pf ppf "    v_err = caml_alloc_small(2, 0);@\n";
   Fmt.pf ppf
-    "  if (!EverParseIsSuccess(r)) caml_failwith(\"%s: validation failed\");@\n"
-    lower
+    "    Field(v_err, 0) = Val_long(EverParseGetValidatorErrorKind(r));@\n";
+  Fmt.pf ppf
+    "    Field(v_err, 1) = Val_long(EverParseGetValidatorErrorPos(r));@\n";
+  Fmt.pf ppf "    v_result = caml_alloc_small(1, 1);@\n";
+  Fmt.pf ppf "    Field(v_result, 0) = v_err;@\n";
+  Fmt.pf ppf "    CAMLreturn(v_result);@\n";
+  Fmt.pf ppf "  }@\n"
+
+(* [Ok v]: the record the validator accepted, as [v]. *)
+let c_stub_ok ppf v =
+  Fmt.pf ppf "  v_result = caml_alloc_small(1, 0);@\n";
+  Fmt.pf ppf "  Field(v_result, 0) = %s;@\n" v;
+  Fmt.pf ppf "  CAMLreturn(v_result);@\n"
 
 (* [off] is caller-supplied and may carry attacker-controlled data (a length or
-   offset parsed from the input). Outside [0, buf_len] it would underflow [len]
-   into a huge span and push [data] past the buffer, so the validator would read
-   out of bounds; reject it with [Invalid_argument] before touching memory. *)
+   offset parsed from the input). A negative one is misuse and raises
+   [Invalid_argument]; one past the end of the buffer is input, and the
+   validator reads it as no bytes, so it answers the end of input rather than
+   underflowing [len] into a span past the buffer. *)
 let pp_c_stub_bounds ppf ~lower =
   Fmt.pf ppf "  intnat off = Int_val(v_off);@\n";
   Fmt.pf ppf "  mlsize_t buf_len = caml_string_length(v_buf);@\n";
-  Fmt.pf ppf "  if (off < 0 || (mlsize_t) off > buf_len)@\n";
-  Fmt.pf ppf "    caml_invalid_argument(\"%s: offset out of bounds\");@\n" lower;
-  Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + off;@\n";
-  Fmt.pf ppf "  uint32_t len = (uint32_t)(buf_len - (mlsize_t) off);@\n"
+  Fmt.pf ppf "  if (off < 0) caml_invalid_argument(\"%s: negative offset\");@\n"
+    lower;
+  Fmt.pf ppf
+    "  mlsize_t start = (mlsize_t) off > buf_len ? buf_len : (mlsize_t) off;@\n";
+  Fmt.pf ppf "  uint8_t *data = (uint8_t *)Bytes_val(v_buf) + start;@\n";
+  Fmt.pf ppf "  uint32_t len = (uint32_t)(buf_len - start);@\n"
 
 (* The C side reads each field from the default visitor, whose member escapes C's
    keywords ([Wire.Everparse.visitor_member]). *)
@@ -68,7 +87,7 @@ let pp_c_stub_output ppf ~lower ~ep ~validator (s : Wire.Everparse.Raw.struct_)
        v_off) {@\n"
       lower;
     Fmt.pf ppf "  CAMLparam3(v_k, v_buf, v_off);@\n";
-    Fmt.pf ppf "  CAMLlocal1(v_result);@\n";
+    Fmt.pf ppf "  CAMLlocal3(v_result, v_err, v_ok);@\n";
     (* [args] collects boxed values ([caml_copy_int64], [caml_copy_double]).
        Each of those allocations can trigger a minor collection that moves or
        reclaims the boxes already stored, and a bare [value args[N]] is
@@ -76,7 +95,7 @@ let pp_c_stub_output ppf ~lower ~ep ~validator (s : Wire.Everparse.Raw.struct_)
        receives garbage field values. [CAMLlocalN] registers the array as a
        root block and pre-fills it with [Val_unit], so every slot is a valid
        root from the declaration on. It comes after the [CAMLparam3] /
-       [CAMLlocal1] declarations and before the first allocation, and the
+       [CAMLlocal3] declarations and before the first allocation, and the
        single [CAMLreturn] unwinds all three root blocks. *)
     Fmt.pf ppf "  CAMLlocalN(args, %d);@\n" n_fields;
     pp_c_stub_bounds ppf ~lower;
@@ -84,18 +103,19 @@ let pp_c_stub_output ppf ~lower ~ep ~validator (s : Wire.Everparse.Raw.struct_)
     List.iteri
       (fun i kind -> Fmt.pf ppf "  args[%d] = %a;@\n" i pp_field_value kind)
       kinds;
-    Fmt.pf ppf "  v_result = caml_callbackN(v_k, %d, args);@\n" n_fields;
-    Fmt.pf ppf "  CAMLreturn(v_result);@\n";
+    Fmt.pf ppf "  v_ok = caml_callbackN(v_k, %d, args);@\n" n_fields;
+    c_stub_ok ppf "v_ok";
     Fmt.pf ppf "}@\n@\n"
   end
   else begin
-    (* Zero-field schema: no callback needed, just validate and return unit. *)
+    (* Zero-field schema: no callback needed, just validate and answer [Ok ()]. *)
     Fmt.pf ppf
       "CAMLprim value caml_wire_%s_parse(value v_buf, value v_off) {@\n" lower;
     Fmt.pf ppf "  CAMLparam2(v_buf, v_off);@\n";
+    Fmt.pf ppf "  CAMLlocal2(v_result, v_err);@\n";
     pp_c_stub_bounds ppf ~lower;
     c_stub_validate ppf ~lower ~ep ~validator;
-    Fmt.pf ppf "  CAMLreturn(Val_unit);@\n";
+    c_stub_ok ppf "Val_unit";
     Fmt.pf ppf "}@\n@\n"
   end
 
@@ -258,33 +278,76 @@ let pp_ml_record_constructor ppf kinds =
     kinds;
   Fmt.pf ppf " })"
 
+(* The bytes of every record of [s], or [0] when they vary. *)
+let constant_size s = Option.value ~default:0 (Wire.Everparse.Raw.struct_size s)
+
+(* The [Wire.Error.t] of a record the C validator refused: its error kind
+   ([EVERPARSE_VALIDATOR_ERROR_*]) and the position it stopped at, [pos] bytes
+   from [off]. EverParse names no field and no value, so the path is empty and
+   a constraint carries no value. The end of input expects the bytes up to
+   the end of a record of constant [size], and one more than it had otherwise. *)
+let pp_ml_error ppf () =
+  Fmt.pf ppf "let wire_error ~size buf off (kind, pos) : Wire.Error.t =@\n";
+  Fmt.pf ppf "  let at = off + pos in@\n";
+  Fmt.pf ppf "  let got = max 0 (Bytes.length buf - at) in@\n";
+  Fmt.pf ppf "  let kind : Wire.Error.kind =@\n";
+  Fmt.pf ppf "    match kind with@\n";
+  Fmt.pf ppf "    | 2 ->@\n";
+  Fmt.pf ppf
+    "        let expected = if size - pos > got then size - pos else got + 1 in@\n";
+  Fmt.pf ppf "        Unexpected_eof { expected; got }@\n";
+  Fmt.pf ppf "    | 5 -> Constraint_failed { which = Action; value = None }@\n";
+  Fmt.pf ppf "    | 7 -> Non_zero_padding@\n";
+  Fmt.pf ppf "    | _ -> Constraint_failed { which = Field; value = None }@\n";
+  Fmt.pf ppf "  in@\n";
+  Fmt.pf ppf "  { at; field = []; kind }@\n@\n"
+
+(* The stubs of [s]: the C entry point, answering [Error (kind, pos)] on a
+   refused record, and its [Wire.Error.t] form, [parse_k] applying a
+   continuation to the field values and [parse] building the record. *)
+let pp_ml_stub ppf ~parse ~parse_k ~type_name s =
+  let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
+  let kinds = Wire.Everparse.Raw.field_kinds s in
+  check_labels s kinds;
+  let size = constant_size s in
+  if kinds <> [] then begin
+    gen_ml_record ppf ~type_name kinds;
+    Fmt.pf ppf
+      "external %s_raw : %a -> bytes -> int -> ('r, int * int) result@\n"
+      parse_k
+      (fun ppf () -> pp_ml_k_type ppf kinds)
+      ();
+    Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n@\n" lower;
+    Fmt.pf ppf "let %s k buf off =@\n" parse_k;
+    Fmt.pf ppf "  match %s_raw k buf off with@\n" parse_k;
+    Fmt.pf ppf "  | Ok v -> Ok v@\n";
+    Fmt.pf ppf "  | Error e -> Error (wire_error ~size:%d buf off e)@\n@\n" size;
+    Fmt.pf ppf "let %s buf off =@\n" parse;
+    Fmt.pf ppf "  %s@\n" parse_k;
+    Fmt.pf ppf "    %a@\n" pp_ml_record_constructor kinds;
+    Fmt.pf ppf "    buf off@\n@\n"
+  end
+  else begin
+    Fmt.pf ppf "external %s_raw : bytes -> int -> (unit, int * int) result@\n"
+      parse;
+    Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
+    Fmt.pf ppf "let %s buf off =@\n" parse;
+    Fmt.pf ppf "  match %s_raw buf off with@\n" parse;
+    Fmt.pf ppf "  | Ok () -> Ok ()@\n";
+    Fmt.pf ppf "  | Error e -> Error (wire_error ~size:%d buf off e)@\n@\n" size
+  end
+
 let to_ml_stubs (structs : Wire.Everparse.Raw.struct_ list) =
   let buf = Buffer.create 256 in
   let ppf = Format.formatter_of_buffer buf in
   check_codec_names structs;
   Fmt.pf ppf "(* Generated by wire (do not edit) *)@\n@\n";
+  pp_ml_error ppf ();
   List.iter
     (fun (s : Wire.Everparse.Raw.struct_) ->
       let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
-      let kinds = Wire.Everparse.Raw.field_kinds s in
-      check_labels s kinds;
-      if kinds <> [] then begin
-        gen_ml_record ppf ~type_name:(ml_type_name s) kinds;
-        (* Single external: the CPS variant. *)
-        Fmt.pf ppf "external %s_parse_k : %a -> bytes -> int -> 'r@\n" lower
-          (fun ppf () -> pp_ml_k_type ppf kinds)
-          ();
-        Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n@\n" lower;
-        (* OCaml-side record-returning wrapper. *)
-        Fmt.pf ppf "let %s_parse buf off =@\n" lower;
-        Fmt.pf ppf "  %s_parse_k@\n" lower;
-        Fmt.pf ppf "    %a@\n" pp_ml_record_constructor kinds;
-        Fmt.pf ppf "    buf off@\n@\n"
-      end
-      else begin
-        Fmt.pf ppf "external %s_parse : bytes -> int -> unit@\n" lower;
-        Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower
-      end)
+      pp_ml_stub ppf ~parse:(lower ^ "_parse") ~parse_k:(lower ^ "_parse_k")
+        ~type_name:(ml_type_name s) s)
     structs;
   Format.pp_print_flush ppf ();
   Buffer.contents buf
@@ -303,23 +366,9 @@ let to_ml_stub_name (s : Wire.Everparse.Raw.struct_) =
 let to_ml_stub (s : Wire.Everparse.Raw.struct_) =
   let buf = Buffer.create 256 in
   let ppf = Format.formatter_of_buffer buf in
-  let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
-  let kinds = Wire.Everparse.Raw.field_kinds s in
-  check_labels s kinds;
   Fmt.pf ppf "(* Generated by wire (do not edit) *)@\n@\n";
-  if kinds <> [] then begin
-    gen_ml_record ppf ~type_name:"t" kinds;
-    Fmt.pf ppf "external parse : bytes -> int -> t@\n";
-    Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n@\n" lower;
-    Fmt.pf ppf "external parse_k : %a -> bytes -> int -> 'r@\n"
-      (fun ppf () -> pp_ml_k_type ppf kinds)
-      ();
-    Fmt.pf ppf "  = \"caml_wire_%s_parse_k\"@\n" lower
-  end
-  else begin
-    Fmt.pf ppf "external parse : bytes -> int -> unit@\n";
-    Fmt.pf ppf "  = \"caml_wire_%s_parse\"@\n" lower
-  end;
+  pp_ml_error ppf ();
+  pp_ml_stub ppf ~parse:"parse" ~parse_k:"parse_k" ~type_name:"t" s;
   Format.pp_print_flush ppf ();
   Buffer.contents buf
 

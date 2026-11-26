@@ -22,6 +22,11 @@
   `plug_fields` and `plug_setters` are `visitor_field`, `visitor_member`,
   `visitor_fields` and `visitor_setters` (#570, @samoht)
 
+- A stub `Wire_stubs` generates answers `(record, Wire.Error.t) result`: a
+  record the validator refuses, a buffer that cuts it and an offset past the
+  buffer are `Error`, not `Failure` or `Invalid_argument`; match on the
+  result of `<name>_parse` and `<name>_parse_k` (#570, @samoht)
+
 - The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
   `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)
