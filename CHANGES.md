@@ -80,12 +80,6 @@
   bitfields of a record of at most 7 bytes with `Codec.Word.check` and
   `Codec.Word.read`, and of any other record with `Codec.View` (#569, @samoht)
 
-- `read_<field>` and `view_<field>` of a field under a map, in a module
-  `Wire_ocaml` writes, answer `('a, Wire.Error.t) result`: bytes rewritten
-  after the check that the map refuses, such as a lookup index past its
-  table, are the map's error, not an exception. Match on the result (#568,
-  @samoht)
-
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
   call a sub-codec's constructor on a record it then rejects, so a
   constructor should only build a value: count or log after `decode` returns
@@ -337,9 +331,9 @@
   once; `decode` uses the same word tests (#435, #445, #496, #512, #521,
   @samoht)
 
-- A fold's `n_frames` (and its unboxed form) reads the
-  IPv4 protocol, or whatever field chooses a frame's nested optional fields,
-  of all four frames of a loop iteration before checking the first. On
+- A fold's `n_frames` reads the IPv4 protocol, or whatever field chooses a
+  frame's nested optional fields, of all four frames of a loop iteration
+  before checking the first. On
   packets whose kind changes from one frame to the next, the
   Ethernet/IPv4/TCP-or-UDP scan takes about 8% fewer cycles on OxCaml, as
   many as wire.rust's, and about 6% fewer on OCaml (#516, #520, @samoht)
