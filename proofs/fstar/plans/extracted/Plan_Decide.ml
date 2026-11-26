@@ -133,9 +133,9 @@ and walk (fuel : Prims.int) (w : Plan_Scan.st) (lim : Prims.int) (disp : Prims.i
           (FStar_List_Tot_Base.op_At ds (FStar_List_Tot_Base.op_At (gate :: (walk_cases fuel1 w1 lim disp fr cs r)) rest)))
       ))
     | (Plan_Scan.Join :: r) -> (walk fuel1 w lim disp fr r)
-    | ((Plan_Scan.Region (n, e, s, am, b)) :: r) -> (let tmp = (span_decision w lim s [] false) in
+    | ((Plan_Scan.Region (n, e, s, am, b)) :: r) -> (let tmp = (span_decision w lim s r (Plan_Scan.unread b)) in
       (match tmp with
-        | (d, tmp1, ends) -> (let w1 = (Plan_Scan.bind_span w false n e s ends) in
+        | (d, implied, ends) -> (let w1 = (Plan_Scan.bind_span w implied n e s ends) in
           let a = { alim = lim;
               ap = (w1).Plan_Scan.p;
               abounded = (w1).Plan_Scan.bounded;

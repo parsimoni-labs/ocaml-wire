@@ -221,6 +221,17 @@ let refine (w : st) (c : cond) : st =
     | (Eq (tmp, tmp1)) -> w
   )
 
+let rec unread_nodes (b : (node) list) : bool =
+  (match b with
+    | [] -> true
+    | ((Prefix ([], tmp)) :: r) -> (unread_nodes r)
+    | ((Test (tmp)) :: r) -> (unread_nodes r)
+    | tmp -> false
+  )
+
+let unread (b : (node) list) : bool =
+  ((unread_nodes b) && (Prims.op_Less_Equals (ahead b) Plan_Expr.max_string_length))
+
 let region_range (w : st) (n : Prims.int) : (Prims.int * Prims.int) =
   (match ((w).rg n) with
     | (Some (r)) -> r

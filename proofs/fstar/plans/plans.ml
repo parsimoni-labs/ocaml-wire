@@ -227,9 +227,11 @@ let mfield (f : P.field) =
 (* With [runs], a run of optional fields is one dispatch, the last case its
    default: some case always runs, which the hoisted bounds need. Without, a
    run may run none of its cases. The decisions of both readings are the
-   model's: the emitter hoists only where no path runs none. *)
-let rec dnode ~runs = function
+   model's: the emitter hoists only where no path runs none. A walk binds
+   only the fields [live] keeps: the others are no fields of its plan. *)
+let rec dnode ~runs ~live = function
   | P.Prefix (fields, size) ->
+      let fields = List.filter (fun (f : P.field) -> live f.id) fields in
       S.Prefix (List.filter_map mfield fields, z size)
       :: List.concat_map field_tests fields
   | P.Span e ->
@@ -241,9 +243,9 @@ let rec dnode ~runs = function
   | P.Region (e, at_most, body) ->
       let n = fresh () in
       let e' = fresh () in
-      [ S.Region (z n, z e', value e, at_most, dnodes ~runs body) ]
+      [ S.Region (z n, z e', value e, at_most, dnodes ~runs ~live body) ]
 
-and dnodes ~runs ns =
+and dnodes ~runs ~live ns =
   let rec go acc = function
     | [] -> List.rev acc
     | P.Gate _ :: _ as ns ->
@@ -252,16 +254,16 @@ and dnodes ~runs ns =
           | rest -> (List.rev bodies, rest)
         in
         let bodies, rest = gates [] ns in
-        let case i b = (z i, dnodes ~runs b) in
+        let case i b = (z i, dnodes ~runs ~live b) in
         let g =
           if runs then
             let cases = List.rev (List.tl (List.rev bodies)) in
             let dflt = List.hd (List.rev bodies) in
-            S.Gate (z 0, List.mapi case cases, Some (dnodes ~runs dflt))
+            S.Gate (z 0, List.mapi case cases, Some (dnodes ~runs ~live dflt))
           else S.Gate (z 0, List.mapi case bodies, None)
         in
         go (g :: acc) rest
-    | n :: rest -> go (List.rev_append (dnode ~runs n) acc) rest
+    | n :: rest -> go (List.rev_append (dnode ~runs ~live n) acc) rest
   in
   go [] ns
 
@@ -396,40 +398,81 @@ let rec depth all window =
 let is_const (at : P.pos) = Option.is_none at.var
 let const_at (at : P.pos) = if is_const at then Some (z at.at) else None
 
+(* The outputs of the walk [name]: none for [check], every one for the
+   folds. *)
+let walk_outputs p name = if name = "check" then [] else P.outputs p
+
 (* The plan as Plan.Scan nodes, and what Plan.Proof assumes of it, as F*
-   extracts it. *)
+   extracts it: the plan of the fields every output reads, and that of each
+   walk, with only the fields it binds (Wire_ocaml.Plan.live). *)
 let well_formed name p =
   Hashtbl.reset ids;
   next := 1;
   let wf = nodes (P.nodes p) in
   Hashtbl.reset ids;
   next := 1;
-  let d = dnodes ~runs:true (P.nodes p) in
-  let d' = dnodes ~runs:false (P.nodes p) in
+  let all _ = true in
+  let d = dnodes ~runs:true ~live:all (P.nodes p) in
+  let d' = dnodes ~runs:false ~live:all (P.nodes p) in
   let sc v = v = z 0 in
   if not (S.wf sc d && S.wf sc d') then not_wf := name :: !not_wf;
-  (wf, d, d')
-
-(* The emitter's span bounds against the model's decisions; the number of
-   them. *)
-let span_bounds name ~all d d' =
-  let spans =
-    List.filter_map
-      (function
-        | P.Span_bound s ->
-            Some
-              {
-                D.dsize = value s.size;
-                dkind = (if !fabricate then D.KNext else kind s.bound);
-                depth = z (depth all s.window);
-                dat = const_at s.at;
-              }
-        | _ -> None)
-      all
+  let walks = Hashtbl.create 2 in
+  let walk w =
+    let outputs = walk_outputs p w in
+    let key = List.map (fun (o : P.output) -> o.name) outputs in
+    match Hashtbl.find_opt walks key with
+    | Some m -> m
+    | None ->
+        let live = P.live p outputs in
+        let dw = dnodes ~runs:true ~live (P.nodes p) in
+        let dw' = dnodes ~runs:false ~live (P.nodes p) in
+        if not (S.wf sc dw && S.wf sc dw') then not_wf := name :: !not_wf;
+        let m = D.decisions (z 0) dw @ D.decisions (z 0) dw' in
+        Hashtbl.replace walks key m;
+        m
   in
-  let model = D.decisions (z 0) d @ D.decisions (z 0) d' in
-  let bad = D.unjustified model spans in
-  if bad <> [] then findings := (name, bad, model) :: !findings;
+  (wf, d, d', walk)
+
+(* The emitter's span bounds, each against the model's decisions for the
+   plan of the walk that takes it; the number of them. *)
+let span_bounds name ~walk runs =
+  let decision w = function
+    | P.Span_bound s ->
+        Some
+          ( w,
+            {
+              D.dsize = value s.size;
+              dkind = (if !fabricate then D.KNext else kind s.bound);
+              depth = z (depth (List.concat runs) s.window);
+              dat = const_at s.at;
+            } )
+    | _ -> None
+  in
+  let spans =
+    List.concat_map
+      (fun run ->
+        snd
+          (List.fold_left
+             (fun (w, acc) d ->
+               match d with
+               | P.Walk { name; _ } -> (name, acc)
+               | d -> (
+                   match decision w d with
+                   | Some s -> (w, s :: acc)
+                   | None -> (w, acc)))
+             ("", []) run)
+        |> List.rev)
+      runs
+  in
+  let bad =
+    List.concat_map (fun (w, s) -> D.unjustified (walk w) [ s ]) spans
+  in
+  if bad <> [] then begin
+    let model =
+      List.concat_map walk (List.sort_uniq compare (List.map fst spans))
+    in
+    findings := (name, bad, model) :: !findings
+  end;
   List.length spans
 
 (* The model walks from each start the walks take: no byte known, or those a
@@ -805,7 +848,7 @@ let count_checks ~all prefixes gates =
    its own walks, against the model. *)
 let check : type a. string -> a Wire.Codec.t -> P.t -> unit =
  fun name c p ->
-  let wf, d, d' = well_formed name p in
+  let wf, d, d', walk = well_formed name p in
   let runs =
     [
       P.decisions c;
@@ -821,7 +864,7 @@ let check : type a. string -> a Wire.Codec.t -> P.t -> unit =
     ]
   in
   let all = List.concat runs in
-  let spans = span_bounds name ~all d d' in
+  let spans = span_bounds name ~walk runs in
   let events = walk_events ~all d d' in
   let model = shared_words name ~all events in
   held_words name runs;

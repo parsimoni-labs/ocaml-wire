@@ -34,7 +34,12 @@ each.
   depth and constant position (`Plan.Decide.justified`). The walk is
   `Plan.Decide.walk`, run as F* extracts it (`plans/extracted`, over exact
   integers instead of zarith), on two readings of each run of optional
-  fields: one that may run no case, one where a case always runs.
+  fields: one that may run no case, one where a case always runs. Each
+  walk's decisions are checked against the plan of the fields that walk
+  binds (`Wire_ocaml.Plan.live`): every field for the folds, those a check,
+  a size or a condition reads for `check`, whose answer has no output. A
+  field the walk does not bind is no field of its plan, which must still
+  be well formed, so no node reads it.
 - Every shared word `Wire_ocaml.Plan.decisions` reports (`Shared_words`)
   a prefix of the step scanner loads is one `Plan.Scan.choose` may keep for
   one of the prefix's fields, between the bounds the model's walk gives the same prefix
@@ -118,7 +123,13 @@ built-in integer `*`, so an older one no longer checks them.
   of constant size checks no bound for the prefixes it holds; an exact
   region whose contents end at a constant offset that the range pins at
   both ends (`ends_exact`) skips the test of its end, which `frames_ok`
-  justifies by keeping the window's length in that range.
+  justifies by keeping the window's length in that range. A region whose
+  contents load no byte (`Plan.Scan.unread`: prefixes of no field the walk
+  binds, and tests) leaves its size's bound to the check after it, as a span
+  does (f0bd4b6b): where the region fits, the walk is that of a checked
+  region; where it runs past the window, its contents read nothing, so they
+  reject or end at a constant position, and the check after the region
+  rejects (`unread_reject`, `close_pending`).
 - `Plan.Proof.region_start_ok` (b633f225): a region's start split into the
   term of its position's sum and a constant (`Plan.Scan.region_start`)
   gives a base and a displacement that add up to the region's window, so
@@ -298,12 +309,10 @@ O1 lane's branch at 114c5dc3; this branch starts before it.
   each that holds, and they agree only where at most one does; nor that an
   atom the tree leaves untested, which the codec evaluates, does not
   overflow there.
-- A region whose contents load no byte, whose bound f0bd4b6b leaves to the
-  check after it: the model reads every field of a prefix and has no notion
-  of a field the walk does not bind, so its region always checks its size.
-  The `check` of a scanner's views (48d34cc5) binds no output, so its
-  regions of `scan_exact`, `scan_at_most` and `scan_region_in_case` load no
-  byte, and `make plans` refuses their bounds.
+- That the codec accepts what the plan of a walk accepts once the fields
+  the walk does not bind are dropped from it: `spec` reads such a field
+  only to bind it, and `make plans` checks the walk's plan is well formed,
+  so no node reads one, but the model does not state it.
 - `off > Bytes.length buf`, which bd97743d leaves to the first check: the
   model assumes the top window lies in the buffer (above), which holds once
   that check passes with a length that is not negative.
@@ -397,6 +406,10 @@ walked knowing the two its prefix needs faults reading its field at 1; a
 field at 1 is loaded ahead of a frame of one byte at 0. Run against an
 emitter mutated to load each field eleven bytes past its offset, `make
 plans` reports the read-ahead of the packet stack and of two scan cases.
+
+The mutant `region-unread-loads` applies f0bd4b6b's rule to a region whose
+contents load a byte, which then reads its fields past the window when the
+region runs past it: it makes `exec_spec` fail.
 
 The mutants `index-ahead-untested`, `index-ahead-past` and
 `index-known-short` change the pipelined loop of `Plan.Index`: the next
