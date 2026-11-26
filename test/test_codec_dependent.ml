@@ -278,6 +278,28 @@ let test_dep_compute_wire_size () =
     (Codec.wire_size simple_record_codec)
     (Codec.wire_size_at simple_record_codec (Bytes.create 7) 0)
 
+(* [wire_size_at] reads a record's sizes from the buffer, so bytes that hold
+   no size are input: it answers the end-of-input error of the bytes it reads
+   a size from, and raises [Invalid_argument] only on a negative offset. *)
+let test_dep_wire_size_at_bad_bytes () =
+  let answers name codec buf off ~expected : unit =
+    ignore (Codec.wire_size_at codec buf off);
+    Alcotest.failf "%s: answered a size, expected %a" name Error.pp expected
+  in
+  answers "a length the buffer cuts" dep_slice_codec (Bytes.of_string "\x00") 0
+    ~expected:
+      { at = 0; field = []; kind = Unexpected_eof { expected = 2; got = 1 } };
+  answers "a length past the buffer" trailer_codec
+    (Bytes.of_string "\x00\x03abc")
+    5
+    ~expected:
+      { at = 5; field = []; kind = Unexpected_eof { expected = 2; got = 0 } };
+  match
+    Codec.wire_size_at dep_slice_codec (Bytes.of_string "\x00\x00") (-1)
+  with
+  | _ -> Alcotest.fail "a negative offset answered a size"
+  | exception Invalid_argument _ -> ()
+
 (* -- Field.ref expression tests -- *)
 
 let test_dep_codec_ref () =
@@ -573,6 +595,8 @@ let suite =
         test_dep_wire_size_metadata;
       Alcotest.test_case "dep: min_wire_size" `Quick test_dep_min_wire_size;
       Alcotest.test_case "dep: wire_size_at" `Quick test_dep_compute_wire_size;
+      Alcotest.test_case "dep: wire_size_at on bad bytes" `Quick
+        test_dep_wire_size_at_bad_bytes;
       Alcotest.test_case "dep: codec ref" `Quick test_dep_codec_ref;
       Alcotest.test_case "dep: size arithmetic 3D cannot verify refused" `Quick
         test_dep_size_arithmetic_overflow;
