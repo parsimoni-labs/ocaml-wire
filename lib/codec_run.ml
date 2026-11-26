@@ -239,18 +239,6 @@ type ('a, 'r) part = { peq : ('a, int) Type.eq; l : int; r : int; m : int }
 external get64u : bytes -> int -> int64 = "%caml_bytes_get64u"
 external swap64 : int64 -> int64 = "%bswap_int64"
 
-let[@inline never] word_out_of_bounds () = invalid_arg "index out of bounds"
-
-(* The record's bytes one by one, where fewer than 8 follow it. *)
-let[@inline never] word_bytes buf off n =
-  if off < 0 || off > Bytes.length buf - n then word_out_of_bounds ()
-  else
-    let acc = Stdlib.ref 0 in
-    for i = 0 to n - 1 do
-      acc := (!acc lsl 8) lor Bytes.get_uint8 buf (off + i)
-    done;
-    !acc
-
 let part eq ~pos ~width ~signed =
   {
     peq = eq;
@@ -259,11 +247,46 @@ let part eq ~pos ~width ~signed =
     m = (if signed then -1 else (1 lsl width) - 1);
   }
 
-(* A reader of records of [n] bytes, and the shift that leaves them in the
-   low bits of the 8 bytes from their offset. *)
-type 'r reader = { n : int; shift : int }
+(* A reader of records of [n] bytes, the shift that leaves them in the low
+   bits of the 8 bytes from their offset, and the extent of each of their
+   fields, in order: its name, offset and width. *)
+type 'r reader = { n : int; shift : int; fields : (string * int * int) array }
 
-let reader n = { n; shift = 8 * (8 - n) }
+let reader n ~fields = { n; shift = 8 * (8 - n); fields = Array.of_list fields }
+
+(* The record at [off] does not lie in [buf]: the error [Codec.get] answers
+   for the first field [buf] cuts, or, for a record with no field to cut, the
+   end of input [decode] answers for it. A negative offset raises. *)
+let[@inline never] word_short r buf off =
+  if off < 0 then Errors.negative_offset off;
+  let len = Bytes.length buf in
+  let rec first i =
+    if i = Array.length r.fields then
+      Error
+        {
+          Types.at = off;
+          field = [];
+          kind =
+            Unexpected_eof
+              { expected = r.n; got = (if off > len then 0 else len - off) };
+        }
+    else
+      let name, at, width = r.fields.(i) in
+      if off > len - (at + width) then
+        short_field name ~base:off ~at:(off + at) ~width buf
+      else first (i + 1)
+  in
+  first 0
+
+(* The record's bytes one by one, where fewer than 8 follow it. *)
+let[@inline never] word_bytes r buf off =
+  if off < 0 || off > Bytes.length buf - r.n then word_short r buf off
+  else
+    let acc = Stdlib.ref 0 in
+    for i = 0 to r.n - 1 do
+      acc := (!acc lsl 8) lor Bytes.get_uint8 buf (off + i)
+    done;
+    Ok !acc
 
 (* One 8-byte load where the buffer has 8 bytes from the record on, else the
    record's bytes one by one, out of line. A known function, so a caller's
@@ -272,8 +295,8 @@ let[@inline] read_word r buf off =
   if Sys.int_size >= 63 && off >= 0 && off <= Bytes.length buf - 8 then
     let w = get64u buf off in
     let w = if Sys.big_endian then w else swap64 w in
-    Int64.to_int (Int64.shift_right_logical w r.shift)
-  else word_bytes buf off r.n
+    Ok (Int64.to_int (Int64.shift_right_logical w r.shift))
+  else word_bytes r buf off
 
 let of_int : type a. (a, int) Type.eq -> int -> a = fun Type.Equal x -> x
 

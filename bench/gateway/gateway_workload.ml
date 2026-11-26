@@ -82,12 +82,15 @@ let p_seq = C.word_part Space.packet_codec cf_sp_seq_count
 let walk_packets buf base ~fhp on_packet =
   let data_start = base + hdr in
   let off = ref (data_start + fhp) in
-  while !off + pkt_size <= data_start + data_field_size do
-    let w = C.read_word packet_header buf !off in
-    let apid = C.of_word p_apid w in
-    let seq = C.of_word p_seq w in
-    on_packet apid seq;
-    off := !off + pkt_size
+  let data_end = data_start + data_field_size in
+  while !off + pkt_size <= data_end do
+    match C.read_word packet_header buf !off with
+    | Ok w ->
+        let apid = C.of_word p_apid w in
+        let seq = C.of_word p_seq w in
+        on_packet apid seq;
+        off := !off + pkt_size
+    | Error _ -> off := data_end
   done
 
 type state = {
@@ -100,11 +103,13 @@ type state = {
 let state buf =
   let n_frames = Bytes.length buf / cadu_size in
   let scan_frame buf base =
-    let w = C.read_word frame_header buf base in
-    let vcid = C.of_word p_vcid w in
-    let fhp = C.of_word p_fhp w in
-    ignore (Sys.opaque_identity vcid);
-    walk_packets buf base ~fhp (fun _apid _seq -> ())
+    match C.read_word frame_header buf base with
+    | Ok w ->
+        let vcid = C.of_word p_vcid w in
+        let fhp = C.of_word p_fhp w in
+        ignore (Sys.opaque_identity vcid);
+        walk_packets buf base ~fhp (fun _apid _seq -> ())
+    | Error _ -> ()
   in
   let scan_once, reset_cycle =
     Bench_lib.cycling ~data:buf ~n_items:n_frames ~size:cadu_size scan_frame
@@ -121,19 +126,23 @@ let checksum state =
   let checksum = ref checksum_init in
   for frame = 0 to state.n_frames - 1 do
     let base = frame * cadu_size in
-    let w = C.read_word frame_header buf base in
-    let fhp = C.of_word p_fhp w in
-    checksum := hash_int (hash_int !checksum (C.of_word p_vcid w)) fhp;
-    let data_end = base + hdr + data_field_size in
-    let off = ref (base + hdr + fhp) in
-    while !off + pkt_size <= data_end do
-      let o = !off in
-      let w = C.read_word packet_header buf o in
-      let apid = C.of_word p_apid w in
-      let seq = C.of_word p_seq w in
-      checksum := hash_int (hash_int !checksum apid) seq;
-      off := o + pkt_size
-    done
+    match C.read_word frame_header buf base with
+    | Ok w ->
+        let fhp = C.of_word p_fhp w in
+        checksum := hash_int (hash_int !checksum (C.of_word p_vcid w)) fhp;
+        let data_end = base + hdr + data_field_size in
+        let off = ref (base + hdr + fhp) in
+        while !off + pkt_size <= data_end do
+          let o = !off in
+          match C.read_word packet_header buf o with
+          | Ok w ->
+              let apid = C.of_word p_apid w in
+              let seq = C.of_word p_seq w in
+              checksum := hash_int (hash_int !checksum apid) seq;
+              off := o + pkt_size
+          | Error _ -> off := data_end
+        done
+    | Error _ -> ()
   done;
   !checksum
 

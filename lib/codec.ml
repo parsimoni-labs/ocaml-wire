@@ -1247,8 +1247,22 @@ let word_size ~op (codec : _ t) =
 
 type 'r word_reader = 'r Codec_run.reader
 
+(* The extent of each field of [codec], in order, which places the error of a
+   record a buffer cuts as [get] places it. *)
+let word_fields (codec : _ t) =
+  let access = (compiled codec).field_access in
+  List.filter_map
+    (fun (Types.Field { field_name; field_typ; _ }) ->
+      Option.bind field_name (fun name ->
+          Option.bind (List.assoc_opt name access) (fun (_, access) ->
+              Option.map
+                (fun (at, width) -> (name, at, width))
+                (immediate_extent field_typ access))))
+    codec.struct_fields
+
 let word_reader (codec : 'r t) : 'r word_reader =
-  Codec_run.reader (word_size ~op:"Codec.word_reader" codec)
+  let n = word_size ~op:"Codec.word_reader" codec in
+  Codec_run.reader n ~fields:(word_fields codec)
 
 let read_word = Codec_run.read_word
 

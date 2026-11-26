@@ -1699,20 +1699,27 @@ module Codec : sig
       let p_len = Codec.word_part codec len
 
       let () =
-        let w = Codec.read_word reader (Bytes.of_string "\x05\x00\x0c") 0 in
-        assert (Codec.of_word p_kind w = 5);
-        assert (UInt16.to_int (Codec.of_word p_len w) = 12)
+        match Codec.read_word reader (Bytes.of_string "\x05\x00\x0c") 0 with
+        | Ok w ->
+            assert (Codec.of_word p_kind w = 5);
+            assert (UInt16.to_int (Codec.of_word p_len w) = 12)
+        | Error _ -> assert false
+
+      let () =
+        assert (
+          Result.is_error (Codec.read_word reader (Bytes.of_string "\x05") 0))
       ]}
 
       Raises [Invalid_argument] when [c] is not of a fixed size or has more
       bytes than fit an [int] with a bit to spare (7 on a 64-bit host). *)
 
-  val read_word : 'r word_reader -> bytes -> int -> 'r word
+  val read_word : 'r word_reader -> bytes -> int -> ('r word, Error.t) result
   (** [read_word r buf off] is the record at [off], read with one bounds check
       and, where [buf] holds 8 bytes from [off] on, one load. It is a function
       the caller's compiler knows, so the load is inlined into the caller's
-      loop. Raises [Invalid_argument] when [buf] does not hold the record at
-      [off], as {!get} does. *)
+      loop. Where [buf] does not hold the record at [off], it is the error
+      {!get} answers for the first field [buf] cuts. Raises [Invalid_argument]
+      on a negative offset, which is misuse. *)
 
   type ('a, 'r) part
   (** A field of a record word. *)

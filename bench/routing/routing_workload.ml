@@ -91,12 +91,14 @@ type state = { off : int ref; handler_counts : int array }
 let step ~buf ~total_bytes state () =
   if !(state.off) + hdr > total_bytes then state.off := 0;
   let o = !(state.off) in
-  let w = C.read_word header buf o in
-  let apid = C.of_word p_apid w in
-  let dlen = C.of_word p_dlen w in
-  let route = route_of_apid apid in
-  state.handler_counts.(route) <- state.handler_counts.(route) + 1;
-  state.off := o + hdr + Wire.UInt16.to_int dlen + 1
+  match C.read_word header buf o with
+  | Ok w ->
+      let apid = C.of_word p_apid w in
+      let dlen = C.of_word p_dlen w in
+      let route = route_of_apid apid in
+      state.handler_counts.(route) <- state.handler_counts.(route) + 1;
+      state.off := o + hdr + Wire.UInt16.to_int dlen + 1
+  | Error _ -> state.off := 0
 
 let state () = { off = ref 0; handler_counts = Array.make n_routes 0 }
 
@@ -132,12 +134,14 @@ let restamp ~buf ~total_bytes ~out n =
   for _ = 1 to n do
     if !off + hdr > total_bytes then off := 0;
     let o = !off in
-    let w = C.read_word header buf o in
-    let apid = C.of_word p_apid w in
-    let dlen = C.of_word p_dlen w in
-    let route = route_of_apid apid in
-    let seq = seqs.(route) in
-    seqs.(route) <- (seq + 1) land 0x3FFF;
-    stamp out o ~apid ~seq ~dlen;
-    off := o + hdr + Wire.UInt16.to_int dlen + 1
+    match C.read_word header buf o with
+    | Ok w ->
+        let apid = C.of_word p_apid w in
+        let dlen = C.of_word p_dlen w in
+        let route = route_of_apid apid in
+        let seq = seqs.(route) in
+        seqs.(route) <- (seq + 1) land 0x3FFF;
+        stamp out o ~apid ~seq ~dlen;
+        off := o + hdr + Wire.UInt16.to_int dlen + 1
+    | Error _ -> off := 0
   done

@@ -74,13 +74,15 @@ val part :
 type 'r reader
 (** A reader of the records of a ['r] codec. *)
 
-val reader : int -> 'r reader
-(** [reader n] reads records of [n] bytes. *)
+val reader : int -> fields:(string * int * int) list -> 'r reader
+(** [reader n ~fields] reads records of [n] bytes whose fields, in order, are
+    [fields]: each one's name, offset in the record and width. *)
 
-val read_word : 'r reader -> bytes -> int -> 'r word
+val read_word : 'r reader -> bytes -> int -> ('r word, Types.parse_error) result
 (** [read_word r buf off] is the record at [off], in one 8-byte load where [buf]
-    has 8 bytes from [off] on. Raises [Invalid_argument] when [buf] does not
-    hold the record at [off]. *)
+    has 8 bytes from [off] on. Where [buf] does not hold the record at [off], it
+    is the error {!Codec.get} answers for the first field [buf] cuts. Raises
+    [Invalid_argument] for a negative [off]. *)
 
 val of_word : ('a, 'r) part -> 'r word -> 'a
 (** [of_word p w] is the field [p] of [w]. *)

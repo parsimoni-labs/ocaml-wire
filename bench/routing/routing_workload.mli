@@ -31,7 +31,7 @@ val reset : state -> unit
 val step : buf:bytes -> total_bytes:int -> state -> unit -> unit
 (** [step ~buf ~total_bytes s ()] routes the packet at the offset of [s] in the
     first [total_bytes] bytes of [buf], wrapping to 0 when its header does not
-    fit, and moves to the next packet. *)
+    fit or [buf] cuts it, and moves to the next packet. *)
 
 val run_packets :
   buf:bytes -> total_bytes:int -> state -> int -> int * int * int * int

@@ -38,7 +38,9 @@ val reset : state -> unit
 
 val step : state -> unit -> unit
 (** [step s ()] reads the header of the frame at the cursor and the header of
-    each packet starting in it, then moves to the next frame, cycling. *)
+    each packet starting in it, then moves to the next frame, cycling. A header
+    the buffer cuts ends the frame: its packets after it, or all of them for a
+    frame header, are not read. *)
 
 val checksum : state -> int
 (** [checksum s] reads every frame as {!step} does and folds each frame's

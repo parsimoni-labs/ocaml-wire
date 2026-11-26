@@ -54,7 +54,7 @@ let check_parts codec parts =
   let buf = Bytes.init 64 (fun _ -> Char.chr (Random.State.int rand 256)) in
   let read = Codec.read_word (Codec.word_reader codec) in
   for off = 0 to Bytes.length buf - size do
-    let w = read buf off in
+    let w = decode_ok (read buf off) in
     List.iter (fun check -> check buf off w) parts
   done
 
@@ -100,9 +100,11 @@ let test_out_of_bounds () =
   if Sys.int_size >= 63 then begin
     let read = Codec.read_word (Codec.word_reader hdr_codec) in
     let buf = Bytes.make 10 '\000' in
-    expect_invalid "negative offset" (fun () -> ignore (read buf (-1)));
-    expect_invalid "past the end" (fun () -> ignore (read buf 5));
-    ignore (read buf 4 : hdr Codec.word)
+    let read_at off () = match read buf off with Ok _ | Error _ -> () in
+    expect_invalid "negative offset" (read_at (-1));
+    expect_invalid "a negative offset that puts the record in the buffer"
+      (read_at (-4));
+    ignore (decode_ok (read buf 4) : hdr Codec.word)
   end
 
 (* A word read takes its record's offset from the caller: a buffer that cuts
@@ -111,9 +113,11 @@ let test_out_of_bounds () =
 let test_short_buffer () =
   if Sys.int_size >= 63 then begin
     let read = Codec.read_word (Codec.word_reader hdr_codec) in
-    let answers name buf off ~expected : unit =
-      ignore (read buf off : hdr Codec.word);
-      Alcotest.failf "%s: read a word, expected %a" name Error.pp expected
+    let error = Alcotest.testable Error.pp Error.equal in
+    let answers name buf off ~expected =
+      Alcotest.(check (result int error))
+        name (Error expected)
+        (Result.map (fun (w : hdr Codec.word) -> (w :> int)) (read buf off))
     in
     answers "a record the buffer cuts" (Bytes.make 4 '\000') 0
       ~expected:
@@ -151,6 +155,7 @@ let test_short_buffer_agrees_with_get () =
     let gets =
       [ get h_ver; get h_id; get h_seq; get h_len; get h_hi; get h_lo ]
     in
+    let error = Alcotest.testable Error.pp Error.equal in
     for len = 0 to 9 do
       let buf = Bytes.make len '\042' in
       for off = 0 to len + 2 do
@@ -160,14 +165,17 @@ let test_short_buffer_agrees_with_get () =
               match get buf off with Ok () -> None | Error e -> Some e)
             gets
         in
-        match (read buf off, expected) with
-        | _, None -> ()
-        | _, Some e ->
-            Alcotest.failf "offset %d of %d bytes: read a word, expected %a" off
-              len Error.pp e
-        | exception Invalid_argument _ ->
-            Alcotest.failf "offset %d of %d bytes: raised Invalid_argument" off
-              len
+        let got =
+          match read buf off with
+          | Ok _ -> None
+          | Error e -> Some e
+          | exception Invalid_argument _ ->
+              Alcotest.failf "offset %d of %d bytes: raised Invalid_argument"
+                off len
+        in
+        Alcotest.(check (option error))
+          (Fmt.str "offset %d of %d bytes" off len)
+          expected got
       done
     done
   end
@@ -224,10 +232,20 @@ let test_no_allocation () =
     let read = Codec.read_word (Codec.word_reader hdr_codec) in
     let p = Codec.word_part hdr_codec h_id in
     let buf = Bytes.make 16 '\007' in
+    let w = decode_ok (read buf 0) in
     Alcotest.(check int)
-      "word and of_word allocate nothing" 0
-      (per_call_words (fun () ->
-           Codec.of_word p (read buf 0) + Codec.of_word p (read buf 10)))
+      "of_word allocates nothing" 0
+      (per_call_words (fun () -> Codec.of_word p w));
+    (* The [Ok] of a read is a block of 2 words, which a compiler that inlines
+       the read into its match does not allocate. *)
+    let words =
+      per_call_words (fun () ->
+          match (read buf 0, read buf 10) with
+          | Ok a, Ok b -> Codec.of_word p a + Codec.of_word p b
+          | _ -> 0)
+    in
+    if words > 4 then
+      Alcotest.failf "two reads allocate %d words, more than their Ok" words
   end
 
 let suite =
@@ -241,5 +259,6 @@ let suite =
       Alcotest.test_case "a short buffer: the error get answers" `Quick
         test_short_buffer_agrees_with_get;
       Alcotest.test_case "staging refusals" `Quick test_staging_refusals;
-      Alcotest.test_case "word allocates nothing" `Quick test_no_allocation;
+      Alcotest.test_case "a read allocates no more than its Ok" `Quick
+        test_no_allocation;
     ] )
