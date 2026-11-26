@@ -236,16 +236,10 @@ let test_no_allocation () =
     Alcotest.(check int)
       "of_word allocates nothing" 0
       (per_call_words (fun () -> Codec.of_word p w));
-    (* The [Ok] of a read is a block of 2 words, which a compiler that inlines
-       the read into its match does not allocate. *)
-    let words =
-      per_call_words (fun () ->
-          match (read buf 0, read buf 10) with
-          | Ok a, Ok b -> Codec.of_word p a + Codec.of_word p b
-          | _ -> 0)
-    in
-    if words > 4 then
-      Alcotest.failf "two reads allocate %d words, more than their Ok" words
+    Alcotest.(check int)
+      "a read and its field allocate nothing" 0
+      (per_call_words (fun () ->
+           match read buf 0 with Ok w -> Codec.of_word p w | Error _ -> 0))
   end
 
 let suite =
@@ -259,6 +253,5 @@ let suite =
       Alcotest.test_case "a short buffer: the error get answers" `Quick
         test_short_buffer_agrees_with_get;
       Alcotest.test_case "staging refusals" `Quick test_staging_refusals;
-      Alcotest.test_case "a read allocates no more than its Ok" `Quick
-        test_no_allocation;
+      Alcotest.test_case "a read allocates nothing" `Quick test_no_allocation;
     ] )
