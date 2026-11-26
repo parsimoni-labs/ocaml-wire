@@ -1135,13 +1135,18 @@ let check_answer_of (type r) ?env (c : r Wire.Codec.t) bs =
       let (Wire.Buf.Any b) = Wire.Buf.v bs in
       View.ok (View.check V.codec b (Wire.Buf.length b) 0))
 
-(* [View.read] of [f] in the view of [c], on a record [View.check] accepts. *)
+(* [View.read] of [f] in the view of [c], on a record [View.check] accepts:
+   of [View.field] where it takes [f], of [View.checked_field] where it reads
+   [f] with a check. *)
 let view_read (type r) ?env (c : r Wire.Codec.t) f bs =
-  answer (fun () ->
+  answer_result (fun () ->
       let module V = (val View.codec ?env c) in
       let (Wire.Buf.Any b) = Wire.Buf.v bs in
-      let k = View.check V.codec b (Wire.Buf.length b) 0 in
-      View.read (View.field V.codec f) b (View.get k))
+      let r = View.get (View.check V.codec b (Wire.Buf.length b) 0) in
+      match View.field V.codec f with
+      | f -> Ok (View.read f b r)
+      | exception Invalid_argument _ ->
+          View.read (View.checked_field V.codec f) b r)
 
 let unit_equal () () = true
 

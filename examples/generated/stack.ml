@@ -808,8 +808,7 @@ module Stack_tcp = struct
     let bw1 = Wire_runtime.Unchecked.u16be buf (v + 12) in
     let f5_data_offset = bw1 lsr 12 in
     let s2 = (f5_data_offset lsl 2) - 20 in
-    if s2 < 0 || s2 > len - (v + 20) then
-      Wire_runtime.Errors.eof ~at:(v + 20) ~expected:s2 ~got:(len - (v + 20))
+    if s2 < 0 || s2 > len - (v + 20) then Bytesrw.Bytes.Slice.eod
     else
       let p3 = v + 20 + s2 in
       Bytesrw.Bytes.Slice.make_or_eod buf ~first:(v + 20) ~length:(p3 - (v + 20))
@@ -1035,8 +1034,7 @@ module Stack_udp = struct
     let len = Bytes.length buf in
     let f3_length = Wire_runtime.Unchecked.u16be buf (v + 4) in
     let s1 = f3_length - 8 in
-    if s1 < 0 || s1 > len - (v + 8) then
-      Wire_runtime.Errors.eof ~at:(v + 8) ~expected:s1 ~got:(len - (v + 8))
+    if s1 < 0 || s1 > len - (v + 8) then Bytesrw.Bytes.Slice.eod
     else
       let p2 = v + 8 + s1 in
       Bytesrw.Bytes.Slice.make_or_eod buf ~first:(v + 8) ~length:(p2 - (v + 8))
@@ -1238,8 +1236,7 @@ module Stack_ipv4 = struct
     let bw1 = Wire_runtime.Unchecked.u8 buf v in
     let f2_ihl = bw1 land 0xf in
     let s2 = (f2_ihl lsl 2) - 20 in
-    if s2 < 0 || s2 > len - (v + 20) then
-      Wire_runtime.Errors.eof ~at:(v + 20) ~expected:s2 ~got:(len - (v + 20))
+    if s2 < 0 || s2 > len - (v + 20) then Bytesrw.Bytes.Slice.eod
     else
       let p3 = v + 20 + s2 in
       Bytesrw.Bytes.Slice.make_or_eod buf ~first:(v + 20) ~length:(p3 - (v + 20))
@@ -1307,13 +1304,11 @@ module Stack_ipv4 = struct
     then Bytesrw.Bytes.Slice.eod
     else
       let s3 = (f2_ihl lsl 2) - 20 in
-      if s3 < 0 || s3 > len - (v + 20) then
-        Wire_runtime.Errors.eof ~at:(v + 20) ~expected:s3 ~got:(len - (v + 20))
+      if s3 < 0 || s3 > len - (v + 20) then Bytesrw.Bytes.Slice.eod
       else
         let p4 = v + 20 + s3 in
         let s5 = f5_total_length - (f2_ihl lsl 2) in
-        if s5 < 0 || s5 > len - p4 then
-          Wire_runtime.Errors.eof ~at:p4 ~expected:s5 ~got:(len - p4)
+        if s5 < 0 || s5 > len - p4 then Bytesrw.Bytes.Slice.eod
         else
           let p6 = p4 + s5 in
           Bytesrw.Bytes.Slice.make_or_eod buf ~first:p4 ~length:(p6 - p4)

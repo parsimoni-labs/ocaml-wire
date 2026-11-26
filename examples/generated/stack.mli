@@ -195,7 +195,7 @@ module Stack_tcp : sig
   val options : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
   (** [options b v] is the field [options] of the record [v], a slice of [b],
       with no byte copied. If bytes of [b] written since the check move it out
-      of [b], raises [Wire_runtime.Errors.Parse_error]. *)
+      of [b], it is read as absent. *)
 
   val set_src_port :
     'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
@@ -314,7 +314,7 @@ module Stack_udp : sig
   val payload : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
   (** [payload b v] is the field [payload] of the record [v], a slice of [b],
       with no byte copied. If bytes of [b] written since the check move it out
-      of [b], raises [Wire_runtime.Errors.Parse_error]. *)
+      of [b], it is read as absent. *)
 
   val set_src_port :
     'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
@@ -418,7 +418,7 @@ module Stack_ipv4 : sig
   val options : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
   (** [options b v] is the field [options] of the record [v], a slice of [b],
       with no byte copied. If bytes of [b] written since the check move it out
-      of [b], raises [Wire_runtime.Errors.Parse_error]. *)
+      of [b], it is read as absent. *)
 
   val tcp :
     'b Wire_runtime.Buf.t ->
@@ -445,12 +445,12 @@ module Stack_ipv4 : sig
   val opaque_present : 'b Wire_runtime.Buf.t -> 'b view -> bool
   (** [opaque_present b v] is [true] iff the optional field it names is present
       in the record [v]. If bytes of [b] written since the check move it out of
-      [b], raises [Wire_runtime.Errors.Parse_error]. *)
+      [b], it is read as absent. *)
 
   val opaque : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
   (** [opaque b v] is the field [opaque] of the record [v], a slice of [b], with
       no byte copied. If bytes of [b] written since the check move it out of
-      [b], raises [Wire_runtime.Errors.Parse_error]. *)
+      [b], it is read as absent. *)
 
   val set_version : 'b Wire_runtime.Buf.t -> 'b view -> int -> unit
   (** [set_version b v x] writes [x] in place as the field {!val-version} reads
@@ -586,13 +586,13 @@ val get : 'b check -> 'b view
 
 val dst : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
 (** [dst b v] is the field [dst] of the record [v], a slice of [b], with no byte
-    copied. If bytes of [b] written since the check move it out of [b], raises
-    [Wire_runtime.Errors.Parse_error]. *)
+    copied. If bytes of [b] written since the check move it out of [b], it is
+    read as absent. *)
 
 val src : 'b Wire_runtime.Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t
 (** [src b v] is the field [src] of the record [v], a slice of [b], with no byte
-    copied. If bytes of [b] written since the check move it out of [b], raises
-    [Wire_runtime.Errors.Parse_error]. *)
+    copied. If bytes of [b] written since the check move it out of [b], it is
+    read as absent. *)
 
 val ether_type : 'b Wire_runtime.Buf.t -> 'b view -> Wire_runtime.UInt16.t
 (** [ether_type b v] is the field [ether_type] of the record [v]. *)

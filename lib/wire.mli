@@ -1467,25 +1467,39 @@ module Codec : sig
     *)
 
     val field : ('c, 'r) codec -> ('a, 'r) record_field -> ('a, 'c) field
-    (** [field v f] is the field [f] in the views of [v]. Make it once per
-        field, not once per record.
+    (** [field v f] is the field [f] in the views of [v], read with no check.
+        Make it once per field, not once per record.
 
-        An integer, a bitfield or a byte slice of constant size, at a constant
-        offset inside the frame of [v] and without an action, is read with no
-        bounds check; a byte slice of size [0] is {!Bytesrw.Bytes.Slice.eod}.
-        Any other field (after a variable-size field, with an action, under a
-        map) is read as {!Codec.get} reads it: with its bounds check, and with
-        its action, which has already run once in {!val-check}.
+        An integer, a bitfield or a byte slice or string of constant size, at a
+        constant offset inside the frame of [v], without an action and under no
+        map, is read with no bounds check; a byte slice of size [0] is
+        {!Bytesrw.Bytes.Slice.eod}. Under an {!Wire.val-enum} or a
+        {!Wire.val-where} it reads the integer there, which the check accepted.
 
         Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
-        codec of [v]. *)
+        codec of [v], or if it is any other field (after a variable-size field,
+        with an action, under a map): read that one with {!checked_field}. *)
+
+    val checked_field :
+      ('c, 'r) codec ->
+      ('a, 'r) record_field ->
+      (('a, Error.t) result, 'c) field
+    (** [checked_field v f] is the field [f] in the views of [v], read as
+        {!Codec.get} reads it: with its bounds check, its value's checks and its
+        action, which has already run once in {!val-check}. Its read answers the
+        error of bytes written after the check that no longer make a value of
+        [f], such as a field they move out of the buffer.
+
+        Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
+        codec of [v], or as {!Codec.get} does. *)
 
     val read : ('a, 'c) field -> 'b Buf.t -> ('b, 'c) t -> 'a
-    (** [read f b r] is the value of [f] in the record [r] of [b].
+    (** [read f b r] is the value of [f] in the record [r] of [b]. It never
+        raises and never reads outside [b].
 
         {b Warning.} If bytes of [b] are written after the check, the value may
-        be one the codec's checks refuse, and a field read as {!Codec.get} reads
-        it raises as {!Codec.get} does. No read leaves [b]. *)
+        be one the codec's checks refuse; a field of {!checked_field} answers
+        its error. *)
 
     (** {1:subs Sub-records} *)
 

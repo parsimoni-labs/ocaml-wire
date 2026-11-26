@@ -939,21 +939,29 @@ module View = struct
   let frame_of (c : _ compiled) =
     match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
 
+  (* The type a view reads a field as, under the [where] and [enum] the check
+     made: a view reads what is there, as the module [Wire_ocaml] writes does. *)
+  let rec read_as : type a. a typ -> a typ = function
+    | Where { inner; _ } -> read_as inner
+    | Enum { base; _ } -> read_as base
+    | t -> t
+
+  let[@inline never] needs_a_check (v : _ codec) (f : _ record_field) =
+    Fmt.invalid_arg
+      "Codec.View.field: field %S of codec %S is read with a check: use \
+       Codec.View.checked_field"
+      f.name v.codec.name
+
   let field (type a r) (v : (_, r) codec) (f : (a, r) record_field) :
       (a, _) field =
     let access = field_access ~op:"Codec.View.field" v.codec f in
     let size = frame_of v.c in
     let plain = not (List.mem_assoc f.name v.c.field_actions) in
+    let typ = read_as f.typ in
     let scalar =
-      if plain then field_scalar ~min_wire_size:size access f.typ else None
+      if plain then field_scalar ~min_wire_size:size access typ else None
     in
-    let get () =
-      let read = Staged.unstage (codec_get ?env:v.env v.codec f) in
-      Get
-        (fun buf off ->
-          match read buf off with Ok x -> x | Error e -> raise (Parse_error e))
-    in
-    match (scalar, f.typ, access) with
+    match (scalar, typ, access) with
     | Some s, _, _ -> (
         match Option.bind (bits_of_scalar s) (word_field ~size) with
         | Some f -> f
@@ -964,11 +972,22 @@ module View = struct
           word_field ~size { o; n = 4; s = shift; w = width; eq = Equal }
         with
         | Some f -> f
-        | None -> get ())
+        | None ->
+            let read = build_bf_accessor_reader (U32 Big) o shift width in
+            Get read)
     | None, Byte_slice { size = Int length }, Fixed off
       when plain && off >= 0 && length >= 0 && off <= size - length ->
         Bytes { off; length }
-    | None, _, _ -> get ()
+    | None, Byte_array { size = Int length }, Fixed off
+      when plain && off >= 0 && length >= 0 && off <= size - length ->
+        Get (fun buf r -> Bytes.sub_string buf (r + off) length)
+    | None, _, _ -> needs_a_check v f
+
+  let checked_field (type a r) (v : (_, r) codec) (f : (a, r) record_field) :
+      ((a, Error.t) result, _) field =
+    ignore
+      (field_access ~op:"Codec.View.checked_field" v.codec f : field_access);
+    Get (Staged.unstage (codec_get ?env:v.env v.codec f))
 
   (* A sub-codec field is data too: where its record starts in the record
      around it, and the frame its views read in. A field at a constant offset
@@ -1666,49 +1685,68 @@ module Gen = struct
             f (Scan_outputs.read s (b : _ Wire_runtime.Buf.t :> bytes) r) label);
       }
 
-  let view_field v name typ =
-    match View.field v (record_field v.codec name typ) with
-    | f -> Some f
-    | exception Invalid_argument _ -> None
+  (* A field a view reads with no check is one direct read; any other is read
+     with its check, answering what [fail] makes of the error, as the module
+     [Wire_ocaml] writes answers a field the bytes written after the check
+     move out of the buffer. *)
+  let view_field (v : _ View.named) name typ ~fail =
+    let f = record_field v.codec name typ in
+    match View.field v f with
+    | f -> Some (Direct f)
+    | exception Invalid_argument _ -> (
+        match View.checked_field v f with
+        | f ->
+            Some
+              (Read
+                 {
+                   read =
+                     (fun b r ->
+                       match View.read f b r with Ok x -> x | Error _ -> fail);
+                 })
+        | exception Invalid_argument _ -> None)
 
   let field_at (type a) (Record v) i (k : a kind) : a reader =
     let name, Types.Pack_typ typ = nth v i in
     let by_output () =
       output v name (fun o l -> of_output k (Scan_outputs.int o l))
     in
-    let optional f =
-      Read
-        { read = (fun b r -> Option.value ~default:(zero k) (View.read f b r)) }
+    let optional = function
+      | Direct f ->
+          Read
+            {
+              read =
+                (fun b r -> Option.value ~default:(zero k) (View.read f b r));
+            }
+      | Read g ->
+          Read
+            { read = (fun b r -> Option.value ~default:(zero k) (g.read b r)) }
     in
     match typ with
     | Types.Optional { inner; _ } -> (
         match typ_eq inner k with
         | Some Type.Equal ->
             Option.fold ~none:(by_output ()) ~some:optional
-              (view_field v name typ)
+              (view_field v name typ ~fail:None)
         | None -> other_type v.codec name)
     | Types.Optional_or { inner; _ } -> (
         match typ_eq inner k with
-        | Some Type.Equal -> (
-            match view_field v name typ with
-            | Some f -> Direct f
-            | None -> by_output ())
+        | Some Type.Equal ->
+            Option.value ~default:(by_output ())
+              (view_field v name typ ~fail:(zero k))
         | None -> other_type v.codec name)
     | _ -> (
         match typ_eq typ k with
-        | Some Type.Equal -> (
-            match view_field v name typ with
-            | Some f -> Direct f
-            | None -> by_output ())
+        | Some Type.Equal ->
+            Option.value ~default:(by_output ())
+              (view_field v name typ ~fail:(zero k))
         | None -> other_type v.codec name)
 
   let present_at (Record v) i =
     let name, Types.Pack_typ typ = nth v i in
     match typ with
     | Types.Optional _ -> (
-        match view_field v name typ with
-        | Some f ->
-            Read { read = (fun b r -> Option.is_some (View.read f b r)) }
+        match view_field v name typ ~fail:None with
+        | Some h -> Read { read = (fun b r -> Option.is_some (read h b r)) }
         | None ->
             output v name (fun o l -> Scan_outputs.bool o (l ^ "_present")))
     | _ -> Fmt.invalid_arg "%s: field %s is not optional" v.codec.name name

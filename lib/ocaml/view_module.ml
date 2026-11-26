@@ -753,8 +753,11 @@ let mode target =
     note = ignore;
   }
 
-let bad_raise ~at ~need =
-  Fmt.str "%s.eof ~at:%s ~expected:%s ~got:(len - %s)" errors at need at
+(* What an accessor answers where the bytes written after the check move its
+   field out of the buffer: the field's value when it is absent, [absent]. A
+   view never raises, as [Codec.View.enter] refuses a record those bytes move
+   out of the buffer rather than raise. *)
+let absent_where absent ~at:_ ~need:_ = absent
 
 (* A field read with one load and no check: at a constant offset inside the
    bytes a view of [r] holds. *)
@@ -859,24 +862,24 @@ let bytes_accessor ppf ~target ~run ~name ~at ~slice =
     else Fmt.str "%s.sub_string buf %s %s" (mode target).src.checked pos n
   in
   let absent = if slice then "Bytesrw.Bytes.Slice.eod" else "\"\"" in
+  let bad = absent_where absent in
   (match at with
     | Fixed f ->
         let n = width_bytes f.store in
-        run ~absent ~bad:bad_raise ~target:(Field f.id) ~finish:(fun w _ p ->
-            ignore (room w ~bad:bad_raise p (f.offset + n));
+        run ~absent ~bad ~target:(Field f.id) ~finish:(fun w _ p ->
+            ignore (room w ~bad p (f.offset + n));
             emit w "%s"
               (make (ptext { p with at = p.at + f.offset }) (string_of_int n)))
     | Sized node ->
         let size = match node with Span e -> e | _ -> assert false in
-        run ~absent ~bad:bad_raise ~target:(Bytes_span node)
-          ~finish:(fun w _ p ->
+        run ~absent ~bad ~target:(Bytes_span node) ~finish:(fun w _ p ->
             match size with
             | T.Int k when k >= 0 ->
                 emit w "if %s > len - %d then %s else\n" (ptext p) k
-                  (bad_raise ~at:(ptext p) ~need:(string_of_int k));
+                  (bad ~at:(ptext p) ~need:(string_of_int k));
                 emit w "%s" (make (ptext p) (string_of_int k))
             | _ ->
-                let q = skip w ~bad:bad_raise ~ahead:None size p in
+                let q = skip w ~bad ~ahead:None size p in
                 emit w "%s"
                   (make (ptext p) (Fmt.str "(%s - %s)" (ptext q) (ptext p)))))
   |> pp_function ~global:slice ppf ~target ~with_len:false ~name
@@ -891,13 +894,12 @@ let accessor ppf ~target ~t ~ends (r : record) member =
   in
   match member with
   | Scalar { name; field = f } ->
-      run ~absent:(typed f "0") ~bad:bad_raise ~target:(Field f.id)
-        ~finish:(fun w _ p ->
+      let absent = typed f "0" in
+      let bad = absent_where absent in
+      run ~absent ~bad ~target:(Field f.id) ~finish:(fun w _ p ->
           if Sset.mem f.id w.bound then emit w "%s" (typed f (to_int w f.id))
           else
-            let size, lo =
-              room w ~bad:bad_raise p (f.offset + width_bytes f.store)
-            in
+            let size, lo = room w ~bad p (f.offset + width_bytes f.store) in
             (* An unsigned big-endian 32-bit field is the top half of the
                64-bit word that starts on it, when that word is known to be
                there: a shift, and no mask. *)
@@ -908,7 +910,7 @@ let accessor ppf ~target ~t ~ends (r : record) member =
       |> pp_function ppf ~target ~with_len:false ~name
            ~ret:(" : " ^ carrier_type f)
   | Present { name; presence } ->
-      run ~absent:"false" ~bad:bad_raise ~target:(Gate presence.id)
+      run ~absent:"false" ~bad:(absent_where "false") ~target:(Gate presence.id)
         ~finish:(fun w _ _ -> emit w "true")
       |> last_test
       |> pp_function ppf ~target ~with_len:false ~name ~ret:" : bool"
@@ -1155,8 +1157,8 @@ let pp_ok_get_val ~target ppf =
      c] is [false]: test {!ok} first, a refused record is input, not misuse."
 
 let moved =
-  " If bytes of [b] written since the check move it out of [b], raises \
-   [Wire_runtime.Errors.Parse_error]."
+  " If bytes of [b] written since the check move it out of [b], it is read as \
+   absent."
 
 let pp_member_val ~target ~t ppf (r : record) = function
   | Scalar { name; field = f } ->

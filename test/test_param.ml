@@ -706,7 +706,7 @@ let test_slice_navigation_with_parameters () =
   let slice = (reader ~env codec body) buf 1 in
   let (Buf.Any b) = Buf.v buf in
   let r = Codec.View.(get (check V.codec b (Buf.length b) 1)) in
-  let read = Codec.View.(read (field V.codec body) b r) in
+  let read = Result.get_ok Codec.View.(read (checked_field V.codec body) b r) in
   Alcotest.(check int)
     "absolute offset"
     (Bytesrw.Bytes.Slice.first slice)

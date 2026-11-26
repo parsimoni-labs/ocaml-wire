@@ -479,17 +479,17 @@ let test_stack_views () =
   and ip_ttl = V.field Ip.codec P.ipv4_ttl
   and ip_proto = V.field Ip.codec P.ipv4_protocol
   and ip_src = V.field Ip.codec P.ipv4_src
-  and ip_options = V.field Ip.codec P.ipv4_options
+  and ip_options = V.checked_field Ip.codec P.ipv4_options
   and tcp_sp = V.field Tcp.codec P.tcp_src_port
   and tcp_dp = V.field Tcp.codec P.tcp_dst_port
   and tcp_seq = V.field Tcp.codec P.tcp_seq
   and tcp_ack = V.field Tcp.codec P.tcp_ack
   and tcp_off = V.field Tcp.codec P.tcp_data_offset
   and tcp_flags = V.field Tcp.codec P.tcp_flags
-  and tcp_options = V.field Tcp.codec P.tcp_options
+  and tcp_options = V.checked_field Tcp.codec P.tcp_options
   and udp_sp = V.field Udp.codec P.udp_src_port
   and udp_len = V.field Udp.codec P.udp_length_f
-  and udp_payload = V.field Udp.codec P.udp_payload in
+  and udp_payload = V.checked_field Udp.codec P.udp_payload in
   let view input off ~framed =
     let (Buf.Any b) = Buf.v input in
     let len = Buf.length b in
@@ -500,13 +500,13 @@ let test_stack_views () =
         (UInt16.to_int (V.read tcp_dp b t))
         u32 (V.read tcp_seq b t) u32 (V.read tcp_ack b t) (V.read tcp_off b t)
         (V.read tcp_flags b t)
-        (hex_slice (V.read tcp_options b t))
+        (hex_slice (Result.get_ok (V.read tcp_options b t)))
     in
     let udp_of u =
       Fmt.str "udp %d %d %s"
         (UInt16.to_int (V.read udp_sp b u))
         (UInt16.to_int (V.read udp_len b u))
-        (hex_slice (V.read udp_payload b u))
+        (hex_slice (Result.get_ok (V.read udp_payload b u)))
     in
     let ipv4_of r =
       Fmt.str "ipv4 %d %d %d %a %s [%s] [%s]"
@@ -514,7 +514,7 @@ let test_stack_views () =
         (UInt8.to_int (V.read ip_ttl b r))
         (UInt8.to_int (V.read ip_proto b r))
         u32 (V.read ip_src b r)
-        (hex_slice (V.read ip_options b r))
+        (hex_slice (Result.get_ok (V.read ip_options b r)))
         (layer (V.enter tcp b len r) tcp_of)
         (layer (V.enter udp b len r) udp_of)
     in

@@ -211,9 +211,12 @@ accessor reads the fields that place it, tests the conditions of the
 optional fields around it, and checks each span not to be negative and each
 read to lie in the buffer, but makes none of the record's own checks, which
 the check that gave the view made. Bytes written after the check are input
-the accessors read again: a sub-record they move is refused, an optional
-field they turn off is absent (0), and a field they move out of the buffer
-raises the runtime's `Parse_error`, as `Codec.View.read` does; no read leaves the buffer.
+the accessors read again, and no accessor raises on them: a sub-record they
+move is refused, an optional field they turn off is absent (0), and a field
+they move out of the buffer reads as absent too (0, `false`, an empty slice
+or string). No read leaves the buffer. `Codec.View.field` takes only a field
+a view reads with no check; `Codec.View.checked_field` reads any other as
+`Codec.get` does, and answers its error.
 The conditions read their bitfields through the bitfield's word, so that
 tests of bits of one word are one masked test, as in the check; fields that
 share a 64-bit word at a constant offset are read from one load of it, and
