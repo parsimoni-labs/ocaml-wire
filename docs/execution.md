@@ -108,6 +108,14 @@ codec is built, so no input can break it.
   gives a value it refuses, such as a lookup index past its table, at the
   field's offset and under its name, as `Get.<field>` and `Codec.get` answer
   it. No value is made up for it: a map's type has no absent value.
+  A field those bytes move out of the buffer, placed again after a span,
+  reads as absent, as an optional field they turn off does: 0 for an
+  integer, `false` for a presence, an empty slice or string for bytes. The
+  accessor keeps its type, in a scanner's views and in the interpreted twin
+  alike, so a generated view still reads it with no allocation. Through
+  `Codec.View`
+  such a field is a `checked_field`, whose read answers its error, and
+  `Codec.View.enter` refuses a sub-record those bytes move.
 - **Field order.** Reads and checks run in declaration order, so the error
   names the first bad field. The walk `decode` runs on a record without
   parameters reports the same error as the check pass: it checks the frame,

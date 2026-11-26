@@ -428,8 +428,12 @@ module View : sig
       and never reads outside [b].
 
       {b Warning.} If bytes of [b] are written after the check, the value may be
-      one the codec's checks refuse; a field of {!checked_field} answers its
-      error. *)
+      one the codec's checks refuse. A field of {!field} lies in the frame the
+      check tested, where no bytes move it; a field of {!checked_field} answers
+      the error of bytes that move it out of [b]. The accessors of the views a
+      [Wire_ocaml] module writes, which answer no error, read such a field as
+      absent: [0] for an integer, [false] for a presence, an empty slice or
+      string for bytes. *)
 
   (** {1:subs Sub-records} *)
 
