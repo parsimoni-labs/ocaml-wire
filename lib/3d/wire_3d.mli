@@ -345,10 +345,8 @@ val main :
 val locate_3d_exe : unit -> string option
 (** [locate_3d_exe ()] is the path of EverParse's 3D compiler,
     [everparse-3d.exe] or, before EverParse v2026.10, [3d.exe], in PATH or
-    [~/.local/everparse/bin/]: the one the library runs. *)
-
-val has_3d_exe : unit -> bool
-(** [has_3d_exe ()] is [locate_3d_exe () <> None]. *)
+    [~/.local/everparse/bin/]: the one the library runs, or [None] when
+    EverParse is not installed. *)
 
 val ensure_dir : string -> unit
 (** [ensure_dir path] creates the directory [path] if it does not exist. *)

@@ -6,7 +6,9 @@ open Wire.Everparse.Raw
 let simple_struct =
   struct_ "TestSimple" [ field "version" uint8; field "length" uint16be ]
 
-let needs_3d_exe () = if not (Wire_3d.has_3d_exe ()) then Alcotest.skip ()
+let needs_3d_exe () =
+  if Option.is_none (Wire_3d.locate_3d_exe ()) then Alcotest.skip ()
+
 let read_file path = In_channel.with_open_text path In_channel.input_all
 
 (* The fake EverParse below is a shell script, which only a POSIX system runs. *)

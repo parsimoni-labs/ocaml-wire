@@ -5,7 +5,8 @@ open Wire.Everparse.Raw
 
 (* A case that shells out to EverParse skips when [3d.exe] is absent, as in
    [Test_wire_3d]. *)
-let needs_3d_exe () = if not (Wire_3d.has_3d_exe ()) then Alcotest.skip ()
+let needs_3d_exe () =
+  if Option.is_none (Wire_3d.locate_3d_exe ()) then Alcotest.skip ()
 
 (* Binary mode: on Windows a text channel drops each CR, so it yields fewer
    bytes than [in_channel_length] counts. *)

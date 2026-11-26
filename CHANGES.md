@@ -36,6 +36,10 @@
 - The type alias `Wire.codec` is removed: write `Wire.Codec.t`; `Wire.codec`
   is the value that embeds a codec as a field type (#570, @samoht)
 
+- `Wire_3d.has_3d_exe` is removed: `Wire_3d.locate_3d_exe ()` is the path of
+  EverParse's 3D compiler, or `None` where `has_3d_exe ()` was `false`
+  (#570, @samoht)
+
 - The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
   `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)

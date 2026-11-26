@@ -64,7 +64,8 @@ let batch_module_name i tag label =
   Buffer.contents b
 
 let batch_enabled () =
-  Wire_3d.has_3d_exe () && normal_mode () && batch_requested ()
+  Option.is_some (Wire_3d.locate_3d_exe ())
+  && normal_mode () && batch_requested ()
 
 (* Shapes whose FFI projection verifies but whose standalone rendering does
    not. Keep each in the registry and assert its standalone rejection below, so

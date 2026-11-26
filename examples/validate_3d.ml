@@ -154,7 +154,7 @@ let test_case case =
   Alcotest.test_case (case_name case) `Quick (fun () -> validate_one case)
 
 let () =
-  if not (Wire_3d.has_3d_exe ()) then begin
+  if Option.is_none (Wire_3d.locate_3d_exe ()) then begin
     Fmt.pr "everparse-3d.exe (or 3d.exe) not found, skipping validation\n";
     exit 0
   end;

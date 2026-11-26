@@ -352,8 +352,6 @@ let patch_everparse_endianness ~outdir =
   let patched = with_freestanding_endianness content in
   Out_channel.with_open_bin dst (fun oc -> Out_channel.output_string oc patched)
 
-let has_3d_exe () = locate_3d_exe () <> None
-
 (* The [_ExternalTypedefs.h] header seen by the EverParse-generated validator
    and wrapper. The default shipped by wire.3d is a forward declaration that
    ties WIRECTX to the matching [<Name>_Fields] visitor struct. Users who want
@@ -946,7 +944,7 @@ let batch_check ?max_jobs ~outdir schemas =
 let generate_c ?(quiet = true) ~outdir schemas =
   check_name_collisions schemas;
   ensure_dir outdir;
-  if has_3d_exe () then begin
+  if Option.is_some (locate_3d_exe ()) then begin
     run_everparse ~quiet ~outdir schemas;
     write_external_typedefs ~outdir schemas;
     write_fields ~outdir schemas;
@@ -1703,7 +1701,7 @@ let generate_3d_standalone_check ?name ~outdir ~package codecs =
 
 let generate_c_standalone ?(quiet = true) ?name ~outdir ~package () =
   ensure_dir outdir;
-  if has_3d_exe () then
+  if Option.is_some (locate_3d_exe ()) then
     run_everparse_files ~quiet ~outdir
       [ standalone_base ?name ~package () ^ ".3d" ]
   else failwith (not_found_3d_exe ^ ". Install EverParse to regenerate C files.")

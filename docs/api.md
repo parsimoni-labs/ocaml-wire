@@ -679,7 +679,7 @@ val main : ?name:string -> mode:[ `Ffi | `Standalone ] -> package:string -> pack
                                                      (** The generator a dune rule runs. *)
 val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
                                                      (** Whether 3D accepts a [.3d] file. *)
-val has_3d_exe : unit -> bool                        (** Whether EverParse is installed. *)
+val locate_3d_exe : unit -> string option            (** EverParse's 3D compiler, if installed. *)
 
 (* Wire_stubs *)
 val generate : schema_dir:string -> outdir:string -> Wire_3d.packed list -> unit
@@ -775,7 +775,8 @@ rests on its own grep, given with it.
 | `Wire_rust` | `rs` 7 | `Wire_rust.v`, `to_rs`, `main` |
 | `Wire_3d` | `everparse_name` 6, `pascal_case` 3, `generate_3d` 7, `generate_dune` 1, `run_everparse` 4, `check_provenance` 1, `fork_pool` 3, `rm_rf` 5, `batch_check` 1, `write_external_typedefs` 3, `write_fields` 5, `generate_c` 4, `harden_wrapper_source` 1, `generate_standalone` 3, `generate_dune_standalone` 2, `wrapper_symbols` 1, `archive_link_steps` 1, `generate_corpus` 5, `generate_agree` 1, `ensure_dir` 1, `strict_cc_flags` 5, `everparse_type_defines` 3, `Private` (module) 2 | the internal library (§ Internal) |
 | `Wire_3d` | `check_plug_names` 4 | the internal library (§ Internal), as `check_visitor_names` |
-| `Wire_3d.Private` | `run_3d_spawned` 1, `pool_in_process` 1, `locate_3d_exe` 2, `has_custard` 1 | the internal library (§ Internal) |
+| `Wire_3d` | `has_3d_exe` 7 | `Wire_3d.locate_3d_exe () <> None` |
+| `Wire_3d.Private` | `run_3d_spawned` 1, `pool_in_process` 1, `locate_3d_exe` (the parameterised one) 2, `has_custard` 1 | the internal library (§ Internal) |
 | `Wire_stubs` | `packed_codec` (type) 0 | `Wire_3d.packed` |
 | `Wire_stubs` | `of_structs` 1, `check_names` 3, `to_c_stubs` 3, `to_ml_stubs` 3, `to_ml_stub` 1, `to_ml_stub_name` 1, `everparse_name` 0, `validator_name` 3, `ml_type_of` 0 | the internal library (§ Internal) |
 | `Wire_runtime.Arith` | `add_overflows` 2, `sub_overflows` 1, `mul_overflows` 1, `Overflow` 2, `add` 2, `sub` 1, `mul` 1, `checked_add` 2, `checked_sub` 2, `checked_mul` 2 | hidden: generated code only (§ Runtime) |
@@ -1080,7 +1081,9 @@ overrule:
 - `Codec.get`, `Codec.set` and `Codec.writer` stay, as CLAUDE.md names them;
   only `Staged` leaves them.
 - `Wire.pp_value` becomes `Codec.pp_value`; `Codec.name` becomes public.
-- `Wire_3d` keeps `pack`, `run`, `main`, `parse_3d` and `has_3d_exe`;
+- `Wire_3d` keeps `pack`, `run`, `main`, `parse_3d` and `locate_3d_exe`, which
+  replaces `has_3d_exe` (`verify/` needs the path, and `has_3d_exe ()` is
+  `locate_3d_exe () <> None`);
   `Wire_stubs` keeps `generate` and `build_codec_archive`, over
   `Wire_3d.packed`.
 - `Vec` stays public with `X4`: it is the API CLAUDE.md requires SIMD to go

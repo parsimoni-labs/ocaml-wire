@@ -12,7 +12,8 @@ let simple_module = module_ [ typedef ~entrypoint:true simple_struct ]
    cases as [OK] when the binary is absent would print a green tick for an
    assertion that never ran, so they skip instead: the four default [dune
    runtest] lanes have no EverParse and must say so. *)
-let needs_3d_exe () = if not (Wire_3d.has_3d_exe ()) then Alcotest.skip ()
+let needs_3d_exe () =
+  if Option.is_none (Wire_3d.locate_3d_exe ()) then Alcotest.skip ()
 
 let test_everparse_name () =
   (* All-caps names get lowercased with first letter capitalized *)
@@ -151,7 +152,7 @@ let test_generate_c () =
    Apple, which is the OS-less cross target the standalone C archive exists to
    serve. *)
 let test_endianness_freestanding () =
-  if not (Wire_3d.has_3d_exe ()) then ()
+  if Option.is_none (Wire_3d.locate_3d_exe ()) then ()
   else begin
     let tmpdir = Filename.temp_dir "wire_3d_endianness" "" in
     let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
@@ -1451,20 +1452,20 @@ let test_uses_wire_ctx () =
     "raw module without extern WireCtx" false
     (Wire.Everparse.uses_wire_ctx raw)
 
-(* [has_3d_exe] is the gate every EverParse-dependent case reads, so it is
+(* [locate_3d_exe] is the gate every EverParse-dependent case reads, so it is
    checked against the search it documents -- PATH, then the
    [~/.local/everparse/bin] fallback -- resolved here independently of
    [Wire_3d]'s own lookup. *)
-let test_has_3d_exe () =
+let test_locate_3d_exe () =
   let found name =
     Fmt.kstr Sys.command "command -v %s > /dev/null 2>&1" name = 0
     || Sys.file_exists
          (Filename.concat (Sys.getenv "HOME") (".local/everparse/bin/" ^ name))
   in
   Alcotest.(check bool)
-    "has_3d_exe agrees with PATH plus the ~/.local/everparse fallback"
+    "locate_3d_exe agrees with PATH plus the ~/.local/everparse fallback"
     (found "everparse-3d.exe" || found "3d.exe")
-    (Wire_3d.has_3d_exe ())
+    (Option.is_some (Wire_3d.locate_3d_exe ()))
 
 let test_main_exists () =
   (* main dispatches on Sys.argv; calling it in tests would exit, so we only
@@ -1831,7 +1832,7 @@ let suite =
       Alcotest.test_case "doc differential wrapped param (needs 3d.exe)" `Quick
         test_doc_differential_wrapped_param;
       Alcotest.test_case "uses_wire_ctx" `Quick test_uses_wire_ctx;
-      Alcotest.test_case "has_3d_exe" `Quick test_has_3d_exe;
+      Alcotest.test_case "locate_3d_exe" `Quick test_locate_3d_exe;
       Alcotest.test_case "main exists" `Quick test_main_exists;
       Alcotest.test_case "projection: wire_size matches Codec" `Quick
         test_projection_sizes;

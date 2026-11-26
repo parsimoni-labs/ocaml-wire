@@ -425,7 +425,7 @@ let test_codec_names_clash () =
 
 (* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
 
-let has_3d = Wire_3d.has_3d_exe ()
+let has_3d = Option.is_some (Wire_3d.locate_3d_exe ())
 
 let run cmd =
   let ic = Unix.open_process_in (cmd ^ " 2>&1") in
