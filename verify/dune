@@ -2,8 +2,9 @@
 ; generated module, executes it symbolically to bit-vector formulas, and has
 ; Z3 prove its reads in bounds and its answers equal to those of the EverParse
 ; 3D specification of the same codec (main.ml says what each check states).
-; It needs EverParse (3d.exe, for the specification's SMT encoding) and z3,
-; so it runs only with BUILD_EVERPARSE=1, as the other EverParse lanes do.
+; It needs EverParse's 3D compiler, found as Wire_3d.locate_3d_exe finds it,
+; for the specification's SMT encoding, and z3, so it runs only with
+; BUILD_EVERPARSE=1, as the other EverParse lanes do.
 
 (executable
  (name gen)
@@ -13,7 +14,7 @@
 (executables
  (names main test_symex)
  (modules main test_symex check linear spec symex smt z3)
- (libraries compiler-libs.common fmt unix))
+ (libraries compiler-libs.common fmt unix wire.3d))
 
 ; The primitives the walk models, each proved equal to the definition it
 ; models: it needs z3 alone.

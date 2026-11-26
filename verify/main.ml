@@ -445,8 +445,8 @@ let target_of_arg arg =
       | _ -> Fmt.invalid_arg "bad target %S" arg)
   | _ -> Fmt.invalid_arg "bad target %S" arg
 
-(* The first executable [name] in [PATH], then in [extra]. *)
-let locate name extra =
+(* The first executable [name] in [PATH]. *)
+let locate name =
   let path =
     match Sys.getenv_opt "PATH" with
     | Some p -> String.split_on_char ':' p
@@ -456,7 +456,7 @@ let locate name extra =
     (fun dir ->
       let f = Filename.concat dir name in
       if Sys.file_exists f then Some f else None)
-    (path @ extra)
+    path
 
 let usage () =
   prerr_endline
@@ -501,15 +501,15 @@ let () =
       }
       (List.tl (Array.to_list Sys.argv))
   in
-  let home = Option.value ~default:"." (Sys.getenv_opt "HOME") in
   let z3 =
-    match locate "z3" [] with
-    | Some z -> z
-    | None -> failwith "z3 is not in PATH"
+    match locate "z3" with Some z -> z | None -> failwith "z3 is not in PATH"
   and threed =
-    match locate "3d.exe" [ Filename.concat home ".local/everparse/bin" ] with
+    match Wire_3d.locate_3d_exe () with
     | Some t -> t
-    | None -> failwith "3d.exe is neither in PATH nor in ~/.local/everparse/bin"
+    | None ->
+        failwith
+          "EverParse's 3D compiler is neither in PATH nor in \
+           ~/.local/everparse/bin"
   in
   match args with
   | _ :: (_ :: _ as targets) when Option.is_some o.against ->

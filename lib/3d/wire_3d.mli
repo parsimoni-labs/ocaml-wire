@@ -342,10 +342,13 @@ val main :
     has no effect in [`Ffi] mode, whose file names come from the individual
     codecs. *)
 
+val locate_3d_exe : unit -> string option
+(** [locate_3d_exe ()] is the path of EverParse's 3D compiler,
+    [everparse-3d.exe] or, before EverParse v2026.10, [3d.exe], in PATH or
+    [~/.local/everparse/bin/]: the one the library runs. *)
+
 val has_3d_exe : unit -> bool
-(** [has_3d_exe ()] returns [true] if EverParse's 3D compiler,
-    [everparse-3d.exe] or, before EverParse v2026.10, [everparse-3d.exe], is
-    available in PATH or [~/.local/everparse/bin/]. *)
+(** [has_3d_exe ()] is [locate_3d_exe () <> None]. *)
 
 val ensure_dir : string -> unit
 (** [ensure_dir path] creates the directory [path] if it does not exist. *)
