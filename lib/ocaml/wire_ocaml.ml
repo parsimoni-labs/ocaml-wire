@@ -33,10 +33,7 @@ and view_member =
 let views c =
   let t =
     Option.get
-      (Writer.views
-         (Writer.v
-            ~folds:[ { Writer.name = "fold"; outputs = None; visitor = None } ]
-            ~require:`Walk ~codec:(Gen.to_struct c).name c))
+      (Writer.views (Writer.v ~require:`Walk ~codec:(Gen.to_struct c).name c))
   in
   let global prefix name = if prefix = "" then name else prefix ^ "_" ^ name in
   let rec view prefix (r : View_module.record) =
@@ -84,7 +81,7 @@ let fstar ?fields ~codec c =
 
 type fold = Writer.fold
 
-let fold ?outputs name = { Writer.name; outputs; visitor = None }
+let fold ?outputs name = { Writer.name; outputs }
 
 (* The compiler the generator runs on, which is the one that builds what it
    writes. *)
@@ -96,7 +93,7 @@ type t =
       name : string;
       target : target;
       simd : bool;
-      folds : fold list option;
+      folds : fold list;
       maps : map list option;
       codec : 'r Wire.Codec.t;
     }
@@ -112,31 +109,33 @@ let visitor_module file =
   in
   String.capitalize_ascii stem
 
-let writer ?(visitors = []) (T t) =
-  let folds =
-    Option.map
-      (List.map (fun (f : fold) ->
-           match List.assoc_opt f.name visitors with
-           | None -> f
-           | Some file -> { f with visitor = Some (visitor_module file) }))
-      t.folds
-  in
-  (match t.folds with
-  | Some folds ->
-      List.iter
-        (fun (n, _) ->
-          if not (List.exists (fun (f : fold) -> f.name = n) folds) then
-            Fmt.invalid_arg "Wire_ocaml: %s declares no fold %S" t.name n)
-        visitors
-  | None -> ());
+let writer (T t) =
   let require =
     if t.simd || Option.is_some t.maps then `Record
-    else match t.folds with Some (_ :: _) -> `Walk | _ -> `Any
+    else match t.folds with _ :: _ -> `Walk | [] -> `Any
   in
-  Writer.v ~target:t.target ~simd:t.simd ?maps:(named t.maps) ?folds ~require
-    ~codec:(Gen.to_struct t.codec).name t.codec
+  Writer.v ~target:t.target ~simd:t.simd ?maps:(named t.maps) ~folds:t.folds
+    ~require ~codec:(Gen.to_struct t.codec).name t.codec
 
-let v ?name ?(target = building) ?(simd = false) ?folds ?maps codec =
+(* The module each fold of [t] calls by name, from [visitors], its source
+   file by fold: each names a fold [t] declares, and each fold has one. *)
+let visitor_modules (T t) visitors =
+  List.iter
+    (fun (n, _) ->
+      if not (List.exists (fun (f : fold) -> f.name = n) t.folds) then
+        Fmt.invalid_arg "Wire_ocaml: %s declares no fold %S" t.name n)
+    visitors;
+  List.map
+    (fun (f : fold) ->
+      match List.assoc_opt f.name visitors with
+      | Some file -> (f.name, visitor_module file)
+      | None ->
+          Fmt.invalid_arg
+            "Wire_ocaml: %s declares the fold %S, which no visitor names" t.name
+            f.name)
+    t.folds
+
+let v ?name ?(target = building) ?(simd = false) ?(folds = []) ?maps codec =
   let name =
     match name with
     | Some n -> n
@@ -151,13 +150,13 @@ let v ?name ?(target = building) ?(simd = false) ?folds ?maps codec =
 
 let name (T t) = t.name
 
-let to_ml ?(twin = false) ?visitors t =
-  let w = writer ?visitors t in
-  if twin then Writer.twin_ml w else Writer.ml w
+let to_ml ?(twin = false) ?(visitors = []) t =
+  let visitors = visitor_modules t visitors and w = writer t in
+  if twin then Writer.twin_ml ~visitors w else Writer.ml ~visitors w
 
-let to_mli ?(twin = false) ?visitors t =
-  let w = writer ?visitors t in
-  if twin then Writer.twin_mli w else Writer.mli w
+let to_mli ?(twin = false) ?(visitors = []) t =
+  let visitors = visitor_modules t visitors and w = writer t in
+  if twin then Writer.twin_mli ~visitors w else Writer.mli ~visitors w
 
 (* {2 The generator's command line} *)
 
@@ -228,28 +227,29 @@ let main ts =
         not
           (List.exists
              (fun (_, _, T t) ->
-               List.exists
-                 (fun (f : fold) -> f.name = fold)
-                 (Option.value ~default:[] t.folds))
+               List.exists (fun (f : fold) -> f.name = fold) t.folds)
              written)
       then
         fail "--visitor %s=%s: no module written declares a fold %s" fold file
           fold)
     visitors;
-  List.iter
-    (fun (file, kind, (T t as m)) ->
-      let visitors =
-        List.filter
-          (fun (fold, _) ->
-            List.exists
-              (fun (f : fold) -> f.name = fold)
-              (Option.value ~default:[] t.folds))
-          visitors
-      in
-      match kind with
-      | `Ml, twin -> write file (to_ml ~twin ~visitors m)
-      | `Mli, twin -> write file (to_mli ~twin ~visitors m))
-    written
+  (* Every text is written once all are: a fold no visitor names refuses
+     the command line before any file is written. *)
+  let texts =
+    List.map
+      (fun (file, kind, (T t as m)) ->
+        let visitors =
+          List.filter
+            (fun (fold, _) ->
+              List.exists (fun (f : fold) -> f.name = fold) t.folds)
+            visitors
+        in
+        match kind with
+        | `Ml, twin -> (file, to_ml ~twin ~visitors m)
+        | `Mli, twin -> (file, to_mli ~twin ~visitors m))
+      written
+  in
+  List.iter (fun (file, text) -> write file text) texts
 
 (* The module of a codec, as [Plan] reads it. *)
 let declared = v
@@ -371,10 +371,11 @@ module Plan = struct
 
   let pp_decision = Decision.pp
 
-  let decisions ?(target = `OCaml) ?(folds = [ fold "fold" ]) ?visitors c =
+  let decisions ?(target = `OCaml) ?(folds = []) ?(visitors = []) c =
     let acc = ref [] in
     let decide d = acc := d :: !acc in
-    ignore (Writer.ml ~decide (writer ?visitors (declared ~target ~folds c)));
+    let t = declared ~target ~folds c in
+    ignore (Writer.ml ~decide ~visitors:(visitor_modules t visitors) (writer t));
     List.rev !acc
 
   let select t names =

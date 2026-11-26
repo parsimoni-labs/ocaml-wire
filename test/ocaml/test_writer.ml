@@ -1,7 +1,6 @@
 (* The one module Wire_ocaml writes for a codec, whatever its shape: the
    members of a fixed record beside the folds, the check and the views, each
-   agreeing with the others and with the codec; the names they take; what
-   [ml] and [scanner] write for one codec. *)
+   agreeing with the others and with the codec; the names they take. *)
 
 open Wire
 module Buf = Wire_runtime.Buf
@@ -165,27 +164,15 @@ let test_accessors () =
       let v = G_eth.get (G_eth.check b (Buf.length b) 0) in
       [ G_eth.src b v ])
 
-(* The module of [c] and its interface, with its default fold ([ml]) or with
-   that fold declared ([scanner]), for the OCaml target. *)
+(* The module of [c] for the OCaml target, with no fold ([ml]) or with the
+   fold [fold], whose visitor is [Step] ([scanner]). *)
 let ml c = Wire_ocaml.(to_ml (v ~target:`OCaml c))
-let mli c = Wire_ocaml.(to_mli (v ~target:`OCaml c))
-let folds = Wire_ocaml.[ fold "fold" ]
-let scanner c = Wire_ocaml.(to_ml (v ~target:`OCaml ~folds c))
-let scanner_mli c = Wire_ocaml.(to_mli (v ~target:`OCaml ~folds c))
 
-type codec = Codec : 'r Codec.t -> codec
-
-(* A module with its default fold and with that fold declared is one module. *)
-let test_one_module () =
-  List.iter
-    (fun (name, Codec c) ->
-      Alcotest.(check string) name (ml c) (scanner c);
-      Alcotest.(check string) (name ^ " interface") (mli c) (scanner_mli c))
-    [
-      ("ipv4", Codec Schemas.ipv4);
-      ("checked", Codec Schemas.checked);
-      ("packed", Codec Schemas.packed);
-    ]
+let scanner c =
+  Wire_ocaml.(
+    to_ml
+      ~visitors:[ ("fold", "step.ml") ]
+      (v ~target:`OCaml ~folds:[ fold "fold" ] c))
 
 let pair n1 n2 =
   Codec.v "Pair"
@@ -268,7 +255,6 @@ let suite =
       Alcotest.test_case "setters" `Quick test_setters;
       Alcotest.test_case "a fixed record's views and folds" `Quick test_fixed;
       Alcotest.test_case "accessors" `Quick test_accessors;
-      Alcotest.test_case "one module for ml and scanner" `Quick test_one_module;
       Alcotest.test_case "accessors named apart" `Quick test_escaped;
       Alcotest.test_case "a record's clashing names" `Quick test_record_clash;
     ] )

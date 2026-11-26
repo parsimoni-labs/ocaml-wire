@@ -43,11 +43,6 @@ let root_names =
     "check";
     "ok";
     "get";
-    "fold";
-    "fold_frames";
-    "fold_step";
-    "fold_step_frames";
-    "fold_step_index";
     "decode";
     "validate";
     "is_valid";

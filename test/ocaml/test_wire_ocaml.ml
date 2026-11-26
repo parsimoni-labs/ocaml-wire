@@ -1245,10 +1245,37 @@ let test_scanner_refusals () =
   in
   refused "two outputs of one name" (fun () -> scanner (pair "a_b" "a_B"));
   refused "an unknown output" (fun () -> scanner ~fields:[ "c" ] (pair "a" "b"));
-  Alcotest.(check string)
-    "a structured codec through ml"
-    Wire_ocaml.(to_ml (v ~target:`OCaml ~folds:[ fold "fold" ] Schemas.sized))
-    (ml Schemas.sized);
+  (* A fold calls its visitor by name: one that no visitor names is
+     refused, naming it, as is a visitor of a fold the module does not
+     declare. *)
+  let declared = Wire_ocaml.(v ~folds:[ fold "count" ] (pair "a" "b")) in
+  List.iter
+    (fun (what, write, needle) ->
+      match write () with
+      | _ -> Alcotest.failf "%s: written" what
+      | exception Invalid_argument msg ->
+          Alcotest.(check bool) (what ^ ": " ^ msg) true (contains msg needle))
+    [
+      ( "a fold with no visitor",
+        (fun () -> Wire_ocaml.to_ml declared),
+        "\"count\"" );
+      ("its interface", (fun () -> Wire_ocaml.to_mli declared), "\"count\"");
+      ("its twin", (fun () -> Wire_ocaml.to_ml ~twin:true declared), "\"count\"");
+      ( "the visitor of another fold",
+        (fun () ->
+          Wire_ocaml.to_ml
+            ~visitors:[ ("count", "count.ml"); ("sum", "sum.ml") ]
+            declared),
+        "\"sum\"" );
+    ];
+  Alcotest.(check bool)
+    "a fold with its visitor" true
+    (contains
+       (Wire_ocaml.to_ml ~visitors:[ ("count", "count.ml") ] declared)
+       "Count.valid init");
+  Alcotest.(check bool)
+    "no fold by default" false
+    (contains (ml Schemas.sized) "~init");
   Alcotest.(check (list (pair string bool)))
     "outputs"
     [ ("n", false); ("body_present", true); ("tail", false) ]

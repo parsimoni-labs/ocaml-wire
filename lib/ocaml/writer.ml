@@ -11,18 +11,11 @@ open Record_module
 
 type target = [ `OCaml | `OxCaml ]
 type require = [ `Record | `Walk | `Any ]
+type fold = { name : string; outputs : string list option }
 
-type fold = {
-  name : string;
-  outputs : string list option;
-  visitor : string option;
-}
-
-type walk = {
-  plan : plan;
-  folds : Scan_module.fold list;
-  views : View_module.t;
-}
+(* A declared fold: its name and the outputs it hands out. *)
+type declared = { fold : string; selected : output list }
+type walk = { plan : plan; folds : declared list; views : View_module.t }
 
 type t = {
   codec : string;
@@ -88,21 +81,15 @@ let checked_record ~codec ~needed ~views record =
       Some r
   | Ok r -> if Names.clash (record_names ~views r) = None then Some r else None
 
-(* The names a fold defines: without a visitor, its consumer's form; with
-   one, the step forms. *)
+(* The names a fold defines. *)
 let fold_names (f : fold) =
   let n = f.name in
-  match f.visitor with
-  | None -> [ n; n ^ "_frames" ]
-  | Some _ -> [ n; n ^ "_frames"; n ^ "_index"; n ^ "_within" ]
+  [ n; n ^ "_frames"; n ^ "_index"; n ^ "_within" ]
 
 (* The folds' names are apart from each other and from the module's own. *)
 let clash_folds ~codec ~record folds =
   let own =
-    List.filter
-      (fun n -> not (String.starts_with ~prefix:"fold" n))
-      View_module.root_names
-    @ if Option.is_none record then [] else own_names
+    View_module.root_names @ if Option.is_none record then [] else own_names
   in
   let names =
     List.map (fun n -> (None, n)) own
@@ -134,9 +121,8 @@ let checked_walk ~codec ~record ~folds c = function
           ( List.map
               (fun (f : fold) ->
                 {
-                  Scan_module.name = f.name;
+                  fold = f.name;
                   selected = Scan_module.selected plan f.outputs;
-                  visitor = f.visitor;
                 })
               folds,
             View_module.of_codec ~reserved c )
@@ -161,7 +147,8 @@ let checked_walk ~codec ~record ~folds c = function
       clash ~codec (accessors @ fields);
       Some { plan; folds; views }
 
-let v ?(target = `OCaml) ?(simd = false) ?(maps = []) ?folds ~require ~codec c =
+let v ?(target = `OCaml) ?(simd = false) ?(maps = []) ?(folds = []) ~require
+    ~codec c =
   let typs = List.map (fun (path, _, typ) -> (path, typ)) maps in
   let record = record_part ~maps:typs c in
   let walk = walk_part ~maps c in
@@ -181,11 +168,6 @@ let v ?(target = `OCaml) ?(simd = false) ?(maps = []) ?folds ~require ~codec c =
   in
   if simd && target <> `OxCaml then
     refuse ~codec "~simd needs the OxCaml target";
-  let folds =
-    match folds with
-    | Some folds -> folds
-    | None -> [ { name = "fold"; outputs = None; visitor = None } ]
-  in
   clash_folds ~codec ~record folds;
   let walk = checked_walk ~codec ~record ~folds c walk in
   let plan =
@@ -210,6 +192,17 @@ let wide t =
   || match t.walk with Some w -> w.plan.wide | None -> false
 
 (* {1 The implementation} *)
+
+(* The folds of [w], each calling the module [visitors] names for it. *)
+let folds ~visitors w =
+  List.map
+    (fun d ->
+      {
+        Scan_module.name = d.fold;
+        selected = d.selected;
+        visitor = List.assoc d.fold visitors;
+      })
+    w.folds
 
 let text f =
   let b = Buffer.create 4096 in
@@ -243,7 +236,7 @@ let accessor t =
       | None -> Fmt.invalid_arg "Writer: no accessor for %s" f.name)
     t.walk
 
-let body ?decide t =
+let body ?decide ~visitors t =
   let accessor = accessor t in
   (* A record's [size] is a function of the record, as for any shape, bound
      last: the module's own code reads the constant. *)
@@ -272,7 +265,7 @@ let body ?decide t =
           (fun m -> take (View_module.member_name m))
           w.views.root.members;
         let walk =
-          Scan_module.walks ?decide ~target:t.target ~folds:w.folds
+          Scan_module.walks ?decide ~target:t.target ~folds:(folds ~visitors w)
             ?size:w.views.size ~taken w.plan
         in
         (* Without a record's members, the module decodes and encodes the
@@ -297,8 +290,8 @@ let body ?decide t =
   in
   (walk ^ record, views ^ size, views_mask32)
 
-let ml ?decide t =
-  let code, views, _ = body ?decide t in
+let ml ?decide ~visitors t =
+  let code, views, _ = body ?decide ~visitors t in
   let all = code ^ views in
   (* No accessor takes a helper's name. *)
   let uses name = uses all name in
@@ -328,7 +321,7 @@ let ml ?decide t =
 
 (* {1 The interface} *)
 
-let mli t =
+let mli ~visitors t =
   text (fun ppf ->
       (match (t.record, t.walk) with
       | Some (plan, size), _ ->
@@ -345,7 +338,7 @@ let mli t =
       Option.iter
         (fun w ->
           Interface.scan_members ppf ~target:t.target ~plan:w.plan
-            ~folds:w.folds;
+            ~folds:(folds ~visitors w);
           let values =
             if Option.is_some t.record then None
             else
@@ -362,20 +355,17 @@ let views t = Option.map (fun w -> w.views) t.walk
 
 (* {1 The interpreted twin} *)
 
-let twin_ml t =
-  let plan, views, folds =
-    match (t.walk, t.record) with
-    | Some w, _ -> (w.plan, Some w.views, w.folds)
-    | None, Some (plan, _) -> (plan, None, [])
-    | None, None -> assert false
-  in
+(* The plan, views and folds the twin reads. *)
+let twin ~visitors t =
+  match (t.walk, t.record) with
+  | Some w, _ -> (w.plan, Some w.views, folds ~visitors w)
+  | None, Some (plan, _) -> (plan, None, [])
+  | None, None -> assert false
+
+let twin_ml ~visitors t =
+  let plan, views, folds = twin ~visitors t in
   Twin_module.ml ~codec:t.name ~digest:t.digest ~plan ~views ~folds
 
-let twin_mli t =
-  let plan, views, folds =
-    match (t.walk, t.record) with
-    | Some w, _ -> (w.plan, Some w.views, w.folds)
-    | None, Some (plan, _) -> (plan, None, [])
-    | None, None -> assert false
-  in
+let twin_mli ~visitors t =
+  let plan, views, folds = twin ~visitors t in
   Twin_module.mli ~codec:t.name ~plan ~views ~folds

@@ -104,19 +104,17 @@ val fold : ?outputs:string list -> string -> fold
     and hands [outputs] (default: every one, {!outputs}) to a consumer; the
     others are not read unless a check needs them, and every check still runs.
     Its consumer is the visitor the module is written with for [name] (see
-    {!to_ml}): the module [V] of the visitor's source file, with the type [V.t]
-    of its accumulators, [V.valid : V.t -> o1:int64 -> ... -> on:int64 -> V.t]
-    (a presence is a [bool]) and [V.invalid : V.t -> V.t], which the fold calls
-    by name. Its functions are [name buf off len ~init], one frame;
+    {!to_ml}), which every fold has: the module [V] of the visitor's source
+    file, with the type [V.t] of its accumulators,
+    [V.valid : V.t -> o1:int64 -> ... -> on:int64 -> V.t] (a presence is a
+    [bool]) and [V.invalid : V.t -> V.t], which the fold calls by name. Its
+    functions are [name buf off len ~init], one frame;
     [name_frames buf off len ~stride ~init], the [len / stride] frames of
     [stride] bytes at [off]; and [name_index buf ~offs ~lens ~init], the frames
     of [lens.(i)] bytes at [offs.(i)], reading the length of [buf] once. OCaml
     without flambda never inlines a function passed as an argument, so the
     visitor is called with no closure call, and nothing is boxed where the
-    compiler inlines [valid] (docs/execution.md, Generated code). Without a
-    visitor, the fold takes its consumer as arguments:
-    [name buf off len ~invalid ~valid] and
-    [name_frames buf off len ~stride ~init ~invalid ~valid]. *)
+    compiler inlines [valid] (docs/execution.md, Generated code). *)
 
 type t
 (** The type for the module generated from a codec. *)
@@ -132,8 +130,7 @@ val v :
 (** [v ?name ?target ?simd ?folds ?maps c] is the module of [c], named [name]
     (default: the codec's name, split at its words and lower-cased:
     [CapturedIPv4] is [captured_ipv4]), for [target] (default: the compiler the
-    generator runs on), with [folds] (default: one fold [fold] of every output,
-    without a visitor, when the module has folds). The module never refers to
+    generator runs on), with [folds] (default: none). The module never refers to
     [c].
 
     A field under a {!Wire.map} is specialised when [maps] names the map: the
@@ -171,8 +168,8 @@ val name : t -> string
 val to_ml : ?twin:bool -> ?visitors:(string * string) list -> t -> string
 (** [to_ml ?twin ?visitors t] is the source of [t]'s module. Each of [visitors]
     is a fold's name and the source file of its visitor, whose module
-    ([flow_step.ml] is [Flow_step]) the fold calls by name; a fold that none
-    names takes its consumer as arguments.
+    ([flow_step.ml] is [Flow_step]) the fold calls by name; each fold [t]
+    declares has one.
 
     With [~twin:true], it is the source of the module's interpreted twin
     instead, the unit [<name>_codec] beside the module: a functor [Make] over a
@@ -192,8 +189,9 @@ val to_ml : ?twin:bool -> ?visitors:(string * string) list -> t -> string
       let codec = Packet_stack.capture
     end)
     v}
-    Raises [Invalid_argument] for a fold [t] does not declare, and with
-    [~twin:true] for a record the twin cannot reach through one field. *)
+    Raises [Invalid_argument], naming the fold, for a visitor of a fold [t] does
+    not declare and for a fold of [t] no visitor names, and with [~twin:true]
+    for a record the twin cannot reach through one field. *)
 
 val to_mli : ?twin:bool -> ?visitors:(string * string) list -> t -> string
 (** [to_mli ?twin ?visitors t] is the interface of [to_ml ?twin ?visitors t]. *)
@@ -208,7 +206,9 @@ val main : t list -> unit
     fold [FOLD] the visitor of the source file [FILE]: naming the visitor in the
     rule makes dune rebuild the module when it changes. It exits with status 2
     and a message on a file that names no module of [ts] and on a visitor of a
-    fold no written module declares. *)
+    fold no written module declares, and raises [Invalid_argument], as {!to_ml}
+    does, for a fold of a written module no [--visitor] names, before it writes
+    any file. *)
 
 val outputs : 'r Wire.Codec.t -> (string * bool) list
 (** [outputs c] is the outputs a fold of [c] hands out, in declaration order:
@@ -226,7 +226,7 @@ val outputs : 'r Wire.Codec.t -> (string * bool) list
 (** {2 Views}
 
     A module also has the views of its codec: [check b length ~off ~len] runs
-    the checks of [fold] on the record at [off] in the [len] bytes there, in the
+    the checks of a fold on the record at [off] in the [len] bytes there, in the
     buffer [b] of length [length] named by [Wire_runtime.Buf.v], and answers a
     ['b check]. A codec of constant size takes no window: [check b length off]
     checks its record at [off] in [b], as {!Wire.Codec.View.check} does; [ok]
@@ -393,8 +393,9 @@ module Plan : sig
       constant. *)
 
   type values = [ `Int | `Int64 | `Int64_u ]
-  (** How a walk holds integer values: as [int], as [int64] in the OCaml step
-      functions, or as [int64_u] on OxCaml. Positions and sizes are [int]. *)
+  (** How a walk holds integer values: on OCaml as [int] in the walk of a
+      generated module's check and as [int64] in its folds, or as [int64_u] on
+      OxCaml. Positions and sizes are [int]. *)
 
   (** How a span's bound is written. *)
   type bound =
@@ -510,10 +511,10 @@ module Plan : sig
     decision list
   (** [decisions ?target ?folds ?visitors c] is the decisions
       [to_ml ?visitors (v ~target ~folds c)] takes, in the order it writes them,
-      each case of an optional field included, with [target] [`OCaml] and
-      [folds] one fold [fold] of every output by default. A [window] is the
-      variable holding the window's length: the frame's, or a region's size.
-      Raises [Invalid_argument] as {!v} does. *)
+      each case of an optional field included, with [target] [`OCaml] and no
+      fold by default. A [window] is the variable holding the window's length:
+      the frame's, or a region's size. Raises [Invalid_argument] as {!v} and
+      {!to_ml} do. *)
 
   val outputs : t -> output list
   (** [outputs t] is the outputs of [t], in declaration order. *)

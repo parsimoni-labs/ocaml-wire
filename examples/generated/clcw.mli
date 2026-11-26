@@ -93,64 +93,6 @@ val write :
      ~reportvalue] writes the record of these fields at [off] in [buf]. Raises
     [Invalid_argument] if it does not fit, if a value does not fit its field. *)
 
-(** {1:scans Scans} *)
-
-val fold :
-  bytes ->
-  int ->
-  int ->
-  invalid:(unit -> 'a) ->
-  valid:
-    (controlwordtype:int ->
-    clcwversion:int ->
-    statusfield:int ->
-    copineffect:int ->
-    vcid:int ->
-    spare:int ->
-    norf:int ->
-    nobitlock:int ->
-    lockout:int ->
-    wait:int ->
-    retransmit:int ->
-    farmbcounter:int ->
-    spare2:int ->
-    reportvalue:int ->
-    'a) ->
-  'a
-(** [fold buf off len ~invalid ~valid] is [valid] applied to the outputs of the
-    record at [off] in the [len] bytes there, or [invalid ()] if the record or
-    the bounds are bad. *)
-
-val fold_frames :
-  bytes ->
-  int ->
-  int ->
-  stride:int ->
-  init:'a ->
-  invalid:('a -> 'a) ->
-  valid:
-    ('a ->
-    controlwordtype:int ->
-    clcwversion:int ->
-    statusfield:int ->
-    copineffect:int ->
-    vcid:int ->
-    spare:int ->
-    norf:int ->
-    nobitlock:int ->
-    lockout:int ->
-    wait:int ->
-    retransmit:int ->
-    farmbcounter:int ->
-    spare2:int ->
-    reportvalue:int ->
-    'a) ->
-  'a
-(** [fold_frames buf off len ~stride ~init ~invalid ~valid] folds [valid] with
-    the outputs of each record, or [invalid], over the [len / stride] frames of
-    [stride] bytes at [off], each checked on its own, from [init]. Raises
-    [Invalid_argument] if [stride] is not positive or the bounds are bad. *)
-
 (** {1:views Views} *)
 
 type 'b view = private int

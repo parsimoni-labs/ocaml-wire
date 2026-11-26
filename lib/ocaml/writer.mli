@@ -15,7 +15,6 @@ type require = [ `Record | `Walk | `Any ]
 type fold = {
   name : string;
   outputs : string list option;  (** Every output for [None]. *)
-  visitor : string option;  (** The module it calls by name, if any. *)
 }
 (** A fold the module declares. *)
 
@@ -32,24 +31,27 @@ val v :
   'a Wire.Codec.t ->
   t
 (** [v ?target ?simd ?maps ?folds ~require ~codec c] is the module of [c], with
-    [folds] (default one fold named ["fold"] of every output, with no visitor)
-    when the walk covers [c]; see {!Wire_ocaml.v}. Raises [Invalid_argument]
-    naming the field and the reason when [c] has no part [require] names, or
-    when two of the names the module defines would be one. *)
+    [folds] (default none) when the walk covers [c]; see {!Wire_ocaml.v}. Raises
+    [Invalid_argument] naming the field and the reason when [c] has no part
+    [require] names, or when two of the names the module defines would be one.
+*)
 
-val ml : ?decide:(Decision.t -> unit) -> t -> string
-(** [ml ?decide t] is the source of [t]. [decide] is given each decision its
-    walks take, in the order it writes them. *)
+val ml :
+  ?decide:(Decision.t -> unit) -> visitors:(string * string) list -> t -> string
+(** [ml ?decide ~visitors t] is the source of [t], each fold calling the module
+    [visitors] names for it, which names one for each. [decide] is given each
+    decision its walks take, in the order it writes them. *)
 
-val mli : t -> string
-(** [mli t] is the interface of [ml t]. *)
+val mli : visitors:(string * string) list -> t -> string
+(** [mli ~visitors t] is the interface of [ml ~visitors t]. *)
 
 val views : t -> View_module.t option
 (** [views t] is the views of [t], if its walk covers its codec. *)
 
-val twin_ml : t -> string
-(** [twin_ml t] is the source of the interpreted twin of [ml t]: a functor over
-    the codec value that reads it as [t] reads its bytes. *)
+val twin_ml : visitors:(string * string) list -> t -> string
+(** [twin_ml ~visitors t] is the source of the interpreted twin of
+    [ml ~visitors t]: a functor over the codec value that reads it as [t] reads
+    its bytes. *)
 
-val twin_mli : t -> string
-(** [twin_mli t] is the interface of [twin_ml t]. *)
+val twin_mli : visitors:(string * string) list -> t -> string
+(** [twin_mli ~visitors t] is the interface of [twin_ml ~visitors t]. *)

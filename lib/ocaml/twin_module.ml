@@ -130,9 +130,9 @@ let pp_types ppf name =
      @\n"
     (name ^ ".get: the check failed")
 
-(* The arguments [valid] takes from the outputs [o], each found by its place
-   among [all]: each integer as an [int], or with a visitor as an [int64]. *)
-let args ~all ~visitor (selected : output list) =
+(* The arguments the visitor's [valid] takes from the outputs [o], each
+   found by its place among [all]: each integer as an [int64]. *)
+let args ~all (selected : output list) =
   let place (o : output) =
     let rec go i = function
       | [] -> Fmt.invalid_arg "Wire_ocaml: no output %s" o.name
@@ -147,48 +147,28 @@ let args ~all ~visitor (selected : output list) =
          (fun (o : output) ->
            let i = place o in
            if o.is_bool then Fmt.str "~%s:(o.(%d) <> 0L)" o.name i
-           else if visitor then Fmt.str "~%s:o.(%d)" o.name i
-           else Fmt.str "~%s:(Int64.to_int o.(%d))" o.name i)
+           else Fmt.str "~%s:o.(%d)" o.name i)
          selected)
 
 let pp_fold ~all ppf (f : Scan_module.fold) =
-  let n = f.name and o = if f.selected = [] then "_" else "o" in
-  match f.visitor with
-  | None ->
-      Fmt.pf ppf
-        "let %s buf off len ~invalid ~valid =@\n\
-        \  match scan' buf off len with@\n\
-        \  | None -> invalid ()@\n\
-        \  | Some %s -> valid %s@\n\
-         @\n\
-         let %s_frames buf off len ~stride ~init ~invalid ~valid =@\n\
-        \  %s.frames ~name:%S buf off len ~stride ~init (fun acc off len ->@\n\
-        \      match scan' buf off len with@\n\
-        \      | None -> invalid acc@\n\
-        \      | Some %s -> valid acc %s)@\n\
-         @\n"
-        n o
-        (args ~all ~visitor:false f.selected)
-        n gen (n ^ "_frames") o
-        (args ~all ~visitor:false f.selected)
-  | Some m ->
-      Fmt.pf ppf
-        "let %s buf off len ~init =@\n\
-        \  match scan' buf off len with@\n\
-        \  | None -> %s.invalid init@\n\
-        \  | Some %s -> %s.valid init %s@\n\
-         @\n\
-         let %s_frames buf off len ~stride ~init =@\n\
-        \  %s.frames ~name:%S buf off len ~stride ~init (fun acc off len ->@\n\
-        \      %s buf off len ~init:acc)@\n\
-         @\n\
-         let %s_index buf ~offs ~lens ~init =@\n\
-        \  %s.index ~name:%S ~offs ~lens ~init (fun acc off len ->@\n\
-        \      %s buf off len ~init:acc)@\n\
-         @\n"
-        n m o m
-        (args ~all ~visitor:true f.selected)
-        n gen (n ^ "_frames") n n gen (n ^ "_index") n
+  let n = f.name and m = f.visitor in
+  let o = if f.selected = [] then "_" else "o" in
+  Fmt.pf ppf
+    "let %s buf off len ~init =@\n\
+    \  match scan' buf off len with@\n\
+    \  | None -> %s.invalid init@\n\
+    \  | Some %s -> %s.valid init %s@\n\
+     @\n\
+     let %s_frames buf off len ~stride ~init =@\n\
+    \  %s.frames ~name:%S buf off len ~stride ~init (fun acc off len ->@\n\
+    \      %s buf off len ~init:acc)@\n\
+     @\n\
+     let %s_index buf ~offs ~lens ~init =@\n\
+    \  %s.index ~name:%S ~offs ~lens ~init (fun acc off len ->@\n\
+    \      %s buf off len ~init:acc)@\n\
+     @\n"
+    n m o m (args ~all f.selected) n gen (n ^ "_frames") n n gen (n ^ "_index")
+    n
 
 let header ppf ~codec =
   Fmt.pf ppf
