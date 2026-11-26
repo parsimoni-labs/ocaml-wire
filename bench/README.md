@@ -85,7 +85,7 @@ relay does to produce it:
 |---|---|---|
 | `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.Word.check`, `ok` and `get` per header, then `Codec.Word.read` per field, for CLCW too. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
 | `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field. Writing: `write`, which takes the fields' values and tests each bitfield's range, per header |
-| `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
+| `wire.rust` | generated Rust, the module `Wire_rust.v` declares for the same codecs | `check(buf, off)` and `get` per header, then an accessor per field, for CLCW too. Writing: `encode` of a `Record` literal per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
 | `ccsds_primary_header` 0.15 (routing) | hand-written | `PrimaryHeader::from_slice`, then `control.apid()` and `length.length_field()`. Writing: the setters of its three words, then their bytes |
 | `gaia-ccsds-c2a` 1.2 (routing, CLCW) | `modular-bitfield` structs over zerocopy | `PrimaryHeader` through `LayoutVerified::new_unaligned_from_prefix`, as its `SpacePacket` reads it; `CLCW::from_bytes`. Writing: the `with_<field>` builders, then `into_bytes` |
@@ -100,7 +100,7 @@ written as a user of each library writes it, with plain checked indexing,
 and every row gives the same result. `bench/apps/loops.ml` writes the loops
 over the generated OCaml, the same source for OCaml 5 and for OxCaml.
 `bench/apps/cargo/src/main.rs` writes them over the generated Rust, whose
-`Valid::at` checks a header once before its accessors read it, and over the
+`check` checks a header once before its accessors read it, and over the
 crates; the Rust rows of a workload share one loop and differ only in the
 header reader and writer they call.
 No EverParse row runs here: those stay in `make bench-routing`,

@@ -16,12 +16,14 @@ let write file s =
 let () =
   match Sys.argv with
   | [| _; "--rust"; dir |] ->
-      let rs name codec c =
-        write (Filename.concat dir (name ^ ".rs")) (Wire_rust.rs ~codec c)
+      let rs name c =
+        write
+          (Filename.concat dir (name ^ ".rs"))
+          (Wire_rust.to_rs (Wire_rust.v ~name c))
       in
-      rs "space_packet" "Space.packet_codec" Space.packet_codec;
-      rs "tm_frame" "Space.tm_frame_codec" Space.tm_frame_codec;
-      rs "clcw" "Space.clcw_codec" Space.clcw_codec
+      rs "space_packet" Space.packet_codec;
+      rs "tm_frame" Space.tm_frame_codec;
+      rs "clcw" Space.clcw_codec
   | _ ->
       let simd = Sys.getenv_opt "WIRE_SIMD" = Some "1" in
       Wire_ocaml.(

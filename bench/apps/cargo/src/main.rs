@@ -8,9 +8,9 @@
 //!
 //! Reading: routing (`Routing_workload.run_packets`), gateway
 //! (`Gateway_workload.checksum`) and CLCW (`Clcw_workload.run_all`). The
-//! generated Rust reads through `Valid::at`, one bounds check per header,
-//! then its accessors, for routing and gateway; for CLCW through one
-//! `get_<field>_word` and a `<field>_of_word` per field.
+//! generated Rust reads through `check(buf, off)` and `get`, one check per
+//! header, then its accessors, as the OCaml rows call `check`, `ok`, `get`
+//! and the accessors; it writes through `encode` of a `Record`.
 //!
 //! Writing: routing re-stamps every packet's header with a sequence count
 //! kept per route (`Routing_workload.restamp`), gateway builds TM frames
@@ -116,7 +116,7 @@ fn output(len: usize) -> Rc<RefCell<Vec<u8>>> {
 // unsegmented, of these values at `off`.
 
 fn sp_wire_rust(buf: &[u8], off: usize) -> Option<(u16, u16)> {
-    let v = space_packet::Valid::at(buf, off).ok()?;
+    let v = space_packet::check(buf, off).get()?;
     Some((v.apid(), v.datalength()))
 }
 
@@ -139,7 +139,8 @@ fn sp_gaia(buf: &[u8], off: usize) -> Option<(u16, u16)> {
 }
 
 fn stamp_wire_rust(out: &mut [u8], off: usize, apid: u16, seq: u16, dlen: u16) -> Option<()> {
-    space_packet::write(out, off, 0, 0, 1, apid, 3, seq, dlen).ok()
+    let r = space_packet::Record { version: 0, type_: 0, sechdrflag: 1, apid, seqflags: 3, seqcount: seq, datalength: dlen };
+    space_packet::encode(&r, out, off).ok()
 }
 
 fn stamp_spacepackets(out: &mut [u8], off: usize, apid: u16, seq: u16, dlen: u16) -> Option<()> {
@@ -184,7 +185,7 @@ fn stamp_gaia(out: &mut [u8], off: usize, apid: u16, seq: u16, dlen: u16) -> Opt
 
 // Reads: every row shares this loop.
 fn routing(table: &[u8; 2048], buf: &[u8], n: usize, header: impl Fn(&[u8], usize) -> Option<(u16, u16)>) -> Counts {
-    let hdr = space_packet::SIZE;
+    let hdr = space_packet::MIN_SIZE;
     let mut counts = [0u64; 4];
     let mut off = 0;
     for _ in 0..n {
@@ -209,7 +210,7 @@ fn restamp(
     header: impl Fn(&[u8], usize) -> Option<(u16, u16)>,
     stamp: impl Fn(&mut [u8], usize, u16, u16, u16) -> Option<()>,
 ) {
-    let hdr = space_packet::SIZE;
+    let hdr = space_packet::MIN_SIZE;
     let mut seqs = [0u16; 4];
     let mut off = 0;
     for _ in 0..n {
@@ -233,7 +234,7 @@ fn restamp(
 // channel and first header pointer, then the APID and sequence count of each
 // 70-byte packet starting in its data field, folded into an FNV-1a hash.
 const CADU_SIZE: usize = 1115;
-const PKT_SIZE: usize = space_packet::SIZE + 64;
+const PKT_SIZE: usize = space_packet::MIN_SIZE + 64;
 
 // FNV-1a modulo 2^63, as `Gateway_workload.hash_int` computes it in OCaml's
 // 63-bit `int`: the 64-bit basis and prime reduced modulo 2^63, each product
@@ -247,7 +248,7 @@ fn hash_int(state: u64, v: u64) -> u64 {
 }
 
 fn gateway(buf: &[u8], frame: impl Fn(&[u8], usize) -> Option<(u8, u16)>, packet: impl Fn(&[u8], usize) -> Option<(u16, u16)>) -> u64 {
-    let hdr = tm_frame::SIZE;
+    let hdr = tm_frame::MIN_SIZE;
     let data_field_size = CADU_SIZE - hdr;
     let mut checksum = FNV_INIT;
     for f in 0..buf.len() / CADU_SIZE {
@@ -266,7 +267,7 @@ fn gateway(buf: &[u8], frame: impl Fn(&[u8], usize) -> Option<(u8, u16)>, packet
 }
 
 fn frame_wire_rust(buf: &[u8], base: usize) -> Option<(u8, u16)> {
-    let f = tm_frame::Valid::at(buf, base).ok()?;
+    let f = tm_frame::check(buf, base).get()?;
     Some((f.vcid(), f.firsthdrptr()))
 }
 
@@ -276,7 +277,7 @@ fn frame_chronus(buf: &[u8], base: usize) -> Option<(u8, u16)> {
 }
 
 fn packet_wire_rust(buf: &[u8], off: usize) -> Option<(u16, u16)> {
-    let p = space_packet::Valid::at(buf, off).ok()?;
+    let p = space_packet::check(buf, off).get()?;
     Some((p.apid(), p.seqcount()))
 }
 
@@ -299,7 +300,7 @@ fn frame(
     frame_header: impl Fn(&mut [u8], usize, u8, u8, u8, u16) -> Option<()>,
     stamp: impl Fn(&mut [u8], usize, u16, u16, u16) -> Option<()>,
 ) {
-    let hdr = tm_frame::SIZE;
+    let hdr = tm_frame::MIN_SIZE;
     let data_field_size = CADU_SIZE - hdr;
     let mut carry = 0usize;
     let mut p = 0usize;
@@ -310,7 +311,7 @@ fn frame(
         }
         let mut off = base + hdr + carry;
         while off + PKT_SIZE <= base + CADU_SIZE {
-            if stamp(out, off, (p % 2048) as u16, (p % 16384) as u16, (PKT_SIZE - space_packet::SIZE - 1) as u16).is_none() {
+            if stamp(out, off, (p % 2048) as u16, (p % 16384) as u16, (PKT_SIZE - space_packet::MIN_SIZE - 1) as u16).is_none() {
                 return;
             }
             off += PKT_SIZE;
@@ -322,7 +323,20 @@ fn frame(
 }
 
 fn frame_header_wire_rust(out: &mut [u8], base: usize, vcid: u8, mc: u8, vc: u8, fhp: u16) -> Option<()> {
-    tm_frame::write(out, base, 0, 0x1FF, vcid, 1, mc, vc, 0, 0, 0, 3, fhp).ok()
+    let r = tm_frame::Record {
+        version: 0,
+        scid: 0x1FF,
+        vcid,
+        ocfflag: 1,
+        mccount: mc,
+        vccount: vc,
+        sechdrflag: 0,
+        syncflag: 0,
+        packetorder: 0,
+        seglenid: 3,
+        firsthdrptr: fhp,
+    };
+    tm_frame::encode(&r, out, base).ok()
 }
 
 // `TmFrameHeader` is `#[non_exhaustive]`: a header is parsed once from six
@@ -356,10 +370,10 @@ fn chronus_template() -> chronus_gateway::frames::TmFrameHeader {
 fn clcw(buf: &[u8]) -> u64 {
     let mut anomalies = 0u64;
     let mut expected = 0u32;
-    for i in 0..buf.len() / clcw::SIZE {
-        let Ok(w) = clcw::get_lockout_word(buf, i * clcw::SIZE) else { break };
-        let report = clcw::reportvalue_of_word(w) as u32;
-        if clcw::lockout_of_word(w) != 0 || clcw::wait_of_word(w) != 0 || clcw::retransmit_of_word(w) != 0 || report != expected & 0xFF {
+    for i in 0..buf.len() / clcw::MIN_SIZE {
+        let Some(w) = clcw::check(buf, i * clcw::MIN_SIZE).get() else { break };
+        let report = w.reportvalue() as u32;
+        if w.lockout() != 0 || w.wait() != 0 || w.retransmit() != 0 || report != expected & 0xFF {
             anomalies += 1;
         }
         expected = (report + 1) & 0xFF;
@@ -395,9 +409,25 @@ fn farm(i: usize) -> (u8, u8, u8, u8) {
 }
 
 fn report_wire_rust(out: &mut [u8]) {
-    for i in 0..out.len() / clcw::SIZE {
+    for i in 0..out.len() / clcw::MIN_SIZE {
         let (lockout, wait, retransmit, report) = farm(i);
-        if clcw::write(out, i * clcw::SIZE, 0, 0, 0, 1, 7, 0, 0, 0, lockout, wait, retransmit, 0, 0, report).is_err() {
+        let r = clcw::Record {
+            controlwordtype: 0,
+            clcwversion: 0,
+            statusfield: 0,
+            copineffect: 1,
+            vcid: 7,
+            spare: 0,
+            norf: 0,
+            nobitlock: 0,
+            lockout,
+            wait,
+            retransmit,
+            farmbcounter: 0,
+            spare2: 0,
+            reportvalue: report,
+        };
+        if clcw::encode(&r, out, i * clcw::MIN_SIZE).is_err() {
             break;
         }
     }
@@ -437,7 +467,7 @@ fn read(w: &str, buf: &[u8], items: usize, runs: usize, filter: &timing::Filter,
             })
         }
         "clcw" => {
-            assert_eq!(buf.len() / clcw::SIZE, items, "{file} does not hold {items} words");
+            assert_eq!(buf.len() / clcw::MIN_SIZE, items, "{file} does not hold {items} words");
             timing::measure(w, "wire.rust", filter, items, runs, || clcw(black_box(buf)));
             timing::measure(w, "gaia-ccsds-c2a 1.2", filter, items, runs, || clcw_gaia(black_box(buf)))
         }
@@ -477,10 +507,10 @@ fn write(w: &str, buf: &[u8], items: usize, runs: usize, filter: &timing::Filter
             })
         }
         "clcw" => {
-            assert_eq!(buf.len() / clcw::SIZE, items, "{file} does not hold {items} words");
-            let out = output(items * clcw::SIZE);
+            assert_eq!(buf.len() / clcw::MIN_SIZE, items, "{file} does not hold {items} words");
+            let out = output(items * clcw::MIN_SIZE);
             timing::measure(c, "wire.rust", filter, items, runs, || written(&out, report_wire_rust));
-            let out = output(items * clcw::SIZE);
+            let out = output(items * clcw::MIN_SIZE);
             timing::measure(c, "gaia-ccsds-c2a 1.2", filter, items, runs, || written(&out, report_gaia))
         }
         _ => panic!("no workload {w}"),
