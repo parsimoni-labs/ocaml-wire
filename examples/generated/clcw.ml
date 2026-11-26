@@ -147,8 +147,7 @@ let[@inline always] check (_b : 'b Wire_runtime.Buf.t)
     let stop = len in
     check_record ~stop ~off
 
-let size = 4
-let min_size = size
+let min_size = 4
 
 module Value : sig
   type controlwordtype = private int
@@ -413,10 +412,10 @@ let pp ppf (r : t) =
   Format.pp_close_box ppf ()
 
 let[@inline never] short buf off =
-  Wire_runtime.Errors.frame ~size ~len:(Bytes.length buf) off
+  Wire_runtime.Errors.frame ~size:min_size ~len:(Bytes.length buf) off
 
 let[@inline never] fail buf off =
-  if off < 0 || off > Bytes.length buf - size then short buf off;
+  if off < 0 || off > Bytes.length buf - min_size then short buf off;
   no_error ()
 
 let[@inline never] error buf off =
@@ -426,16 +425,16 @@ let[@inline never] error buf off =
       Error (Wire_runtime.Errors.error_of exn)
 
 let[@inline never] too_short buf off =
-  Wire_runtime.Errors.encode_too_short ~name:codec_name ~size
+  Wire_runtime.Errors.encode_too_short ~name:codec_name ~size:min_size
     ~len:(Bytes.length buf) off
 
 let[@inline] is_valid buf off =
-  if off < 0 || off > Bytes.length buf - size then false else true
+  if off < 0 || off > Bytes.length buf - min_size then false else true
 
 let validate buf off = if is_valid buf off then Ok () else error buf off
 
 let decode buf off =
-  if off < 0 || off > Bytes.length buf - size then error buf off
+  if off < 0 || off > Bytes.length buf - min_size then error buf off
   else
     let bw1 = Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32 in
     let f1_controlwordtype = bw1 lsr 31 in
@@ -473,7 +472,7 @@ let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
     f3_statusfield f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock
     f9_lockout f10_wait f11_retransmit f12_farmbcounter f13_spare2
     f14_reportvalue =
-  if off < 0 || off > Bytes.length buf - size then too_short buf off;
+  if off < 0 || off > Bytes.length buf - min_size then too_short buf off;
   Wire_runtime.Errors.check_unsigned ~bits:1 f1_controlwordtype;
   Wire_runtime.Errors.check_unsigned ~bits:2 f2_clcwversion;
   Wire_runtime.Errors.check_unsigned ~bits:3 f3_statusfield;
@@ -509,7 +508,7 @@ let[@inline] write_int buf off ~controlwordtype:f1_controlwordtype
     first_error buf off f1_controlwordtype f2_clcwversion f3_statusfield
       f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait
       f11_retransmit f12_farmbcounter f13_spare2 f14_reportvalue
-  else if off < 0 || off > Bytes.length buf - size then too_short buf off
+  else if off < 0 || off > Bytes.length buf - min_size then too_short buf off
   else begin
     Wire_runtime.Unchecked.set_i32be buf (off + 0)
       (Int32.of_int
@@ -545,7 +544,7 @@ let[@inline] write buf off ~controlwordtype:f1_controlwordtype
   let f12_farmbcounter = (f12_farmbcounter : Value.farmbcounter :> int) in
   let f13_spare2 = (f13_spare2 : Value.spare2 :> int) in
   let f14_reportvalue = (f14_reportvalue : Value.reportvalue :> int) in
-  if off < 0 || off > Bytes.length buf - size then too_short buf off
+  if off < 0 || off > Bytes.length buf - min_size then too_short buf off
   else begin
     Wire_runtime.Unchecked.set_i32be buf (off + 0)
       (Int32.of_int
@@ -581,7 +580,7 @@ let[@inline] write_int_at (b : 'b Wire_runtime.Buf.t)
     first_error buf off f1_controlwordtype f2_clcwversion f3_statusfield
       f4_copineffect f5_vcid f6_spare f7_norf f8_nobitlock f9_lockout f10_wait
       f11_retransmit f12_farmbcounter f13_spare2 f14_reportvalue
-  else if off < 0 || off > len - size then too_short buf off
+  else if off < 0 || off > len - min_size then too_short buf off
   else begin
     Wire_runtime.Unchecked.set_i32be buf (off + 0)
       (Int32.of_int
@@ -620,7 +619,7 @@ let[@inline] write_at (b : 'b Wire_runtime.Buf.t)
   let f12_farmbcounter = (f12_farmbcounter : Value.farmbcounter :> int) in
   let f13_spare2 = (f13_spare2 : Value.spare2 :> int) in
   let f14_reportvalue = (f14_reportvalue : Value.reportvalue :> int) in
-  if off < 0 || off > len - size then too_short buf off
+  if off < 0 || off > len - min_size then too_short buf off
   else begin
     Wire_runtime.Unchecked.set_i32be buf (off + 0)
       (Int32.of_int

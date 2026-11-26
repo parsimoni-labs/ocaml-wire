@@ -63,7 +63,8 @@ let pp_fixed ppf ~m ~(plan : plan) ~size k =
     plan.nodes (fun _ _ -> k ())
 
 let pp_frame ~src ppf on_short =
-  Fmt.pf ppf "off < 0 || off > %s buf - size then %s buf off" src.len on_short
+  Fmt.pf ppf "off < 0 || off > %s buf - min_size then %s buf off" src.len
+    on_short
 
 let all_fields (plan : plan) = fields_of plan.nodes
 
@@ -130,8 +131,9 @@ let pp_decode ?(src = bytes_src) ?(ox = false) ?(value = typed_value) ppf ~plan
     ~size ~head ~fail ~call =
   let fields = all_fields plan in
   let value = value ~src in
-  Fmt.pf ppf "%s =@\n  if off < 0 || off > %s buf - size then %s@\n  else@\n"
-    head src.len fail;
+  Fmt.pf ppf
+    "%s =@\n  if off < 0 || off > %s buf - min_size then %s@\n  else@\n" head
+    src.len fail;
   (* A 32-bit field is handed out as its [int32], bound whether live or not;
      its [int] is live only where a check reads it. *)
   let outputs =
@@ -153,7 +155,7 @@ let pp_validate ~src ppf ~target ~plan ~size =
   let attr = "[@inline]" ^ zero_alloc target in
   Fmt.pf ppf
     "let%s is_valid %s off =@\n\
-    \  if off < 0 || off > %s buf - size then false@\n\
+    \  if off < 0 || off > %s buf - min_size then false@\n\
     \  else@\n"
     attr src.buf src.len;
   let m =
@@ -214,7 +216,8 @@ let short_cold ~src ~live ~size ~ends ~offsets ~where_end =
     }
   in
   let fits n e =
-    Fmt.str "(if %d > avail then %s.frame ~size ~len off else %s)" n errors e
+    Fmt.str "(if %d > avail then %s.frame ~size:min_size ~len off else %s)" n
+      errors e
   in
   let m = cold ~src ~live in
   {
@@ -230,7 +233,8 @@ let short_cold ~src ~live ~size ~ends ~offsets ~where_end =
    its first check that fails, run on the bytes there are, else the frame's. *)
 let pp_short ~src ppf ~target ~plan ~size =
   if not (has_checks plan) then
-    Fmt.pf ppf "let%s short %s off =@\n  %s.frame ~size ~len:(%s buf) off@\n@\n"
+    Fmt.pf ppf
+      "let%s short %s off =@\n  %s.frame ~size:min_size ~len:(%s buf) off@\n@\n"
       (cold_attr target) src.buf errors src.len
   else begin
     let tmp =
@@ -241,7 +245,7 @@ let pp_short ~src ppf ~target ~plan ~size =
       \  let len = %s buf in@\n\
       \  if off >= 0 then begin@\n\
       \    let avail = len - off in@\n\
-      \    let tmp = Bytes.make size '\\000' in@\n\
+      \    let tmp = Bytes.make min_size '\\000' in@\n\
       \    for i = 0 to avail - 1 do@\n\
       \      %s.set_u8 tmp i (%s.u8 buf (off + i))@\n\
       \    done;@\n\
@@ -262,14 +266,14 @@ let pp_short ~src ppf ~target ~plan ~size =
     in
     start ~m ~ppf ~ranges:plan.ranges ~base:"0" ~limit:"len" ~known:size nodes
       (fun _ _ -> Fmt.pf ppf "()@\n");
-    Fmt.pf ppf "  end;@\n  %s.frame ~size ~len off@\n@\n" errors
+    Fmt.pf ppf "  end;@\n  %s.frame ~size:min_size ~len off@\n@\n" errors
   end
 
 let pp_cold ~src ppf ~target ~plan ~size =
   pp_short ~src ppf ~target ~plan ~size;
   Fmt.pf ppf
     "let%s fail %s off =@\n\
-    \  if off < 0 || off > %s buf - size then short buf off;@\n"
+    \  if off < 0 || off > %s buf - min_size then short buf off;@\n"
     (cold_attr target) src.buf src.len;
   let m = cold ~src ~live:(live ~cold:true plan ~outputs:[]) in
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "no_error ()@\n");
@@ -281,7 +285,7 @@ let pp_cold ~src ppf ~target ~plan ~size =
     \  | exception exn when %s.is_error exn -> Error (%s.error_of exn)@\n\
      @\n\
      let%s too_short %s off =@\n\
-    \  %s.encode_too_short ~name:codec_name ~size ~len:(%s buf) off@\n\
+    \  %s.encode_too_short ~name:codec_name ~size:min_size ~len:(%s buf) off@\n\
      @\n"
     src.buf errors errors (cold_attr target) src.buf errors src.len
 
@@ -690,7 +694,7 @@ let pp_stores ?len ?ox ~src ppf ~plan ~in_range fields =
   | None -> Fmt.pf ppf "  if %a@\n  else begin@\n" (pp_frame ~src) "too_short"
   | Some len ->
       Fmt.pf ppf
-        "  if off < 0 || off > %s - size then too_short buf off@\n\
+        "  if off < 0 || off > %s - min_size then too_short buf off@\n\
         \  else begin@\n"
         len);
   stores ?ox ~src ppf fields;
@@ -1182,7 +1186,7 @@ let pp_view_with ~src ppf ~target ~plan ~size ~b ~live =
   in
   Fmt.pf ppf "@\n  let[@inline] with_ %s len off %s =@\n" b k;
   pp_bind_len ~src ppf ~live;
-  Fmt.pf ppf "    if off < 0 || off > len - size then fail ()@\n    else@\n";
+  Fmt.pf ppf "    if off < 0 || off > len - min_size then fail ()@\n    else@\n";
   let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"fail ()" () in
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "ok off@\n")
 
@@ -1192,11 +1196,12 @@ let pp_view_with ~src ppf ~target ~plan ~size ~b ~live =
 let pp_view_check ~src ppf ~target ~plan ~size ~live =
   pp_bind_len ~src ppf ~live;
   if has_checks plan then begin
-    Fmt.pf ppf "    if off < 0 || off > len - size then refused@\n    else@\n";
+    Fmt.pf ppf
+      "    if off < 0 || off > len - min_size then refused@\n    else@\n";
     let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"refused" () in
     pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "off@\n")
   end
-  else Fmt.pf ppf "    if off > len - size then refused else off@\n"
+  else Fmt.pf ppf "    if off > len - min_size then refused else off@\n"
 
 (* A view is a record checked in a named buffer: [View.check b len off] runs
    the frame check against [len], the buffer's length read once by the caller,
@@ -1591,7 +1596,7 @@ let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
     ~size =
   let views = Option.is_some accessor in
   let fields = all_fields plan in
-  Fmt.pf ppf "let size = %d@\nlet min_size = size@\n@\n" size;
+  Fmt.pf ppf "let min_size = %d@\n@\n" size;
   pp_values ppf fields;
   pp_record ~maps ppf fields;
   pp_printer ppf fields;
