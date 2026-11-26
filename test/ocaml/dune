@@ -135,6 +135,7 @@
  (modules
   test
   test_wire_ocaml
+  test_get
   test_view_module
   test_writer
   test_value_module
