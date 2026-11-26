@@ -583,11 +583,13 @@ let length_of s =
   else "Bytes.length buf"
 
 (* The loop of [fold_step_index] that {!pp_fold_index_ahead} writes to
-   [out]: its target, the bytes [need] its frames are known to hold, the fields [used]
-   it reads ahead and their values at a frame start, the walk [body] of a
-   frame that holds [need] bytes and [within], the walk of any other. *)
+   [out]: its name, its target, the bytes [need] its frames are known to
+   hold, the fields [used] it reads ahead and their values at a frame start,
+   the walk [body] of a frame that holds [need] bytes and [within], the walk
+   of any other. *)
 type index_loop = {
   out : Format.formatter;
+  index : string;
   unboxed : bool;
   need : int;
   used : (string * (string -> string)) list;
@@ -606,56 +608,109 @@ let index_mutable l v e =
 
 let index_zero l = if l.unboxed then "#0L" else "0L"
 
-(* The frame at index [i] as the variables suffixed [x]: its start, its
-   length, [known] when it lies in the buffer and holds [need] bytes, and
-   then the fields read ahead, else zero. On OxCaml the bounds are tested as
+(* The fields read ahead of a frame: one function each, or on OxCaml one for
+   all of several, which loads them under one test, as an unboxed tuple. *)
+let ahead_tuple l =
+  match l.used with _ :: _ :: _ when l.unboxed -> true | _ -> false
+
+(* The function that reads ahead the [k]th field of [l]: [_ahead] when one
+   reads them all. *)
+let ahead_name l k =
+  match l.used with
+  | [ _ ] -> l.index ^ "_ahead"
+  | _ when ahead_tuple l -> l.index ^ "_ahead"
+  | _ -> Fmt.str "%s_ahead_%d" l.index k
+
+(* The functions the loop of [l] calls on each frame, so that none of its
+   functions tests more than a few conditions: [_known], whether a frame
+   lies in the buffer and holds [need] bytes; the fields read ahead of a
+   known frame, else zero; and [_frame], the walk of a frame, [body] where
+   it is known and [within] otherwise. On OxCaml the bounds are tested as
    the sign of one [logor] of [int64_u]s, which hold the differences of two
    [int]s without wrapping. *)
-let pp_index_next l x i =
-  let ppf = l.out and zero = index_zero l in
+let pp_index_functions l ~buf =
+  let ppf = l.out and zero = index_zero l and index = l.index in
+  let pos v = if l.unboxed then Fmt.str "(%s : int64_u)" v else v in
   if l.unboxed then
     Fmt.pf ppf
-      "let base%s = U.of_int (Array.unsafe_get offs %s) in@\n\
-       let stop%s = U.of_int (Array.unsafe_get lens %s) in@\n\
-       let known%s = U.compare (U.logor (U.logor base%s (U.sub (U.sub length \
-       base%s) stop%s)) (U.sub stop%s #%dL)) #0L >= 0 in@\n"
-      x i x i x x x x x l.need
+      "let[@inline always] %s_known ~(length : int64_u) %s %s =@\n\
+       U.compare (U.logor (U.logor base (U.sub (U.sub length base) stop)) \
+       (U.sub stop #%dL)) #0L >= 0@\n\
+       @\n"
+      index (pos "base") (pos "stop") l.need
   else
     Fmt.pf ppf
-      "let base%s = Array.unsafe_get offs %s in@\n\
-       let stop%s = Array.unsafe_get lens %s in@\n\
-       let known%s = base%s >= 0 && stop%s >= %d && stop%s <= length - base%s \
-       in@\n"
-      x i x i x x x l.need x x;
-  let one (v, value) =
-    Fmt.pf ppf "let %s%s = if known%s then %s else %s in@\n" v x x
-      (value ("base" ^ x))
-      zero
-  in
-  match l.used with
-  | _ :: _ :: _ when l.unboxed ->
-      let list f = String.concat ", " (List.map f l.used) in
-      Fmt.pf ppf "let #(%s) = if known%s then #(%s) else #(%s) in@\n"
-        (list (fun (v, _) -> v ^ x))
-        x
-        (list (fun (_, value) -> value ("base" ^ x)))
-        (list (fun _ -> zero))
-  | used -> List.iter one used
+      "let[@inline always] %s_known ~length base stop =@\n\
+       base >= 0 && stop >= %d && stop <= length - base@\n\
+       @\n"
+      index l.need;
+  if ahead_tuple l then begin
+    let list f = String.concat ", " (List.map f l.used) in
+    Fmt.pf ppf
+      "let[@inline always] %s_ahead %s ~known %s =@\n\
+       if known then #(%s) else #(%s)@\n\
+       @\n"
+      index buf (pos "base")
+      (list (fun (_, value) -> value "base"))
+      (list (fun _ -> zero))
+  end
+  else
+    List.iteri
+      (fun k (_, value) ->
+        Fmt.pf ppf
+          "let[@inline always] %s %s ~known %s =@\n\
+           if known then %s else %s@\n\
+           @\n"
+          (ahead_name l k) buf (pos "base") (value "base") zero)
+      l.used;
+  let int v = if l.unboxed then Fmt.str "(U.to_int %s)" v else v in
+  Fmt.pf ppf
+    "let[@inline always] %s_frame %s ~%s ~known ~%s ~%s ~current%s =@\n\
+     if known then (@\n\
+     %s) else %s buf ~length %s %s ~init:current@\n\
+     @\n"
+    index buf
+    (if l.unboxed then "(length : int64_u)" else "length")
+    (pos "base") (pos "stop")
+    (String.concat "" (List.map (fun (v, _) -> " ~" ^ pos v) l.used))
+    l.body l.within (int "base") (int "stop")
+
+(* The frame at index [i] as the variables suffixed [x]: its start, its
+   length, [known] when it lies in the buffer and holds [need] bytes, and
+   then the fields read ahead, else zero. *)
+let pp_index_next l x i =
+  let ppf = l.out and index = l.index in
+  let pos e = if l.unboxed then Fmt.str "U.of_int (%s)" e else e in
+  Fmt.pf ppf
+    "let base%s = %s in@\n\
+     let stop%s = %s in@\n\
+     let known%s = %s_known ~length base%s stop%s in@\n"
+    x
+    (Fmt.kstr pos "Array.unsafe_get offs %s" i)
+    x
+    (Fmt.kstr pos "Array.unsafe_get lens %s" i)
+    x index x x;
+  if ahead_tuple l then
+    Fmt.pf ppf "let #(%s) = %s buf ~known:known%s base%s in@\n"
+      (String.concat ", " (List.map (fun (v, _) -> v ^ x) l.used))
+      (ahead_name l 0) x x
+  else
+    List.iteri
+      (fun k (v, _) ->
+        Fmt.pf ppf "let %s%s = %s buf ~known:known%s base%s in@\n" v x
+          (ahead_name l k) x x)
+      l.used
 
 (* The walk of the frame suffixed [x], whose variables [carried] reads from
    the loop's references. *)
 let pp_index_walk ?(carried = false) l x =
-  let ppf = l.out and read = index_read l in
+  let read = index_read l in
   let v name = if carried then read (name ^ x) else name ^ x in
-  let int name =
-    if l.unboxed then Fmt.str "(U.to_int %s)" (v name) else v name
-  in
-  Fmt.pf ppf "acc %s (if %s then (@\nlet base = %s in@\n" (index_assign l)
-    (v "known") (v "base");
-  if mentions "stop" l.body then Fmt.pf ppf "let stop = %s in@\n" (v "stop");
-  List.iter (fun (n, _) -> Fmt.pf ppf "let %s = %s in@\n" n (v n)) l.used;
-  Fmt.pf ppf "let current = %s in@\n%s) else %s buf ~length %s %s ~init:%s)"
-    (read "acc") l.body l.within (int "base") (int "stop") (read "acc")
+  Fmt.pf l.out
+    "acc %s %s_frame buf ~length ~known:%s ~base:%s ~stop:%s ~current:%s%s"
+    (index_assign l) l.index (v "known") (v "base") (v "stop") (read "acc")
+    (String.concat ""
+       (List.map (fun (n, _) -> Fmt.str " ~%s:%s" n (v n)) l.used))
 
 (* The frames of the index, two an iteration, so the loop polls and tests
    its bound once per two frames, the next frame read before the current
@@ -703,8 +758,21 @@ let pp_fold_index_ahead s ~within ~m ~need ~ahead =
       in
       let used = List.filter (fun (v, _) -> mentions v body) ahead in
       let l =
-        { out = s.ppf; unboxed = s.m.num = Unboxed; need; used; body; within }
+        {
+          out = s.ppf;
+          index;
+          unboxed = s.m.num = Unboxed;
+          need;
+          used;
+          body;
+          within;
+        }
       in
+      List.iter
+        (fun n -> Hashtbl.replace s.taken n ())
+        ((index ^ "_known") :: (index ^ "_frame")
+        :: List.mapi (fun k _ -> ahead_name l k) used);
+      pp_index_functions l ~buf:s.m.src.buf;
       Fmt.pf s.ppf
         "let[@inline always] %s %s ~(offs : int array) ~(lens : int array) \
          ~init =@\n\

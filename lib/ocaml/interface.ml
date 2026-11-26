@@ -566,7 +566,7 @@ let pp_visitor_fold ppf ~target ~plan b n m selected =
   pp_val ~portable:false target ppf (n ^ "_index")
     (arrows [ b; "offs:int array"; "lens:int array"; "init:" ^ t; t ])
     (Fmt.str
-       "[%s_index buf ~offs ~lens ~init] folds [%s] over the frames of \
+       "[%s_index buf ~offs ~lens ~init] folds {!val-%s} over the frames of \
         [lens.(i)] bytes at [offs.(i)], in order, from [init]: a frame whose \
         bounds are bad gives [%s.invalid]. The length of [buf] is read once. \
         Raises [Invalid_argument] if [offs] and [lens] differ in length."
@@ -574,7 +574,7 @@ let pp_visitor_fold ppf ~target ~plan b n m selected =
   pp_val ~portable:false target ppf (n ^ "_frames")
     (arrows [ b; "int"; "int"; "stride:int"; "init:" ^ t; t ])
     (Fmt.str
-       "[%s_frames buf off len ~stride ~init] folds [%s] over the [len / \
+       "[%s_frames buf off len ~stride ~init] folds {!val-%s} over the [len / \
         stride] frames of [stride] bytes at [off], each checked on its own, \
         from [init]. Raises [Invalid_argument] if [stride] is not positive or \
         the bounds are bad."
