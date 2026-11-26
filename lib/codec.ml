@@ -1233,54 +1233,62 @@ let[@inline always] extract (bf : bitfield) (word : Optint.t) =
 
 (* -- Record words -- *)
 
-type 'r word = 'r Codec_run.word
-type ('a, 'r) part = ('a, 'r) Codec_run.part
+module Word = struct
+  type 'r codec = 'r t
+  type ('a, 'r) codec_field = ('a, 'r) field
+  type 'r t = 'r Codec_run.Word.t
+  type 'r reader = 'r Codec_run.Word.reader
+  type 'r check = 'r Codec_run.Word.check
+  type ('a, 'r) field = ('a, 'r) Codec_run.Word.field
 
-let word_size ~op (codec : _ t) =
-  match (compiled codec).wire_size with
-  | Fixed n when 8 * n < Sys.int_size -> n
-  | Fixed n ->
-      Fmt.invalid_arg "%s: codec %S has %d bytes, more than an int holds" op
-        codec.name n
-  | Variable _ ->
-      Fmt.invalid_arg "%s: codec %S is not of a fixed size" op codec.name
+  let size ~op (codec : _ codec) =
+    match (compiled codec).wire_size with
+    | Fixed n when 8 * n < Sys.int_size -> n
+    | Fixed n ->
+        Fmt.invalid_arg "%s: codec %S has %d bytes, more than an int holds" op
+          codec.name n
+    | Variable _ ->
+        Fmt.invalid_arg "%s: codec %S is not of a fixed size" op codec.name
 
-type 'r word_reader = 'r Codec_run.reader
+  (* The extent of each field of [codec], in order, which places the error of
+     a record a buffer cuts as [get] places it. *)
+  let fields (codec : _ codec) =
+    let access = (compiled codec).field_access in
+    List.filter_map
+      (fun (Types.Field { field_name; field_typ; _ }) ->
+        Option.bind field_name (fun name ->
+            Option.bind (List.assoc_opt name access) (fun (_, access) ->
+                Option.map
+                  (fun (at, width) -> (name, at, width))
+                  (immediate_extent field_typ access))))
+      codec.struct_fields
 
-(* The extent of each field of [codec], in order, which places the error of a
-   record a buffer cuts as [get] places it. *)
-let word_fields (codec : _ t) =
-  let access = (compiled codec).field_access in
-  List.filter_map
-    (fun (Types.Field { field_name; field_typ; _ }) ->
-      Option.bind field_name (fun name ->
-          Option.bind (List.assoc_opt name access) (fun (_, access) ->
-              Option.map
-                (fun (at, width) -> (name, at, width))
-                (immediate_extent field_typ access))))
-    codec.struct_fields
+  let reader (codec : 'r codec) : 'r reader =
+    let n = size ~op:"Codec.Word.reader" codec in
+    Codec_run.Word.reader n ~fields:(fields codec)
 
-let word_reader (codec : 'r t) : 'r word_reader =
-  let n = word_size ~op:"Codec.word_reader" codec in
-  Codec_run.reader n ~fields:(word_fields codec)
+  let check = Codec_run.Word.check
+  let ok = Codec_run.Word.ok
+  let get = Codec_run.Word.get
+  let error = Codec_run.Word.error
 
-let read_word = Codec_run.read_word
+  let field (type a r) (codec : r codec) (f : (a, r) codec_field) : (a, r) field
+      =
+    let n = size ~op:"Codec.Word.field" codec in
+    match slot_of ~n codec f with
+    | None ->
+        Fmt.invalid_arg
+          "Codec.Word.field: field %S of codec %S is not a big-endian integer \
+           or a bitfield of a byte or a big-endian 16- or 32-bit word"
+          f.name codec.name
+    | Some s ->
+        let signed =
+          match f.typ with Int8 | Int16 _ | Int32 _ -> true | _ -> false
+        in
+        Codec_run.Word.field s.eq ~pos:s.pos ~width:s.width ~signed
 
-let word_part (type a r) (codec : r t) (f : (a, r) field) : (a, r) part =
-  let n = word_size ~op:"Codec.word_part" codec in
-  match slot_of ~n codec f with
-  | None ->
-      Fmt.invalid_arg
-        "Codec.word_part: field %S of codec %S is not a big-endian integer or \
-         a bitfield of a byte or a big-endian 16- or 32-bit word"
-        f.name codec.name
-  | Some s ->
-      let signed =
-        match f.typ with Int8 | Int16 _ | Int32 _ -> true | _ -> false
-      in
-      Codec_run.part s.eq ~pos:s.pos ~width:s.width ~signed
-
-let of_word = Codec_run.of_word
+  let read = Codec_run.Word.read
+end
 
 (* -- Snapshot: batch bitfield access -- *)
 

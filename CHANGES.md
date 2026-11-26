@@ -32,8 +32,11 @@
   `Invalid_argument` instead of reading in front of the record. Match on the
   result before `extract` or `<field>_of_word` (#568, @samoht)
 
-- `Wire.Codec.read_word r buf off` answers `('r word, Error.t) result`
-  (#569, @samoht)
+- `Wire.Codec.word_reader`, `read_word`, `word_part` and `of_word` are
+  `Codec.Word.reader`, `check`, `field` and `read`: `check r buf off` never
+  raises and allocates nothing; test `Codec.Word.ok`, take the word with
+  `Codec.Word.get`, and ask `Codec.Word.error` for the error of a refused
+  record (#569, @samoht)
 
 - `read_<field>` and `view_<field>` of a field under a map, in a module
   `Wire_ocaml` writes, answer `('a, Wire.Error.t) result`: bytes rewritten
@@ -163,9 +166,8 @@
 - `Wire.Codec.writer`: write many fixed-size records from a template and the
   fields that vary (#496, @samoht)
 
-- `Wire.Codec.word_reader`, `read_word`, `word_part` and `of_word`: read a
-  record of at most 7 bytes as one `int`, then take each field from it (#496,
-  @samoht)
+- `Wire.Codec.Word`: read a record of at most 7 bytes as one `int`, then
+  take each field from it (#496, @samoht)
 
 - `wire.ocaml`: generate one OCaml module per codec, of any shape the walk
   covers, that links only the new `wire.runtime` and builds on OCaml,

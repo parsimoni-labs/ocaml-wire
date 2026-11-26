@@ -14,9 +14,9 @@
       for untrusted input: a field is read only from a record that passed, in
       the buffer it passed in.
 
-    - {!word_reader} and {!load_word} read the fields of a short fixed header
-      from one word, with a bounds check and no other check. They are faster
-      than {!View} on records shorter than 8 bytes; see {!type-word_reader}.
+    - {!Word} checks that a short fixed header lies in the buffer and reads it
+      as one word, with no other check. It is faster than {!View} on records
+      shorter than 8 bytes.
 
     - {!get} and {!set} read and write one field in place, for bytes the program
       wrote itself. {!get} fires the field's [~action] (if any). Neither checks
@@ -664,44 +664,97 @@ val extract : bitfield -> Optint.t -> int
 (** [extract bf word] extracts the field from a pre-loaded word value. Pure
     shift+mask, no memory access. *)
 
-type 'r word = private int
-(** The bytes of a record of a ['r] codec, big-endian, in an [int]. *)
+(** Records of at most 7 bytes read as one word.
 
-type 'r word_reader
-(** A reader of the records of a ['r] codec as words.
+    A check of a record of a fixed size that fits an [int] with a bit to spare
+    reads its bytes, big-endian, into one [int], with one bounds test and, where
+    the buffer holds 8 bytes from the record on, one load; each field is then
+    two shifts and a mask. A check tests no constraint of the record: on
+    untrusted input use {!View}. A word check stays for short fixed headers,
+    such as the 6-byte space packet and frame headers of [bench/routing] and
+    [bench/gateway]: a view reads a field of a frame shorter than 8 bytes out of
+    line, where a word is read once and each field taken from it inline.
 
-    The record is read with a bounds check and no other check; on untrusted
-    input use {!View}. The word readers stay for unchecked reads of short fixed
-    headers, such as the 6-byte space packet and frame headers of
-    [bench/routing] and [bench/gateway]: a view reads a field of a frame shorter
-    than 8 bytes out of line, where a word reader reads the header once and
-    takes each field from it inline. *)
+    {[
+    open Wire
 
-val word_reader : 'r t -> 'r word_reader
-(** [word_reader c] reads the records of [c] with {!read_word}. Raises
-    [Invalid_argument] when [c] is not of a fixed size or has more bytes than
-    fit an [int] with a bit to spare (7 on a 64-bit host). *)
+    type hdr = { kind : int; len : UInt16.t }
 
-val read_word : 'r word_reader -> bytes -> int -> ('r word, Error.t) result
-(** [read_word r buf off] is the record at [off], read with one bounds check
-    and, where [buf] holds 8 bytes from [off] on, one load. Read its fields with
-    {!of_word}. It is a function the caller's compiler knows, so the load is
-    inlined into the caller's loop. Where [buf] does not hold the record at
-    [off], it is the error {!get} answers for the first field [buf] cuts. Raises
-    [Invalid_argument] on a negative offset, which is misuse. *)
+    let kind = Codec.(Field.v "kind" (bits ~width:8 U8) $ fun h -> h.kind)
+    let len = Codec.(Field.v "len" uint16be $ fun h -> h.len)
 
-type ('a, 'r) part
-(** A field of a record word. *)
+    let codec =
+      Codec.v "Hdr" (fun kind len -> { kind; len }) Codec.[ kind; len ]
 
-val word_part : 'r t -> ('a, 'r) field -> ('a, 'r) part
-(** [word_part c f] is field [f] of the words {!word_reader} reads. Raises
-    [Invalid_argument] as {!word_reader} does, and when [f] is not one of [c]'s
-    or is not a big-endian integer or a bitfield of a byte or a big-endian 16-
-    or 32-bit word. *)
+    let reader = Codec.Word.reader codec
+    let w_len = Codec.Word.field codec len
 
-val of_word : ('a, 'r) part -> 'r word -> 'a
-(** [of_word p w] is the field [p] of [w]: two shifts and a mask, with no memory
-    access but the part's own. *)
+    let len_of buf off =
+      let k = Codec.Word.check reader buf off in
+      if Codec.Word.ok k then Ok (Codec.Word.read w_len (Codec.Word.get k))
+      else Error (Codec.Word.error reader buf off)
+
+    let () =
+      assert (len_of (Bytes.of_string "\x05\x00\x0c") 0 = Ok (UInt16.v 12));
+      assert (Result.is_error (len_of (Bytes.of_string "\x05") 0))
+    ]} *)
+module Word : sig
+  type 'r codec := 'r t
+  type ('a, 'r) codec_field := ('a, 'r) field
+
+  type 'r t = private int
+  (** The type for the bytes of a record of a ['r] codec, big-endian. *)
+
+  type 'r reader
+  (** The type for readers of the records of a ['r] codec. *)
+
+  val reader : 'r codec -> 'r reader
+  (** [reader c] reads the records of [c]. Raises [Invalid_argument] when [c] is
+      not of a fixed size or has more bytes than fit an [int] with a bit to
+      spare (7 on a 64-bit host, 3 on a 31- or 32-bit one). *)
+
+  type 'r check = private int
+  (** The type for the results of checking a record of a ['r] codec: its word,
+      or a negative [int] where it was refused. *)
+
+  val check : 'r reader -> bytes -> int -> 'r check
+  (** [check r buf off] is the record of [r] at [off] in [buf]. It is a function
+      the caller's compiler knows, so the load is inlined into the caller's
+      loop.
+
+      [check] never raises: a negative [off] or a record [buf] does not hold is
+      refused. Its error is {!error}. *)
+
+  val ok : 'r check -> bool
+  (** [ok k] is [true] iff [k] accepted its record. *)
+
+  val get : 'r check -> 'r t
+  (** [get k] is the word of the record [k] accepted.
+
+      Raises [Invalid_argument] if [ok k] is [false]. Test {!ok} first: a
+      refused record is input, not misuse. *)
+
+  val error : 'r reader -> bytes -> int -> Error.t
+  (** [error r buf off] is the error of a record {!check} refused: the error
+      {!Codec.get} answers for the first field [buf] cuts. Out of line, for the
+      slow path.
+
+      Raises [Invalid_argument] on a negative [off], as {!Codec.get} does, and
+      if {!check} accepts the record. *)
+
+  type ('a, 'r) field
+  (** The type for fields of type ['a] of the words of a ['r] codec. *)
+
+  val field : 'r codec -> ('a, 'r) codec_field -> ('a, 'r) field
+  (** [field c f] is the field [f] of the words of [c]. Raises
+      [Invalid_argument] as {!reader} does, and when [f] is not one of [c]'s or
+      is not a big-endian integer or a bitfield of a byte or a big-endian 16- or
+      32-bit word. *)
+
+  val read : ('a, 'r) field -> 'r t -> 'a
+  (** [read f w] is the field [f] of [w]: two shifts and a mask, with no memory
+      access but the field's own. *)
+end
 
 val blit_string_exact : int -> bytes -> int -> string -> int
 (** [blit_string_exact n buf off s] writes [s] into [buf] at [off] and returns

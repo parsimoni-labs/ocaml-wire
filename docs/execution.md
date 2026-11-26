@@ -101,10 +101,11 @@ codec is built, so no input can break it.
 - **Input never raises `Invalid_argument`.** Bad bytes give a parse error;
   `Invalid_argument` is for misuse of the API (a negative offset, a missing
   `env`). A reader that takes its record's offset from the caller, such as
-  `Codec.get`, `Codec.load_word`, `Codec.read_word` or `Get.<field>_word`,
-  answers a buffer that cuts the bytes it reads with the end of input of the
-  first field cut, as `Codec.get` answers it for that field, and raises only
-  on a negative offset.
+  `Codec.get`, `Codec.load_word` or `Get.<field>_word`, answers a buffer that
+  cuts the bytes it reads with the end of input of the first field cut, as
+  `Codec.get` answers it for that field, and raises only on a negative
+  offset. `Codec.Word.check` refuses such a buffer and a negative offset, and
+  `Codec.Word.error` answers the error `Codec.get` answers.
 - **Bytes rewritten after a check are input.** A read of a checked record
   (`read_<field>` of a `Valid.t`, `view_<field>` of a view) reads its bytes
   again with no check of their own, and never raises on them. A field under

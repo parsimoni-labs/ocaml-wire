@@ -1,6 +1,6 @@
 (* TM frame reassembly: the frame stream and the walk over the packets each
-   frame carries, each header read by Wire's [Codec.read_word] and its
-   fields taken with [Codec.of_word]. *)
+   frame carries, each header checked by Wire's [Codec.Word.check] and its
+   fields taken with [Codec.Word.read]. *)
 
 module C = Wire.Codec
 
@@ -71,12 +71,14 @@ let generate_frames n =
   (buf, !total_pkts)
 
 (* Each header is read once, then the fields the walk needs taken from it. *)
-let frame_header = C.word_reader Space.tm_frame_codec
-let p_vcid = C.word_part Space.tm_frame_codec cf_tf_vcid
-let p_fhp = C.word_part Space.tm_frame_codec cf_tf_first_hdr
-let packet_header = C.word_reader Space.packet_codec
-let p_apid = C.word_part Space.packet_codec cf_sp_apid
-let p_seq = C.word_part Space.packet_codec cf_sp_seq_count
+module W = C.Word
+
+let frame_header = W.reader Space.tm_frame_codec
+let p_vcid = W.field Space.tm_frame_codec cf_tf_vcid
+let p_fhp = W.field Space.tm_frame_codec cf_tf_first_hdr
+let packet_header = W.reader Space.packet_codec
+let p_apid = W.field Space.packet_codec cf_sp_apid
+let p_seq = W.field Space.packet_codec cf_sp_seq_count
 
 (* The packets of the frame at [base], whose first header pointer is [fhp]. *)
 let walk_packets buf base ~fhp on_packet =
@@ -84,13 +86,15 @@ let walk_packets buf base ~fhp on_packet =
   let off = ref (data_start + fhp) in
   let data_end = data_start + data_field_size in
   while !off + pkt_size <= data_end do
-    match C.read_word packet_header buf !off with
-    | Ok w ->
-        let apid = C.of_word p_apid w in
-        let seq = C.of_word p_seq w in
-        on_packet apid seq;
-        off := !off + pkt_size
-    | Error _ -> off := data_end
+    let k = W.check packet_header buf !off in
+    if W.ok k then begin
+      let w = W.get k in
+      let apid = W.read p_apid w in
+      let seq = W.read p_seq w in
+      on_packet apid seq;
+      off := !off + pkt_size
+    end
+    else off := data_end
   done
 
 type state = {
@@ -103,13 +107,14 @@ type state = {
 let state buf =
   let n_frames = Bytes.length buf / cadu_size in
   let scan_frame buf base =
-    match C.read_word frame_header buf base with
-    | Ok w ->
-        let vcid = C.of_word p_vcid w in
-        let fhp = C.of_word p_fhp w in
-        ignore (Sys.opaque_identity vcid);
-        walk_packets buf base ~fhp (fun _apid _seq -> ())
-    | Error _ -> ()
+    let k = W.check frame_header buf base in
+    if W.ok k then begin
+      let w = W.get k in
+      let vcid = W.read p_vcid w in
+      let fhp = W.read p_fhp w in
+      ignore (Sys.opaque_identity vcid);
+      walk_packets buf base ~fhp (fun _apid _seq -> ())
+    end
   in
   let scan_once, reset_cycle =
     Bench_lib.cycling ~data:buf ~n_items:n_frames ~size:cadu_size scan_frame
@@ -126,23 +131,26 @@ let checksum state =
   let checksum = ref checksum_init in
   for frame = 0 to state.n_frames - 1 do
     let base = frame * cadu_size in
-    match C.read_word frame_header buf base with
-    | Ok w ->
-        let fhp = C.of_word p_fhp w in
-        checksum := hash_int (hash_int !checksum (C.of_word p_vcid w)) fhp;
-        let data_end = base + hdr + data_field_size in
-        let off = ref (base + hdr + fhp) in
-        while !off + pkt_size <= data_end do
-          let o = !off in
-          match C.read_word packet_header buf o with
-          | Ok w ->
-              let apid = C.of_word p_apid w in
-              let seq = C.of_word p_seq w in
-              checksum := hash_int (hash_int !checksum apid) seq;
-              off := o + pkt_size
-          | Error _ -> off := data_end
-        done
-    | Error _ -> ()
+    let k = W.check frame_header buf base in
+    if W.ok k then begin
+      let w = W.get k in
+      let fhp = W.read p_fhp w in
+      checksum := hash_int (hash_int !checksum (W.read p_vcid w)) fhp;
+      let data_end = base + hdr + data_field_size in
+      let off = ref (base + hdr + fhp) in
+      while !off + pkt_size <= data_end do
+        let o = !off in
+        let k = W.check packet_header buf o in
+        if W.ok k then begin
+          let w = W.get k in
+          let apid = W.read p_apid w in
+          let seq = W.read p_seq w in
+          checksum := hash_int (hash_int !checksum apid) seq;
+          off := o + pkt_size
+        end
+        else off := data_end
+      done
+    end
   done;
   !checksum
 

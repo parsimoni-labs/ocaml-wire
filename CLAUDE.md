@@ -158,8 +158,8 @@ measures the trick, not the library, and its win belongs in the generator.
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
 does the same work with the codec's read and write API, as a user would:
-`Codec.read_word` once per header and `Codec.of_word` per field
-(`Codec.load_word` and `Codec.extract` for CLCW), `Codec.writer` per header
+`Codec.Word.check`, `ok` and `get` once per header and `Codec.Word.read`
+per field (`Codec.load_word` and `Codec.extract` for CLCW), `Codec.writer` per header
 written, and `Codec.get`/`Codec.set` for a lone field.
 
 **Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one

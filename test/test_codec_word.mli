@@ -1,4 +1,4 @@
-(** Tests for [Codec.read_word] and [Codec.of_word]. *)
+(** Tests for [Codec.Word]. *)
 
 val suite : string * unit Alcotest.test_case list
 (** Alcotest suite. *)
