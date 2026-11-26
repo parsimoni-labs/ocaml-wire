@@ -27,9 +27,13 @@ type query = {
   win_size : Smt.t;
 }
 
-let int_names inputs =
+(* The integer inputs, each with its sort. *)
+let scalars inputs =
   List.filter_map
-    (function Symex.Int_input x -> Some x | Symex.Buffer_input _ -> None)
+    (function
+      | Symex.Int_input x -> Some (x, Smt.Bv 63)
+      | Symex.I64_input x -> Some (x, Smt.Bv 64)
+      | Symex.Buffer_input _ -> None)
     inputs
 
 (* {1 Scripts} *)
@@ -50,7 +54,7 @@ let script q ?(abstract = false) ?spec goal ~extra =
   Fmt.pf ppf "(set-option :produce-models true)@.";
   declare "buf" Smt.Bytes;
   declare "buflen" (Smt.Bv 63);
-  List.iter (fun x -> declare x (Smt.Bv 63)) (int_names q.entry.inputs);
+  List.iter (fun (x, sort) -> declare x sort) (scalars q.entry.inputs);
   List.iter (fun (n, s) -> declare n s) (Symex.declared q.ctx);
   Option.iter (fun (e : Spec.encoding) -> Fmt.pf ppf "%s@." e.prelude) spec;
   let loads = Symex.loads q.ctx in
@@ -72,7 +76,8 @@ let script q ?(abstract = false) ?spec goal ~extra =
   Fmt.pf ppf "(assert %a)@." Smt.pp goal;
   Fmt.pf ppf "(check-sat)@.";
   let names =
-    [ "buflen" ] @ int_names q.entry.inputs
+    [ "buflen" ]
+    @ List.map fst (scalars q.entry.inputs)
     @ [ "win_start"; "win_size" ]
     @ List.map fst extra
     @ List.init q.entry.bound (Fmt.str "byte_%d")
@@ -83,13 +88,13 @@ let script q ?(abstract = false) ?spec goal ~extra =
 
 (* {1 Counterexamples} *)
 
-let wide = [ "win_start"; "win_size"; "offset" ]
-
 let show_values ~bound values =
   let signed n =
     match List.assoc_opt n values with
-    | Some v ->
-        Option.map (Smt.signed (if List.mem n wide then 64 else 63)) (Z3.bits v)
+    | Some v -> (
+        match (Z3.width v, Z3.bits v) with
+        | Some w, Some x -> Some (Smt.signed w x)
+        | _ -> None)
     | None -> None
   in
   let scalars =

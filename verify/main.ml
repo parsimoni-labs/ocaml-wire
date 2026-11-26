@@ -173,8 +173,9 @@ let loaded_ahead ctx ~record ~frames =
     ahead
 
 (* The precondition of the frame loop's body, as its calls state it (on
-   OxCaml over int64_u positions) and as its entry states it over ints: the
-   frame and the fields loaded ahead of it. *)
+   OxCaml over int64_u positions) and as its entry states it over int
+   positions: the frame and the fields loaded ahead of it, which the entry
+   takes as inputs of their own type. *)
 let frame_contract ~ox ~min_stride ahead =
   let holds = List.map (fun (x, e) -> Fmt.str " && %s = (%s)" x e) ahead in
   if not ox then
@@ -186,9 +187,7 @@ let frame_contract ~ox ~min_stride ahead =
         (frame_pre min_stride
         :: List.map
              (fun (x, e) ->
-               Fmt.str
-                 " && Int64.of_int %s = (let base = Int64.of_int base in %s)" x
-                 e)
+               Fmt.str " && %s = (let base = Int64.of_int base in %s)" x e)
              ahead)
     in
     (String.concat "" (frame_pre_ox min_stride :: holds), record_pre)
@@ -203,6 +202,11 @@ let valid_arguments =
    frame loop itself with valid and with any arguments, its calls to the
    body checked against that. [step] names the step scanner's entries,
    which answer through [Step.valid] and [Step.invalid]. *)
+(* A field the frame loop loads ahead is an int64 on the step scanner and
+   an int64_u on OxCaml: an input of 64 bits, any of which the load can
+   give. *)
+let field_input ~step ~ox x = if step || ox then I64_input x else Int_input x
+
 let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
   let at x = if ox then Fmt.str "~%s:(Int64.of_int %s)" x x else "~" ^ x in
   let fold, fold_expr, record, record_args, frames, frames_expr =
@@ -224,7 +228,7 @@ let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
   let ahead = loaded_ahead ctx ~record ~frames in
   let contract, record_pre = frame_contract ~ox ~min_stride ahead in
   let record_args =
-    String.concat " " (record_args :: List.map (fun (x, _) -> at x) ahead)
+    String.concat " " (record_args :: List.map (fun (x, _) -> "~" ^ x) ahead)
   in
   let contracts = [ (record, contract) ] in
   let framed = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ] in
@@ -245,7 +249,7 @@ let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
       entry ~pre:record_pre ~spec ~bound
         ~inputs:
           ([ buf; Int_input "base"; Int_input "stop"; Int_input "current" ]
-          @ List.map (fun (x, _) -> Int_input x) ahead)
+          @ List.map (fun (x, _) -> field_input ~step ~ox x) ahead)
         ~window:("base", "stop") record
         (Fmt.str "%s ~buf %s %s %s" record (at "base") (at "stop") record_args);
     ]

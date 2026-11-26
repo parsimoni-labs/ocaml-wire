@@ -64,6 +64,16 @@ let bits = function
       Some (Int64.of_string ("0u" ^ String.sub bv 2 (String.length bv - 2)))
   | _ -> None
 
+(* The width of a bit-vector literal. *)
+let width = function
+  | Atom a when String.starts_with ~prefix:"#x" a ->
+      Some (4 * (String.length a - 2))
+  | Atom a when String.starts_with ~prefix:"#b" a -> Some (String.length a - 2)
+  | List [ Atom "_"; Atom bv; Atom w ] when String.starts_with ~prefix:"bv" bv
+    ->
+      int_of_string_opt w
+  | _ -> None
+
 let rec pp_sexp ppf = function
   | Atom a -> Fmt.string ppf a
   | List l -> Fmt.pf ppf "(%a)" Fmt.(list ~sep:sp pp_sexp) l

@@ -1526,13 +1526,17 @@ let load_reference ctx ~file src =
 
 (* {1 Entries} *)
 
-type input = Int_input of string | Buffer_input of string
+type input =
+  | Int_input of string
+  | I64_input of string
+  | Buffer_input of string
 
 let entry_env inputs =
   let locals =
     List.fold_left
       (fun m -> function
         | Int_input x -> SMap.add x (Int (Smt.name x (Smt.Bv 63))) m
+        | I64_input x -> SMap.add x (I64 (Smt.name x (Smt.Bv 64))) m
         | Buffer_input x -> SMap.add x Buffer m)
       SMap.empty inputs
   in
