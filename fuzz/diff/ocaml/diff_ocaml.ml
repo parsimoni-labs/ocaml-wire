@@ -182,17 +182,6 @@ let outcome f =
   | exception Refused e -> Fmt.str "parse error %a" Wire.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
-(* A word load raises [Invalid_argument] where its word is not in the buffer,
-   as [Wire.Codec.load_word] does, where the codec's reader answers the field
-   cut: the same answer. A word load takes the word's position, so a negative
-   record offset is no input of it. *)
-let word_outcome f =
-  match f () with
-  | s -> "ok " ^ s
-  | exception (Refused { kind = Unexpected_eof _; _ } | Invalid_argument _) ->
-      "out of the buffer"
-  | exception Refused e -> Fmt.str "parse error %a" Wire.Error.pp e
-
 let view_name name = function
   | Get -> Fmt.str "get %s" name
   | Get_int -> Fmt.str "get %s as an int" name
@@ -277,16 +266,10 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
              ""));
       List.iter
         (fun (name, view, read) ->
-          match view with
-          | Of_word when off < 0 -> ()
-          | _ ->
-              let outcome =
-                match view with Of_word -> word_outcome | _ -> outcome
-              in
-              same case.label
-                (what (view_name name view))
-                (outcome (fun () -> List.assoc name case.refs buf off))
-                (outcome (fun () -> read buf off)))
+          same case.label
+            (what (view_name name view))
+            (outcome (fun () -> List.assoc name case.refs buf off))
+            (outcome (fun () -> read buf off)))
         ops.gets;
       views_at case c ~what ~validated ops buf off)
 

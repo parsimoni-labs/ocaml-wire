@@ -342,7 +342,7 @@ let rec build_populate : type a.
    platform: an unboxed native [int] on a 64-bit host, a boxed [int32] where
    the int cannot hold the word. *)
 type bf_info = {
-  word_reader : bytes -> int -> Optint.t;
+  word_reader : bytes -> int -> (Optint.t, Types.parse_error) result;
   bf_shift : int;
   bf_mask : Optint.t;
   bf_mask_int : int;

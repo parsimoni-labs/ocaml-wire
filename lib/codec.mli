@@ -643,13 +643,18 @@ val bitfield : 'r t -> (int, 'r) field -> bitfield
 (** [bitfield codec field] returns a bitfield accessor. Raises if [field] is not
     a bitfield or was not bound from the source {!Field.t} used in [codec]. *)
 
-val load_word : bitfield -> (bytes -> int -> Optint.t) Staged.t
+val load_word :
+  bitfield -> (bytes -> int -> (Optint.t, Error.t) result) Staged.t
 (** [load_word bf] returns a staged word reader. Force once, then call the
     resulting function to read the packed base word. Fields sharing the same
     base word return readers that read the same bytes -- call once and pass the
     result to multiple {!extract} calls. The word is an [Optint.t] so a 32-bit
     base survives a platform whose int is narrower: an unboxed native int on a
-    64-bit host. *)
+    64-bit host.
+
+    The reader answers the error {!get} answers for the field of [bf] where the
+    buffer cuts the word, and raises [Invalid_argument] on a negative offset,
+    which is misuse. *)
 
 val extract : bitfield -> Optint.t -> int
 (** [extract bf word] extracts the field from a pre-loaded word value. Pure

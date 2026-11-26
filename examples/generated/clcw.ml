@@ -773,46 +773,74 @@ module Get = struct
       Ok (cast Value.reportvalue_eq f14_reportvalue)
 
   let[@inline] controlwordtype_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "ControlWordType" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] clcwversion_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "CLCWVersion" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] statusfield_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "StatusField" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] copineffect_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "COPInEffect" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] vcid_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "VCID" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] spare_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Spare" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] norf_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "NoRF" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] nobitlock_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "NoBitlock" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] lockout_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Lockout" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] wait_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Wait" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] retransmit_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Retransmit" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] farmbcounter_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "FARMBCounter" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] spare2_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "Spare2" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 
   let[@inline] reportvalue_word buf off =
-    Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32
+    if off < 0 || off > Bytes.length buf - 4 then
+      field_eof "ReportValue" (Bytes.length buf) off 0 4
+    else Ok (Int32.to_int (Bytes.get_int32_be buf (off + 0)) land mask32)
 end
 
 let[@inline] controlwordtype_of_word w = (w lsr 31) land 0x1

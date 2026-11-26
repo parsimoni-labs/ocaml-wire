@@ -1063,14 +1063,15 @@ let pp_getter ~src ppf f =
   | _ -> ()
 
 (* A bitfield's word, read once for all the fields packed in it:
-   [Get.<field>_word] is the checked load of the word that holds the field, and
+   [Get.<field>_word] is the word that holds the field, framed as [Get.<field>]
+   frames it, so it answers the same error where the buffer cuts the word, and
    [<field>_of_word], outside [Get] since a view's word goes through it too,
    takes the field out of it. *)
 let word_attr = function
   | `OxCaml -> "[@inline][@zero_alloc]"
   | `OCaml -> "[@inline]"
 
-let pp_word_getter ~src ppf ~target f =
+let pp_word_getter ~src ppf f =
   match f.store with
   | Bits { base; _ } ->
       let bytes = Bitfield.byte_size base in
@@ -1081,8 +1082,9 @@ let pp_word_getter ~src ppf ~target f =
         if bytes = 4 then Fmt.str "(%s.to_int %s land mask32)" (i32 src) word
         else word
       in
-      Fmt.pf ppf "let%s %s_word %s off = %s@\n@\n" (word_attr target) f.label
-        src.buf word
+      Fmt.pf ppf "let%s %s_word %s off =@\n" getter_attr f.label src.buf;
+      pp_get_frame ~src ppf f;
+      Fmt.pf ppf "  Ok %s@\n@\n" word
   | _ -> ()
 
 let pp_of_word ppf ~target f =
@@ -1115,7 +1117,7 @@ let pp_getters ?(src = bytes_src) ppf ~target fields =
       error;
   Fmt.pf ppf "module Get = struct@\n";
   List.iter (pp_getter ~src ppf) fields;
-  List.iter (pp_word_getter ~src ppf ~target) fields;
+  List.iter (pp_word_getter ~src ppf) fields;
   Fmt.pf ppf "end@\n@\n";
   List.iter (pp_of_word ppf ~target) fields
 

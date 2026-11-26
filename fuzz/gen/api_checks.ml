@@ -151,7 +151,11 @@ let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
   let bit_hi = Wire.Codec.bitfield codec bf_hi in
   let bit_lo = Wire.Codec.bitfield codec bf_lo in
   let load = Wire.Codec.load_word bit_hi |> Wire.Staged.unstage in
-  let word = load buf base in
+  let word =
+    match load buf base with
+    | Ok w -> w
+    | Error e -> Alcobar.failf "Codec.load_word: %a" Wire.Error.pp e
+  in
   check_int "Codec.extract hi" hi (Wire.Codec.extract bit_hi word);
   check_int "Codec.extract lo" lo (Wire.Codec.extract bit_lo word)
 

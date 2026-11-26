@@ -414,12 +414,17 @@ let test_get_bitfield_word_past_buffer () =
             Alcotest.failf
               "%s field %s: read %d at offset %d of a %d-byte buffer" name fname
               v off len);
-        match load buf off with
-        | v ->
+        match (load buf off, get buf off) with
+        | Error e, Error e' when Error.equal e e' -> ()
+        | Error e, _ ->
+            Alcotest.failf
+              "%s field %s: the load answers %a, not Codec.get's error, at \
+               offset %d of a %d-byte buffer"
+              name fname Error.pp e off len
+        | Ok v, _ ->
             Alcotest.failf
               "%s field %s: loaded %d at offset %d of a %d-byte buffer" name
               fname (Optint.to_int v) off len
-        | exception Invalid_argument _ -> ()
       in
       (* No room for the word at all, and room for it but not where the frame
          starts. *)
@@ -440,9 +445,10 @@ let test_load_word_bad_input () =
   let b = Codec.(Field.v "b" (bits ~width:12 U16be) $ fun (_, _, b) -> b) in
   let c = Codec.v "LoadWord" (fun h a b -> (h, a, b)) Codec.[ h; a; b ] in
   let load = Staged.unstage (Codec.load_word (Codec.bitfield c a)) in
-  let answers name buf off ~expected : unit =
-    ignore (load buf off);
-    Alcotest.failf "%s: loaded a word, expected %a" name Error.pp expected
+  let error = Alcotest.testable Error.pp Error.equal in
+  let optint = Alcotest.testable Optint.pp Optint.equal in
+  let answers name buf off ~expected =
+    Alcotest.(check (result optint error)) name (Error expected) (load buf off)
   in
   answers "a word the buffer cuts"
     (Bytes.of_string "\x00\x12")

@@ -57,10 +57,13 @@ let state buf =
   let anomalies = ref 0 in
   let expected_seq = ref 0 in
   let process_word buf off =
-    let w = load buf off in
-    detect_anomaly ~lockout:(C.extract bf_lockout w) ~wait:(C.extract bf_wait w)
-      ~retransmit:(C.extract bf_retransmit w)
-      ~report:(C.extract bf_report w) anomalies expected_seq
+    match load buf off with
+    | Ok w ->
+        detect_anomaly ~lockout:(C.extract bf_lockout w)
+          ~wait:(C.extract bf_wait w)
+          ~retransmit:(C.extract bf_retransmit w)
+          ~report:(C.extract bf_report w) anomalies expected_seq
+    | Error _ -> incr anomalies
   in
   let step_once, reset_cycle =
     Bench_lib.cycling ~data:buf ~n_items:n_words ~size:word_size process_word

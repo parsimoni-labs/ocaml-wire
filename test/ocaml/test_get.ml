@@ -59,9 +59,7 @@ let test_getter_errors () =
 let test_words () =
   let size = Codec.min_wire_size Schemas.wide in
   for _ = 1 to 2000 do
-    (* A word load takes the word's position: a negative offset is none. *)
     let buf, off = input ~size in
-    let off = max 0 off in
     let fields =
       G_wide.
         [
@@ -79,17 +77,16 @@ let test_words () =
             f_of_word );
         ]
     in
+    let show = function
+      | Ok v -> string_of_int v
+      | Error e -> Fmt.str "%a" Error.pp e
+    in
     List.iter
       (fun (get, word, of_word) ->
         Alcotest.(check string)
           "word"
-          (outcome (fun () ->
-               match get buf off with
-               | Ok v -> string_of_int v
-               | Error { Error.kind = Unexpected_eof _; _ } ->
-                   invalid_arg "index out of bounds"
-               | Error e -> Fmt.str "%a" Error.pp e))
-          (outcome (fun () -> string_of_int (of_word (word buf off)))))
+          (outcome (fun () -> show (get buf off)))
+          (outcome (fun () -> show (Result.map of_word (word buf off)))))
       fields;
     (* The same through a view, whose word reads have no check of their own. *)
     match Wire_runtime.Buf.v buf with
@@ -117,9 +114,9 @@ let test_words () =
    the word is input, answered as the field's getter answers it, and a negative
    offset is misuse, refused even where it puts the word inside the buffer. *)
 let test_word_bad_input () =
-  let answers name load buf off ~expected : unit =
-    ignore (load buf off);
-    Alcotest.failf "%s: loaded a word, expected %a" name Error.pp expected
+  let error = Alcotest.testable Error.pp Error.equal in
+  let answers name load buf off ~expected =
+    Alcotest.(check (result int error)) name (Error expected) (load buf off)
   in
   answers "a word the buffer cuts" G_wide.Get.f_word (Bytes.make 10 '\x00') 0
     ~expected:

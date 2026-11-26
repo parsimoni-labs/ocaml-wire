@@ -1158,51 +1158,50 @@ let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
 
 type bitfield = bf_info
 
-(* The word a bitfield sits in, read with one checked load. Where [Optint.t] is
-   the native [int] the word is that [int], with no conversion. *)
-let bf_word_reader base byte_off : bytes -> int -> Optint.t =
+(* The word a bitfield sits in, read with one bounds test. Where [Optint.t] is
+   the native [int] the word is that [int], with no conversion. A buffer that
+   cuts the word is the field's end of input, as [Codec.get] answers it; a
+   negative offset raises. *)
+let bf_word_reader ~name base byte_off :
+    bytes -> int -> (Optint.t, parse_error) result =
   let n = bf_base_byte_size base in
+  let stop = byte_off + n in
+  let eof buf off =
+    Codec_leaf.short_field name ~base:off ~at:(off + byte_off) ~width:n buf
+  in
   match (Optint.is_immediate, base) with
   | True, U8 ->
       fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Unchecked.u8 buf p
+        if off < 0 || off > Bytes.length buf - stop then eof buf off
+        else Ok (Unchecked.u8 buf (off + byte_off))
   | True, U16 Little ->
       fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Unchecked.u16le buf p
+        if off < 0 || off > Bytes.length buf - stop then eof buf off
+        else Ok (Unchecked.u16le buf (off + byte_off))
   | True, U16 Big ->
       fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Unchecked.u16be buf p
+        if off < 0 || off > Bytes.length buf - stop then eof buf off
+        else Ok (Unchecked.u16be buf (off + byte_off))
   | True, U32 Little ->
       fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Int32.to_int (Unchecked.i32le buf p) land mask32
+        if off < 0 || off > Bytes.length buf - stop then eof buf off
+        else Ok (Int32.to_int (Unchecked.i32le buf (off + byte_off)) land mask32)
   | True, U32 Big ->
       fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Int32.to_int (Unchecked.i32be buf p) land mask32
+        if off < 0 || off > Bytes.length buf - stop then eof buf off
+        else Ok (Int32.to_int (Unchecked.i32be buf (off + byte_off)) land mask32)
   | False, U32 Little ->
       fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Optint.of_int32 (Unchecked.i32le buf p)
+        if off < 0 || off > Bytes.length buf - stop then eof buf off
+        else Ok (Optint.of_int32 (Unchecked.i32le buf (off + byte_off)))
   | False, U32 Big ->
       fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Optint.of_int32 (Unchecked.i32be buf p)
+        if off < 0 || off > Bytes.length buf - stop then eof buf off
+        else Ok (Optint.of_int32 (Unchecked.i32be buf (off + byte_off)))
   | False, (U8 | U16 _) ->
       fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Optint.of_int (Bitfield.read_word base buf p)
+        if off < 0 || off > Bytes.length buf - stop then eof buf off
+        else Ok (Optint.of_int (Bitfield.read_word base buf (off + byte_off)))
 
 let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
   match field_access ~op:"Codec.bitfield" codec f with
@@ -1211,7 +1210,7 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
          is a direct read of the right width with [byte_off] baked in.
          Avoids the partial-application + runtime [match] that
          [Bitfield.read_word base] would create. *)
-      let word_reader = bf_word_reader base byte_off in
+      let word_reader = bf_word_reader ~name:f.name base byte_off in
       let mask = (1 lsl width) - 1 in
       {
         word_reader;
@@ -1221,7 +1220,8 @@ let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
       }
   | _ -> Fmt.invalid_arg "Codec.bitfield: field %S is not a bitfield" f.name
 
-let load_word (bf : bitfield) : (bytes -> int -> Optint.t) Staged.t =
+let load_word (bf : bitfield) :
+    (bytes -> int -> (Optint.t, parse_error) result) Staged.t =
   Staged.stage bf.word_reader
 
 let[@inline always] extract (bf : bitfield) (word : Optint.t) =

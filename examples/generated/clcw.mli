@@ -412,61 +412,75 @@ module Get : sig
   (** [reportvalue buf off] is bits 0 to 7 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val controlwordtype_word : bytes -> int -> int
+  val controlwordtype_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [controlwordtype_word buf off] is the big-endian 32-bit word at offset 0
-      of the record at [off], for {!controlwordtype_of_word}. *)
+      of the record at [off], for {!controlwordtype_of_word}, or the error
+      {!controlwordtype} answers where [buf] cuts it. *)
 
-  val clcwversion_word : bytes -> int -> int
+  val clcwversion_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [clcwversion_word buf off] is the big-endian 32-bit word at offset 0 of
-      the record at [off], for {!clcwversion_of_word}. *)
+      the record at [off], for {!clcwversion_of_word}, or the error
+      {!clcwversion} answers where [buf] cuts it. *)
 
-  val statusfield_word : bytes -> int -> int
+  val statusfield_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [statusfield_word buf off] is the big-endian 32-bit word at offset 0 of
-      the record at [off], for {!statusfield_of_word}. *)
+      the record at [off], for {!statusfield_of_word}, or the error
+      {!statusfield} answers where [buf] cuts it. *)
 
-  val copineffect_word : bytes -> int -> int
+  val copineffect_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [copineffect_word buf off] is the big-endian 32-bit word at offset 0 of
-      the record at [off], for {!copineffect_of_word}. *)
+      the record at [off], for {!copineffect_of_word}, or the error
+      {!copineffect} answers where [buf] cuts it. *)
 
-  val vcid_word : bytes -> int -> int
+  val vcid_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [vcid_word buf off] is the big-endian 32-bit word at offset 0 of the
-      record at [off], for {!vcid_of_word}. *)
+      record at [off], for {!vcid_of_word}, or the error {!vcid} answers where
+      [buf] cuts it. *)
 
-  val spare_word : bytes -> int -> int
+  val spare_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [spare_word buf off] is the big-endian 32-bit word at offset 0 of the
-      record at [off], for {!spare_of_word}. *)
+      record at [off], for {!spare_of_word}, or the error {!spare} answers where
+      [buf] cuts it. *)
 
-  val norf_word : bytes -> int -> int
+  val norf_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [norf_word buf off] is the big-endian 32-bit word at offset 0 of the
-      record at [off], for {!norf_of_word}. *)
+      record at [off], for {!norf_of_word}, or the error {!norf} answers where
+      [buf] cuts it. *)
 
-  val nobitlock_word : bytes -> int -> int
+  val nobitlock_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [nobitlock_word buf off] is the big-endian 32-bit word at offset 0 of the
-      record at [off], for {!nobitlock_of_word}. *)
+      record at [off], for {!nobitlock_of_word}, or the error {!nobitlock}
+      answers where [buf] cuts it. *)
 
-  val lockout_word : bytes -> int -> int
+  val lockout_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [lockout_word buf off] is the big-endian 32-bit word at offset 0 of the
-      record at [off], for {!lockout_of_word}. *)
+      record at [off], for {!lockout_of_word}, or the error {!lockout} answers
+      where [buf] cuts it. *)
 
-  val wait_word : bytes -> int -> int
+  val wait_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [wait_word buf off] is the big-endian 32-bit word at offset 0 of the
-      record at [off], for {!wait_of_word}. *)
+      record at [off], for {!wait_of_word}, or the error {!wait} answers where
+      [buf] cuts it. *)
 
-  val retransmit_word : bytes -> int -> int
+  val retransmit_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [retransmit_word buf off] is the big-endian 32-bit word at offset 0 of the
-      record at [off], for {!retransmit_of_word}. *)
+      record at [off], for {!retransmit_of_word}, or the error {!retransmit}
+      answers where [buf] cuts it. *)
 
-  val farmbcounter_word : bytes -> int -> int
+  val farmbcounter_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [farmbcounter_word buf off] is the big-endian 32-bit word at offset 0 of
-      the record at [off], for {!farmbcounter_of_word}. *)
+      the record at [off], for {!farmbcounter_of_word}, or the error
+      {!farmbcounter} answers where [buf] cuts it. *)
 
-  val spare2_word : bytes -> int -> int
+  val spare2_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [spare2_word buf off] is the big-endian 32-bit word at offset 0 of the
-      record at [off], for {!spare2_of_word}. *)
+      record at [off], for {!spare2_of_word}, or the error {!spare2} answers
+      where [buf] cuts it. *)
 
-  val reportvalue_word : bytes -> int -> int
+  val reportvalue_word : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [reportvalue_word buf off] is the big-endian 32-bit word at offset 0 of
-      the record at [off], for {!reportvalue_of_word}. *)
+      the record at [off], for {!reportvalue_of_word}, or the error
+      {!reportvalue} answers where [buf] cuts it. *)
 end
 
 val controlwordtype_of_word : int -> int

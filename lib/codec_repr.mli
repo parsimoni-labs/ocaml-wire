@@ -47,7 +47,7 @@ val build_populate :
     for its checks when [t] has no int slot. *)
 
 type bf_info = {
-  word_reader : bytes -> int -> Optint.t;
+  word_reader : bytes -> int -> (Optint.t, Types.parse_error) result;
   bf_shift : int;
   bf_mask : Optint.t;
   bf_mask_int : int;

@@ -402,12 +402,13 @@ let pp_get ppf r b =
       let l = f.label in
       match f.store with
       | Bits { base; _ } ->
-          pp_val ~zero_alloc:true target ppf (l ^ "_word")
-            (arrows [ buf b; "int"; "int" ])
+          pp_val ~zero_alloc:false target ppf (l ^ "_word")
+            (arrows [ buf b; "int"; result "int" ])
             (Fmt.str
                "[%s_word buf off] is %s at offset %d of the record at [off], \
-                for {!%s_of_word}."
-               l (word base) f.offset l)
+                for {!%s_of_word}, or the error {!%s} answers where [buf] cuts \
+                it."
+               l (word base) f.offset l l)
       | _ -> ())
     r.fields;
   Fmt.pf ppf "end@\n@\n"

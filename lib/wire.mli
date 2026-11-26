@@ -1646,12 +1646,17 @@ module Codec : sig
       [Invalid_argument] if [field] was not bound from the source {!Field.t}
       used in [codec]. *)
 
-  val load_word : bitfield -> (bytes -> int -> Optint.t) Staged.t
+  val load_word :
+    bitfield -> (bytes -> int -> (Optint.t, Error.t) result) Staged.t
   (** Staged word reader. Force once, reuse for every read. Fields in the same
       base word share the same underlying reader -- call once and use {!extract}
       on the result for each field. The word is an [Optint.t] so a 32-bit base
       survives a platform whose int is narrower: an unboxed native int on a
-      64-bit host. *)
+      64-bit host.
+
+      The reader answers the error {!get} answers for the field of the bitfield
+      where the buffer cuts the word, and raises [Invalid_argument] on a
+      negative offset, which is misuse. *)
 
   val extract : bitfield -> Optint.t -> int
   (** [extract bf word] extracts the field from a pre-loaded word. Pure

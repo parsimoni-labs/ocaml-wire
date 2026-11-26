@@ -97,8 +97,10 @@ let pp_gets ~m ~buf ppf f =
             Fmt.str "string_of_int (Diff_ocaml.ok (%s.Get.%s_int (%s) o))" m
               f.ident buf
         | Of_word ->
-            Fmt.str "string_of_int (%s.%s_of_word (%s.Get.%s_word (%s) o))" m
-              f.ident m f.ident buf
+            Fmt.str
+              "string_of_int (%s.%s_of_word (Diff_ocaml.ok (%s.Get.%s_word \
+               (%s) o)))"
+              m f.ident m f.ident buf
       in
       Fmt.pf ppf "        (%S, %s, fun b o -> %s);@\n" f.name (view v) read)
     f.views

@@ -321,7 +321,7 @@ let test_bitfield_extract () =
   let hi = Codec.bitfield bf_codec bf_cf_hi in
   let lo = Codec.bitfield bf_codec bf_cf_lo in
   let load = Staged.unstage (Codec.load_word hi) in
-  let w = load buf 0 in
+  let w = decode_ok (load buf 0) in
   let hi = Codec.extract hi w in
   let lo = Codec.extract lo w in
   (* Compare against Codec.get *)
@@ -350,7 +350,7 @@ let test_bitfield_short_buffer () =
   (* Short buffer -- should read garbage but not crash *)
   let buf = Bytes.create 8 in
   Bytes.set_int32_be buf 0 0x12345678l;
-  let w = load buf 0 in
+  let w = decode_ok (load buf 0) in
   let v = Codec.extract bf w in
   Alcotest.(check int) "extract from valid buf" 0x12 v
 
@@ -367,8 +367,8 @@ let test_bitfield_load_shared () =
   let load_b = Staged.unstage (Codec.load_word b) in
   let buf = Bytes.create 4 in
   Bytes.set_int32_be buf 0 0xABCDEF01l;
-  let wa = load_a buf 0 in
-  let wb = load_b buf 0 in
+  let wa = decode_ok (load_a buf 0) in
+  let wb = decode_ok (load_b buf 0) in
   (* Same base word, same value *)
   (* [Codec.load_word] hands back the bitfield's raw base word, an [Optint.t],
      not a uint32 field value. *)

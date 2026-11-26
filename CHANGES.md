@@ -26,6 +26,12 @@
   the result where the call gave the size; a negative offset raises
   `Invalid_argument` (#XXX, @samoht)
 
+- The reader `Wire.Codec.load_word` stages, and `Get.<field>_word` of a
+  module `Wire_ocaml` writes, answer a `result`: a buffer that cuts the word
+  is the error `Codec.get` gives the field, and a negative offset raises
+  `Invalid_argument` instead of reading in front of the record. Match on the
+  result before `extract` or `<field>_of_word` (#XXX, @samoht)
+
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
   call a sub-codec's constructor on a record it then rejects, so a
   constructor should only build a value: count or log after `decode` returns

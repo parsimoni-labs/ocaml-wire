@@ -922,9 +922,9 @@ let test_bigstring () =
         ((G_checked_big.read_proto v :> int) + (G_checked_big.read_ihl v :> int)));
   same_on_bigstring Schemas.wide
     ~on_bytes:(fun b o ->
-      string_of_int (G_wide.c_of_word (G_wide.Get.c_word b o)))
+      string_of_int (G_wide.c_of_word (ok (G_wide.Get.c_word b o))))
     ~on_big:(fun b o ->
-      string_of_int (G_wide.c_of_word (G_wide_big.Get.c_word b o)));
+      string_of_int (G_wide.c_of_word (ok (G_wide_big.Get.c_word b o))));
   let size = Codec.min_wire_size Schemas.checked in
   for _ = 1 to 2000 do
     let w k = Random.State.int rand (k + 40) - 20 in
