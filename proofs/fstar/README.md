@@ -20,9 +20,8 @@ make -C proofs/fstar check-extract # plans/extracted is the model
 `Wire_ocaml.Plan` makes of the sampled codecs of the differential fuzzer,
 its structured scan cases, the `Defect.PrefixWrap` codec, the packet stack
 of `examples/net` and the `huge`, `deep` and `nested` schemas of
-`test/ocaml`, and the decisions of the OCaml scanner and of its step form,
-and of the OxCaml scanner and of its step form, and checks three things of
-each.
+`test/ocaml`, and the decisions of their module with a fold and its
+visitor, on OCaml and on OxCaml, and checks three things of each.
 
 - `wf` holds of the plan: every variable bound once and read after it is
   bound, the premise `scanner_correct` takes of the planner. F* evaluates

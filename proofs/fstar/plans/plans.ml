@@ -14,6 +14,14 @@ module P = Wire_ocaml.Plan
 module T = Wire.Private.Types
 module L = Wire.Private.Layout
 
+(* The decisions of the module of [c] with the fold [fold], whose visitor is
+   [Step]. *)
+let decisions ?target c =
+  P.decisions ?target
+    ~folds:Wire_ocaml.[ fold "fold" ]
+    ~visitors:[ ("fold", "step.ml") ]
+    c
+
 let ids : (string, int) Hashtbl.t = Hashtbl.create 64
 let next = ref 1
 
@@ -610,21 +618,18 @@ let word_ranges ~found p all =
       | _ -> ())
     all
 
-(* How each walk holds values, by run: [int] in the scanner, [int64] in the
-   walks of the visitor's fold [fold_step], [int64_u] on OxCaml, those walks
-   included. *)
+(* How each walk holds values, by run: on OCaml [int64] in the walks of the
+   fold and [int] in [check]'s, [int64_u] in every walk on OxCaml. *)
 let walk_values ~found runs =
   List.iteri
     (fun i run ->
       List.iter
         (function
           | P.Walk w ->
-              let step = String.starts_with ~prefix:"fold_step" w.name in
               let expected =
                 match i with
-                | 2 | 3 -> `Int64_u
-                | 1 when step -> `Int64
-                | _ -> `Int
+                | 1 -> `Int64_u
+                | _ -> if w.name = "check" then `Int else `Int64
               in
               let values = if !fabricate then `Int else w.values in
               walks := !walks + 1;
@@ -699,8 +704,7 @@ let frame_loop_walks ~found run ~name ~need ~short =
     when not
            (List.exists
               (function
-                | P.Walk { name = "fold" | "fold_step"; known; _ } -> known = 0
-                | _ -> false)
+                | P.Walk { name = "fold"; known; _ } -> known = 0 | _ -> false)
               run) ->
       Fmt.kstr found "frame loop %s walks short frames by no fold" name
   | _ -> ()
@@ -842,26 +846,13 @@ let count_checks ~all prefixes gates =
        (function P.Walk _ | P.Frame_loop _ -> true | _ -> false)
        all)
 
-(* The plan of [c] and the decisions of the scanner, of its step form, of
-   its OxCaml form and of that form's step form, each with the decisions of
-   its own walks, against the model. *)
+(* The plan of [c] and the decisions of its module with the fold [fold], on
+   OCaml and on OxCaml, each with the decisions of its own walks, against the
+   model. *)
 let check : type a. string -> a Wire.Codec.t -> P.t -> unit =
  fun name c p ->
   let wf, d, d', walk = well_formed name p in
-  let runs =
-    [
-      P.decisions c;
-      P.decisions
-        ~folds:Wire_ocaml.[ fold "fold"; fold "fold_step" ]
-        ~visitors:[ ("fold_step", "step.ml") ]
-        c;
-      P.decisions ~target:`OxCaml c;
-      P.decisions ~target:`OxCaml
-        ~folds:Wire_ocaml.[ fold "fold"; fold "fold_step" ]
-        ~visitors:[ ("fold_step", "step.ml") ]
-        c;
-    ]
-  in
+  let runs = [ decisions c; decisions ~target:`OxCaml c ] in
   let all = List.concat runs in
   let spans = span_bounds name ~walk runs in
   let events = walk_events ~all d d' in
@@ -1002,20 +993,7 @@ let () =
     in
     let c = Packet_stack.codec in
     dump "packet stack"
-      [
-        ("ocaml", P.decisions c);
-        ( "step",
-          P.decisions
-            ~folds:Wire_ocaml.[ fold "fold"; fold "fold_step" ]
-            ~visitors:[ ("fold_step", "step.ml") ]
-            c );
-        ("oxcaml", P.decisions ~target:`OxCaml c);
-        ( "oxcaml step",
-          P.decisions ~target:`OxCaml
-            ~folds:Wire_ocaml.[ fold "fold"; fold "fold_step" ]
-            ~visitors:[ ("fold_step", "step.ml") ]
-            c );
-      ];
+      [ ("ocaml", decisions c); ("oxcaml", decisions ~target:`OxCaml c) ];
     exit 0
   end;
   if mode = "leak" then add "hoisted bound in a region (#504)" Leak.codec
