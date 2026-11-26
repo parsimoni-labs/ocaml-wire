@@ -1137,8 +1137,6 @@ let pp_value (t : _ t) ppf v =
     (field_readers t);
   Fmt.pf ppf "@ }@]"
 
-let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
-
 (* -- Record words -- *)
 
 module Word = struct

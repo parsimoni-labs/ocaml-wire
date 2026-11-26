@@ -1602,9 +1602,6 @@ module Codec : sig
       its field cannot represent; the bytes from the offset on are then scrap,
       as after a failed {!encode}. *)
 
-  val field_ref : ('a, 'r) field -> int expr
-  (** Field reference expression from a bound field handle. *)
-
   val field_readers :
     'r t -> (string * (bytes -> int -> (int, Error.t) result)) list
   (** [field_readers c] is the decoder's own reader for every named int-valued

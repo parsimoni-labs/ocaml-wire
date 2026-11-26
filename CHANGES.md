@@ -27,6 +27,9 @@
   buffer are `Error`, not `Failure` or `Invalid_argument`; match on the
   result of `<name>_parse` and `<name>_parse_k` (#570, @samoht)
 
+- `Wire.Codec.field_ref` is removed: write `Field.ref f` of the source field
+  (#570, @samoht)
+
 - The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
   `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)

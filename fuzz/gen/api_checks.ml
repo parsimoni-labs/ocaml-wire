@@ -407,7 +407,6 @@ let check_metadata_helpers () =
   in
   if not (String.contains pp_value 'S') then
     Alcobar.failf "pp_value did not include field output: %S" pp_value;
-  let _ = Wire.Codec.field_ref Wire.Codec.(f_src $ fst) in
   check_int "Wire.size fixed" 1 (Option.get (size uint8));
   match size all_bytes with
   | None -> ()

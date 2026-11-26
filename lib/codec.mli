@@ -594,9 +594,6 @@ val pp_value : 'r t -> 'r Fmt.t
 (** [pp_value c] prints a record of [c] field by field, each integer field with
     its value as {!field_readers} reads it from the record's encoding. *)
 
-val field_ref : ('a, 'r) field -> int Types.expr
-(** Expression referencing a field by name. *)
-
 type validator
 (** A struct validator without a constructor. The same int-array validation
     kernel that backs {!validate} on a [Codec.t], but built directly from a
