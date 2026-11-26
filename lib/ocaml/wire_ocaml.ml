@@ -17,7 +17,6 @@ type target = [ `OCaml | `OxCaml ]
 type map = { path : string; ocaml : string; typ : Planner.typ }
 
 let map path ~typ m = { path; ocaml = typ; typ = Typ m }
-let ident = ident
 let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
 let outputs = scanner_fields
 

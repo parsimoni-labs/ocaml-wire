@@ -65,15 +65,6 @@ type target = [ `OCaml | `OxCaml ]
     checks on the checks, [write] and the reads, and takes the buffers it does
     not keep [local]. *)
 
-val ident : string -> string
-(** [ident name] is the OCaml name a generated module derives from the field
-    [name], for either target: its record field is [ident name], and so is its
-    accessor unless the module defines that name ({{!views}Views}). It is [name]
-    lower-cased, any character other than a letter, a digit or ['_'] turned into
-    ['_'], prefixed with ["f_"] when that is empty or starts with a digit, and
-    suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the code
-    for the default target compiles on an OxCaml compiler too. *)
-
 type map
 (** The type for a {!Wire.map} the generated code calls by its OCaml path. *)
 
@@ -169,10 +160,10 @@ val v :
     [maps] does not name; for [folds], [~maps] or [~simd:true] on a codec the
     walk, or the fixed record, does not cover; for [~simd:true] with the
     [`OCaml] target; naming both fields when two of them would define the same
-    OCaml name ({!ident}), or, in a module that reads with [Get], one of them a
-    getter that would shadow a name the getters call, such as [Get.cast]; and
-    naming the names, for a fold whose functions take a name the module defines
-    or another fold's. *)
+    OCaml name (as {!outputs} spells it), or, in a module that reads with [Get],
+    one of them a getter that would shadow a name the getters call, such as
+    [Get.cast]; and naming the names, for a fold whose functions take a name the
+    module defines or another fold's. *)
 
 val name : t -> string
 (** [name t] is the name of [t]'s module: its file is [name t ^ ".ml"]. *)
@@ -221,9 +212,15 @@ val main : t list -> unit
 
 val outputs : 'r Wire.Codec.t -> (string * bool) list
 (** [outputs c] is the outputs a fold of [c] hands out, in declaration order:
-    each named scalar field, its name the path of field labels ({!ident}) joined
-    with ['_'], and for each optional field [<path>_present], flagged [true]. A
-    field in an anonymous one is checked but not an output. Raises
+    each named scalar field, its name the path of field labels joined with
+    ['_'], and for each optional field [<path>_present], flagged [true]. A field
+    in an anonymous one is checked but not an output. A field's label is the
+    OCaml name the module gives it, its record field and its accessor unless the
+    module defines that name ({{!views}Views}), for either target: the field's
+    name lower-cased, any character other than a letter, a digit or ['_'] turned
+    into ['_'], prefixed with ["f_"] when that is empty or starts with a digit,
+    and suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the
+    code for the default target compiles on an OxCaml compiler too. Raises
     [Invalid_argument] for a codec no fold covers. *)
 
 (** {2 Views}

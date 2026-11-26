@@ -18,38 +18,35 @@ type field = {
   acc : string;  (** Its accessor in the module's views. *)
 }
 
-(* The accessor of the field [ident] in the views of [c]: its name, or that
-   name escaped where the module defines it. *)
-let accessor c =
-  let members =
-    match Wire_ocaml.views c with
-    | v -> v.members
-    | exception Invalid_argument _ -> []
-  in
-  fun ident ->
-    List.find_map
-      (function
-        | Wire_ocaml.Int { name; output; _ } when output = ident -> Some name
-        | Bytes { name; _ }
-          when List.mem name [ ident; ident ^ "_"; ident ^ "__" ] ->
-            Some name
-        | _ -> None)
-      members
-    |> Option.value ~default:ident
+(* The accessors of the views of [c], one per field of its fixed record, in
+   the order of its fields. *)
+let accessors c =
+  List.map
+    (function
+      | Wire_ocaml.Int { name; _ }
+      | Bool { name; _ }
+      | Record { name; _ }
+      | Bytes { name; _ } ->
+          name)
+    (Wire_ocaml.views c).members
 
 let fields c =
-  let acc = accessor c in
-  List.map
-    (fun (T.Field f) ->
+  let accs = accessors c in
+  List.mapi
+    (fun i (T.Field f) ->
       let name = Option.get f.field_name in
-      let ident = Wire_ocaml.ident name in
+      let acc =
+        match List.nth_opt accs i with
+        | Some a -> a
+        | None -> Fmt.failwith "gen: field %s has no accessor" name
+      in
       let plain =
         match Diff_ocaml.show_code f.field_typ with
         | Some s -> s
         | None ->
             Fmt.failwith "gen: field %s has a type the backend cannot show" name
       in
-      { name; plain; acc = acc ident })
+      { name; plain; acc })
     (Gen.to_struct c).fields
 
 (* A read of the view [v] of [bb] through the module's accessor of [f]. *)
