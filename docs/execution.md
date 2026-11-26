@@ -141,18 +141,17 @@ the codec once into a plan: runs of fields at constant offsets (prefixes),
 spans whose size an expression gives, optional fields (gates), sized windows
 (regions) and where clauses, in the order the codec checks them, over
 variables unique in the plan. One walk over the plan writes every function
-that checks a record: `is_valid`, the decoders and the function that finds
-the codec's error for a fixed record, `check`, and each fold the module
-declares (`Wire_ocaml.fold`), for a codec of any shape in scope. One writer
+that checks a record: `check`, `validate`, the decoders and the function
+that finds the codec's error, and each fold the module declares
+(`Wire_ocaml.fold`), for a codec of any shape in scope. One writer
 (`Writer`) puts them in one module per codec, whatever its shape: the walks,
 the check and the views of every codec the walk covers, and the members of a
-fixed record of named scalars (its record, decoder and write) where the
-codec is one. The views read the fields: a fixed record has no second check
-(`Valid`, `View`) nor second reads (`Get`, `read_<field>`, `view_<field>`,
-a word and its fields) beside them. A fixed record the walk does not cover,
-one with a map or an integer wider than 32 bits, reads its fields with `Get`.
-`Wire_ocaml.v` declares the
-module, `Wire_ocaml.main` writes it, one dune rule per module.
+fixed record of named scalars (its record, decoder and labelled `write`)
+where the codec is one. The views read the fields, with no second check nor
+second read beside them. A fixed record the walk does not cover, one with a
+field under a map, has no views and reads each field with `Get.<field> buf
+off`, a bounds-checked load at a constant offset. `Wire_ocaml.v` declares
+the module, `Wire_ocaml.main` writes it, one dune rule per module.
 
 A fold `n` without a visitor takes its consumer as arguments (`n`,
 `n_frames`). A fold with a

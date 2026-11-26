@@ -54,16 +54,16 @@
     another length than its byte array. Bad input never makes a decoder raise.
 
     The views read every field of a codec the walk covers. A fixed record it
-    does not cover, one with a map or an integer wider than 32 bits, has no
-    views, and reads its fields instead with [Get.<field> buf off], one
-    bounds-checked load at a constant offset, and, for a bitfield,
-    [Get.<field>_word] and [<field>_of_word], so fields packed in one word share
-    one load. *)
+    does not cover, one with a field under a map, has no views, and reads its
+    fields instead with [Get.<field> buf off], one bounds-checked load at a
+    constant offset, and, for a bitfield, [Get.<field>_word] and
+    [<field>_of_word], so fields packed in one word share one load. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
-    checks on the checks, [write] and the reads, and takes the buffers it does
-    not keep [local]. *)
+    checks on [write] and on the check [validate] runs, holds the values its
+    walks read as unboxed [int64_u], and takes the buffers it does not keep
+    [local]. *)
 
 type map
 (** The type for a {!Wire.map} the generated code calls by its OCaml path. *)
@@ -154,16 +154,16 @@ val v :
     The walk covers integers up to 32 bits, bitfields, byte arrays and slices of
     any size, nested codecs, optional fields and fields in a sized region, exact
     or at most; a fixed record of named scalars at constant offsets also takes
-    wider integers and maps. Raises [Invalid_argument], naming the field and the
-    reason, for a codec no part of the module covers: parameters, actions, a
-    field of a type it does not read (a repetition, a tagged union), or a map
-    [maps] does not name; for [folds], [~maps] or [~simd:true] on a codec the
-    walk, or the fixed record, does not cover; for [~simd:true] with the
-    [`OCaml] target; naming both fields when two of them would define the same
-    OCaml name (as {!outputs} spells it), or, in a module that reads with [Get],
-    one of them a getter that would shadow a name the getters call, such as
-    [Get.cast]; and naming the names, for a fold whose functions take a name the
-    module defines or another fold's. *)
+    maps. Raises [Invalid_argument], naming the field and the reason, for a
+    codec no part of the module covers: parameters, actions, a field of a type
+    it does not read (a repetition, a tagged union), or a map [maps] does not
+    name; for [folds], [~maps] or [~simd:true] on a codec the walk, or the fixed
+    record, does not cover; for [~simd:true] with the [`OCaml] target; naming
+    both fields when two of them would define the same OCaml name (as {!outputs}
+    spells it), or, in a module that reads with [Get], one of them a getter that
+    would shadow a name the getters call, such as [Get.cast]; and naming the
+    names, for a fold whose functions take a name the module defines or another
+    fold's. *)
 
 val name : t -> string
 (** [name t] is the name of [t]'s module: its file is [name t ^ ".ml"]. *)
