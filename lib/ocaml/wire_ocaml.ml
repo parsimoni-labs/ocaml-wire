@@ -423,4 +423,46 @@ module Plan = struct
   let shared tree =
     let shared, case_shared, _ = Dispatch_tree.reach tree in
     (shared, case_shared)
+
+  type nonrec sub = sub = {
+    var : string;
+    path : string list option;
+    codec_id : int;
+    codec_name : string;
+    fixed_size : int option;
+    codec : T.struct_;
+  }
+
+  type member = View_module.member =
+    | Scalar of { name : string; field : field }
+    | Present of { name : string; presence : output }
+    | Sub of { name : string; sub : sub; presence : output option }
+    | Bytes of { name : string; label : string; at : bytes_at; slice : bool }
+
+  and bytes_at = View_module.bytes_at = Fixed of field | Sized of node
+
+  type record = View_module.record = {
+    id : int;
+    codec_name : string;
+    module_name : string option;
+    struct_ : T.struct_;
+    plan : plan;
+    subs : sub list;
+    fixed : int;
+    fixed_size : int option;
+    members : member list;
+  }
+
+  type records = View_module.t = {
+    root : record;
+    records : record list;
+    size : int option;
+  }
+
+  let records ?reserved c =
+    match View_module.of_codec ?reserved c with
+    | r -> r
+    | exception Unsupported why -> invalid_arg why
+
+  let settable = View_module.settable
 end

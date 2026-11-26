@@ -623,4 +623,65 @@ module Plan : sig
   val shared : tree -> (tree -> bool) * (int -> bool)
   (** [shared t] tells which branches of [t] are reached more than once, and
       which cases are, so a writer gives each of those one definition. *)
+
+  (** {2:records Records}
+
+      The records the views of a module reach, each planned on its own: in the
+      plan of a record, each record a field of it holds is a {!Span} of a
+      variable standing for its size, so the plan holds the record's own fields
+      only. *)
+
+  type sub = {
+    var : string;  (** The variable that stands for its size. *)
+    path : string list option;
+        (** The field's path, [None] under an anonymous field. *)
+    codec_id : int;
+    codec_name : string;
+    fixed_size : int option;  (** Its size, when constant. *)
+    codec : Wire.Private.Types.struct_;
+  }
+  (** A record a field holds. *)
+
+  (** A named member of a record's view, named as its accessor. *)
+  type member =
+    | Scalar of { name : string; field : field }  (** An integer field. *)
+    | Present of { name : string; presence : output }
+        (** The presence of an optional field that holds no record. *)
+    | Sub of { name : string; sub : sub; presence : output option }
+        (** A record a field holds, with its presence when optional. *)
+    | Bytes of { name : string; label : string; at : bytes_at; slice : bool }
+        (** A named field of bytes, its label, where its bytes are, and whether
+            it is a slice rather than a string. *)
+
+  (** Where the bytes of a field are: at a constant offset in a prefix, or in a
+      span of the plan. *)
+  and bytes_at = Fixed of field | Sized of node
+
+  type record = {
+    id : int;  (** The id of its codec; [-1] for the root. *)
+    codec_name : string;
+    module_name : string option;  (** [None] for the root. *)
+    struct_ : Wire.Private.Types.struct_;
+    plan : t;  (** Its plan, the records it holds kept apart. *)
+    subs : sub list;
+    fixed : int;  (** The bytes at constant offsets a view of it holds. *)
+    fixed_size : int option;
+    members : member list;
+  }
+  (** A record a view reaches. *)
+
+  type records = { root : record; records : record list; size : int option }
+  (** The records of a codec: its root, every record it holds, each once, those
+      a record holds before it, and the codec's size when constant. *)
+
+  val records : ?reserved:string list -> 'r Wire.Codec.t -> records
+  (** [records ?reserved c] is the records the views of [c]'s module reach, with
+      its accessors named as {!views} names them, a name of [reserved] escaped
+      as a keyword is. Raises [Invalid_argument] with the reason for a codec no
+      fold covers. *)
+
+  val settable : record -> (string * field) list
+  (** [settable r] is the fields of [r] a setter writes in place, each with its
+      accessor's name: an integer or a bitfield at a constant offset inside the
+      bytes a view of [r] holds. *)
 end
