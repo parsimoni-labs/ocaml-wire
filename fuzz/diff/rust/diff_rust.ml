@@ -51,10 +51,11 @@ let contains s sub =
   go 0
 
 (* The codec's error, raised to stop where it is answered, so a result and a
-   reader that stops compare the same. *)
-exception Refused of Wire.Error.t
+   reader that stops compare the same: the exception [Diff_ocaml.reference]
+   raises, so a getter's error is compared and not thrown. *)
+exception Refused = Diff_ocaml.Refused
 
-let ok = function Ok v -> v | Error e -> raise (Refused e)
+let ok = Diff_ocaml.ok
 
 let refused ~field = function
   | { Wire.Error.kind = Unexpected_eof _; _ } -> "short"

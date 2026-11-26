@@ -39,9 +39,12 @@ type ops = {
 type t = { bytes : ops; bigstring : ops }
 (** A generated module: its functions and those of its [Bigstring]. *)
 
+exception Refused of Wire.Error.t
+(** The error {!ok} raises. *)
+
 val ok : ('a, Wire.Error.t) result -> 'a
-(** [ok r] is the value of [r], its error raised for {!t}'s getters to compare
-    as the codec's reader answers it. *)
+(** [ok r] is the value of [r], its error raised as {!Refused} for {!t}'s
+    getters and {!reference} to compare as the codec's reader answers it. *)
 
 val pp : t Fmt.t
 (** [pp] prints the getters of a generated module. *)
@@ -68,7 +71,7 @@ val reference : 'r Wire.Codec.t -> string -> bytes -> int -> string
 (** [reference c name buf off] reads the field [name] of [c] at [off] in [buf]
     with the reader {!Wire.Codec.get} stages, and shows its value as
     {!show_code} shows a generated getter's: an integer in decimal, a byte array
-    quoted. *)
+    quoted. The reader's error is raised as {!Refused}. *)
 
 val codecs : (string * Fuzz_gen.packed) list
 (** [codecs] is the codecs the backend compares: the {!Diff_codecs.candidates}
