@@ -220,9 +220,11 @@
 
 - A generated module decodes, validates and encodes its codec with the
   codec's errors into a record of its own, sized by `size r` and `min_size`;
-  a fixed record adds a getter per field and `write buf off ~field ...`, with
-  each field under its label, a field under a map in the map's type (#436,
-  #492, #562, #566, @samoht)
+  a fixed record adds `write buf off ~field ...`, each field under its label
+  and of the type its accessor returns, a field under a map in the map's
+  type. A module with no views, a fixed record with a map or an integer wider
+  than 32 bits and any module on a bigarray, reads its fields with
+  `Get.<field>` (#436, #492, #562, #566, #571, @samoht)
 
 - `Wire_ocaml.v ~buffer:`Bigstring` generates the module on a bigarray of
   bytes instead of `bytes`: generate one module per buffer kind (#562, #566,
@@ -246,9 +248,8 @@
 - A generated module checks a record once (`check`, `ok`, `get`), then reads
   a field with its accessor or writes one with `set_<field>`, with no bounds
   check and no allocation. An accessor never raises: a field that bytes
-  written after the check move out of the buffer reads as absent, and
-  `Get.<field>` answers a result as `Wire.Codec.get` does (#442, #492, #493,
-  #562, #566, @samoht)
+  written after the check move out of the buffer reads as absent (#442, #492,
+  #493, #562, #566, #571, @samoht)
 
 - A generated module of constant size checks its record at an offset,
   `check b length off`, as `Wire.Codec.View.check` does; any other shape
