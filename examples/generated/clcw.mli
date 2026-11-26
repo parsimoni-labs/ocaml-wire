@@ -75,10 +75,6 @@ val size : t -> int
 
 (** {1:checks Validating and decoding} *)
 
-val is_valid : bytes -> int -> bool
-(** [is_valid buf off] is [true] iff the record at [off] in [buf] fits and
-    passes its checks. *)
-
 val validate : bytes -> int -> (unit, Wire_runtime.Error.t) result
 (** [validate buf off] is [Ok ()] if the record at [off] in [buf] fits and
     passes its checks, and the codec's error otherwise. Raises

@@ -39,7 +39,7 @@ let test_fixed () =
   for _ = 1 to 2000 do
     let buf, off = input () in
     let len = Bytes.length buf - off in
-    let valid = G_checked.is_valid buf off in
+    let valid = Result.is_ok (Codec.validate Schemas.checked buf off) in
     let folded =
       G_checked.fold buf off len
         ~invalid:(fun () -> None)

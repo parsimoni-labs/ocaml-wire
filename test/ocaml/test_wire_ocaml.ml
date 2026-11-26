@@ -715,9 +715,8 @@ let test_getters () =
     ~show:string_of_int;
   getter Schemas.eth Schemas.eth_src ~get:(big G_eth_big.Get.src) ~show:Fun.id
 
-(* [is_valid buf off] holds exactly when [Codec.validate] accepts the
-   record at [off]. In the buffer named [b] of length [len],
-   [check b len off] passes exactly then, and each accessor
+(* In the buffer named [b] of length [len], [check b len off] passes
+   exactly when [Codec.validate] accepts the record at [off], and each accessor
    [<field> b v] of the view [get] makes then reads what [Codec.get] reads at
    [off]. *)
 let test_view () =
@@ -744,10 +743,6 @@ let test_view () =
           ok (Codec.validate Schemas.ipv4 buf off);
           "ok")
     in
-    Alcotest.(check bool)
-      "is_valid"
-      (String.starts_with ~prefix:"ok" codec_ok)
-      (G_ipv4.is_valid buf off);
     let expected =
       outcome (fun () ->
           ok (Codec.validate Schemas.ipv4 buf off);
@@ -761,7 +756,10 @@ let test_view () =
       ^ string_of_int (SInt32.to_int (G_ipv4.src b v))
     in
     let c = G_ipv4.check b len off in
-    Alcotest.(check bool) "check" (G_ipv4.is_valid buf off) (G_ipv4.ok c);
+    Alcotest.(check bool)
+      "check"
+      (String.starts_with ~prefix:"ok" codec_ok)
+      (G_ipv4.ok c);
     let got =
       outcome (fun () ->
           if G_ipv4.ok c then read (G_ipv4.get c)
@@ -783,10 +781,11 @@ let test_view () =
           ok (Codec.validate Schemas.checked buf off);
           "ok")
     in
-    Alcotest.(check bool)
-      "is_valid"
-      (String.starts_with ~prefix:"ok" codec_ok)
-      (G_checked.is_valid buf off);
+    (let (Buf.Any b) = Buf.v buf in
+     Alcotest.(check bool)
+       "check"
+       (String.starts_with ~prefix:"ok" codec_ok)
+       (G_checked.ok (G_checked.check b (Buf.length b) off)));
     let expected =
       outcome (fun () ->
           ok (Codec.validate Schemas.checked buf off);
@@ -978,9 +977,9 @@ let test_short_faults () =
     ]
 
 (* The OxCaml target checks the hot paths for allocation, marks the cold ones
-   as raising, takes each buffer it does not keep and the continuations of
-   [decode_with] [local], and holds a 32-bit or 64-bit value unboxed. The stock compiler cannot build
-   it; the OxCaml tests do. *)
+   as raising, takes each buffer it does not keep [local], and holds a 32-bit
+   or 64-bit value unboxed. The stock compiler cannot build it; the OxCaml
+   tests do. *)
 let test_oxcaml () =
   let src = ml ~target:`OxCaml Schemas.ipv4 in
   List.iter
@@ -991,8 +990,6 @@ let test_oxcaml () =
       "let[@inline always] src (b : 'b Wire_runtime.Buf.t @ local) (v : 'b \
        view)";
       "[@zero_alloc assume error] fail";
-      "let[@inline] decode_with (make @ local) ~(fail @ local) (buf @ local) \
-       off";
       "let[@inline][@zero_alloc] write (buf @ local) off";
       "module Int32_u = Wire_runtime.Target.Int32_u";
     ];
@@ -1846,15 +1843,21 @@ let test_interfaces () =
   List.iter
     (fun name ->
       Alcotest.(check bool) ("hides " ^ name) false (contains stock name))
-    [ "first_error"; "no_error"; "cast"; "codec_name"; "validate_written" ];
+    [
+      "first_error";
+      "no_error";
+      "cast";
+      "codec_name";
+      "validate_written";
+      "is_valid";
+    ];
   Alcotest.(check bool) "stock: no mode" false (contains stock "@ local");
   Alcotest.(check bool) "stock: no check" false (contains stock "zero_alloc");
   List.iter
     (fun s -> Alcotest.(check bool) s true (contains ox s))
     [
-      "val[@zero_alloc] is_valid : bytes @ local -> int -> bool @@ portable";
       "val pp : Format.formatter -> t -> unit @@ portable";
-      "fail:(unit -> 'a) @ local ->";
+      "'b Wire_runtime.Buf.t @ local";
     ];
   (* The constraints of the codec are documented with its fields. *)
   Alcotest.(check bool) "constraint" true (contains stock "where [");

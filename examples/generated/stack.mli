@@ -634,10 +634,6 @@ val decode : bytes -> int -> (t, Wire_runtime.Error.t) result
     [buf] as {!val-check} checks it, or the codec's error. Raises
     [Invalid_argument] if [off] is negative. *)
 
-val is_valid : bytes -> int -> bool
-(** [is_valid buf off] is [true] iff the record at [off] in [buf] passes its
-    checks. It never raises. *)
-
 val validate : bytes -> int -> (unit, Wire_runtime.Error.t) result
 (** [validate buf off] is [Ok ()] if the record at [off] in [buf] passes its
     checks and the codec's error otherwise. Raises [Invalid_argument] if [off]

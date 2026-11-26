@@ -132,7 +132,6 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
      %a      ];@\n\
     \      reads = [ %a ];@\n\
     \      valid = (fun b -> Result.map (fun v -> [ %a ]) (%s.Valid.v (%s)));@\n\
-    \      is_valid = (fun b o -> %s.is_valid (%s) o);@\n\
     \      view =@\n\
     \        (fun b o ->@\n\
     \          Result.map (fun () ->@\n\
@@ -159,7 +158,7 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
       list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
     reads
     Fmt.(list ~sep:(any "; ") (pp_read ~m))
-    reads m buf m buf brand buf brand m m brand
+    reads m buf brand buf brand m m brand
     Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
     reads m buf brand buf brand m brand m m
     Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
@@ -198,7 +197,6 @@ let pp_ops_views ppf fields =
      0) in@\n\
     \                  [ %a ])@\n\
     \            (M.validate b 0));@\n\
-    \      is_valid = (fun b o -> M.is_valid b o);@\n\
     \      view =@\n\
     \        (fun b o ->@\n\
     \          Result.map (fun () ->@\n\
@@ -465,13 +463,12 @@ let pp_values_backend ppf ~m ~codec c =
       "%s Diff_ocaml.values_scan ~name:%S ~codec:%s ~fields:[%a] ~full:%a { \
        Diff_ocaml.decode = (fun b o -> match %s.decode b o with Error e -> \
        Error e | Ok r -> let out = Bytes.create (%s.size r) in %s.encode r out \
-       0; Ok (Bytes.to_string out)); validate = %s.validate; is_valid = \
-       %s.is_valid });@\n"
+       0; Ok (Bytes.to_string out)); validate = %s.validate });@\n"
       wrap (m ^ " values") codec
       Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
       fields
       (pp_fold ~m ~unboxed:false)
-      fields m m m m m
+      fields m m m m
   end
 
 (* The backends over [c]: each module [(name, target, selected)], generated

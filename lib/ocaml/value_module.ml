@@ -992,9 +992,6 @@ let mli_root ppf ~target t (r : V.record) =
     "[decode buf off] is the record at [off] in [buf], checked to the end of \
      [buf] as {!val-check} checks it, or the codec's error. Raises \
      [Invalid_argument] if [off] is negative.";
-  pp_val ~target ppf "is_valid" "bytes -> int -> bool"
-    "[is_valid buf off] is [true] iff the record at [off] in [buf] passes its \
-     checks. It never raises.";
   pp_val ~target ppf "validate"
     (Fmt.str "bytes -> int -> (unit, %s) result" parse_error)
     "[validate buf off] is [Ok ()] if the record at [off] in [buf] passes its \

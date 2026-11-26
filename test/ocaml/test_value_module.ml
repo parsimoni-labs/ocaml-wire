@@ -70,8 +70,8 @@ let test_values () =
   | () -> Alcotest.fail "encode: an IHL of 4"
   | exception Invalid_argument _ -> ()
 
-(* Bad bytes never raise from decode, validate or is_valid: they answer the
-   codec's error, or false. *)
+(* Bad bytes never raise from decode or validate: they answer the codec's
+   error. *)
 let test_bad_input () =
   for _ = 1 to 5000 do
     let n = Random.State.int rand 80 in

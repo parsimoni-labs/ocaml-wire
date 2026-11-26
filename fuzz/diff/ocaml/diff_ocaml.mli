@@ -25,7 +25,6 @@ type ops = {
           {!constructor-Get}, [read_<f>_int] as {!constructor-Get_int}. *)
   valid : bytes -> (string list, Wire.Error.t) result;
       (** [Valid.v] on the buffer, then each of {!field-reads}. *)
-  is_valid : bytes -> int -> bool;  (** The generated [is_valid]. *)
   view : bytes -> int -> (string list, Wire.Error.t) result;
       (** [validate buf off], then [View.check] and each of {!field-reads}
           through [view_<f>]. *)
@@ -144,7 +143,6 @@ type values = {
           error. *)
   validate : bytes -> int -> (unit, Wire.Error.t) result;
       (** The generated [validate]. *)
-  is_valid : bytes -> int -> bool;  (** The generated [is_valid]. *)
 }
 (** The values of a generated module of any shape. *)
 
@@ -158,7 +156,7 @@ val values_scan :
 (** [values_scan ~name ~codec ~fields ~full v] is the backend of the values of a
     module of [codec]: on each frame, the bytes alone, [v]'s decode gives what
     {!Wire.Codec.decode} gives, written back by the generated and the codec's
-    encoders alike, or the same error, and its validate and is_valid agree with
+    encoders alike, or the same error, and its validate agrees with
     {!Wire.Codec.validate}; it then hands out [full], the module's own outputs.
     Fails with {!Alcobar.failf}. *)
 

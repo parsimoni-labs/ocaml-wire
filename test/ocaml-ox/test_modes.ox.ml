@@ -1,8 +1,8 @@
 (* The modes of the code Wire_ocaml generates for OxCaml: a function that reads
    or writes a buffer without keeping it takes it [local], so the buffer may be
-   on the caller's stack; [decode_with] takes its continuations [local]; and every
-   function is [portable], so a parallel task may call it. Only an OxCaml
-   compiler builds this file. *)
+   on the caller's stack, and reads it through views that allocate nothing;
+   and every function is [portable], so a parallel task may call it. Only an
+   OxCaml compiler builds this file. *)
 
 let packet =
   "\x45\x00\x00\x3c\x1c\x46\x40\x00\x40\x06\xb1\xe6\xc0\xa8\x00\x68\xc0\xa8\x00\x01"
@@ -25,8 +25,8 @@ let[@inline] fields (b @ local) =
 let stack_fields () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
-  if not (G_ipv4.is_valid b 0) then Alcotest.fail "the header is refused";
   let r = fields b in
+  if r < 0 then Alcotest.fail "the header is refused";
   r
 
 let test_stack_reads () =
@@ -62,29 +62,36 @@ let[@inline] record (r : G_ipv4_record.t @ local) =
   (r.versionihl :> int) + (r.length :> int) + (r.ttl :> int)
   + (r.frag :> int) + (r.sum :> int)
 
-(* What [decode_with] folds of the header in [b] into one [int], as {!record}
-   does, or [-1] for a header it refuses. *)
+(* What the view of the header in [b] holds, folded into one [int] as {!record}
+   folds it, or [-1] for a header its check refuses. *)
 let[@inline] folded (b @ local) =
-  G_ipv4_record.decode_with
-    (fun vihl _tos len _id frag ttl _proto sum _src _dst ->
-      (vihl :> int) + (len :> int) + (ttl :> int) + (frag :> int)
-      + (sum :> int))
-    ~fail:(fun () -> -1)
-    b 0
+  let module G = G_ipv4_record in
+  let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
+  let c = G.check n (Wire_runtime.Buf.length n) 0 in
+  if G.ok c then
+    let v = G.get c in
+    (G.versionihl n v :> int)
+    + (G.length n v :> int)
+    + (G.ttl n v :> int)
+    + (G.frag n v :> int)
+    + (G.sum n v :> int)
+  else -1
 
-(* [decode_with] with a constructor that closes over a local value, on a
-   buffer on the stack. *)
+(* A view read by a function that closes over a local value, on a buffer on
+   the stack. *)
 let stack_decode () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
   let local_ bias = ref 1 in
-  let with_ =
-    G_ipv4.decode_with
-      (fun vihl _tos len _id _frag ttl _proto _sum _src _dst ->
-        !bias + (vihl :> int) + (len :> int) + (ttl :> int))
-      ~fail:(fun () -> -1)
-      b 0
+  let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
+  let read v =
+    !bias
+    + (G_ipv4.versionihl n v :> int)
+    + (G_ipv4.length n v :> int)
+    + (G_ipv4.ttl n v :> int)
   in
+  let with_ = if G_ipv4.ok c then read (G_ipv4.get c) else -1 in
   with_ + folded b
 
 let test_stack_decode () =
@@ -101,8 +108,7 @@ let stack_write () =
   let b = Bytes.create__stack size in
   G_ipv4_record.encode r b 0;
   let back = folded b in
-  let valid = G_ipv4.is_valid b 0 in
-  valid && back = record r
+  back >= 0 && back = record r
 
 let test_stack_write () = Alcotest.(check bool) "written" true (stack_write ())
 

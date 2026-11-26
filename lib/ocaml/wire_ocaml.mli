@@ -69,9 +69,8 @@
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
-    checks on the checks, [write] and the reads, and [decode_with k ~fail],
-    which takes continuations for flambda2 to inline, so a [k] that uses a few
-    fields reads only those, under one frame check. *)
+    checks on the checks, [write] and the reads, and takes the buffers it does
+    not keep [local]. *)
 
 type buffer = [ `Bytes | `Bigstring ]
 (** The buffer a generated module reads and writes: [bytes], or a bigarray of

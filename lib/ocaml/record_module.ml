@@ -1193,17 +1193,6 @@ let pp_validate_written ~src ppf ~target =
     (match target with `OxCaml -> "[@inline][@zero_alloc]" | `OCaml -> "")
     src.buf
 
-(* [decode_with] takes the constructor and the answer to a record that fails
-   as arguments, [local], so flambda2 inlines them with it and a decode of
-   integer fields allocates nothing on the heap. *)
-let pp_oxcaml ~src ppf ~plan ~size =
-  pp_decode ~src ~ox:true ppf ~plan ~size
-    ~head:
-      (Fmt.str
-         "let[@inline] decode_with (make @@ local) ~(fail @@ local) %s off"
-         src.buf) ~fail:"fail ()" ~call:(fun args ->
-      Fmt.str "make %a" pp_list args)
-
 (* The bits of a 4-byte record a field occupies in a NEON lane, which holds the
    record's bytes in buffer order read as a little-endian word: [(shift,
    width)] when the field sits in one byte, unsigned, with no check, enum or
@@ -1464,13 +1453,12 @@ let src_of ~target = function
 
 (* The checks, decoders and writes of a fixed record on [src], and with
    [getters] its reads. *)
-let pp_codec ~src ~bytes ~getters ppf ~target ~plan ~size =
+let pp_codec ~src ~getters ppf ~target ~plan ~size =
   pp_cold ~src ppf ~target ~plan ~size;
   pp_validate ~src ppf ~target ~plan ~size;
   if has_checks plan then pp_validate_written ~src ppf ~target;
   pp_decode ~src ppf ~plan ~size ~head:(Fmt.str "let decode %s off" src.buf)
     ~fail:"error buf off" ~call:(fun args -> Fmt.str "Ok (v %a)" pp_list args);
-  if target = `OxCaml && bytes then pp_oxcaml ~src ppf ~plan ~size;
   pp_write ~src ppf ~target ~plan;
   if getters then pp_getters ~src ppf ~target (all_fields plan)
 
@@ -1482,11 +1470,10 @@ let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
   pp_record ~maps ppf fields;
   pp_printer ppf fields;
   let src = src_of ~target buffer in
-  let bytes = buffer = `Bytes in
   (* Beside the module's views, [Get] would be second reads of each field,
      [Valid] and [View] second checks, and [read_<field>] and [view_<field>]
      second reads again: a module without views keeps them as its reads. *)
-  pp_codec ~src ~bytes ~getters:(not views) ppf ~target ~plan ~size;
+  pp_codec ~src ~getters:(not views) ppf ~target ~plan ~size;
   if not views then begin
     pp_valid ~src ppf ~target ~plan;
     pp_view ~src ppf ~target ~plan ~size
@@ -1511,7 +1498,6 @@ let own_names =
     "validate_written";
     "rejected";
     "decode";
-    "decode_with";
     "first_error";
     "error";
     "write";

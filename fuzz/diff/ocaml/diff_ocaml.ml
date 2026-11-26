@@ -10,7 +10,6 @@ type ops = {
   gets : (string * view * (bytes -> int -> string)) list;
   reads : (string * view) list;
   valid : bytes -> (string list, Wire.Error.t) result;
-  is_valid : bytes -> int -> bool;
   view : bytes -> int -> (string list, Wire.Error.t) result;
   checked : bytes -> int -> bool * string list;
 }
@@ -216,12 +215,9 @@ let both case f =
   f "bytes" case.m.bytes;
   f "bigstring" case.m.bigstring
 
-(* [is_valid], [validate] then the view's reads, and [View.check] at [off],
+(* [validate] then the view's reads, and [View.check] at [off],
    against [Codec.validate] and each field's reader there. *)
-let views_at case c ~what ~validated ops buf off =
-  same case.label (what "is_valid")
-    (string_of_bool (validated = "ok "))
-    (string_of_bool (ops.is_valid buf off));
+let views_at case c ~what ops buf off =
   let expected =
     outcome (fun () ->
         ok (Wire.Codec.validate c buf off);
@@ -271,7 +267,7 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
             (outcome (fun () -> List.assoc name case.refs buf off))
             (outcome (fun () -> read buf off)))
         ops.gets;
-      views_at case c ~what ~validated ops buf off)
+      views_at case c ~what ops buf off)
 
 (* The record [buf] holds at [off], when it decodes, encoded into buffers
    around it, too short, and at an offset out of range. *)
@@ -482,7 +478,6 @@ let scan_frame buf off len =
 type values = {
   decode : bytes -> int -> (string, Wire.Error.t) result;
   validate : bytes -> int -> (unit, Wire.Error.t) result;
-  is_valid : bytes -> int -> bool;
 }
 
 let pp_result pp_ok =
@@ -533,17 +528,14 @@ let check_decoded ~name codec frame got =
 
 (* The values of a module on a frame's bytes alone, against the codec's:
    [decode] gives the record the codec gives, written back by the module's
-   encoder in the bytes it measures, or the codec's error; [validate] and
-   [is_valid] agree with the codec's [validate]. *)
+   encoder in the bytes it measures, or the codec's error; [validate] agrees
+   with the codec's. *)
 let check_values ~name codec v frame =
   check_decoded ~name codec frame (v.decode frame 0);
   let want = Wire.Codec.validate codec frame 0 and got = v.validate frame 0 in
   if not (same_result (fun () () -> true) want got) then
     Alcobar.failf "%s: on %S the codec validates %a, the module %a" name
-      (Bytes.to_string frame) (pp_result Fmt.nop) want (pp_result Fmt.nop) got;
-  if v.is_valid frame 0 <> Result.is_ok want then
-    Alcobar.failf "%s: is_valid disagrees with validate on %S" name
-      (Bytes.to_string frame)
+      (Bytes.to_string frame) (pp_result Fmt.nop) want (pp_result Fmt.nop) got
 
 let values_scan ~name ~codec ~fields ~full v =
   let scan buf off len =

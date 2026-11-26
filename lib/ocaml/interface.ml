@@ -256,14 +256,10 @@ let pp_record_type ppf r =
   pp_val r.target ppf "pp" "Format.formatter -> t -> unit"
     "[pp ppf r] prints an unspecified representation of [r] on [ppf]."
 
-(* [is_valid] to [decode], on the buffer [b]. *)
+(* [validate] and [decode], on the buffer [b]. *)
 let pp_checks ppf r b =
   let target = r.target in
   let t = decoded r in
-  pp_val ~zero_alloc:true target ppf "is_valid"
-    (arrows [ buf b; "int"; "bool" ])
-    "[is_valid buf off] is [true] iff the record at [off] in [buf] fits and \
-     passes its checks.";
   pp_val target ppf "validate"
     (arrows [ buf b; "int"; Fmt.str "(unit, %s) result" parse_error ])
     "[validate buf off] is [Ok ()] if the record at [off] in [buf] fits and \
@@ -273,19 +269,6 @@ let pp_checks ppf r b =
   pp_val ~portable target ppf "decode"
     (arrows [ buf b; "int"; Fmt.str "(%s, %s) result" t parse_error ])
     "[decode buf off] is the record at [off] in [buf], or the codec's error. \
-     Raises [Invalid_argument] if [off] is negative."
-
-let pp_oxcaml_decoders ppf r =
-  let b = bytes_buf r.target in
-  let k = arrows (List.map (typed ~maps:r.maps) r.fields @ [ "'a" ]) in
-  pp_val ~portable:(no_map r.fields) r.target ppf "decode_with"
-    (arrows
-       [
-         "(" ^ k ^ ") @ local"; "fail:(unit -> 'a) @ local"; buf b; "int"; "'a";
-       ])
-    "[decode_with k ~fail buf off] is [k] applied to the fields of the record \
-     at [off] in [buf], in order, if it fits and passes its checks, and [fail \
-     ()] otherwise. [k] and [fail] are [local], so flambda2 inlines them. \
      Raises [Invalid_argument] if [off] is negative."
 
 let pp_writes ppf r b =
@@ -567,7 +550,6 @@ let pp_x4 ppf r lanes =
 let pp_buffer ?(views = false) ppf r b =
   pp_section ppf "checks" "Validating and decoding";
   pp_checks ppf r b;
-  if b.typ = "bytes" && r.target = `OxCaml then pp_oxcaml_decoders ppf r;
   pp_section ppf "writes" "Writing";
   pp_writes ppf r b;
   if not views then begin
