@@ -824,13 +824,8 @@ module Gen : sig
   (** [check_window r b length ~off ~len] is [off] when the [len] bytes at [off]
       lie in [b] and the codec accepts them on their own, and [-1] otherwise. *)
 
-  type 'a read = { read : 'b. 'b Wire_runtime.Buf.t -> int -> 'a }
-  (** A read of a field of the record a view holds. *)
-
-  (** A field's read: through the views of its codec, or another. *)
-  type 'a reader =
-    | Direct of ('a, unit) View.field  (** Read by {!module-View.val-read}. *)
-    | Read of 'a read  (** Read otherwise. *)
+  type 'a reader = ('a, unit) View.field
+  (** A field's read: a field of the views of its codec. *)
 
   val read : 'a reader -> 'b Wire_runtime.Buf.t -> int -> 'a
   (** [read h b v] reads the field [h] of the record [v] holds in [b]. *)

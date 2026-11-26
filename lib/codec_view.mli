@@ -26,6 +26,9 @@ type ('a, 'c) field =
   | Scalar : 'a Codec_repr.scalar -> ('a, 'c) field
   | Get : (bytes -> int -> 'a) -> ('a, 'c) field
 
+val read_other : ('a, 'c) field -> bytes -> int -> 'a
+(** [read_other f buf r] is {!read} on the bytes [buf], out of line. *)
+
 val read : ('a, 'c) field -> 'b Buf.t -> int -> 'a
 (** [read f b r] is the field [f] of the record at [r] in [b], which the
     record's check accepted. A {!constructor-Word} read is inline, every other

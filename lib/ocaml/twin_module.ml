@@ -193,19 +193,28 @@ let header ppf ~codec =
      @\n"
     codec
 
+(* The functor's head, inlined where it is applied so that flambda reads its
+   records and handles as constants, not through the instance's closures. *)
+let pp_functor ppf ~digest =
+  Fmt.pf ppf
+    "module Make =@\n\
+     functor@\n\
+    \  [@inline]@\n\
+    \  (C : sig@\n\
+    \    type r@\n\
+     @\n\
+    \    val codec : r Wire.Codec.t@\n\
+    \  end)@\n\
+     ->@\n\
+     struct@\n\
+     let () = %s.check C.codec %S@\n"
+    gen digest
+
 let ml ~codec ~digest ~(views : V.t option) ~folds =
   Fmt.str "%a"
     (fun ppf () ->
       header ppf ~codec;
-      Fmt.pf ppf
-        "module Make (C : sig@\n\
-        \  type r@\n\
-         @\n\
-        \  val codec : r Wire.Codec.t@\n\
-         end) =@\n\
-         struct@\n\
-         let () = %s.check C.codec %S@\n"
-        gen digest;
+      pp_functor ppf ~digest;
       (match views with
       | None -> ()
       | Some (t : V.t) ->

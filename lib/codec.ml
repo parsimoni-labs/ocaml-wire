@@ -1676,11 +1676,11 @@ module Gen = struct
   let other_type c name =
     Fmt.invalid_arg "%s: field %s has another type" c.name name
 
-  type 'a read = { read : 'b. 'b Wire_runtime.Buf.t -> int -> 'a }
-  type 'a reader = Direct of ('a, unit) View.field | Read of 'a read
+  (* A field's read is a field of the views: one the views read with no
+     check, or [Get] of a read of any other. *)
+  type 'a reader = ('a, unit) View.field
 
-  let[@inline] read h b r =
-    match h with Direct f -> View.read f b r | Read g -> g.read b r
+  let[@inline] read (h : _ reader) b r = View.read h b r
 
   (* An integer output as a value of the kind [k]. *)
   let of_output : type a. a kind -> int64 -> a =
@@ -1700,33 +1700,27 @@ module Gen = struct
   (* A field the views read with no reader of their own, such as an optional
      field behind a gate the record's bytes decide, is read with the record's
      outputs, which name it by its label. *)
-  let output (v : _ View.named) name f =
+  let output (v : _ View.named) name f : _ reader =
     let s = to_struct v.codec and label = Names.ocaml_label name in
-    Read
-      {
-        read =
-          (fun b r ->
-            f (Scan_outputs.read s (b : _ Wire_runtime.Buf.t :> bytes) r) label);
-      }
+    View.Get (fun buf r -> f (Scan_outputs.read s buf r) label)
 
   (* A field a view reads with no check is one direct read; any other is read
      with its check, answering what [fail] makes of the error, as the module
      [Wire_ocaml] writes answers a field the bytes written after the check
      move out of the buffer. *)
-  let view_field (v : _ View.named) name typ ~fail =
+  let view_field (v : _ View.named) name typ ~fail : _ reader option =
     let f = record_field v.codec name typ in
     match View.field v f with
-    | f -> Some (Direct f)
+    | f -> Some f
     | exception Invalid_argument _ -> (
         match View.checked_field v f with
         | f ->
             Some
-              (Read
-                 {
-                   read =
-                     (fun b r ->
-                       match View.read f b r with Ok x -> x | Error _ -> fail);
-                 })
+              (View.Get
+                 (fun buf r ->
+                   match View.read_other f buf r with
+                   | Ok x -> x
+                   | Error _ -> fail))
         | exception Invalid_argument _ -> None)
 
   let field_at (type a) (Record v) i (k : a kind) : a reader =
@@ -1734,16 +1728,9 @@ module Gen = struct
     let by_output () =
       output v name (fun o l -> of_output k (Scan_outputs.int o l))
     in
-    let optional = function
-      | Direct f ->
-          Read
-            {
-              read =
-                (fun b r -> Option.value ~default:(zero k) (View.read f b r));
-            }
-      | Read g ->
-          Read
-            { read = (fun b r -> Option.value ~default:(zero k) (g.read b r)) }
+    let optional f =
+      View.Get
+        (fun buf r -> Option.value ~default:(zero k) (View.read_other f buf r))
     in
     match typ with
     | Types.Optional { inner; _ } -> (
@@ -1770,7 +1757,8 @@ module Gen = struct
     match typ with
     | Types.Optional _ -> (
         match view_field v name typ ~fail:None with
-        | Some h -> Read { read = (fun b r -> Option.is_some (read h b r)) }
+        | Some h ->
+            View.Get (fun buf r -> Option.is_some (View.read_other h buf r))
         | None ->
             output v name (fun o l -> Scan_outputs.bool o (l ^ "_present")))
     | _ -> Fmt.invalid_arg "%s: field %s is not optional" v.codec.name name
@@ -1828,8 +1816,12 @@ module Gen = struct
 
   let sub_at r i = fst (held_at r i)
   let enter_at r i = snd (held_at r i)
-  let enter (s : (unit, unit) View.sub) b len r : int = View.enter s b len r
-  let check_at (Record v) b length off : int = View.check v b length off
+
+  let[@inline] enter (s : (unit, unit) View.sub) b len r : int =
+    View.enter s b len r
+
+  let[@inline] check_at (Record v) b length off : int =
+    View.check v b length off
 
   let check_window (Record v) (b : _ Wire_runtime.Buf.t) length ~off ~len : int
       =
