@@ -61,11 +61,8 @@
     one load.
 
     With [~buffer:`Bigstring] the module reads and writes a bigarray of bytes
-    instead, with the same functions and the same errors, and no walk:
-    [Valid.v buf] validates the record at offset 0 and [read_<field>] on what it
-    returns is one load with no check of its own; [View.check b len off],
-    [View.ok], [View.get] and [view_<field> b v] are its views, and
-    [View.with_ b len off ~ok ~fail] hands the view to [ok] or calls [fail]. *)
+    instead, with the same functions and the same errors, and no walk: it has no
+    views, and reads its fields with [Get]. *)
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]

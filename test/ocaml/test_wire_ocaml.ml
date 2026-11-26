@@ -804,8 +804,8 @@ let test_view () =
     Alcotest.(check string) "checked view" expected got
   done
 
-(* A check that failed gives no view: [get] refuses it, on [bytes] and on a
-   bigarray alike, and [Valid.v] on a bigarray answers the codec's error. *)
+(* A check that failed gives no view: [get] refuses it, and on a bigarray,
+   where the module has no views, [validate] answers the codec's error. *)
 let test_failed_views () =
   let short = Bytes.make 3 '\xff' in
   let (Buf.Any b) = Buf.v short in
@@ -819,21 +819,13 @@ let test_failed_views () =
   let big =
     Bigarray.Array1.init Bigarray.char Bigarray.c_layout 3 (fun _ -> '\xff')
   in
-  let (Buf.Bigstring.Any b) = Buf.Bigstring.v big in
-  let c = G_ipv4_big.View.check b (Buf.Bigstring.length b) 0 in
-  Alcotest.(check bool) "bigstring: failed" false (G_ipv4_big.View.ok c);
-  Alcotest.(check bool)
-    "bigstring: get refuses" true
-    (match G_ipv4_big.View.get c with
-    | _ -> false
-    | exception Invalid_argument _ -> true);
   Alcotest.(check string)
-    "bigstring: Valid.v answers the codec's error"
+    "bigstring: validate answers the codec's error"
     (outcome (fun () ->
          ok (Codec.validate Schemas.ipv4 short 0);
          ""))
     (outcome (fun () ->
-         ignore (ok (G_ipv4_big.Valid.v big));
+         ok (G_ipv4_big.validate big 0);
          ""));
   let off_end = Bytes.make 40 '\x45' in
   let (Buf.Any b) = Buf.v off_end in
@@ -917,9 +909,8 @@ let test_bigstring () =
       let r = ok (G_checked.decode b 0) in
       string_of_int (UInt8.to_int r.proto + r.ihl))
     ~on_big:(fun b _ ->
-      let v = ok (G_checked_big.Valid.v b) in
-      string_of_int
-        ((G_checked_big.read_proto v :> int) + (G_checked_big.read_ihl v :> int)));
+      let r = ok (G_checked_big.decode b 0) in
+      string_of_int (UInt8.to_int r.proto + r.ihl));
   let size = Codec.min_size Schemas.checked in
   for _ = 1 to 2000 do
     let w k = Random.State.int rand (k + 40) - 20 in

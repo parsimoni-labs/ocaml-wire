@@ -195,14 +195,6 @@ let labelled_args fields =
 let typed ~maps f =
   match f.map with Some path -> List.assoc path maps | None -> type_of f
 
-(* The implementation's allocation checks, as [Record_module] writes them:
-   a read of an integer or a bitfield with no map, and a write that calls no
-   map. *)
-let read_checked f =
-  match f.store with
-  | (Int _ | Bits _) when Option.is_none f.map -> true
-  | _ -> false
-
 let no_map fields = List.for_all (fun f -> Option.is_none f.map) fields
 
 (* {2 The record module} *)
@@ -225,21 +217,6 @@ let read_what f =
   match f.map with
   | Some path -> Fmt.str "%s, read through [%s]" (where f) path
   | None -> where f
-
-(* The type a read of a checked record answers: a field under a map answers
-   its value or the map's error, as bytes rewritten after the check may hold a
-   value the map refuses. *)
-let checked_type ~maps f =
-  match f.map with
-  | Some _ -> Fmt.str "(%s, %s) result" (typed ~maps f) parse_error
-  | None -> typed ~maps f
-
-(* What a read of a checked record answers, in its documentation. *)
-let checked_what f =
-  match f.map with
-  | Some _ ->
-      Fmt.str "%s, or the error of a value the map refuses" (read_what f)
-  | None -> read_what f
 
 let pp_record_type ppf r =
   pp_section ppf "records" "Records";
@@ -365,112 +342,6 @@ let pp_of_words ppf r =
       | _ -> ())
     r.fields
 
-let pp_valid ppf r b =
-  let target = r.target in
-  pp_doc ppf
-    "Buffers whose record at offset 0 passed its checks. A read of one is one \
-     load with no check: the buffer's length cannot change, so a read stays in \
-     it, but if its bytes change after the check a read may return a value \
-     that breaks a constraint, and a field under a map answers the map's error \
-     on a value it refuses.";
-  Fmt.pf ppf "module Valid : sig@\ntype t = private %s@\n" b.typ;
-  pp_doc ppf "The type for buffers whose record at offset 0 passed its checks.";
-  Fmt.pf ppf "@\n";
-  pp_val target ppf "v"
-    (arrows [ b.typ; Fmt.str "(t, %s) result" parse_error ])
-    "[v buf] is [buf], once its record at offset 0 passed its checks, and the \
-     codec's error otherwise.";
-  Fmt.pf ppf "end@\n@\n";
-  List.iter
-    (fun f ->
-      let l = f.label in
-      let zero_alloc = read_checked f in
-      let portable = Option.is_none f.map in
-      pp_val ~zero_alloc ~portable target ppf ("read_" ^ l)
-        (arrows [ "Valid.t"; checked_type ~maps:r.maps f ])
-        (Fmt.str "[read_%s v] is %s of the record in [v]." l (checked_what f));
-      match f.store with
-      | Int { width = 32; _ } ->
-          pp_val ~zero_alloc target ppf
-            ("read_" ^ l ^ "_int")
-            (arrows [ "Valid.t"; "int" ])
-            (Fmt.str "[read_%s_int v] is %s of the record in [v], as an [int]."
-               l (where f))
-      | _ -> ())
-    r.fields
-
-let pp_view_module ppf r b =
-  let target = r.target in
-  let k = local_mode (target = `OxCaml) in
-  pp_doc ppf
-    "Records checked once in a buffer named by [Wire_runtime.Buf.v], whose \
-     length is read once. A view is an [int], so it allocates nothing, and a \
-     read of one is one load with no check, with the promise of {!Valid}.";
-  Fmt.pf ppf "module View : sig@\n";
-  Fmt.pf ppf "type 'b t = private int@\n";
-  pp_doc ppf "The type for records that passed their checks in the buffer ['b].";
-  Fmt.pf ppf "@\ntype 'b check = private int@\n";
-  pp_doc ppf "The type for the answers of {!val-check}.";
-  Fmt.pf ppf "@\n";
-  pp_val target ppf "check"
-    (arrows [ named b; length b; "int"; "'b check" ])
-    "[check b len off] checks the record at [off] in the buffer [b] of length \
-     [len], without raising.";
-  pp_val target ppf "ok"
-    (arrows [ "'b check"; "bool" ])
-    "[ok c] is [true] iff the check [c] passed.";
-  pp_val target ppf "get"
-    (arrows [ "'b check"; "'b t" ])
-    "[get c] is the record the check [c] passed. Raises [Invalid_argument] if \
-     [c] failed.";
-  pp_val target ppf "with_"
-    (arrows
-       [
-         named b;
-         length b;
-         "int";
-         Fmt.str "ok:('b t -> 'a)%s" k;
-         Fmt.str "fail:(unit -> 'a)%s" k;
-         "'a";
-       ])
-    "[with_ b len off ~ok ~fail] is [ok r] for the record [r] at [off] in the \
-     buffer [b] of length [len] if it passes its checks, and [fail ()] \
-     otherwise.";
-  Fmt.pf ppf "end@\n@\n"
-
-let pp_view ppf r b =
-  let target = r.target in
-  pp_view_module ppf r b;
-  let view_t = "'b View.t" in
-  List.iter
-    (fun f ->
-      let l = f.label in
-      let zero_alloc = read_checked f in
-      let view ?(portable = true) suffix typ doc =
-        pp_val ~zero_alloc ~portable target ppf
-          ("view_" ^ l ^ suffix)
-          (arrows [ named b; view_t; typ ])
-          doc
-      in
-      view ~portable:(Option.is_none f.map) ""
-        (checked_type ~maps:r.maps f)
-        (Fmt.str "[view_%s b v] is %s of the record [v] in [b]." l
-           (checked_what f));
-      match f.store with
-      | Int { width = 32; _ } ->
-          view "_int" "int"
-            (Fmt.str
-               "[view_%s_int b v] is %s of the record [v] in [b], as an [int]."
-               l (where f))
-      | Bits { base; _ } ->
-          view "_word" "int"
-            (Fmt.str
-               "[view_%s_word b v] is %s at offset %d of the record [v] in \
-                [b], for {!%s_of_word}."
-               l (word base) f.offset l)
-      | _ -> ())
-    r.fields
-
 let pp_x4_writes ppf r lanes =
   let target = r.target in
   let b = bytes_buf r.target in
@@ -555,10 +426,7 @@ let pp_buffer ?(views = false) ppf r b =
   if not views then begin
     pp_section ppf "reads" "Reading fields";
     pp_get ppf r b;
-    pp_of_words ppf r;
-    pp_valid ppf r b;
-    pp_section ppf "views" "Views";
-    pp_view ppf r b
+    pp_of_words ppf r
   end
 
 let pp_preamble ppf r =

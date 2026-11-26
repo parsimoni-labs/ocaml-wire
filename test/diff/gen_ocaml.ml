@@ -99,20 +99,20 @@ let reads fields =
         f.views)
     fields
 
-(* A read of [v], a [Valid.t]; or with [b], of the view [v] of the buffer
-   named [b]. *)
-let pp_read ?(prefix = "read") ?b ~m ppf (f, v) =
-  let args = match b with None -> "v" | Some b -> b ^ " v" in
+(* A read of the field [f] at [o] in [bb] with the getter of [v] of [m]. *)
+let pp_get ~m ppf (f, v) =
   match v with
   | Diff_ocaml.Get ->
-      Fmt.pf ppf "%s (%s.%s_%s %s)" f.plain m prefix f.ident args
-  | _ -> Fmt.pf ppf "string_of_int (%s.%s_%s_int %s)" m prefix f.ident args
+      Fmt.pf ppf "%s (Diff_ocaml.ok (%s.Get.%s bb o))" f.plain m f.ident
+  | _ ->
+      Fmt.pf ppf "string_of_int (Diff_ocaml.ok (%s.Get.%s_int bb o))" m f.ident
 
-(* The glue over [m], whose buffer [buf] makes from
-   the bytes [b] and [brand] names; [back] wraps a write so its bytes land in
-   [b]. *)
-let pp_ops ppf ~m ~buf ~brand ~back fields =
+(* The glue over [m], a module with no views, whose buffer [buf] makes from
+   the bytes [b]; [back] wraps a write so its bytes land in [b]. Its reads
+   after a check are [validate] then its getters. *)
+let pp_ops ppf ~m ~buf ~back fields =
   let reads = reads fields in
+  let pp_reads = Fmt.(list ~sep:(any "; ") (pp_get ~m)) in
   Fmt.pf ppf
     "{@\n\
     \      Diff_ocaml.decode =@\n\
@@ -131,38 +131,26 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     \      gets = [@\n\
      %a      ];@\n\
     \      reads = [ %a ];@\n\
-    \      valid = (fun b -> Result.map (fun v -> [ %a ]) (%s.Valid.v (%s)));@\n\
+    \      valid =@\n\
+    \        (fun b ->@\n\
+    \          let bb = %s and o = 0 in@\n\
+    \          Result.map (fun () -> [ %a ]) (%s.validate bb o));@\n\
     \      view =@\n\
     \        (fun b o ->@\n\
-    \          Result.map (fun () ->@\n\
-    \              match %s.v (%s) with@\n\
-    \              | %s.Any bb ->@\n\
-    \                  let v = %s.View.get (%s.View.check bb (%s.length bb) o) \
-     in@\n\
-    \                  [ %a ])@\n\
-    \            (%s.validate (%s) o));@\n\
+    \          let bb = %s in@\n\
+    \          Result.map (fun () -> [ %a ]) (%s.validate bb o));@\n\
     \      checked =@\n\
     \        (fun b o ->@\n\
-    \          match %s.v (%s) with@\n\
-    \          | %s.Any bb ->@\n\
-    \              let c = %s.View.check bb (%s.length bb) o in@\n\
-    \              if %s.View.ok c then@\n\
-    \                let v = %s.View.get c in@\n\
-    \                (true, [ %a ])@\n\
-    \              else (false, []));@\n\
+    \          let bb = %s in@\n\
+    \          if o >= 0 && Result.is_ok (%s.validate bb o) then (true, [ %a ])@\n\
+    \          else (false, []));@\n\
     \    }"
     m m m buf m buf m back (Fmt.str "%s.encode r" m)
     Fmt.(list ~sep:nop (pp_gets ~m ~buf))
     fields
     Fmt.(
       list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
-    reads
-    Fmt.(list ~sep:(any "; ") (pp_read ~m))
-    reads m buf brand buf brand m m brand
-    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
-    reads m buf brand buf brand m brand m m
-    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
-    reads
+    reads buf pp_reads reads m buf pp_reads reads m buf m pp_reads reads
 
 (* A read of the view [v] of [bb] through the module's accessor of [f]. *)
 let pp_access ppf (f, _) = Fmt.pf ppf "%s (M.%s bb v)" f.plain f.acc
@@ -254,8 +242,7 @@ let pp_case ppf (label, c, (src, intf)) =
     (Wire_ocaml.to_mli (Wire_ocaml.v ~target ~buffer:`Bigstring c))
     (Wire_ocaml.to_ml (Wire_ocaml.v ~target ~buffer:`Bigstring c))
     pp_ops_views fields
-    (pp_ops ~m:"MB" ~buf:"Diff_ocaml.big b" ~brand:"Wire_runtime.Buf.Bigstring"
-       ~back:(fun ppf w ->
+    (pp_ops ~m:"MB" ~buf:"Diff_ocaml.big b" ~back:(fun ppf w ->
          Fmt.pf ppf
            "let bb = Diff_ocaml.big b in %s bb o; Diff_ocaml.blit_back bb b" w))
     fields

@@ -106,12 +106,13 @@ codec is built, so no input can break it.
   it for that field, and raises only on a negative offset. `Codec.Word.check` refuses such a buffer and a negative offset, and
   `Codec.Word.error` answers the error `Codec.get` answers.
 - **Bytes rewritten after a check are input.** A read of a checked record
-  (`read_<field>` of a `Valid.t`, `view_<field>` of a view) reads its bytes
-  again with no check of their own, and never raises on them. A field under
-  a map answers `('a, Wire.Error.t) result`: its value, or the error the map
-  gives a value it refuses, such as a lookup index past its table, at the
-  field's offset and under its name, as `Get.<field>` and `Codec.get` answer
-  it. No value is made up for it: a map's type has no absent value.
+  (a view's accessor) reads its bytes again with no check of their own, and
+  never raises on them. A generated module whose record has a field under a
+  map has no views: `Get.<field>` frames the field at each read and answers
+  `('a, Wire.Error.t) result`, its value or the error the map gives a value
+  it refuses, such as a lookup index past its table, at the field's offset
+  and under its name, as `Codec.get` answers it. No value is made up for it:
+  a map's type has no absent value.
   A field those bytes move out of the buffer, placed again after a span,
   reads as absent, as an optional field they turn off does: 0 for an
   integer, `false` for a presence, an empty slice or string for bytes. The
@@ -151,8 +152,8 @@ codec is one. The views read the fields: a fixed record has no second check
 a word and its fields) beside them. A fixed record the walk does not cover,
 one with a map or an integer wider than 32 bits, reads its fields with `Get`.
 A module reads one buffer, chosen when it is generated: `~buffer:`Bigstring`
-writes a fixed record's members on a bigarray, with no walk, where `Get`,
-`Valid` and `View` remain its reads and views. `Wire_ocaml.v` declares the
+writes a fixed record's members on a bigarray, with no walk, where `Get`
+remains its reads. `Wire_ocaml.v` declares the
 module, `Wire_ocaml.main` writes it, one dune rule per module.
 
 A fold `n` without a visitor takes its consumer as arguments (`n`,

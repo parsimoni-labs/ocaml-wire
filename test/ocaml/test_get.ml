@@ -59,8 +59,7 @@ let test_getter_errors () =
         kind = Unexpected_eof { expected = 2; got = 1 };
       }
 
-(* A field taken out of its word reads what its own getter reads, from a
-   checked load or through a view. *)
+(* A field taken out of its word reads what its own getter reads. *)
 let test_words () =
   let size = Codec.min_size Schemas.wide in
   for _ = 1 to 2000 do
@@ -85,29 +84,7 @@ let test_words () =
           "word"
           (outcome (fun () -> show (get buf off)))
           (outcome (fun () -> show (Result.map of_word (word buf off)))))
-      fields;
-    (* The same through a view, whose word reads have no check of their own. *)
-    let module B = Wire_runtime.Buf.Bigstring in
-    match B.v buf with
-    | B.Any b ->
-        let c = G_wide_big.View.check b (B.length b) off in
-        if G_wide_big.View.ok c then begin
-          let w = G_wide_big.View.get c in
-          let check name get of_view = Alcotest.(check int) name get of_view in
-          let open G_wide_big in
-          check "view a"
-            (Result.get_ok (Get.a buf off))
-            (a_of_word (view_a_word b w));
-          check "view c"
-            (Result.get_ok (Get.c buf off))
-            (c_of_word (view_c_word b w));
-          check "view e"
-            (Result.get_ok (Get.e buf off))
-            (e_of_word (view_e_word b w));
-          check "view f"
-            (Result.get_ok (Get.f buf off))
-            (f_of_word (view_f_word b w))
-        end
+      fields
   done
 
 (* A word load takes its record's offset from the caller: a buffer that cuts
@@ -131,41 +108,10 @@ let test_word_bad_input () =
       Alcotest.fail "a negative offset loaded the word in front of the record"
   | exception Invalid_argument _ -> ()
 
-(* A read of a checked record reads its bytes again, so bytes rewritten after
-   the check are input: a field under a map answers the map's error where they
-   no longer make a value, here a lookup index past its table, as [Get] does. *)
-let test_mapped_rewritten () =
-  let error = Alcotest.testable Error.pp Error.equal in
-  let proto =
-    Alcotest.testable
-      (fun ppf _ -> Fmt.string ppf "a protocol")
-      (fun a b -> a = b)
-  in
-  let answers name read ~expected =
-    Alcotest.(check (result proto error)) name (Error expected) (read ())
-  in
-  let expected = { Error.at = 6; field = [ "Proto" ]; kind = Invalid_tag 7 } in
-  let buf = Bytes.of_string "\x00\x01\x00\x00\x00\x00\x01\x00" in
-  (match G_mapped.Valid.v buf with
-  | Error e -> Alcotest.failf "Valid.v refused the record: %a" Error.pp e
-  | Ok v ->
-      Bytes.set_uint8 buf 6 7;
-      answers "read_proto" (fun () -> G_mapped.read_proto v) ~expected);
-  Bytes.set_uint8 buf 6 1;
-  match Wire_runtime.Buf.v buf with
-  | Wire_runtime.Buf.Any b ->
-      let c = G_mapped.View.check b (Wire_runtime.Buf.length b) 0 in
-      if not (G_mapped.View.ok c) then Alcotest.fail "View.check refused";
-      let v = G_mapped.View.get c in
-      Bytes.set_uint8 buf 6 7;
-      answers "view_proto" (fun () -> G_mapped.view_proto b v) ~expected
-
 let suite =
   ( "get",
     [
       Alcotest.test_case "getter errors" `Quick test_getter_errors;
       Alcotest.test_case "fields from their word" `Quick test_words;
       Alcotest.test_case "word loads on bad input" `Quick test_word_bad_input;
-      Alcotest.test_case "mapped fields on rewritten bytes" `Quick
-        test_mapped_rewritten;
     ] )

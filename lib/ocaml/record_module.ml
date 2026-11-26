@@ -854,12 +854,6 @@ let checked_read ~src f =
   | Bytes n ->
       Fmt.str "(%s.sub_string buf (off + %d) %d)" src.checked f.offset n
 
-let read_attr target f =
-  match (target, f.store) with
-  | `OxCaml, (Int _ | Bits _) when Option.is_none f.map ->
-      "[@inline][@zero_alloc]"
-  | _ -> "[@inline]"
-
 (* A getter answers a result, which it allocates: it is inlined, and checked
    for allocation on neither target. *)
 let getter_attr = "[@inline]"
@@ -887,12 +881,6 @@ let getter_value ~src f =
       Fmt.str "(%s.get ~at:(off + %d) ~field:%S %s)" (map_var f) f.offset f.name
         f.id
   | None, _ -> Fmt.str "Ok %s" (typed_value ~src f)
-
-(* The value a read of a checked record answers. Bytes rewritten after the
-   check are input, so a field under a map answers as its getter does, the
-   map's error included; any other field answers its value. *)
-let checked_value ~src f =
-  match f.map with Some _ -> getter_value ~src f | None -> typed_value ~src f
 
 (* A getter's frame: the field's bytes lie in the buffer, or the getter
    answers their end-of-input error. *)
@@ -990,189 +978,6 @@ let pp_getters ?(src = bytes_src) ppf ~target fields =
   List.iter (pp_word_getter ~src ppf) fields;
   Fmt.pf ppf "end@\n@\n";
   List.iter (pp_of_word ppf ~target) fields
-
-(* One field at [off] read with no check of its own, in a record of [size]
-   bytes already checked to fit. A 32-bit field is bound as its [int32] only:
-   both its typed value and its [int] view are made from that. *)
-let pp_read ~src ~ox ?size ppf f =
-  let m = hot ~ox ~raw32:true ~src ~live:Sset.empty ~fail:"" () in
-  match f.store with
-  | Int { width = 32; endian; _ } ->
-      Fmt.pf ppf "  let %s_raw = %s in@\n" f.id
-        (load m ~o:"off" ~k:f.offset ~bytes:4 ~endian)
-  | _ ->
-      Fmt.pf ppf "  let %s = %s in@\n" f.id
-        (value m ?size ~o:"off" ~words:[] ~k:0 f)
-
-(* [Valid.v buf] validates the record at offset 0. A buffer's length never
-   changes, so each [read_<field>] after it is one load at a constant offset
-   with no check of its own, and stays in the buffer even if its bytes change;
-   only then may it read a value that breaks a constraint, and a field under a
-   map answers the map's error on a value it refuses. This is EverParse's
-   validate-then-read, with the proof a type. *)
-let pp_valid ?(src = bytes_src) ppf ~target ~plan =
-  let fields = all_fields plan in
-  Fmt.pf ppf
-    "module Valid : sig@\n\
-    \  type t = private %s@\n\
-     @\n\
-    \  val v : %s -> (t, %s.t) result@\n\
-     end = struct@\n\
-    \  type t = %s@\n\
-     @\n\
-    \  let[@inline] v buf = if is_valid buf 0 then Ok buf else error buf 0@\n\
-     end@\n\
-     @\n"
-    src.typ src.typ Emitter.error src.typ;
-  List.iter
-    (fun f ->
-      let attr = read_attr target f in
-      let read ~suffix ~result =
-        Fmt.pf ppf
-          "let%s read_%s%s (v : Valid.t) =@\n\
-          \  let buf = (v :> %s) and off = 0 in@\n"
-          attr f.label suffix src.typ;
-        pp_read ~src ~ox:false ppf f;
-        Fmt.pf ppf "  %s@\n@\n" result
-      in
-      read ~suffix:"" ~result:(checked_value ~src f);
-      match f.store with
-      | Int { width = 32; _ } -> read ~suffix:"_int" ~result:(int_view ~src f)
-      | _ -> ())
-    fields
-
-(* The buffer [b] named as [buf], and the length [len] as an [int]. The checks'
-   loads are the only reads of [buf]: a record with none binds only [len]. *)
-let pp_bind_len ~src ppf ~live =
-  if Sset.is_empty live then Fmt.pf ppf "    let "
-  else
-    Fmt.pf ppf "    let buf = (b : _ %s.t :> %s)@\n    and " src.brand src.typ;
-  Fmt.pf ppf "len = (len : _ %s.length :> int) in@\n" src.brand
-
-(* [View.with_] is [View.check]'s walk ending in [ok] or [fail] itself, so no
-   answer is built for [ok] and [get] to test again after the branches meet. *)
-let pp_view_with ~src ppf ~target ~plan ~size ~b ~live =
-  let k =
-    match target with
-    | `OxCaml -> "~(ok @ local) ~(fail @ local)"
-    | `OCaml -> "~ok ~fail"
-  in
-  Fmt.pf ppf "@\n  let[@inline] with_ %s len off %s =@\n" b k;
-  pp_bind_len ~src ppf ~live;
-  Fmt.pf ppf "    if off < 0 || off > len - min_size then fail ()@\n    else@\n";
-  let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"fail ()" () in
-  pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "ok off@\n")
-
-(* The body of [View.check], which answers [refused] for a record it refuses.
-   A record with no check of its own loads nothing, so a negative [off] needs
-   no test: it is the answer, which [View.ok] refuses. *)
-let pp_view_check ~src ppf ~target ~plan ~size ~live =
-  pp_bind_len ~src ppf ~live;
-  if has_checks plan then begin
-    Fmt.pf ppf
-      "    if off < 0 || off > len - min_size then refused@\n    else@\n";
-    let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"refused" () in
-    pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "off@\n")
-  end
-  else Fmt.pf ppf "    if off > len - min_size then refused else off@\n"
-
-(* A view is a record checked in a named buffer: [View.check b len off] runs
-   the frame check against [len], the buffer's length read once by the caller,
-   and the record's own checks, and answers the offset, or a negative [int].
-   [View.get] turns an answer that passed into a ['b View.t], which only the
-   reads of the buffer named ['b] accept, so each [view_<field> b v] is one
-   load at a constant offset from [v] with no check of its own, and costs no
-   allocation: [b] is the buffer and [v] an [int]. [View.get] tests the
-   comparison [View.ok] makes, so that a compiler which shares the two
-   (flambda2) drops the second test after [if View.ok c]. *)
-let pp_view_module ~src ppf ~target ~plan ~size =
-  let attr =
-    match target with
-    | `OxCaml -> "[@inline][@zero_alloc]"
-    | `OCaml -> "[@inline]"
-  in
-  let param, local =
-    match target with
-    | `OxCaml -> ((fun b -> "(" ^ b ^ " @ local)"), " @ local")
-    | `OCaml -> (Fun.id, "")
-  in
-  let b = param "b" in
-  let live = live plan ~outputs:[] in
-  (* A record whose checks load nothing reads neither [b] nor [buf]. *)
-  let b_param = if Sset.is_empty live then param "_b" else b in
-  Fmt.pf ppf
-    "module View : sig@\n\
-    \  type 'b t = private int@\n\
-    \  type 'b check = private int@\n\
-     @\n\
-    \  val check : 'b %s.t%s -> 'b %s.length -> int -> 'b check@\n\
-    \  val ok : 'b check -> bool@\n\
-    \  val get : 'b check -> 'b t@\n\
-     @\n\
-    \  val with_ :@\n\
-    \    'b %s.t%s -> 'b %s.length -> int -> ok:('b t -> 'a)%s ->@\n\
-    \    fail:(unit -> 'a)%s -> 'a@\n\
-     end = struct@\n\
-    \  type 'b t = int@\n\
-    \  type 'b check = int@\n\
-     @\n\
-    \  let refused = -1@\n\
-     @\n\
-    \  let%s check %s len off =@\n"
-    src.brand local src.brand src.brand local src.brand local local attr b_param;
-  pp_view_check ~src ppf ~target ~plan ~size ~live;
-  pp_view_with ~src ppf ~target ~plan ~size ~b:b_param ~live;
-  Fmt.pf ppf
-    "@\n\
-    \  let%s ok c = c >= 0@\n\
-     @\n\
-    \  let failed = Invalid_argument (codec_name ^ \".View.get: the check \
-     failed\")@\n\
-     @\n\
-    \  let%s get c = if c >= 0 then c else raise failed@\n\
-     end@\n\
-     @\n"
-    attr attr
-
-(* The view module of a record and its reads: each field's, a 32-bit field's
-   [int] and a bitfield's word. *)
-let pp_view ?(src = bytes_src) ppf ~target ~plan ~size =
-  let fields = all_fields plan in
-  let ox = target = `OxCaml in
-  pp_view_module ~src ppf ~target ~plan ~size;
-  let b =
-    match target with
-    | `OxCaml -> Fmt.str "((b : 'b %s.t) @@ local)" src.brand
-    | `OCaml -> Fmt.str "(b : 'b %s.t)" src.brand
-  in
-  let view_t = "View.t" in
-  let head attr name =
-    Fmt.pf ppf
-      "let%s %s %s (v : 'b %s) =@\n\
-      \  let buf = (b : _ %s.t :> %s) and off = (v : _ %s :> int) in@\n"
-      attr name b view_t src.brand src.typ view_t
-  in
-  List.iter
-    (fun f ->
-      let attr = read_attr target f in
-      let view ~suffix ~result =
-        head attr (Fmt.str "view_%s%s" f.label suffix);
-        pp_read ~src ~ox ~size ppf f;
-        Fmt.pf ppf "  %s@\n@\n" result
-      in
-      view ~suffix:"" ~result:(checked_value ~src f);
-      match f.store with
-      | Int { width = 32; _ } -> view ~suffix:"_int" ~result:(int_view ~src f)
-      | Bits { base; _ } ->
-          (* The word that holds the field, for [<field>_of_word]: fields
-             packed in one word share one load. *)
-          let m = hot ~ox ~src ~live:Sset.empty ~fail:"" () in
-          head attr (Fmt.str "view_%s_word" f.label);
-          Fmt.pf ppf "  %s@\n@\n"
-            (unsigned m ~size ~o:"off" ~words:[] ~k:f.offset
-               ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ())
-      | _ -> ())
-    fields
 
 (* A record the encoder wrote that fails its own constraints. The check is
    [is_valid], which OxCaml's allocation checker follows, and only a record
@@ -1470,14 +1275,9 @@ let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
   pp_record ~maps ppf fields;
   pp_printer ppf fields;
   let src = src_of ~target buffer in
-  (* Beside the module's views, [Get] would be second reads of each field,
-     [Valid] and [View] second checks, and [read_<field>] and [view_<field>]
-     second reads again: a module without views keeps them as its reads. *)
+  (* Beside the module's views, [Get] would be second reads of each field: a
+     module without views keeps them as its reads. *)
   pp_codec ~src ~getters:(not views) ppf ~target ~plan ~size;
-  if not views then begin
-    pp_valid ~src ppf ~target ~plan;
-    pp_view ~src ppf ~target ~plan ~size
-  end;
   if simd then pp_x4 ~src ppf ~plan ~size;
   pp_encode ~src ppf fields
 
@@ -1508,8 +1308,6 @@ let own_names =
     "encode";
     "min_size";
     "t";
-    "Valid";
-    "View";
     "Field";
     "Global";
     "mask32";
@@ -1530,12 +1328,11 @@ let names_of f =
   let l = f.label in
   let derived =
     match f.store with
-    | Int { width = 32; _ } ->
-        [ "Get." ^ l ^ "_int"; "read_" ^ l ^ "_int"; "view_" ^ l ^ "_int" ]
-    | Bits _ -> [ "Get." ^ l ^ "_word"; "view_" ^ l ^ "_word"; l ^ "_of_word" ]
+    | Int { width = 32; _ } -> [ "Get." ^ l ^ "_int" ]
+    | Bits _ -> [ "Get." ^ l ^ "_word"; l ^ "_of_word" ]
     | Int _ | Bytes _ -> []
   in
-  ("Get." ^ l) :: ("read_" ^ l) :: ("view_" ^ l) :: derived
+  ("Get." ^ l) :: derived
 
 (* The names a field of the record defines, those in [Get] qualified, and
    those [Get]'s reads call. *)
