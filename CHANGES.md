@@ -24,8 +24,9 @@
 
 - A stub `Wire_stubs` generates answers `(record, Wire.Error.t) result`: a
   record the validator refuses, a buffer that cuts it and an offset past the
-  buffer are `Error`, not `Failure` or `Invalid_argument`; match on the
-  result of `<name>_parse` and `<name>_parse_k` (#570, @samoht)
+  buffer are `Error`, not `Failure` or `Invalid_argument`; `<name>_parse` and
+  `<name>_parse_k` are `parse` and `parse_k` of `Stubs.Name.Make (C)`, applied
+  to the codec, whose error is the one `Codec.validate` answers (#570, @samoht)
 
 - `Wire.Codec.field_ref` is removed: write `Field.ref f` of the source field
   (#570, @samoht)
