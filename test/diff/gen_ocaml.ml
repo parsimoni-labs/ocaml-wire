@@ -284,10 +284,13 @@ let pp_values_backend ppf ~m ~codec c =
       fields (pp_fold ~m) () m m m m
   end
 
-(* The backends over [c]: each module [(name, target, selected)], generated
-   inside the function under its interface, after the [Step] it calls, and
-   the views of the one with every output. *)
-let pp_scanners ppf ~codec c modules =
+(* The scanner modules over [c], each a suffix of its value's name, whether
+   its backends read [c] and the expression of its backends: each module
+   [(name, target, selected)] generated inside the expression under its
+   interface, after the [Step] it calls, with the views and values of the one
+   with every output; then the interpreted twin of that one, when [c] has one.
+   [codec] spells [c] for the backends that read it. *)
+let scanners ~codec c modules =
   (* Its fold [fold], which calls [Step] by name. *)
   let scanner target o =
     Wire_ocaml.(v ~target ~folds:[ fold ?outputs:o "fold" ] c)
@@ -297,19 +300,32 @@ let pp_scanners ppf ~codec c modules =
     | None -> fields
     | Some ns -> List.filter (fun (n, _) -> List.mem n ns) fields
   in
-  List.iter
-    (fun (m, t, selected) ->
-      Fmt.pf ppf
-        "let module Step = %a in@\n\
-         let module %s : sig@\n\
-         %s@\n\
-         end = struct@\n\
-         %s@\n\
-         end in@\n"
-        pp_step (selected_fields selected) m
-        (Wire_ocaml.to_mli ~visitors (scanner t selected))
-        (Wire_ocaml.to_ml ~visitors (scanner t selected)))
-    modules;
+  let modules =
+    List.map
+      (fun (m, t, selected) ->
+        let fields = selected_fields selected in
+        let pp ppf () =
+          Fmt.pf ppf
+            "let module Step = %a in@\n\
+             let module %s : sig@\n\
+             %s@\n\
+             end = struct@\n\
+             %s@\n\
+             end in@\n\
+             [@\n"
+            pp_step fields m
+            (Wire_ocaml.to_mli ~visitors (scanner t selected))
+            (Wire_ocaml.to_ml ~visitors (scanner t selected));
+          pp_backend ppf ~m fields;
+          if selected = None then begin
+            pp_view_backend ppf ~m ~codec c;
+            pp_values_backend ppf ~m ~codec c
+          end;
+          Fmt.pf ppf "]@\n"
+        in
+        (String.lowercase_ascii m, selected = None, pp))
+      modules
+  in
   (* The interpreted twin of the module of every output, under the same
      visitor, whose backends are those of the generated module: swapping one
      for the other gives the same answers. *)
@@ -318,57 +334,59 @@ let pp_scanners ppf ~codec c modules =
       ( Wire_ocaml.to_mli ~twin:true ~visitors (scanner target None),
         Wire_ocaml.to_ml ~twin:true ~visitors (scanner target None) )
     with
-    | twin -> Some twin
-    | exception Invalid_argument _ -> None
+    | intf, src ->
+        let pp ppf () =
+          Fmt.pf ppf
+            "let module Step = %a in@\n\
+             let module Twin : sig@\n\
+             %s@\n\
+             end = struct@\n\
+             %s@\n\
+             end in@\n\
+             let twin (type r) (codec : r Wire.Codec.t) : Diff_ocaml.scan_ops \
+             list =@\n\
+             let module M = Twin.Make (struct type nonrec r = r let codec = \
+             codec end) in@\n\
+             [@\n"
+            pp_step fields intf src;
+          pp_backend ppf ~m:"M" fields;
+          pp_view_backend ppf ~m:"M" ~codec:("(", "codec") c;
+          Fmt.pf ppf "]@\nin@\n%s twin %s)@\n" (fst codec) (snd codec)
+        in
+        [ ("twin", true, pp) ]
+    | exception Invalid_argument _ -> []
   in
-  Option.iter
-    (fun (intf, src) ->
-      Fmt.pf ppf
-        "let module Step = %a in@\n\
-         let module Twin : sig@\n\
-         %s@\n\
-         end = struct@\n\
-         %s@\n\
-         end in@\n\
-         let twin (type r) (codec : r Wire.Codec.t) : Diff_ocaml.scan_ops list \
-         =@\n\
-         let module M = Twin.Make (struct type nonrec r = r let codec = codec \
-         end) in@\n\
-         [@\n"
-        pp_step fields intf src;
-      pp_backend ppf ~m:"M" fields;
-      pp_view_backend ppf ~m:"M" ~codec:("(", "codec") c;
-      Fmt.pf ppf "]@\nin@\n")
-    twin;
-  Fmt.pf ppf "[@\n";
-  List.iter
-    (fun (m, _, selected) ->
-      let fields = selected_fields selected in
-      pp_backend ppf ~m fields;
-      if selected = None then begin
-        pp_view_backend ppf ~m ~codec c;
-        pp_values_backend ppf ~m ~codec c
-      end)
-    modules;
-  Fmt.pf ppf "]@\n";
-  if Option.is_some twin then
-    Fmt.pf ppf "@@ %s twin %s)@\n" (fst codec) (snd codec)
+  modules @ twin
 
 let every_other c =
   List.filteri (fun i _ -> i mod 2 = 0) (Wire_ocaml.outputs c) |> List.map fst
 
 (* {1 Shards}
 
-   Each case, structured scanner and sampled scanner is a top-level value of
-   one of the shards, the index lists them in order, and the shards are
-   balanced by size so that no compiler run has to hold all of them. *)
+   Each case, and each scanner module of a structured or sampled scanner, is a
+   top-level value of one of the shards, and the index lists them in order.
+   The shards are balanced by size so that no compiler run has to hold all of
+   them. A scanner's modules are separate values, so that the largest value,
+   which a shard cannot split, is one module and not all of them: the
+   compiler's peak heap follows the largest functions it allocates registers
+   for more than the size of the file. *)
 
 type def = { name : string; src : string }
+
+(* The definition of each scanner module of [c], named after [prefix] and the
+   module, whose head is [head]: told whether the module's backends read
+   [codec]. *)
+let scanner_defs ~prefix ~head ~codec c modules =
+  List.map
+    (fun (suffix, reads_codec, pp) ->
+      let name = Fmt.str "%s_%s" prefix suffix in
+      let src = Fmt.str "%a%a@\n" head (name, reads_codec) pp () in
+      { name; src })
+    (scanners ~codec c modules)
 
 let scan_cases () =
   List.mapi
     (fun i (Diff_codecs.Scan c) ->
-      let name = Fmt.str "scan_case_%d" i in
       let modules =
         [
           ("Full", target, None);
@@ -377,20 +395,17 @@ let scan_cases () =
         ]
         @ if target = `OxCaml then [ ("Stock", `OCaml, None) ] else []
       in
-      let src =
-        Fmt.str "let %s () : Diff_ocaml.scan_ops list =@\n%a@\n" name
-          (fun ppf () ->
-            pp_scanners ppf
-              ~codec:
-                ( Fmt.str
-                    "(match List.nth Diff_codecs.scan_cases %d with \
-                     Diff_codecs.Scan sc ->"
-                    i,
-                  "sc.codec" )
-              c.codec modules)
-          ()
-      in
-      (c.label, { name; src }))
+      ( c.label,
+        scanner_defs ~prefix:(Fmt.str "scan_case_%d" i)
+          ~head:(fun ppf (name, _) ->
+            Fmt.pf ppf "let %s () : Diff_ocaml.scan_ops list =@\n" name)
+          ~codec:
+            ( Fmt.str
+                "(match List.nth Diff_codecs.scan_cases %d with \
+                 Diff_codecs.Scan sc ->"
+                i,
+              "sc.codec" )
+          c.codec modules ))
     Diff_codecs.scan_cases
 
 let sampled_scanners () =
@@ -407,24 +422,20 @@ let sampled_scanners () =
     List.mapi
       (fun i (label, Fuzz_gen.Pack g) ->
         let c = Fuzz_gen.codec g in
-        let name = Fmt.str "sampled_%d" i in
-        let src =
-          Fmt.str
-            "let %s : Fuzz_gen.packed -> Diff_ocaml.scan_ops list = function@\n\
-            \  | Fuzz_gen.Pack g ->@\n\
-             %a@\n"
-            name
-            (fun ppf () ->
-              pp_scanners ppf
-                ~codec:("(", "(Fuzz_gen.codec g)")
-                c
-                [
-                  ("Full", target, None);
-                  ("Selected", target, Some (every_other c));
-                ])
-            ()
-        in
-        (label, { name; src }))
+        ( label,
+          scanner_defs ~prefix:(Fmt.str "sampled_%d" i)
+            ~head:(fun ppf (name, reads_codec) ->
+              Fmt.pf ppf
+                "let %s : Fuzz_gen.packed -> Diff_ocaml.scan_ops list = \
+                 function@\n\
+                \  | Fuzz_gen.Pack %s ->@\n"
+                name
+                (if reads_codec then "g" else "_"))
+            ~codec:("(", "(Fuzz_gen.codec g)")
+            c
+            [
+              ("Full", target, None); ("Selected", target, Some (every_other c));
+            ] ))
       accepted
   in
   (accepted, refused)
@@ -497,17 +508,25 @@ let pp_entries ~typ ~qualify ppf (name, entries) =
     entries;
   Fmt.pf ppf "  ]@\n@\n"
 
+(* A scanner's modules, in [qualify]'d names, as one function of [arg]. *)
+let joined ~qualify ~arg defs =
+  Fmt.str "(fun %s -> List.concat [ %s ])" arg
+    (String.concat "; " (List.map (fun d -> qualify d ^ " " ^ arg) defs))
+
 let write_index file ~qualify ~cases ~refused ~scans ~sampled ~scan_refused =
   Out_channel.with_open_text file (fun oc ->
       let ppf = Format.formatter_of_out_channel oc in
-      let defs = pp_entries ~qualify in
       let msgs = pp_entries ~qualify:(Fmt.str "%S") ~typ:"string" in
       Fmt.pf ppf "%slet name = %S@\n@\n" header
         (match target with `OCaml -> "ocaml" | `OxCaml -> "oxcaml");
-      defs ~typ:"(Fuzz_gen.packed -> Diff_ocaml.t)" ppf ("covered", cases);
+      pp_entries ~qualify ~typ:"(Fuzz_gen.packed -> Diff_ocaml.t)" ppf
+        ("covered", cases);
       msgs ppf ("refused", refused);
-      defs ~typ:"(unit -> Diff_ocaml.scan_ops list)" ppf ("scanners", scans);
-      defs ~typ:"(Fuzz_gen.packed -> Diff_ocaml.scan_ops list)" ppf
+      pp_entries
+        ~qualify:(joined ~qualify ~arg:"()")
+        ~typ:"(unit -> Diff_ocaml.scan_ops list)" ppf ("scanners", scans);
+      pp_entries ~qualify:(joined ~qualify ~arg:"p")
+        ~typ:"(Fuzz_gen.packed -> Diff_ocaml.scan_ops list)" ppf
         ("sampled_scanners", sampled);
       msgs ppf ("scan_refused", scan_refused);
       Format.pp_print_flush ppf ())
@@ -524,7 +543,7 @@ let () =
       let cases, refused = cases () in
       let scans = scan_cases () in
       let sampled, scan_refused = sampled_scanners () in
-      let all = List.map snd (cases @ scans @ sampled) in
+      let all = List.map snd cases @ List.concat_map snd (scans @ sampled) in
       let shards = Array.of_list shards in
       let owner = assign (Array.length shards) all in
       Array.iteri
