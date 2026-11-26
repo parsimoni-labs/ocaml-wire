@@ -119,7 +119,7 @@ let check_string label expected actual =
   if not (String.equal expected actual) then
     Alcobar.failf "%s: expected %S, got %S" label expected actual
 
-(* [Codec.get] of [f], unstaged, on bytes a positive holds. *)
+(* [Codec.get] of [f] on bytes a positive holds. *)
 let getter codec f =
   let read = Wire.Codec.get codec f in
   fun buf off ->

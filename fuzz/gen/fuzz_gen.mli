@@ -155,11 +155,11 @@ val construction_guard_cases : string -> Alcobar.test_case list
 
 val api_cases : string -> Alcobar.test_case list
 (** [api_cases label] exercises Wire API surfaces that are not naturally covered
-    by value round-trips over one typ: staged [Codec.get] / [set] accessors,
-    slice navigation, batch bitfield extraction, custom sequence maps, direct
-    struct validators, metadata helpers, [Wire.size], [Codec.pp_value], and
-    cheap Everparse / Raw projection helpers. File-writing projection helpers
-    are guarded to run once per process so repeated fuzz loops stay fast. *)
+    by value round-trips over one typ: [Codec.get] / [set] accessors, slice
+    navigation, batch bitfield extraction, custom sequence maps, direct struct
+    validators, metadata helpers, [Wire.size], [Codec.pp_value], and cheap
+    Everparse / Raw projection helpers. File-writing projection helpers are
+    guarded to run once per process so repeated fuzz loops stay fast. *)
 
 val direct_cases : string -> 'a t -> Alcobar.test_case list
 (** [direct_cases label g] round-trips a gen through {!Wire.of_string} and

@@ -35,5 +35,5 @@ val report : out:bytes -> int -> unit
 (** [report ~out n] writes in [out] the [n] CLCW words a FARM reports, word [i]
     {!Space.clcw_default} with report value [i mod 256], lockout when the 12 low
     bits of [i] are all set, wait when its 6 low bits are, and retransmit bit 13
-    of [i], by Wire's staged {!Wire.Codec.writer} of the default and those four
-    fields. *)
+    of [i], each written by Wire's {!Wire.Codec.writer} of the default and those
+    four fields. *)

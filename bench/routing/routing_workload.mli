@@ -41,8 +41,8 @@ val run_packets :
 val stamp : bytes -> int -> apid:int -> seq:int -> dlen:Wire.UInt16.t -> unit
 (** [stamp out o ~apid ~seq ~dlen] writes at [o] in [out] the header of a
     telemetry packet with a secondary header, unsegmented, with APID [apid],
-    sequence count [seq] and data length [dlen], by Wire's staged
-    {!Wire.Codec.writer} of {!Space.packet_default} and those three fields. *)
+    sequence count [seq] and data length [dlen], by Wire's {!Wire.Codec.writer}
+    of {!Space.packet_default} and those three fields. *)
 
 val restamp : buf:bytes -> total_bytes:int -> out:bytes -> int -> unit
 (** [restamp ~buf ~total_bytes ~out n] reads the headers of [n] packets as
