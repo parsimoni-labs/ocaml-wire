@@ -325,8 +325,8 @@ pick for exactly this work:
 | `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | a `Codec.View.codec` per header codec; `View.check`/`View.ok`/`View.get` per header, then a `View.read` of a `View.field` per field; the harness links the layers |
 | `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the fold `checksum` of the stack and `checksum_frames` (batch), which call the checksum visitor by name; `selected outputs` hands out only the checksum's fields |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `check b len off`/`ok`/`get` per fixed header, then an accessor `<field> b v` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
-| `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.scanner` of the stack | `scan` per frame; `selected outputs` hands out only the checksum's fields |
-| `wire.rust, linked headers` | generated Rust of the fixed headers | `Valid::at` per header, then a read per field; the harness links the layers |
+| `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.v` of the stack | the fold `checksum_frames` (batch), handing the outputs to the checksum visitor `gen.exe` writes; `selected outputs` hands out only the checksum's fields |
+| `wire.rust, linked headers` | generated Rust modules of the fixed headers | `check(buf, off)`/`get` per header, then the accessor of each field; the harness links the layers |
 | `EverParse C, default visitor` (`BUILD_EVERPARSE=1`) | the verified validator EverParse generates from `Packet_stack.codec` | `EthernetStackValidateWireEthernetStack` per slot, then the members of the default `EthernetStack_Fields` visitor, zeroed per slot |
 | `EverParse C, inline visitor` (`BUILD_EVERPARSE=1`) | the same validator, compiled with a custom visitor | the validator per slot, then the same members of a visitor copied from `EthernetStack_Fields.c` and trimmed to them, its setters `static inline` in the validator's translation unit |
 | `etherparse` 0.21 | hand-written | `SlicedPacket::from_ethernet`, its one-call path |
@@ -352,7 +352,7 @@ Every row does the work `SlicedPacket::from_ethernet` does on each packet:
 
 The stack rows use `examples/net/packet_stack.ml`: one codec owns Ethernet
 and protocol dispatch, fragment handling, options, and the nested payload
-bounds. The folds of `Wire_ocaml` and `Wire_rust.scanner` write those rules out
+bounds. The folds of `Wire_ocaml` and `Wire_rust` write those rules out
 from one plan as a fused scanner; the harness only folds returned scalar
 fields into the checksum. Its
 `off`/`len` arguments bound each frame even inside a larger corpus buffer.
@@ -585,8 +585,8 @@ passes and not timed; the report fails unless every row agrees. The default pack
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of `headers.ml`, IPv6 included | `check b len off`/`ok`/`get` per fixed header, an accessor `<field> b v` per field; the harness links the layers and checks each header ends inside the capture |
 | `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `classify_index` over the frames, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
 | `wire.ocaml check/view, accessors` | the views the generated OCaml scanner of `Packet_stack.capture` writes | `check` per frame, then the accessor of each field, each sub-record (`ipv4`, `ipv6`, `tcp`, `udp`) entered through the accessor of its field, which tests its presence and places it again |
-| `wire.rust scanner, selected outputs` | generated Rust scanner of `Packet_stack.capture` | `scan` per frame |
-| `wire.rust, linked headers` | generated Rust of `headers.ml` | `Valid::at` per header, then a read per field; the harness links the layers |
+| `wire.rust scanner, selected outputs` | generated Rust module of `Packet_stack.capture` | the fold `classify` per frame, handing the classifier's fields to the visitor `Classify` of `flow.rs` |
+| `wire.rust, linked headers` | generated Rust modules of `headers.ml` | `check(buf, off)`/`get` per header, then the accessor of each field; the harness links the layers |
 | EverParse C (`BUILD_EVERPARSE=1`) | the verified validator of `Packet_stack.capture` | `CapturedStackValidateWireCapturedStack` per frame, then the members of the default `CapturedStack_Fields` visitor, zeroed per frame |
 | `etherparse 0.21, lax` | hand-written | `LaxSlicedPacket::from_ethernet` |
 | `smoltcp 0.14` | hand-written | `EthernetFrame::new_checked`, `TcpPacket::new_checked`; the IPv4, IPv6 and UDP layers through `new_unchecked` after the adapter's checks, because `new_checked` bounds them by their length fields and rejects a header-only capture |

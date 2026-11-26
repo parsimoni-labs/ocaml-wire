@@ -3,8 +3,8 @@
 The packet traversal is `Packet_stack.codec` in `examples/net`. The
 `fused stack` and `selected outputs` rows run the folds of the module
 `Wire_ocaml` writes from this codec, g_stack and g_selected, for the OCaml
-target on OCaml and for the OxCaml target on OxCaml, and the scanner `Wire_rust.scanner`
-writes from the same plan; `Wire.Codec stack decode` decodes the
+target on OCaml and for the OxCaml target on OxCaml, and the fold of the
+module `Wire_rust` writes from the same plan; `Wire.Codec stack decode` decodes the
 same codec. The `linked headers` rows, OCaml and generated Rust, read the
 fixed header codecs of `headers.ml` and link the layers in the harness. The
 Rust crate rows traverse the same layers. Every row computes the same

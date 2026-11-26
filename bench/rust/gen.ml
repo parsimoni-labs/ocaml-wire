@@ -2,10 +2,13 @@
    this generator.
 
    With [--rust DIR], in [DIR]: the Wire_rust modules of the fixed header
-   codecs, eth.rs, ipv4.rs, ipv6.rs, tcp.rs and udp.rs; the scanner Wire_rust
-   writes from [Packet_stack.codec], stack.rs; the same scanner handing out
-   only the fields the checksum reads, stack_selected.rs; and the scanner of
-   [Packet_stack.capture] handing out the flow classifier's fields, flow.rs.
+   codecs, eth.rs, ipv4.rs, ipv6.rs, tcp.rs and udp.rs; that of
+   [Packet_stack.codec], stack.rs, whose fold [checksum] hands out every
+   output, and stack_selected.rs, whose fold hands out only the fields the
+   checksum reads, each visited by the checksum visitor of the harness,
+   cargo/src/stack_step.rs and cargo/src/selected_step.rs; and that of
+   [Packet_stack.capture], flow.rs, whose fold [classify] hands out the flow
+   classifier's fields to the visitor of flow.rs in the harness.
 
    Otherwise the modules Wire_ocaml writes, as {!Wire_ocaml.main} reads its
    command line: g_stack and g_selected, the modules of [Packet_stack.codec]
@@ -93,25 +96,27 @@ let headers { g } =
 let () =
   match Array.to_list Sys.argv with
   | [ _; "--rust"; dir ] ->
-      let codec = "Packet_stack.codec" in
-      write
-        (Filename.concat dir "stack.rs")
-        (Wire_rust.scanner ~codec Packet_stack.codec);
-      write
-        (Filename.concat dir "stack_selected.rs")
-        (Wire_rust.scanner ~fields:checksum_fields ~codec Packet_stack.codec);
-      write
-        (Filename.concat dir "flow.rs")
-        (Wire_rust.scanner ~fields:flow_fields ~codec:"Packet_stack.capture"
-           Packet_stack.capture);
-      headers
-        {
-          g =
-            (fun name c ->
-              write
-                (Filename.concat dir (name ^ ".rs"))
-                (Wire_rust.rs ~codec:("Headers." ^ name) c));
-        }
+      let rs ?visitors name m =
+        write (Filename.concat dir (name ^ ".rs")) (Wire_rust.to_rs ?visitors m)
+      in
+      let checksum ~name ~step outputs =
+        rs name
+          ~visitors:[ ("checksum", step ^ ".rs") ]
+          (Wire_rust.v ~name
+             ~folds:[ Wire_rust.fold ?outputs "checksum" ]
+             Packet_stack.codec)
+      in
+      checksum ~name:"stack" ~step:"stack_step" None;
+      checksum ~name:"stack_selected" ~step:"selected_step"
+        (Some checksum_fields);
+      rs "flow"
+        ~visitors:
+          [ ("classify", "crate::flow::Classify<'static, crate::flow::Table>") ]
+        Wire_rust.(
+          v ~name:"flow"
+            ~folds:[ fold ~outputs:flow_fields "classify" ]
+            Packet_stack.capture);
+      headers { g = (fun name c -> rs name (Wire_rust.v ~name c)) }
   | _ ->
       let checksum o = Wire_ocaml.[ fold ?outputs:o "checksum" ]
       and flow =
