@@ -794,9 +794,34 @@ let test_enter_past_regions () =
       (Fmt.str "input %d" i) (decoded input) (viewed input)
   done
 
+(* A field after a span is read with a check, which a field of a view does
+   not make: [View.field] refuses it, rather than raise on bytes written after
+   the check that move it out of the buffer. *)
+let test_view_field_after_a_span () =
+  let len = Field.v "len" uint8 in
+  let tail = Codec.(Field.v "tail" uint8 $ fun (_, _, t) -> t) in
+  let c =
+    Codec.v "AfterSpan"
+      (fun len body tail -> (len, body, tail))
+      Codec.
+        [
+          (len $ fun (l, _, _) -> l);
+          ( Field.v "body" (byte_array ~size:(Field.ref len)) $ fun (_, b, _) ->
+            b );
+          tail;
+        ]
+  in
+  let module V = Codec.View in
+  let module C = (val V.codec c) in
+  match V.field C.codec tail with
+  | _ -> Alcotest.fail "View.field takes a field read with a check"
+  | exception Invalid_argument _ -> ()
+
 let suite =
   ( "codec_stack",
     [
+      Alcotest.test_case "view: a field after a span is read with a check"
+        `Quick test_view_field_after_a_span;
       Alcotest.test_case "walk: gates that reuse an earlier gate" `Quick
         test_walk_shared_gates;
       Alcotest.test_case "walk: a fixed field after a span" `Quick

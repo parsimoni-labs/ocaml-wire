@@ -165,14 +165,15 @@ let test_views_rewritten () =
             (C.Stack_tcp.ok (C.Stack_ipv6.tcp b len (C.Stack_ipv6.get k))));
     }
 
-(* A field after a span is placed again from the span's size, and raises
-   rather than read past the buffer when that size has grown. *)
+(* A field after a span is placed again from the span's size, and reads as
+   absent rather than past the buffer when that size has grown: an accessor
+   never raises. *)
 let test_views_moved_field () =
   let buf = Bytes.make 9 '\000' in
   Bytes.set_int32_be buf 0 0x0002_0000l;
   Bytes.set_uint8 buf 8 7;
   match Buf.v buf with
-  | Buf.Any b -> (
+  | Buf.Any b ->
       let len = Buf.length b in
       let c = S_sized.check b len ~off:0 ~len:9 in
       Alcotest.(check bool) "accepted" true (S_sized.ok c);
@@ -185,12 +186,14 @@ let test_views_moved_field () =
         "tail without the body" 0
         (UInt8.to_int (S_sized.tail b v));
       Bytes.set_int32_be buf 0 0x0010_0000l;
-      match S_sized.tail b v with
-      | n -> Alcotest.failf "a tail past the buffer read %d" (UInt8.to_int n)
-      | exception
-          Wire_runtime.Errors.Parse_error { Error.kind = Unexpected_eof _; _ }
-        ->
-          ())
+      Alcotest.(check bool)
+        "a body past the buffer" true (S_sized.body_present b v);
+      Alcotest.(check int)
+        "a body past the buffer reads empty" 0
+        (Bytesrw.Bytes.Slice.length (S_sized.body b v));
+      Alcotest.(check int)
+        "a tail past the buffer reads absent" 0
+        (UInt8.to_int (S_sized.tail b v))
 
 let suite =
   ( "view_module",
