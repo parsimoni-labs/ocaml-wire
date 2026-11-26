@@ -741,10 +741,13 @@ let pp_record ppf c =
 
    [encode_at r buf p write path] walks [r] from [p] and answers where it
    ends, writing it when [write]: [size] is the same walk with no write, so
-   the two cannot disagree on where a field goes. A size, a presence or a
-   where clause the values break is refused as a failed constraint at the
-   field, and a value its field cannot hold as out of range, as the codec's
-   encoder refuses them. *)
+   the two cannot disagree on where a field goes. A size or a presence the
+   values break is refused as a failed constraint at the field, and a value
+   its field cannot hold as out of range, as the codec's encoder refuses
+   them. A where clause the values break is refused at the record's start, as
+   the codec names it, by [size] and by the encoder of a flat record
+   ({!flat_record}); any other encoder leaves it to the check of the bytes
+   written, which names the codec's first error. *)
 
 (* The failure of the check [k] of [f] at [at], as the codec answers it. *)
 let fail_check c ~at ~field (f : P.field) (k : P.check) =
@@ -881,7 +884,9 @@ and pp_node e env ~p ~path node =
   match node with
   | P.Prefix (fields, n) -> pp_prefix e env ~p ~path fields n
   | P.Test cond ->
-      refuse_if e (Fmt.str "!(%s)" (text cond)) ~at:p ~field:path "Where";
+      refuse_if e
+        (Fmt.str "%s!(%s)" (if e.flat then "" else "!write && ") (text cond))
+        ~at:"p" ~field:path "Where";
       p
   | P.Span (T.Ref (T.I, var)) when Option.is_some (sub_of e.ec var) -> (
       let s = Option.get (sub_of e.ec var) in
@@ -1334,40 +1339,63 @@ fn first_error(buf: &[u8], length: usize, off: usize) -> Error {
 
 |}
 
-(* The body of [encode] past the size of [r], in [n]. A flat record
-   ({!flat_record}) of [size] bytes is written into the array of its bytes,
-   whose stores need no bound of their own, its values checked before;
-   any other is written into [buf] and its bytes checked again. *)
+(* The body of [encode]. A record of constant size is [size] bytes, so its
+   bounds are tested before its values, as the codec tests them. A flat
+   record ({!flat_record}) is written into the array of its bytes, whose
+   stores need no bound of their own, its values checked before; any other
+   is written into [buf] and its bytes checked again. A record of variable
+   size is measured first, from 0: an error of the measure is moved to
+   [off]. *)
 let written c ~size ~own_check =
+  let eof =
+    "        return Err(fail(off as i64, Path::ROOT, Kind::UnexpectedEof { \
+     expected: n, got }));\n"
+  in
+  let into_buf =
+    Fmt.str
+      "    if off > buf.len() || n > got {\n\
+       %s    }\n\
+      \    encode_at(r, buf, off as i64, true, Path::ROOT)?;\n\
+      \    let buf: &[u8] = buf;\n\
+      \    if %s.ok() {\n\
+      \        Ok(())\n\
+      \    } else {\n\
+      \        Err(first_error(buf, off + n, off))\n\
+      \    }\n"
+      eof own_check
+  in
   match size with
   | Some k when flat_record c ->
       Fmt.str
-        "    let got = buf.len().saturating_sub(off);\n\
+        "    let n: usize = %d;\n\
+        \    let got = buf.len().saturating_sub(off);\n\
         \    let Some(b) = buf.get_mut(off..).and_then(|s| \
          s.first_chunk_mut::<%d>()) else {\n\
-        \        return Err(fail(off as i64, Path::ROOT, Kind::UnexpectedEof { \
-         expected: n, got }));\n\
-        \    };\n\
+         %s    };\n\
         \    match encode_at(r, b, 0, true, Path::ROOT) {\n\
         \        Ok(_) => Ok(()),\n\
         \        Err(e) => Err(Error { at: e.at + off, ..e }),\n\
         \    }\n"
-        k
-  | _ ->
+        k k eof
+  | Some k ->
       Fmt.str
-        "    let got = buf.len().saturating_sub(off);\n\
-        \    if off > buf.len() || n > got {\n\
-        \        return Err(fail(off as i64, Path::ROOT, Kind::UnexpectedEof { \
-         expected: n, got }));\n\
-        \    }\n\
-        \    encode_at(r, buf, off as i64, true, Path::ROOT)?;\n\
-        \    let buf: &[u8] = buf;\n\
-        \    if %s.ok() {\n\
-        \        Ok(())\n\
-        \    } else {\n\
-        \        Err(first_error(buf, off + n, off))\n\
-        \    }\n"
-        own_check
+        "    let n: usize = %d;\n\
+        \    let got = buf.len().saturating_sub(off);\n\
+         %s"
+        k into_buf
+  | None ->
+      Fmt.str
+        "    let n = match size(r) {\n\
+        \        Ok(n) => n,\n\
+        \        Err(e) => return Err(match e.at.checked_add(off) {\n\
+        \            Some(at) => Error { at, ..e },\n\
+        \            None => fail(off as i64, Path::ROOT, Kind::UnexpectedEof \
+         { expected: MIN_SIZE, got: 0 }),\n\
+        \        }),\n\
+        \    };\n\
+        \    let got = buf.len().saturating_sub(off);\n\
+         %s"
+        into_buf
 
 let pp_root ppf ~size c =
   let rt = if borrows c.all c.r then "Record<'_>" else "Record" in
@@ -1402,7 +1430,6 @@ let pp_root ppf ~size c =
      /// its own checks once written; the bytes written are then scrap.\n\
      #[inline]\n\
      pub fn encode(r: &%s, buf: &mut [u8], off: usize) -> Result<(), Error> {\n\
-    \    let n = size(r)?;\n\
      %s}\n\n"
     check first_error window rt window rt
     (written c ~size ~own_check)
