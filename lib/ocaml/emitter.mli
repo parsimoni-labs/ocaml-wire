@@ -121,14 +121,12 @@ type cuts = {
   prefix : string;
   defs : Buffer.t;
   taken : (string, unit) Hashtbl.t;
-  poly : string;
   reserve : int;
   trace : bool -> bool;
 }
 (** Where the functions a walk is cut into go: their names start with [prefix],
     each distinct from those in [taken]; [defs] holds their definitions, each
-    before the functions that call it; [poly] is written before the parameters
-    of each, as [(type a : bits64) ]; each keeps room for [reserve] characters,
+    before the functions that call it; each keeps room for [reserve] characters,
     the call that ends the walk; and [trace] is applied to each choice to cut or
     not, which an F* walk takes from the OCaml one. *)
 

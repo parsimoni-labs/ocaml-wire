@@ -74,10 +74,9 @@ let pp_args ~fstar ~conv ppf outputs =
       (List.map (fun (o : output) -> Fmt.str "~%s:%s" o.name (conv o)) outputs)
 
 (* An integer output as [valid] takes it. A value held as [int64_u] is
-   converted for a [valid] that is not unboxed: to an [int64] with [step], to
-   an [int] otherwise. *)
-let to_int (w : w) ~unboxed ~step (o : output) =
-  if rep w.m.num = Unboxed && (not unboxed) && not o.is_bool then
+   converted: to an [int64] with [step], to an [int] otherwise. *)
+let to_int (w : w) ~step (o : output) =
+  if rep w.m.num = Unboxed && not o.is_bool then
     let u = if w.m.num = Fstar_u then "P" else "U" in
     match List.assoc_opt o.id w.settled with
     | Some _ -> if step && w.m.num = Unboxed then "0L" else "0"
@@ -89,9 +88,9 @@ let to_int (w : w) ~unboxed ~step (o : output) =
 
 (* The call of [valid] with the outputs, where the walk [w] ends. With
    [step], [valid] is the consumer of the step functions and takes [int64]. *)
-let call ?(step = false) s ~unboxed valid (w : w) =
+let call ?(step = false) s valid (w : w) =
   pf w "%s %a@\n" valid
-    (pp_args ~fstar:(is_fstar w.m.num) ~conv:(to_int w ~unboxed ~step))
+    (pp_args ~fstar:(is_fstar w.m.num) ~conv:(to_int w ~step))
     s.selected
 
 (* The functions cut out of [name] are named after it, without [fold_]. *)
@@ -105,7 +104,7 @@ let cut_prefix name =
 (* [write s] writes one function of the scanner, [name], with [cuts], the
    functions its walk is cut into, before it; none in a scanner with slots,
    whose walk stays one function. *)
-let with_cuts ?(poly = "") ?(trace = Fun.id) s name write =
+let with_cuts ?(trace = Fun.id) s name write =
   Hashtbl.replace s.taken name ();
   if not (Sset.is_empty s.m.slots) then write s None
   else begin
@@ -122,7 +121,6 @@ let with_cuts ?(poly = "") ?(trace = Fun.id) s name write =
         prefix = cut_prefix name;
         defs = Buffer.create 4096;
         taken = s.taken;
-        poly;
         reserve;
         trace;
       }
@@ -263,27 +261,6 @@ let pp_entry ?cuts ?(length = "Bytes.length buf") ?int_length
   end;
   pp_scan ?cuts ~name ~scope s ~reject ~accept
 
-(* The types of the callbacks [fold_frames_unboxed] takes, whose accumulator
-   has layout [bits64]. *)
-let callback_types s =
-  let fields =
-    if s.selected = [] then [ "unit" ]
-    else
-      List.map
-        (fun (o : output) ->
-          o.name ^ ":" ^ if o.is_bool then "bool" else "int64_u")
-        s.selected
-  in
-  ("a -> a", String.concat " -> " (("a" :: fields) @ [ "a" ]))
-
-(* The callbacks [fold_frames] takes: on OxCaml, unboxed ones have their
-   types written out. *)
-let frames_callbacks s ~unboxed =
-  if not unboxed then "~invalid ~valid"
-  else
-    let invalid, valid = callback_types s in
-    Fmt.str "~(invalid : %s) ~(valid : %s) : a" invalid valid
-
 (* The variables of a frame loop: how [acc] and [cursor] are read and
    assigned, and the stride added to [cursor]. *)
 let frames_vars s =
@@ -355,8 +332,7 @@ let read_aheads ?(leading = false) s ~need =
 (* The walk of one frame of a loop of [fold_frames], with the read-ahead
    [ahead] fields bound as variables: the expression of the next
    accumulator. *)
-let frames_body ?cuts ?step ~ahead s ~name ~names ~unboxed ~invalid ~valid
-    ~known =
+let frames_body ?cuts ?step ~ahead s ~name ~names ~invalid ~valid ~known =
   let body = Buffer.create 4096 in
   let bppf = Format.formatter_of_buffer body in
   let m = { s.m with ahead = Sset.of_list (List.map fst ahead) } in
@@ -364,7 +340,7 @@ let frames_body ?cuts ?step ~ahead s ~name ~names ~unboxed ~invalid ~valid
   let names = names @ List.map (fun (v, _) -> (v, typ)) ahead in
   pp_scan ?cuts ~known ~name ~scope:(scope s names) { s with ppf = bppf; m }
     ~reject:(invalid ^ " current")
-    ~accept:(call ~step:(Option.is_some step) s ~unboxed (valid ^ " current"));
+    ~accept:(call ~step:(Option.is_some step) s (valid ^ " current"));
   Format.pp_print_flush bppf ();
   Buffer.contents body
 
@@ -429,12 +405,11 @@ let pp_frames_unrolled s ~body ~used =
    frame's [ahead] fields, before the walk of its first frame. The guard
    [stride <= len / unroll] keeps [off + len - unroll * stride] from
    overflowing or falling below [off]. *)
-let pp_frames_loop ?cuts ?step ?(ahead = []) s ~name ~names ~unboxed ~invalid
-    ~valid ~known ~unrolled =
+let pp_frames_loop ?cuts ?step ?(ahead = []) s ~name ~names ~invalid ~valid
+    ~known ~unrolled =
   let read, assign, stride = frames_vars s in
   let body =
-    frames_body ?cuts ?step ~ahead s ~name ~names ~unboxed ~invalid ~valid
-      ~known
+    frames_body ?cuts ?step ~ahead s ~name ~names ~invalid ~valid ~known
   in
   let used = List.filter (fun (v, _) -> mentions v body) ahead in
   if unrolled && Option.is_some cuts then pp_frames_unrolled s ~body ~used;
@@ -488,26 +463,19 @@ let pp_frames_apart ?step s name =
 (* The variables a frame loop's walk starts with besides its own, each with
    the type a function cut out of it gives it, and what goes before those
    functions' parameters. *)
-let frames_scope ?step s ~unboxed =
+let frames_scope ?step () =
   match step with
-  | Some _ -> ([ ("current", None) ], "")
-  | None when unboxed ->
-      let i, v = callback_types s in
-      ( [ ("current", Some "a"); ("invalid", Some i); ("valid", Some v) ],
-        "(type a : bits64) " )
-  | None -> ([ ("current", None); ("invalid", None); ("valid", None) ], "")
+  | Some _ -> [ ("current", None) ]
+  | None -> [ ("current", None); ("invalid", None); ("valid", None) ]
 
 (* The start of the frame loop [name]: its parameters, the check of its
    bounds and stride, and its accumulator, cursor and last offset. With
    [len] not negative, [len > Bytes.length buf - off] rejects an [off] past
    the buffer. *)
-let pp_frames_head s ~name ~unboxed ~callbacks =
+let pp_frames_head s ~name ~callbacks =
   let ppf = s.ppf and native = s.m.num = Unboxed in
-  Fmt.pf ppf "let[@inline always] %s%s %s off len ~stride %s %s =@\n" name
-    (if unboxed then " (type a : bits64)" else "")
-    s.m.src.buf
-    (if unboxed then "~(init : a)" else "~init")
-    callbacks;
+  Fmt.pf ppf "let[@inline always] %s %s off len ~stride ~init %s =@\n" name
+    s.m.src.buf callbacks;
   Fmt.pf ppf
     "if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then@\n\
      invalid_arg \"%s: invalid frame bounds or stride\";@\n"
@@ -526,7 +494,7 @@ let pp_frames_head s ~name ~unboxed ~callbacks =
 
 (* The frame loop [name] as a decision: [pp_frames] below writes it. A walk
    with slots is not cut, so its loop is not unrolled. *)
-let frame_loop s ~name ~need ~apart ~unboxed =
+let frame_loop s ~name ~need ~apart =
   let frames = if Sset.is_empty s.m.slots then unroll else 1 in
   Decision.Frame_loop
     {
@@ -536,7 +504,6 @@ let frame_loop s ~name ~need ~apart ~unboxed =
       short =
         (if need = 0 then None
          else if Option.is_some apart then Some Decision.Apart
-         else if unboxed then Some Decision.Walked
          else Some Decision.Inline);
       ahead = (if frames > 1 then List.map fst (read_aheads s ~need) else []);
     }
@@ -546,46 +513,40 @@ let frame_loop s ~name ~need ~apart ~unboxed =
    [last = off + len - stride] from overflowing and every frame inside
    [off + len]. The loop runs [len / stride] times, and each frame gets all
    its checks, so a short frame cannot borrow bytes from the next. *)
-let pp_frames ?step s ~unboxed =
+let pp_frames ?step s =
   let native = s.m.num = Unboxed in
   let read = if native then "" else "!" in
-  let name, callbacks, invalid, valid =
+  let name = s.fold ^ "_frames" in
+  let callbacks, invalid, valid =
     match step with
-    | Some m -> (s.fold ^ "_frames", "", m ^ ".invalid", m ^ ".valid")
-    | None ->
-        ( (s.fold ^ if unboxed then "_frames_unboxed" else "_frames"),
-          frames_callbacks s ~unboxed,
-          "invalid",
-          "valid" )
+    | Some m -> ("", m ^ ".invalid", m ^ ".valid")
+    | None -> ("~invalid ~valid", "invalid", "valid")
   in
-  let names, poly = frames_scope ?step s ~unboxed in
+  let names = frames_scope ?step () in
   let need = fixed_need s.plan.nodes in
   let apart =
     if need > 0 && not native then Some (pp_frames_apart ?step s name) else None
   in
-  s.m.decide (frame_loop s ~name ~need ~apart ~unboxed);
-  with_cuts ~poly s name (fun s cuts ->
+  s.m.decide (frame_loop s ~name ~need ~apart);
+  with_cuts s name (fun s cuts ->
       let ppf = s.ppf in
-      pp_frames_head s ~name ~unboxed ~callbacks;
+      pp_frames_head s ~name ~callbacks;
       let loop ~unrolled known =
         let ahead =
           if unrolled && Option.is_some cuts then
             List.map snd (read_aheads s ~need:known)
           else []
         in
-        pp_frames_loop ?cuts ?step ~ahead s ~name ~names ~unboxed ~invalid
-          ~valid ~known ~unrolled
+        pp_frames_loop ?cuts ?step ~ahead s ~name ~names ~invalid ~valid ~known
+          ~unrolled
       in
       (* The loop over frames that hold the leading prefixes comes last,
          where the compiler closes it with one conditional branch. *)
       if need > 0 then begin
         Fmt.pf ppf "if stride < %d then (@\n" need;
-        (* [fold_unboxed] is not polymorphic in the layout of its answer, so
-           the unboxed loop keeps a walk of its own. *)
         (match apart with
         | Some call -> Fmt.pf ppf "%s" call
-        | None ->
-            if unboxed then loop ~unrolled:false 0 else pp_frames_short ?step s);
+        | None -> pp_frames_short ?step s);
         Fmt.pf ppf ")@\nelse (@\n";
         loop ~unrolled:true need;
         Fmt.pf ppf ")"
@@ -593,9 +554,9 @@ let pp_frames ?step s ~unboxed =
       else loop ~unrolled:true 0;
       Fmt.pf ppf ";@\n%sacc@\n@\n" read)
 
-(* [fold], or [fold_unboxed], whose consumer takes the outputs unboxed. *)
-let pp_fold ?trace s ~unboxed =
-  let name = if unboxed then s.fold ^ "_unboxed" else s.fold in
+(* [fold], which takes its consumer as arguments. *)
+let pp_fold ?trace s =
+  let name = s.fold in
   with_cuts ?trace s name (fun s cuts ->
       let callbacks =
         if is_fstar s.m.num then begin
@@ -612,7 +573,7 @@ let pp_fold ?trace s ~unboxed =
         end
       in
       pp_entry ?cuts ~name ~scope:(scope s callbacks) s ~reject:"invalid ()"
-        ~accept:(call s ~unboxed "valid");
+        ~accept:(call s "valid");
       Fmt.pf s.ppf "@\n")
 
 (* The length of [buf] as the [_within] walk of a visitor's fold takes it:
@@ -735,9 +696,9 @@ let pp_index_frames l =
 let pp_fold_index_ahead s ~within ~m ~need ~ahead =
   let index = s.fold ^ "_index" in
   with_cuts s index (fun s cuts ->
-      let names, _ = frames_scope ~step:m s ~unboxed:false in
+      let names = frames_scope ~step:m () in
       let body =
-        frames_body ?cuts ~step:m ~ahead s ~name:index ~names ~unboxed:false
+        frames_body ?cuts ~step:m ~ahead s ~name:index ~names
           ~invalid:(m ^ ".invalid") ~valid:(m ^ ".valid") ~known:need
       in
       let used = List.filter (fun (v, _) -> mentions v body) ahead in
@@ -851,7 +812,7 @@ let pp_step_within ?trace s m =
       pp_entry ?cuts ~length:"length" ~unboxed_length:true ~name:s.fold
         ~scope:(scope s [ ("init", None) ])
         { s with ppf } ~reject:(m ^ ".invalid init")
-        ~accept:(call ~step:true s ~unboxed:false (m ^ ".valid init"));
+        ~accept:(call ~step:true s (m ^ ".valid init"));
       Format.pp_print_flush ppf ();
       let body = Buffer.contents body in
       (* A walk that reads no byte takes [buf] for its type alone. *)
@@ -961,9 +922,8 @@ let without_dead_bindings text =
 type fold = { name : string; selected : output list; visitor : string option }
 
 (* The walks of a module: each of its [folds], then [check]. A fold with no
-   visitor takes its consumer as arguments, and on OxCaml has unboxed forms;
-   one with a visitor calls that module by name, on OCaml holding values as
-   [int64]. *)
+   visitor takes its consumer as arguments; one with a visitor calls that
+   module by name, on OCaml holding values as [int64]. *)
 let pp_body ~folds ?size s =
   let unboxed = s.m.num = Unboxed in
   if unboxed then
@@ -980,16 +940,12 @@ let pp_body ~folds ?size s =
       in
       match f.visitor with
       | None ->
-          pp_fold s ~unboxed:false;
-          pp_frames s ~unboxed:false;
-          if unboxed then begin
-            pp_fold s ~unboxed:true;
-            pp_frames s ~unboxed:true
-          end
+          pp_fold s;
+          pp_frames s
       | Some m ->
           let s = if unboxed then s else { s with m = mode Boxed } in
           pp_fold_step s m;
-          pp_frames ~step:m s ~unboxed:false)
+          pp_frames ~step:m s)
     folds;
   Fmt.pf s.ppf "type 'b view = int@\ntype 'b check = int@\n@\n";
   pp_check ?size s
@@ -1066,9 +1022,9 @@ let pp_frame_walk ?trace ~frame ~index s m =
     else List.map snd (read_aheads s ~need)
   in
   with_cuts ?trace s name (fun s cuts ->
-      let names, _ = frames_scope ~step:m s ~unboxed:false in
+      let names = frames_scope ~step:m () in
       let body =
-        frames_body ?cuts ~step:m ~ahead s ~name ~names ~unboxed:false
+        frames_body ?cuts ~step:m ~ahead s ~name ~names
           ~invalid:(m ^ ".invalid") ~valid:(m ^ ".valid") ~known:need
       in
       let pos = if rep s.m.num = Unboxed then "P.int64" else "P.int" in
@@ -1143,16 +1099,14 @@ let rendered ?(fold = "fold") ?fields c ~num write =
   }
 
 let fstar ?fields c =
-  rendered ?fields c ~num:Fstar (fun ~trace ~frame:_ s ->
-      pp_fold ~trace s ~unboxed:false)
+  rendered ?fields c ~num:Fstar (fun ~trace ~frame:_ s -> pp_fold ~trace s)
 
 let fstar_step ?fields ~step c =
   rendered ~fold:"fold_step" ?fields c ~num:Fstar64 (fun ~trace ~frame:_ s ->
       pp_step_within ~trace s step)
 
 let fstar_ox ?fields c =
-  rendered ?fields c ~num:Fstar_u (fun ~trace ~frame:_ s ->
-      pp_fold ~trace s ~unboxed:false)
+  rendered ?fields c ~num:Fstar_u (fun ~trace ~frame:_ s -> pp_fold ~trace s)
 
 let fstar_ox_step ?fields ~step c =
   rendered ~fold:"fold_step" ?fields c ~num:Fstar_u (fun ~trace ~frame:_ s ->

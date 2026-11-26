@@ -595,40 +595,6 @@ let pp_visitor_fold ppf ~target ~plan b n m selected =
         the bounds are bad."
        n n)
 
-(* The unboxed forms of the fold [n], on OxCaml. *)
-let pp_unboxed_fold ppf ~target b n selected =
-  let valid = arrows (outputs ~num:"int64_u" selected @ [ "'a" ]) in
-  let valid_acc =
-    arrows (("'a" :: outputs ~num:"int64_u" selected) @ [ "'a" ])
-  in
-  pp_val target ppf (n ^ "_unboxed")
-    (arrows
-       [
-         b; "int"; "int"; "invalid:(unit -> 'a)"; "valid:(" ^ valid ^ ")"; "'a";
-       ])
-    (Fmt.str
-       "[%s_unboxed buf off len ~invalid ~valid] is [%s buf off len ~invalid \
-        ~valid] with the outputs unboxed."
-       n n);
-  pp_val target ppf (n ^ "_frames_unboxed")
-    ("('a : bits64). "
-    ^ arrows
-        [
-          b;
-          "int";
-          "int";
-          "stride:int";
-          "init:'a";
-          "invalid:('a -> 'a)";
-          "valid:(" ^ valid_acc ^ ")";
-          "'a";
-        ])
-    (Fmt.str
-       "[%s_frames_unboxed buf off len ~stride ~init ~invalid ~valid] is \
-        [%s_frames] with the outputs unboxed and an accumulator of layout \
-        [bits64]."
-       n n)
-
 (* The fold [n] taking its consumer as arguments. *)
 let pp_closure_fold ppf ~target ~plan b n selected =
   let valid = arrows (outputs ~num:"int" selected @ [ "'a" ]) in
@@ -661,8 +627,7 @@ let pp_closure_fold ppf ~target ~plan b n selected =
         frames of [stride] bytes at [off], each checked on its own, from \
         [init]. Raises [Invalid_argument] if [stride] is not positive or the \
         bounds are bad."
-       n);
-  if target = `OxCaml then pp_unboxed_fold ppf ~target b n selected
+       n)
 
 let scan_members ppf ~target ~(plan : plan) ~(folds : Scan_module.fold list) =
   let b = buf (bytes_buf target) in

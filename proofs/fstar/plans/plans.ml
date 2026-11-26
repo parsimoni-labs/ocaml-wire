@@ -679,8 +679,8 @@ let dispatch_trees ~found all =
       | _ -> ())
     all
 
-(* The walks of a frame loop: those of its frames, knowing its [need] bytes,
-   and those of its short frames, knowing none. *)
+(* The walks of a frame loop: those of its frames, knowing its [need]
+   bytes. *)
 let frame_loop_walks ~found run ~name ~need ~short =
   let walks =
     List.filter_map
@@ -689,7 +689,7 @@ let frame_loop_walks ~found run ~name ~need ~short =
   in
   List.iter
     (fun known ->
-      if known <> need && not (known = 0 && short = Some P.Walked) then
+      if known <> need then
         Fmt.kstr found "frame loop %s walks a frame knowing %d bytes" name known)
     walks;
   if not (List.mem need walks) then
@@ -736,8 +736,7 @@ let frame_loop_ahead ~found d ~name ~need ~frames ahead =
   end
 
 (* A frame loop as Plan.Loop.frame_walks models it: the frames shorter than
-   its [need] bytes walked by [fold] or by a walk of its own that knows none,
-   the others by a walk that knows [need], and [need] within the [fixed]
+   its [need] bytes walked by [fold], the others by a walk that knows [need], and [need] within the [fixed]
    bytes the leading fields need. *)
 let frame_loop ~found ~fixed d run ~name ~need ~frames ~short ~ahead =
   let short, ahead = if !fabricate then (None, []) else (short, ahead) in

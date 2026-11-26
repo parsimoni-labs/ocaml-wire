@@ -73,45 +73,9 @@ let checksum_contribution ~zero get =
   ^ " then " ^ ports "ipv4_udp" ^ " + " ^ get "ipv4_udp_length" ^ " else "
   ^ zero ^ " in\n" ^ "(ip0 + ip1) + (ip2 + transport)"
 
-let reader_modes name =
-  ( List.mem name [ "batch"; "batch_unboxed" ],
-    List.mem name [ "fold_unboxed"; "batch_unboxed" ] )
-
-let reader_invocation ~core ~fields ~batch ~wide =
-  let call =
-    if batch then
-      (if wide then
-         ".fold_frames_unboxed buf off len ~stride ~init:(U.of_int base)"
-       else ".fold_frames buf off len ~stride ~init:base")
-      ^ " ~invalid:(fun x -> x) ~valid:(fun[@inline always] base "
-    else
-      (if wide then ".fold_unboxed" else ".fold")
-      ^ " buf off len ~invalid:(fun () -> base) ~valid:(fun[@inline always] "
-  in
-  let args =
-    List.map
-      (fun (name, _) ->
-        "~" ^ name ^ if List.mem name checksum_fields then "" else ":_")
-      fields
-  in
-  core ^ call ^ String.concat " " args ^ " ->\n"
-
-let reader_wrappers ~wide ~batch =
-  let first = if wide && batch then "U.to_int (" else "" in
-  let inside =
-    if wide then
-      if batch then "(let open Ops in\n" else "U.to_int (let open Ops in\n"
-    else ""
-  in
-  let last =
-    (if wide then ")" else "") ^ ")\n" ^ if wide && batch then ")\n" else ""
-  in
-  (first, inside, last)
-
 (* The checksum visitor the fold [checksum] calls by name: OCaml without
    flambda never inlines a function passed as an argument. It takes the
-   outputs as [int64] and folds them as such, as the unboxed rows of OxCaml
-   fold [int64_u]. *)
+   outputs as [int64] and folds them as such, as the Rust rows fold [u64]. *)
 let step ~fields =
   let args =
     List.map
@@ -130,52 +94,29 @@ let step ~fields =
   ^ checksum_contribution ~zero:"0L" Fun.id
   ^ " in\nbase + contribution\n"
 
-let checksum_reader target ~core ~fields name =
-  let batch, wide = reader_modes name in
-  let first, inside, last = reader_wrappers ~wide ~batch in
+let checksum_reader target ~core name =
+  let batch = name = "batch" in
   (* Checked where the fold is inlined, under the bench profile: the dev
      profile compiles g_stack opaque, so the reader calls it. *)
   let annotation =
     if batch && target = `OxCaml then "[@zero_alloc opt]" else ""
   in
-  let base = if wide && not batch then "U.of_int base" else "base" in
+  let call =
+    core
+    ^
+    if batch then ".checksum_frames buf off len ~stride"
+    else ".checksum buf off len"
+  in
   "let[@inline always]" ^ annotation ^ " " ^ name
   ^ (if batch then " ~stride" else "")
-  ^ " base buf off len =\n"
-  ^
-  if not wide then
-    let call =
-      core
-      ^
-      if batch then ".checksum_frames buf off len ~stride"
-      else ".checksum buf off len"
-    in
-    "Int64.to_int (" ^ call ^ " ~init:(Int64.of_int base))\n"
-  else
-    first
-    ^ reader_invocation ~core ~fields ~batch ~wide
-    ^ inside ^ "let contribution = "
-    ^ checksum_contribution ~zero:(if wide then "#0L" else "0") Fun.id
-    ^ " in\n" ^ base ^ " + contribution\n" ^ last
+  ^ " base buf off len =\n" ^ "Int64.to_int (" ^ call
+  ^ " ~init:(Int64.of_int base))\n"
 
-let stack_reader target ~core ~fields =
-  let reader = checksum_reader target ~core ~fields in
+let stack_reader target ~core =
+  let reader = checksum_reader target ~core in
   "let oxcaml = "
   ^ string_of_bool (target = `OxCaml)
-  ^ "\n"
-  ^ (if target = `OxCaml then
-       "module U = Wire_runtime.Target.Int64_u\n\
-        module Ops = struct\n\
-        let ( + ) = U.add\n\
-        let ( lxor ) = U.logxor\n\
-        let ( lor ) = U.logor\n\
-        let ( lsl ) = U.shift_left\n\
-        end\n"
-     else "")
-  ^ reader "fold" ^ reader "batch"
-  ^
-  if target = `OxCaml then reader "fold_unboxed" ^ reader "batch_unboxed"
-  else "let fold_unboxed = fold\nlet batch_unboxed = batch\n"
+  ^ "\n" ^ reader "fold" ^ reader "batch"
 
 (* {1 The flow classifier}
 
@@ -313,8 +254,8 @@ let harness file =
     match Filename.remove_extension (Filename.basename file) with
     | "stack_step" -> step ~fields:all
     | "selected_step" -> step ~fields:selected
-    | "stack_read" -> stack_reader target ~core:"G_stack" ~fields:all
-    | "selected_read" -> stack_reader target ~core:"G_selected" ~fields:selected
+    | "stack_read" -> stack_reader target ~core:"G_stack"
+    | "selected_read" -> stack_reader target ~core:"G_selected"
     | "flow_step" -> table_step
     | "flow_parse" -> parse_visitor
     | "flow_read" ->
@@ -349,8 +290,7 @@ let () =
                 (Wire_rust.rs ~codec:("Headers." ^ name) c));
         }
   | _ ->
-      let checksum o =
-        Wire_ocaml.[ fold ?outputs:o "fold"; fold ?outputs:o "checksum" ]
+      let checksum o = Wire_ocaml.[ fold ?outputs:o "checksum" ]
       and flow =
         Wire_ocaml.
           [

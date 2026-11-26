@@ -51,12 +51,12 @@ val walks :
   string
 (** [walks ?decide ~target ~folds ?size ~taken plan] is the walks of a module
     over [plan]: for each of [folds] named [n], without a visitor [n] and
-    [n_frames], which take their consumer as arguments, and on OxCaml
-    [n_unboxed] and [n_frames_unboxed]; with a visitor [n], [n_frames] and
-    [n_index], which call it by name. Then [check]: [check b length ~off ~len],
-    or [check b length off] for a codec of constant [size]. Each function it
-    writes is named apart from [taken], which it adds to. [decide] is given each
-    decision the walks take, in the order it writes them. *)
+    [n_frames], which take their consumer as arguments; with a visitor [n],
+    [n_frames] and [n_index], which call it by name. Then [check]:
+    [check b length ~off ~len], or [check b length off] for a codec of constant
+    [size]. Each function it writes is named apart from [taken], which it adds
+    to. [decide] is given each decision the walks take, in the order it writes
+    them. *)
 
 val without_dead_bindings : string -> string
 (** [without_dead_bindings text] is [text] without the bindings it never reads.

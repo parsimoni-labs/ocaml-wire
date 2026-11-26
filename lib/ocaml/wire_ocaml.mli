@@ -134,9 +134,7 @@ val fold : ?outputs:string list -> string -> fold
     compiler inlines [valid] (docs/execution.md, Generated code). Without a
     visitor, the fold takes its consumer as arguments:
     [name buf off len ~invalid ~valid] and
-    [name_frames buf off len ~stride ~init ~invalid ~valid], and on OxCaml
-    [name_unboxed] and [name_frames_unboxed], which hand the outputs out
-    unboxed. *)
+    [name_frames buf off len ~stride ~init ~invalid ~valid]. *)
 
 type t
 (** The type for the module generated from a codec. *)
@@ -444,7 +442,6 @@ module Plan : sig
   type short_frames =
     | Apart  (** Through [fold], in a function of their own. *)
     | Inline  (** Through [fold], in the frame loop's function. *)
-    | Walked  (** Through a walk of their own that knows no byte. *)
 
   type decision =
     | Walk of { name : string; values : values; known : int }

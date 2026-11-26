@@ -624,27 +624,10 @@ let rows stride =
     ("wire.ocaml fused stack, fold" ^ target, generated_fold ~stride);
     ( "wire.ocaml fused stack, batch" ^ target,
       fun buf -> Stack_read.batch ~stride 0 buf 0 (Bytes.length buf) );
+    ("wire.ocaml selected outputs, fold" ^ target, generated_selected ~stride);
+    ( "wire.ocaml selected outputs, batch" ^ target,
+      fun buf -> Selected_read.batch ~stride 0 buf 0 (Bytes.length buf) );
   ]
-  @ (if oxcaml then
-       [
-         ( "wire.ocaml fused stack, unboxed batch",
-           fun buf ->
-             Stack_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
-       ]
-     else [])
-  @ [
-      ("wire.ocaml selected outputs, fold" ^ target, generated_selected ~stride);
-      ( "wire.ocaml selected outputs, batch" ^ target,
-        fun buf -> Selected_read.batch ~stride 0 buf 0 (Bytes.length buf) );
-    ]
-  @
-  if oxcaml then
-    [
-      ( "wire.ocaml selected outputs, unboxed batch",
-        fun buf ->
-          Selected_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
-    ]
-  else []
 
 (* {1 Timing}
 

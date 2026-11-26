@@ -139,7 +139,6 @@ type cuts = {
   prefix : string;
   defs : Buffer.t;
   taken : (string, unit) Hashtbl.t;
-  poly : string;
   reserve : int;
   trace : bool -> bool;
       (* Each choice to cut or not, in the order the walk makes them: an F*
@@ -864,8 +863,8 @@ let cut w ~label body =
           ( String.concat " " (List.map param params),
             String.concat " " (List.map (fun (v, _) -> "~" ^ v) params) )
       in
-      Fmt.pf (Fmt.with_buffer c.defs) "let[@inline always] %s %s%s =\n%s\n\n%!"
-        name c.poly formal (String.concat "\n" lines);
+      Fmt.pf (Fmt.with_buffer c.defs) "let[@inline always] %s %s =\n%s\n\n%!"
+        name formal (String.concat "\n" lines);
       pf w "%s %s@\n" name actual
   | _ -> body w
 

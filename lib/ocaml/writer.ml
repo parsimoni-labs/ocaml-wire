@@ -90,12 +90,12 @@ let checked_record ~codec ~needed ~views record =
       Some r
   | Ok r -> if Names.clash (record_names ~views r) = None then Some r else None
 
-(* The names a fold defines: without a visitor, its consumer's form and on
-   OxCaml the unboxed one; with one, the step forms. *)
+(* The names a fold defines: without a visitor, its consumer's form; with
+   one, the step forms. *)
 let fold_names (f : fold) =
   let n = f.name in
   match f.visitor with
-  | None -> [ n; n ^ "_frames"; n ^ "_unboxed"; n ^ "_frames_unboxed" ]
+  | None -> [ n; n ^ "_frames" ]
   | Some _ -> [ n; n ^ "_frames"; n ^ "_index"; n ^ "_within" ]
 
 (* The folds' names are apart from each other and from the module's own. *)

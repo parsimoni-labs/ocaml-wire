@@ -25,7 +25,7 @@ type choice = Run of int option | If of bool T.expr * choice * choice
 type join = Joined | Copied
 
 (** How a frame loop walks frames too short for the bytes it knows. *)
-type short_frames = Apart | Inline | Walked
+type short_frames = Apart | Inline
 
 (** A decision. *)
 type t =

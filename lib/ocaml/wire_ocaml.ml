@@ -327,7 +327,7 @@ module Plan = struct
     | If of bool T.expr * choice * choice
 
   type join = Decision.join = Joined | Copied
-  type short_frames = Decision.short_frames = Apart | Inline | Walked
+  type short_frames = Decision.short_frames = Apart | Inline
 
   type decision = Decision.t =
     | Walk of { name : string; values : values; known : int }

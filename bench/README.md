@@ -323,7 +323,7 @@ pick for exactly this work:
 | `Wire.Codec stack decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of one bounded stack codec |
 | `Wire.Codec stack check/enter/read` | interpreted codec (OCaml 5, OxCaml) | `View.check` of the same bounded stack codec, which builds nothing, then `View.enter` of each layer present (a `View.sub` or `View.sub_option` per sub-codec field) and a `View.read` of a `View.field` per field |
 | `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | a `Codec.View.codec` per header codec; `View.check`/`View.ok`/`View.get` per header, then a `View.read` of a `View.field` per field; the harness links the layers |
-| `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the scanner of the stack: `fold` and `fold_frames` (batch), on OxCaml also their unboxed forms; `selected outputs` hands out only the checksum's fields |
+| `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the fold `checksum` of the stack and `checksum_frames` (batch), which call the checksum visitor by name; `selected outputs` hands out only the checksum's fields |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `check b len off`/`ok`/`get` per fixed header, then an accessor `<field> b v` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
 | `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.scanner` of the stack | `scan` per frame; `selected outputs` hands out only the checksum's fields |
 | `wire.rust, linked headers` | generated Rust of the fixed headers | `Valid::at` per header, then a read per field; the harness links the layers |
@@ -360,8 +360,7 @@ fields into the checksum. Its
 slot and constructs its ordinary nested values. Byte fields are zero-copy
 slices.
 
-The frame loop of the batch rows (`fold_frames` and its unboxed and step
-forms) walks four frames per iteration, so that it polls for signals once
+The frame loop of the batch rows (`fold_frames` and its step form) walks four frames per iteration, so that it polls for signals once
 per four frames. Each iteration first computes where its four frames start
 and loads the field their transport header is chosen on, the IPv4
 protocol, then walks the frames: a mispredicted branch of one frame does
@@ -377,9 +376,7 @@ into a checksum, and the report fails if they disagree.
 
 The existing `test/ocaml` and `fuzz/diff/ocaml` suites compare scanner
 acceptance and scalar fields with `Codec`, including truncation at every
-byte, nonzero frame offsets, IPv4/TCP options and arbitrary mutations.
-Their `ocaml-ox` lanes also compare the boxed and unboxed folds and check
-`fold_frames_unboxed` with `[@zero_alloc]` in release builds. With
+byte, nonzero frame offsets, IPv4/TCP options and arbitrary mutations. With
 `BUILD_EVERPARSE=1`, the same differential driver compiles the projected
 3D schemas through EverParse and compares C acceptance, consumed length and
 the scalar members of the default visitor, nested fields included.

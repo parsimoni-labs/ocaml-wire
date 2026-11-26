@@ -75,8 +75,11 @@ runs taken one row after another do not; the medians still move by about
 Instructions / cycles per packet, ordered by the instructions on
 `fixed64-random`. The `wire.ocaml fused stack` and `fused stack, unboxed
 API` rows timed the scanner's output record, its `decode` and
-`decode_unboxed`, which the one module per codec removed; they are no
-longer run, and their lines below are kept as measured:
+`decode_unboxed`, which the one module per codec removed, and the `unboxed
+batch` rows the OxCaml folds that took their consumer as unboxed closures,
+which the batch through the visitor matches within 2% of instructions and
+cycles; they are no longer run, and their lines below are kept as
+measured:
 
 | Row | fixed64 random | fixed64 sorted | mix128 random | mix128 sorted |
 | --- | ---: | ---: | ---: | ---: |
@@ -141,7 +144,5 @@ as an argument. When the fold by name was added, on the `fixed64-random` corpus 
 `fold_frames` and a closure called `valid` through `caml_apply20`,
 allocated a five-word closure per frame and took 31.30 (full outputs) and
 20.18 (selected) ns/packet, against 15.38 and 14.86 by name, with no
-allocation and no call per frame. The stock `decode` row still builds its
-record through `fold`'s closures. The visitor takes the outputs as `int64` and
-folds them as `int64`, as the unboxed OxCaml rows fold `int64_u` and the
-Rust rows `u64`.
+allocation and no call per frame. The visitor takes the outputs as `int64`
+and folds them as `int64`, as the Rust rows fold `u64`.

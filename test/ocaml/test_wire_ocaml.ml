@@ -1244,10 +1244,10 @@ let words s =
   !n
 
 (* [n] optional fields nested inside each other that hand out every output.
-   The OCaml target writes two walks ([fold] and [fold_frames]; [decode]
-   calls [fold]) and the OxCaml target six, [fold_frames_unboxed] two of them:
-   one for a stride that holds the fixed bytes of a frame, which tests none
-   of their bounds, and one for a shorter stride. Past the first four levels,
+   Each target writes the walks of [fold] and [fold_frames], whose frame
+   loop copies the walk of a frame into each frame it unrolls; the OxCaml
+   budget is the one its unboxed folds needed, which no longer exist, and is
+   not tightened. Past the first four levels,
    whose outputs are immutable, a level costs a walk about 21 lines: its
    three slots, the bound checks and reads of its two prefixes, its
    presence, its join and the jumps to it, or the short code after it copied

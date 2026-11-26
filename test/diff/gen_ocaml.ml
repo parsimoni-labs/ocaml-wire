@@ -250,19 +250,17 @@ let pp_case ppf (label, c, (src, intf)) =
 (* {1 Scanners}
 
    Each scanner is handed to [Diff_ocaml] as its [fold] and [fold_frames],
-   as its [fold_step] and [fold_step_frames], and on OxCaml also as the
-   unboxed forms of the first two. A structured case gets the scanner
+   and as its [fold_step] and [fold_step_frames]. A structured case gets the scanner
    of every output, one of every other output, one of none, and on OxCaml one
    for the default target too; a sampled shape the first two. *)
 
-let snapshot ppf ?(boxed = false) ~unboxed ~var fields =
+let snapshot ppf ?(boxed = false) ~var fields =
   Fmt.pf ppf "[";
   List.iter
     (fun (n, is_bool) ->
       let v = var n in
       Fmt.pf ppf "(%S, %s);" n
         (if is_bool then "(if " ^ v ^ " then 1 else 0)"
-         else if unboxed then "(Wire_runtime.Target.Int64_u.to_int " ^ v ^ ")"
          else if boxed then "(Int64.to_int " ^ v ^ ")"
          else v))
     fields;
@@ -273,44 +271,31 @@ let labels fields =
   else
     String.concat " " (List.map (fun (n, _) -> "~" ^ n ^ ":field_" ^ n) fields)
 
-(* [fold], or [fold_unboxed], handing each output to a snapshot. *)
-let pp_fold ppf ~m ~unboxed fields =
+(* [fold], handing each output to a snapshot. *)
+let pp_fold ppf ~m fields =
   Fmt.pf ppf
-    "(fun b o n -> %s.%s b o n ~invalid:(fun () -> None) ~valid:(fun %s -> \
+    "(fun b o n -> %s.fold b o n ~invalid:(fun () -> None) ~valid:(fun %s -> \
      Some %a))"
-    m
-    (if unboxed then "fold_unboxed" else "fold")
-    (labels fields)
-    (fun ppf () -> snapshot ppf ~unboxed ~var:(fun n -> "field_" ^ n) fields)
+    m (labels fields)
+    (fun ppf () -> snapshot ppf ~var:(fun n -> "field_" ^ n) fields)
     ()
 
-let pp_backend ppf ~m ~unboxed fields =
+let pp_backend ppf ~m fields =
   let args = labels fields in
-  let values ppf () =
-    snapshot ppf ~unboxed ~var:(fun n -> "field_" ^ n) fields
-  in
+  let values ppf () = snapshot ppf ~var:(fun n -> "field_" ^ n) fields in
   let batch ppf () =
-    if unboxed then
-      Fmt.pf ppf
-        "Some (fun b o n stride -> let results = ref [] in try let _ = \
-         %s.fold_frames_unboxed b o n ~stride ~init:#0L ~invalid:(fun acc -> \
-         results := None :: !results; acc) ~valid:(fun acc %s -> results := \
-         Some %a :: !results; acc) in Some (List.rev !results) with \
-         Invalid_argument _ -> None)"
-        m args values ()
-    else
-      Fmt.pf ppf
-        "Some (fun b o n stride -> try Some (List.rev (%s.fold_frames b o n \
-         ~stride ~init:[] ~invalid:(fun acc -> None :: acc) ~valid:(fun acc %s \
-         -> Some %a :: acc))) with Invalid_argument _ -> None)"
-        m args values ()
+    Fmt.pf ppf
+      "Some (fun b o n stride -> try Some (List.rev (%s.fold_frames b o n \
+       ~stride ~init:[] ~invalid:(fun acc -> None :: acc) ~valid:(fun acc %s \
+       -> Some %a :: acc))) with Invalid_argument _ -> None)"
+      m args values ()
   in
   Fmt.pf ppf
     "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = %a; scan_batch = \
      %a; scan_index = None };@\n"
-    (m ^ if unboxed then " unboxed" else "")
+    m
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields (pp_fold ~m ~unboxed) fields batch ()
+    fields (pp_fold ~m) fields batch ()
 
 (* The module [fold_step] and [fold_step_frames] call by name: it conses each
    frame's snapshot onto the accumulator. It takes the integer outputs as
@@ -323,10 +308,7 @@ let pp_step ppf fields =
      let valid acc %s = Some %a :: acc@\n\
      end"
     (labels fields)
-    (fun ppf () ->
-      snapshot ppf ~boxed:true ~unboxed:false
-        ~var:(fun n -> "field_" ^ n)
-        fields)
+    (fun ppf () -> snapshot ppf ~boxed:true ~var:(fun n -> "field_" ^ n) fields)
     ()
 
 (* [fold_step], [fold_step_frames] and [fold_step_index], as the [fold],
@@ -412,9 +394,7 @@ let pp_view_backend ppf ~m ~codec c =
      %s.get c in Some %s) else None));@\n"
     wrap (m ^ " views") codec
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields
-    (pp_fold ~m ~unboxed:false)
-    fields frame check m
+    fields (pp_fold ~m) fields frame check m
     (if
        List.for_all
          (function Wire_ocaml.Bytes _ -> true | _ -> false)
@@ -453,9 +433,7 @@ let pp_values_backend ppf ~m ~codec c =
        0; Ok (Bytes.to_string out)); validate = %s.validate });@\n"
       wrap (m ^ " values") codec
       Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-      fields
-      (pp_fold ~m ~unboxed:false)
-      fields m m m m
+      fields (pp_fold ~m) fields m m m m
   end
 
 (* The backends over [c]: each module [(name, target, selected)], generated
@@ -511,18 +489,17 @@ let pp_scanners ppf ~codec c modules =
          end) in@\n\
          [@\n"
         pp_step fields intf src;
-      pp_backend ppf ~m:"M" ~unboxed:false fields;
+      pp_backend ppf ~m:"M" fields;
       pp_step_backend ppf ~m:"M" fields;
       pp_view_backend ppf ~m:"M" ~codec:("(", "codec") c;
       Fmt.pf ppf "]@\nin@\n")
     twin;
   Fmt.pf ppf "[@\n";
   List.iter
-    (fun (m, t, selected) ->
+    (fun (m, _, selected) ->
       let fields = selected_fields selected in
-      pp_backend ppf ~m ~unboxed:false fields;
+      pp_backend ppf ~m fields;
       pp_step_backend ppf ~m fields;
-      if t = `OxCaml then pp_backend ppf ~m ~unboxed:true fields;
       if selected = None then begin
         pp_view_backend ppf ~m ~codec c;
         pp_values_backend ppf ~m ~codec c

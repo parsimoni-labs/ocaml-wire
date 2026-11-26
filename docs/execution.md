@@ -157,7 +157,7 @@ remains its reads. `Wire_ocaml.v` declares the
 module, `Wire_ocaml.main` writes it, one dune rule per module.
 
 A fold `n` without a visitor takes its consumer as arguments (`n`,
-`n_frames`, and on OxCaml `n_unboxed` and `n_frames_unboxed`). A fold with a
+`n_frames`). A fold with a
 visitor calls it by name (`n`, `n_frames`, `n_index`): the visitor is a
 source file the generation rule names (`--visitor n=%{dep:flow_step.ml}`),
 whose module the generator derives from the file, so dune rebuilds the module

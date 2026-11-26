@@ -10,7 +10,7 @@ type bound =
 
 type choice = Run of int option | If of bool T.expr * choice * choice
 type join = Joined | Copied
-type short_frames = Apart | Inline | Walked
+type short_frames = Apart | Inline
 
 type t =
   | Walk of { name : string; values : values; known : int }
@@ -87,7 +87,6 @@ let rec pp_choice ppf = function
 let pp_short ppf = function
   | Apart -> Fmt.string ppf "short frames apart"
   | Inline -> Fmt.string ppf "short frames inline"
-  | Walked -> Fmt.string ppf "short frames walked"
 
 let pp_ints = Fmt.(brackets (list ~sep:semi int))
 let plural n = if n = 1 then "" else "s"

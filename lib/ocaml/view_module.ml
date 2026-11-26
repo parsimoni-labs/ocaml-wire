@@ -48,8 +48,6 @@ let root_names =
     "fold_step";
     "fold_step_frames";
     "fold_step_index";
-    "fold_unboxed";
-    "fold_frames_unboxed";
     "decode";
     "validate";
     "is_valid";

@@ -305,9 +305,8 @@ the step walks. The control of the frame loops is not rendered: the cursor,
 index's offsets and lengths, its `known` test and the loads ahead it
 guards stay outside F*, and no theorem states a loop's result as the fold
 of its frames' answers (above). Outside the rendering stay too the walks
-of a frame of `fold_frames` and `fold_frames_unboxed`,
-which call closures (the same walk as `fold_step_frames`'s, its consumer a
-parameter), the OxCaml `fold_unboxed` and `decode_unboxed`, the views,
+of a frame of `fold_frames`, which calls closures (the same walk as
+`fold_step_frames`'s, its consumer a parameter), the views,
 the record module, and the Rust Wire_rust writes, which has a walk of its
 own and stays under `make fuzz-rust`.
 
