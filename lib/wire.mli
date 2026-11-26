@@ -4,7 +4,8 @@
     bitfields, enumerations, byte arrays -- laid out at fixed bit offsets in a
     buffer. A {!Codec} binds those fields to an OCaml record, giving you:
 
-    - Zero-copy field access via staged getters and setters.
+    - Zero-copy field access: {!Codec.get} and {!Codec.set} applied to a codec
+      and a field are its reader and writer.
     - Full-record [decode] / [encode] between bytes and OCaml values.
     - Constraint checking and dependent-size fields.
 
@@ -24,7 +25,7 @@
         Codec.[ bf_version; bf_length ]
 
     let buf = Codec.to_bytes codec { version = 1; length = UInt16.v 42 }
-    let get_version = Staged.unstage (Codec.get codec bf_version)
+    let get_version = Codec.get codec bf_version
     let () = assert (get_version buf 0 = Ok 1)
 
     let () =
@@ -35,16 +36,6 @@
 
     The same description can be projected to an EverParse 3D schema via
     {!Everparse}, for verified C parser generation. *)
-
-module Staged : sig
-  type +'a t = 'a Wire_runtime.Staged.t
-
-  val stage : 'a -> 'a t
-  (** [stage v] wraps [v] as a staged value. *)
-
-  val unstage : 'a t -> 'a
-  (** [unstage s] forces the staged value [s]. *)
-end
 
 (** {1 Expressions}
 
@@ -1174,7 +1165,7 @@ module Codec : sig
       can evaluate it.
 
       [v] checks the description and compiles nothing; the first operation that
-      needs the layout (encoding, decoding, validating, sizing, staging an
+      needs the layout (encoding, decoding, validating, sizing, making an
       accessor, embedding with {!codec}) compiles it, from any domain. Domains
       that use a new codec at the same time may each compile it; one result is
       kept, and they are interchangeable. Raises [Invalid_argument] on a
@@ -1257,11 +1248,6 @@ module Codec : sig
       an unbound input param would resolve a parametric field size to 0 and
       silently truncate the field. *)
 
-  val decoder : 'r t -> (bytes -> int -> ('r, Error.t) result) Staged.t
-  (** [decoder c] is [decode c], staged: [c] is compiled when the stage is
-      built, and each call runs its decoder with no other dispatch. Unstage it
-      once and call the result per record. It raises what {!decode} raises. *)
-
   val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
   (** [encode ?env c r buf off] encodes one record value into a buffer at the
       given base offset.
@@ -1290,10 +1276,6 @@ module Codec : sig
       {!to_string} when no destination buffer should escape on failure. Only the
       single-field {!set} rolls its write back. *)
 
-  val encoder : 'r t -> ('r -> bytes -> int -> unit) Staged.t
-  (** [encoder c] is [encode c], staged as {!decoder} is. It raises what
-      {!encode} raises. *)
-
   val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
   (** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs
       the same validation pass as {!validate}. Field [~action]s therefore fire,
@@ -1321,23 +1303,25 @@ module Codec : sig
     ?env:Param.env ->
     'r t ->
     ('a, 'r) field ->
-    (bytes -> int -> ('a, Error.t) result) Staged.t
-  (** Staged field reader. [read buf off] is the value of the field in the
-      record at [off], or the error of its bytes: the field cut by the end of
-      [buf], a closed enum outside its cases, a lookup past its table, an action
-      that aborts. The error is the one {!decode} gives the field, at its offset
-      and under its name. If the field has an [~action], the action fires on
-      every read. Pass [~env] to sync output parameters after each action and to
-      resolve a dependent layout's parameters; omit it for parameter-free
-      accessors.
+    bytes ->
+    int ->
+    ('a, Error.t) result
+  (** [get c f buf off] is the value of the field [f] in the record at [off].
+      Apply it to [c] and [f] once: the reader is made then. It is, or the error
+      of its bytes: the field cut by the end of [buf], a closed enum outside its
+      cases, a lookup past its table, an action that aborts. The error is the
+      one {!decode} gives the field, at its offset and under its name. If the
+      field has an [~action], the action fires on every read. Pass [~env] to
+      sync output parameters after each action and to resolve a dependent
+      layout's parameters; omit it for parameter-free accessors.
 
       Raises [Invalid_argument] when the codec has input params and [~env] is
       omitted, when it was created for another codec, or when the field binding
       does not share its source {!Field.t} with the field in the codec: an
-      unbound param reads 0, which would stage the reader onto the bytes in
-      front of the field, while a same-named lookalike could interpret those
-      bytes with a different wire type. The reader raises [Invalid_argument] on
-      a negative offset, which is misuse, not input.
+      unbound param reads 0, which would place the reader on the bytes in front
+      of the field, while a same-named lookalike could interpret those bytes
+      with a different wire type. The reader raises [Invalid_argument] on a
+      negative offset, which is misuse, not input.
 
       Does not check [~where] clauses or other fields' constraints. On untrusted
       input use {!View}. *)
@@ -1551,24 +1535,22 @@ module Codec : sig
   end
 
   val set :
-    ?env:Param.env ->
-    'r t ->
-    ('a, 'r) field ->
-    (bytes -> int -> 'a -> unit) Staged.t
-  (** Staged field writer. [~env] supplies the input params a dependent field
-      layout is measured from; omit it for parameter-free codecs. Raises
-      [Invalid_argument] on the same terms as {!get}: an unbound param reads 0,
-      which would put the write on a field the caller never named and leave the
-      one it did name unchanged.
+    ?env:Param.env -> 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
+  (** [set c f buf off v] writes [v] as the field [f] of the record at [off].
+      Apply it to [c] and [f] once: the writer is made then. [~env] supplies the
+      input params a dependent field layout is measured from; omit it for
+      parameter-free codecs. Raises [Invalid_argument] on the same terms as
+      {!get}: an unbound param reads 0, which would put the write on a field the
+      caller never named and leave the one it did name unchanged.
 
       Does not check constraints or fire actions -- call {!validate} after a
       batch of writes to verify constraints still hold. *)
 
-  val writer : 'r t -> 'r -> ('f, 'r) args -> (bytes -> int -> 'f) Staged.t
-  (** [writer c template fields] is a staged writer of a record of [c]: called
-      with a buffer, an offset and one value per field of [fields], it writes
-      [template] at the offset with each of those fields set to its value, as
-      {!encode} of [template] then {!set} of each field would. A header that
+  val writer : 'r t -> 'r -> ('f, 'r) args -> bytes -> int -> 'f
+  (** [writer c template fields buf off] writes [template] at [off] in [buf]
+      with each field of [fields] set to the value that follows, one per field,
+      as {!encode} of [template] then {!set} of each field would. Apply it to
+      [c], [template] and [fields] once: the writer is made then. A header that
       differs from a template in a few fields is one call:
 
       {[
@@ -1590,10 +1572,9 @@ module Codec : sig
             ]
 
       let stamp =
-        Staged.unstage
-          (Codec.writer codec
-             { version = 4; kind = 0; len = UInt16.v 0 }
-             [ kind; len ])
+        Codec.writer codec
+          { version = 4; kind = 0; len = UInt16.v 0 }
+          [ kind; len ]
 
       let () =
         let buf = Bytes.create 3 in
@@ -2207,8 +2188,8 @@ module Private : sig
 
     val with_field_reader : 'r Codec.t -> string -> 'b field_k -> 'b option
     (** [with_field_reader t name k] is [k.k ty r], where [r] is the reader
-        {!Codec.val-get} stages for the field [name] of [t] and [ty] its type,
-        or [None] when [t] has no field [name]. *)
+        {!Codec.val-get} makes for the field [name] of [t] and [ty] its type, or
+        [None] when [t] has no field [name]. *)
 
     (** {2 Maps} *)
 

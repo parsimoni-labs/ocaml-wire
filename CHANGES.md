@@ -2,6 +2,13 @@
 
 ### Breaking
 
+- `Wire.Staged` and `Wire_runtime.Staged` are removed: `Codec.get c f`,
+  `Codec.set c f` and `Codec.writer c template fields`, applied once, are the
+  reader or the writer; drop `Staged.unstage` (#570, @samoht)
+
+- `Wire.Codec.decoder` and `Wire.Codec.encoder` are removed: apply
+  `Codec.decode c` and `Codec.encode c` once (#570, @samoht)
+
 - The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
   `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)

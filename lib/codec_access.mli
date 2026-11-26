@@ -38,7 +38,7 @@ val build_immediate_get :
   'a Types.typ ->
   Codec_repr.field_access ->
   'a Codec_leaf.get option
-(** [build_immediate_get ~name t access] is the reader {!Codec.get} stages for
+(** [build_immediate_get ~name t access] is the reader {!Codec.get} makes for
     the field [name] of type [t] at a constant place: one closure that checks
     the field's bytes lie in the buffer, loads them and answers [Ok v], or the
     error of a closed enum's value it does not list. [None] for a field whose

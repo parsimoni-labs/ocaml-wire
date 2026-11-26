@@ -40,13 +40,9 @@ let generate_stream n =
   let buf = Bytes.create !total in
   let off = ref 0 in
   let payload_total = ref 0 in
-  let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid) in
-  let set_seq =
-    Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
-  in
-  let set_dlen =
-    Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
-  in
+  let set_apid = C.set Space.packet_codec cf_sp_apid in
+  let set_seq = C.set Space.packet_codec cf_sp_seq_count in
+  let set_dlen = C.set Space.packet_codec cf_sp_data_len in
   for i = 0 to min n (whole + 1) - 1 do
     let apid = apid_of_index i in
     let plen = payload_size_of_apid apid in
@@ -125,9 +121,8 @@ let run_packets ~buf ~total_bytes state n_pkts =
 (* The header {!Space.packet_default} encodes, a telemetry packet with a
    secondary header, unsegmented, with the three fields a router writes. *)
 let write_header =
-  Wire.Staged.unstage
-    (C.writer Space.packet_codec Space.packet_default
-       [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ])
+  C.writer Space.packet_codec Space.packet_default
+    [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ]
 
 let stamp out o ~apid ~seq ~dlen = write_header out o apid seq dlen
 

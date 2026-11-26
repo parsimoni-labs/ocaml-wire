@@ -86,7 +86,7 @@ let build_bf_accessor_reader base byte_off shift width =
         Bitfield.check_word buf (off + byte_off) 4;
         read buf off
 
-(* The reader {!Codec.get} stages for a bitfield: one closure, as
+(* The reader {!Codec.get} makes for a bitfield: one closure, as
    {!Codec_leaf.build_immediate_get}. *)
 let build_bf_get ~name base byte_off shift width =
   let mask = (1 lsl width) - 1 in

@@ -511,20 +511,6 @@ let decode ?consume ?env t buf off =
   | exception exn when Types.is_parse_error exn ->
       Error (Types.parse_error_of exn)
 
-let decoder t =
-  let c = compiled t in
-  let decode =
-    match c.plain_decode with
-    | Some decode -> decode
-    | None -> fun buf off -> decode_slow `Prefix None t c buf off
-  in
-  Staged.stage (fun buf off ->
-      match decode buf off with
-      | v -> Ok v
-      | exception exn when Types.is_parse_error exn ->
-          let e = Types.parse_error_of exn in
-          Error e)
-
 let encode_slow e t v buf off =
   if off < 0 then
     Fmt.invalid_arg "Codec.encode %s: negative offset %d" t.name off;
@@ -551,12 +537,6 @@ let encode ?env:e t v buf off =
       | Some { plain_encode = Some f; _ } -> f v buf off
       | _ -> encode_slow e t v buf off)
   | _ -> encode_slow e t v buf off
-
-let encoder t =
-  let c = compiled t in
-  match c.plain_encode with
-  | Some f when t.n_params = 0 -> Staged.stage f
-  | _ -> Staged.stage (fun v buf off -> encode_slow None t v buf off)
 
 let collect_params name (fields : Types.field list) where =
   collect_param_handles name fields where
@@ -649,8 +629,8 @@ let[@inline never] field_eof name ~at ~width len =
    slots, its error placed at the field as [decode] places it. *)
 let action_reader ?env (codec : _ t) (c : _ compiled) rt access act read name =
   (* Reuse the codec's own domain-local scratch rather than minting another
-         [Domain.DLS] key here: [get] returns a staged reader, but a caller that
-         re-stages instead of reusing would leak a key per call. [decode_scratch]
+         [Domain.DLS] key here: [get c f] returns a reader, but a caller that
+         makes it again instead of reusing it would leak a key per call. [decode_scratch]
          is sized [n_array_slots] and only ever touched by one operation at a
          time on a given domain, so sharing it with decode is safe. *)
   let get_arr = c.decode_scratch in
@@ -692,19 +672,19 @@ let action_reader ?env (codec : _ t) (c : _ compiled) rt access act read name =
     sync arr;
     v
   in
-  Staged.stage (fun buf off ->
-      if off < 0 then Errors.negative_offset off
-      else
-        match run buf off with
-        | v -> Ok v
-        | exception exn when Types.is_parse_error exn ->
-            let e = Types.parse_error_of exn in
-            field_error name e)
+  fun buf off ->
+    if off < 0 then Errors.negative_offset off
+    else
+      match run buf off with
+      | v -> Ok v
+      | exception exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
+          field_error name e
 
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
-    (bytes -> int -> (a, parse_error) result) Staged.t =
+    bytes -> int -> (a, parse_error) result =
   (* A field's offset can be driven by an input param, and an unbound one reads
-     0, which stages a reader onto the bytes in front of the field rather than
+     0, which places a reader on the bytes in front of the field rather than
      onto the field. That is the same silent misread [decode] refuses, so it is
      refused here on the same terms. *)
   require_env ~op:"get" codec env;
@@ -722,32 +702,32 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
           build_immediate_staged_reader f.typ access,
           immediate_extent f.typ access )
       with
-      | Some get, _, _ -> Staged.stage get
-      | None, Some read, Some (off, width) ->
-          Staged.stage (fun buf base ->
-              let len = Bytes.length buf in
-              if base < 0 then Errors.negative_offset base
-              else if base > len - off - width then
-                field_eof name ~at:(base + off) ~width len
-              else
-                match read buf base with
-                | v -> Ok v
-                | exception exn when Types.is_parse_error exn ->
-                    let e = Types.parse_error_of exn in
-                    field_error name e)
-      | _ ->
-          Staged.stage (fun buf base ->
-              if base < 0 then Errors.negative_offset base
-              else
-                match read rt (Input_end.of_bytes buf) buf base with
-                | v -> Ok v
-                | exception exn when Types.is_parse_error exn ->
-                    let e = Types.parse_error_of exn in
-                    field_error name e))
+      | Some get, _, _ -> get
+      | None, Some read, Some (off, width) -> (
+          fun buf base ->
+            let len = Bytes.length buf in
+            if base < 0 then Errors.negative_offset base
+            else if base > len - off - width then
+              field_eof name ~at:(base + off) ~width len
+            else
+              match read buf base with
+              | v -> Ok v
+              | exception exn when Types.is_parse_error exn ->
+                  let e = Types.parse_error_of exn in
+                  field_error name e)
+      | _ -> (
+          fun buf base ->
+            if base < 0 then Errors.negative_offset base
+            else
+              match read rt (Input_end.of_bytes buf) buf base with
+              | v -> Ok v
+              | exception exn when Types.is_parse_error exn ->
+                  let e = Types.parse_error_of exn in
+                  field_error name e))
   | Some act -> action_reader ?env codec c rt access act read name
 
 let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
-    (bytes -> int -> a -> unit) Staged.t =
+    bytes -> int -> a -> unit =
   (* As for [get]: an unbound param places the write on the wrong bytes, which
      for a writer means overwriting a field the caller never named and leaving
      the one it did name as it was. *)
@@ -756,8 +736,8 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
   let write = build_staged_writer f.typ access in
   let rt = runtime ?env () in
   match build_immediate_staged_writer f.typ access with
-  | Some write -> Staged.stage write
-  | None -> Staged.stage (fun buf off value -> write rt buf off value)
+  | Some write -> write
+  | None -> fun buf off value -> write rt buf off value
 
 (* {1 Writers} *)
 
@@ -799,12 +779,12 @@ let rec wfields : type f r.
       let w =
         match if fast then slot_of ~n codec f else None with
         | Some s -> Slot s
-        | None -> Setter (Staged.unstage (set codec f))
+        | None -> Setter (set codec f)
       in
       WCons (w, wfields ~fast ~n codec rest (f.id :: seen))
 
 let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
-    (bytes -> int -> f) Staged.t =
+    bytes -> int -> f =
   let n =
     match (compiled codec).wire_size with
     | Fixed n -> n
@@ -819,12 +799,12 @@ let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
   let ws = wfields ~fast ~n codec args [] in
   if fast && all_slots ws then
     let t = clear_slots ws (run_of_bytes b n) in
-    Staged.stage (run_writer ~name:codec.name ~n t ws)
+    run_writer ~name:codec.name ~n t ws
   else
     let ws =
       if all_slots ws then wfields ~fast:false ~n codec args [] else ws
     in
-    Staged.stage (set_writer ~name:codec.name ~n b ws)
+    set_writer ~name:codec.name ~n b ws
 
 (* {1 Checked views} *)
 
@@ -1011,7 +991,7 @@ module View = struct
       ((a, Error.t) result, _) field =
     ignore
       (field_access ~op:"Codec.View.checked_field" v.codec f : field_access);
-    Get (Staged.unstage (codec_get ?env:v.env v.codec f))
+    Get (codec_get ?env:v.env v.codec f)
 
   (* A sub-codec field is data too: where its record starts in the record
      around it, and the frame its views read in. A field at a constant offset
@@ -1388,16 +1368,14 @@ module Gen_core = struct
     k : 'a. 'a Types.typ -> (bytes -> int -> ('a, Error.t) result) -> 'b;
   }
 
-  (* The reader [Codec.get] stages for a field, found by its name. *)
+  (* The reader [Codec.get] makes for a field, found by its name. *)
   let with_field_reader t name { k } =
     List.find_map
       (fun (Types.Field f) ->
         if f.field_name <> Some name then None
         else
           let typ = f.field_typ in
-          Option.map
-            (fun field -> k typ (Staged.unstage (get t field)))
-            (named_field t name typ))
+          Option.map (fun field -> k typ (get t field)) (named_field t name typ))
       (to_struct t).fields
 
   (* A map's functions, typed through its inner type: the wire value is read
@@ -1721,9 +1699,7 @@ module Gen = struct
     let name, Types.Pack_typ typ = nth v i in
     match typ_eq typ k with
     | Some Type.Equal ->
-        let write =
-          Staged.unstage (set v.codec (record_field v.codec name typ))
-        in
+        let write = set v.codec (record_field v.codec name typ) in
         { write = (fun b r x -> write (b : _ Wire_runtime.Buf.t :> bytes) r x) }
     | None -> other_type v.codec name
 

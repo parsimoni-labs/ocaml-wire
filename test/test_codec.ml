@@ -1043,7 +1043,7 @@ let test_get_needs_the_param_to_locate_the_field () =
     (UInt16.to_int (read buf 0));
   (* Without it the reader must not answer with the padding at offset 0. *)
   match Codec.get c f_v with
-  | _ -> Alcotest.fail "expected get to refuse a param layout without ?env"
+  | _f -> Alcotest.fail "expected get to refuse a param layout without ?env"
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
         "the refusal names the remedy" true (contains ~sub:"?env" msg)
@@ -1052,7 +1052,7 @@ let test_set_never_writes_over_an_unnamed_field () =
   let c, f_v = param_offset_codec () in
   let buf = Bytes.of_string "AAAA\x12\x34" in
   let env = Param.bind_by_name "n" 4 (Codec.env c) in
-  let write = Staged.unstage (Codec.set ~env c f_v) in
+  let write = Codec.set ~env c f_v in
   write buf 0 (UInt16.v 0xbeef);
   Alcotest.(check string)
     "with ?env only the named field moves" "AAAA\xbe\xef" (Bytes.to_string buf);
@@ -1060,7 +1060,7 @@ let test_set_never_writes_over_an_unnamed_field () =
   (* Without it the write would land on the padding and leave "v" as it was, so
      the record a caller reads back differs from the one it asked to change. *)
   match Codec.set c f_v with
-  | _ -> Alcotest.fail "expected set to refuse a param layout without ?env"
+  | _f -> Alcotest.fail "expected set to refuse a param layout without ?env"
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
         "the refusal names the remedy" true (contains ~sub:"?env" msg);
@@ -1330,7 +1330,7 @@ let test_bitfield_error_offset () =
 
 let test_set_dependent_byte_refinement () =
   let check codec field initial expected =
-    let set = Staged.unstage (Codec.set codec field) in
+    let set = Codec.set codec field in
     let buf = Bytes.of_string initial in
     (match set buf 0 "A\xff" with
     | () -> Alcotest.fail "set accepted a byte the field refinement rejects"
@@ -1490,28 +1490,6 @@ let test_decode_words () =
     Alcotest.(check int) "S" (UInt8.to_int (s buf off)) s'
   done
 
-(* The staged decoder and encoder do what [decode] and [encode] do, a frame
-   too short for the record included. *)
-let test_staged_decoder () =
-  let rand = Random.State.make [| 7 |] in
-  let decode = Staged.unstage (Codec.decoder wide_codec) in
-  let encode = Staged.unstage (Codec.encoder wide_codec) in
-  for _ = 1 to 200 do
-    let buf, off = random_frame rand wide_codec in
-    let off = if Random.State.int rand 8 = 0 then Bytes.length buf else off in
-    let want = Codec.decode wide_codec buf off in
-    let got = decode buf off in
-    Alcotest.(check bool) "decode" true (want = got);
-    match want with
-    | Error _ -> ()
-    | Ok v ->
-        let a = Bytes.make (Bytes.length buf) '\x00' in
-        let b = Bytes.make (Bytes.length buf) '\x00' in
-        Codec.encode wide_codec v a off;
-        encode v b off;
-        Alcotest.(check bytes) "encode" a b
-  done
-
 (* -- Codec.get on bad input -- *)
 
 (* [Codec.get] answers the error of the field it reads where its bytes do not
@@ -1534,8 +1512,7 @@ let test_get_bad_input () =
       $ snd)
   in
   let c = Codec.v "GetAction" (fun h v -> (h, v)) [ head (); v ] in
-  answers_error "an action that aborts"
-    (Staged.unstage (Codec.get c v))
+  answers_error "an action that aborts" (Codec.get c v)
     (Bytes.of_string "\x00\x00\x43")
     1
     ~expected:
@@ -1546,8 +1523,7 @@ let test_get_bad_input () =
       };
   let e = Codec.(Field.v "e" (enum "E" [ ("A", 1); ("B", 2) ] uint8) $ snd) in
   let c = Codec.v "GetEnum" (fun h e -> (h, e)) [ head (); e ] in
-  answers_error "a closed enum outside its cases"
-    (Staged.unstage (Codec.get c e))
+  answers_error "a closed enum outside its cases" (Codec.get c e)
     (Bytes.of_string "\x00\x00\x07")
     1
     ~expected:
@@ -1558,14 +1534,13 @@ let test_get_bad_input () =
       };
   let l = Codec.(Field.v "l" (lookup [ "x"; "y" ] uint8) $ snd) in
   let c = Codec.v "GetLookup" (fun h l -> (h, l)) [ head (); l ] in
-  answers_error "a lookup past its table"
-    (Staged.unstage (Codec.get c l))
+  answers_error "a lookup past its table" (Codec.get c l)
     (Bytes.of_string "\x00\x05")
     0
     ~expected:{ at = 1; field = [ "l" ]; kind = Invalid_tag 5 };
   let b = Codec.(Field.v "b" uint16be $ snd) in
   let c = Codec.v "GetShort" (fun h b -> (h, b)) [ head (); b ] in
-  let read = Staged.unstage (Codec.get c b) in
+  let read = Codec.get c b in
   let buf = Bytes.of_string "\x00\x00\x01" in
   answers_error "a field cut by the buffer" read buf 1
     ~expected:
@@ -1592,18 +1567,14 @@ let test_get_bad_input () =
       Codec.[ (len $ fun (len, _, _) -> len); p; t ]
   in
   let buf = Bytes.of_string "\x05ab" in
-  answers_error "a span past the buffer"
-    (Staged.unstage (Codec.get c p))
-    buf 0
+  answers_error "a span past the buffer" (Codec.get c p) buf 0
     ~expected:
       {
         at = 1;
         field = [ "p" ];
         kind = Unexpected_eof { expected = 5; got = 2 };
       };
-  answers_error "a field after a span past the buffer"
-    (Staged.unstage (Codec.get c t))
-    buf 0
+  answers_error "a field after a span past the buffer" (Codec.get c t) buf 0
     ~expected:
       {
         at = 6;
@@ -1631,8 +1602,6 @@ let suite =
       Alcotest.test_case "record: encode" `Quick test_record_encode;
       Alcotest.test_case "record: decode" `Quick test_record_decode;
       Alcotest.test_case "decode: fields read as words" `Quick test_decode_words;
-      Alcotest.test_case "decode: staged decoder and encoder" `Quick
-        test_staged_decoder;
       Alcotest.test_case "decode: prefix and all consumption" `Quick
         test_codec_decode_consumption_modes;
       Alcotest.test_case "record: roundtrip" `Quick test_record_roundtrip;

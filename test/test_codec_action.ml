@@ -34,7 +34,7 @@ let test_action_fires_on_get () =
   in
   let codec = Codec.v "ActionGet" (fun v -> v) [ cf_v ] in
   let get_v = reader codec cf_v in
-  let read_v = Staged.unstage (Codec.get codec cf_v) in
+  let read_v = Codec.get codec cf_v in
   (* Even value: action passes *)
   Alcotest.(check int)
     "get even" 0x42
@@ -163,7 +163,7 @@ let test_get_action_abort_field () =
       v)
   in
   let codec = Codec.v "AbortGet" (fun v -> v) [ cf_v ] in
-  let read_v = Staged.unstage (Codec.get codec cf_v) in
+  let read_v = Codec.get codec cf_v in
   expect_constraint_fail (read_v (Bytes.of_string "\x42") 0)
 
 let test_get_noaction_ignores_env () =
@@ -218,7 +218,7 @@ let test_get_action_with_inputparam () =
   let buf_ok = Bytes.of_string "\x30" in
   let buf_bad = Bytes.of_string "\x40" in
   let get_v = reader ~env codec cf_v in
-  let read_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let read_v = Codec.get ~env codec cf_v in
   (* 0x30 = 48 <= 50: passes *)
   Alcotest.(check int)
     "get with input param" 0x30
@@ -245,13 +245,13 @@ let test_get_action_inputparam_noenv () =
   in
   let codec = Codec.v "NoEnvInput" (fun v -> v) [ cf_v ] in
   (match Codec.get codec cf_v with
-  | _ -> Alcotest.fail "expected get to refuse an unbound action param"
+  | _f -> Alcotest.fail "expected get to refuse an unbound action param"
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
         "the refusal names the remedy" true (contains ~sub:"?env" msg));
   let env = Param.bind_by_name "lim2" 4 (Codec.env codec) in
   let get_v = reader ~env codec cf_v in
-  let read_v = Staged.unstage (Codec.get ~env codec cf_v) in
+  let read_v = Codec.get ~env codec cf_v in
   Alcotest.(check int)
     "within the bound the value reads back" 4
     (UInt8.to_int (get_v (Bytes.of_string "\x04") 0));
@@ -787,13 +787,13 @@ let test_samefield_twocodecs_set () =
   in
   let buf = Bytes.make 2 '\x00' in
   (* set via codec1 should write to offset 0 *)
-  (Staged.unstage (Codec.set codec1 cf_v)) buf 0 (UInt8.v 0xAA);
+  Codec.set codec1 cf_v buf 0 (UInt8.v 0xAA);
   Alcotest.(check int) "codec1 set -> byte 0" 0xAA (Bytes.get_uint8 buf 0);
   Alcotest.(check int)
     "codec1 set -> byte 1 untouched" 0 (Bytes.get_uint8 buf 1);
   Bytes.fill buf 0 2 '\x00';
   (* set via codec2 should write to offset 1 *)
-  (Staged.unstage (Codec.set codec2 cf_v)) buf 0 (UInt8.v 0xBB);
+  Codec.set codec2 cf_v buf 0 (UInt8.v 0xBB);
   Alcotest.(check int)
     "codec2 set -> byte 0 untouched" 0 (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "codec2 set -> byte 1" 0xBB (Bytes.get_uint8 buf 1)

@@ -338,7 +338,7 @@ let cf_retransmit = Space.bf_cw_retransmit
 
 (* A CLCW field of a word the bench wrote itself. *)
 let clcw_field f =
-  let read = Wire.Staged.unstage (Wire.Codec.get clcw_codec f) in
+  let read = Wire.Codec.get clcw_codec f in
   fun buf off ->
     match read buf off with
     | Ok v -> v
@@ -347,7 +347,7 @@ let clcw_field f =
 let run_zero_copy () =
   let data = clcw_data n_values in
   let get_report = clcw_field cf_report in
-  let set_report = Wire.Staged.unstage (Wire.Codec.set clcw_codec cf_report) in
+  let set_report = Wire.Codec.set clcw_codec cf_report in
   Fmt.pr "  CLCW zero-copy get...\n%!";
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do

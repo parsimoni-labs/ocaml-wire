@@ -29,17 +29,11 @@ let generate_frames n =
   let buf = Bytes.create (n * cadu_size) in
   let total_pkts = ref 0 in
   let carry = ref 0 in
-  let set_vcid = Wire.Staged.unstage (C.set Space.tm_frame_codec cf_tf_vcid) in
-  let set_fhp =
-    Wire.Staged.unstage (C.set Space.tm_frame_codec cf_tf_first_hdr)
-  in
-  let set_apid = Wire.Staged.unstage (C.set Space.packet_codec cf_sp_apid) in
-  let set_seq =
-    Wire.Staged.unstage (C.set Space.packet_codec cf_sp_seq_count)
-  in
-  let set_dlen =
-    Wire.Staged.unstage (C.set Space.packet_codec cf_sp_data_len)
-  in
+  let set_vcid = C.set Space.tm_frame_codec cf_tf_vcid in
+  let set_fhp = C.set Space.tm_frame_codec cf_tf_first_hdr in
+  let set_apid = C.set Space.packet_codec cf_sp_apid in
+  let set_seq = C.set Space.packet_codec cf_sp_seq_count in
+  let set_dlen = C.set Space.packet_codec cf_sp_data_len in
   for frame = 0 to n - 1 do
     let base = frame * cadu_size in
     Wire.Codec.encode Space.tm_frame_codec Space.tm_frame_default buf base;
@@ -157,18 +151,14 @@ let checksum state =
 (* The header {!Space.tm_frame_default} encodes, spacecraft 0x1FF, OCF flag
    set, segment length identifier 3, with the four fields a frame varies. *)
 let write_frame_header =
-  Wire.Staged.unstage
-    (C.writer Space.tm_frame_codec Space.tm_frame_default
-       [
-         cf_tf_vcid; Space.bf_tf_mc_count; Space.bf_tf_vc_count; cf_tf_first_hdr;
-       ])
+  C.writer Space.tm_frame_codec Space.tm_frame_default
+    [ cf_tf_vcid; Space.bf_tf_mc_count; Space.bf_tf_vc_count; cf_tf_first_hdr ]
 
 (* The header {!Space.packet_default} encodes, a telemetry packet with a
    secondary header, unsegmented, with the three fields a packet varies. *)
 let write_packet_header =
-  Wire.Staged.unstage
-    (C.writer Space.packet_codec Space.packet_default
-       [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ])
+  C.writer Space.packet_codec Space.packet_default
+    [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ]
 
 let pkt_dlen = Wire.UInt16.v (pkt_payload - 1)
 let stamp out o ~apid ~seq = write_packet_header out o apid seq pkt_dlen

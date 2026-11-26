@@ -147,7 +147,7 @@ let test_get_field_notin_codec () =
   let cf_y = Codec.(Field.v "y" uint8 $ fun v -> v) in
   let codec = Codec.v "OnlyX" (fun v -> v) [ cf_x ] in
   match Codec.get codec cf_y with
-  | _ -> Alcotest.fail "expected Invalid_argument for unknown field"
+  | _f -> Alcotest.fail "expected Invalid_argument for unknown field"
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
         "mentions field name" true
@@ -162,7 +162,7 @@ let test_set_field_notin_codec () =
   let cf_y = Codec.(Field.v "y" uint8 $ fun v -> v) in
   let codec = Codec.v "OnlyX2" (fun v -> v) [ cf_x ] in
   match Codec.set codec cf_y with
-  | _ -> Alcotest.fail "expected Invalid_argument for unknown field"
+  | _f -> Alcotest.fail "expected Invalid_argument for unknown field"
   | exception Invalid_argument _ -> ()
 
 let expect_foreign_field ~op ~field ~codec f =
@@ -185,9 +185,13 @@ let test_lookalike_field_handles () =
     "rebinding the same Field.t works" 0x1234
     (UInt16.to_int (read buf 0));
   expect_foreign_field ~op:"Codec.get" ~field:"word" ~codec:"WordOwner"
-    (fun () -> ignore (Codec.get word_codec lookalike_word));
+    (fun () ->
+      let _f = Codec.get word_codec lookalike_word in
+      ());
   expect_foreign_field ~op:"Codec.set" ~field:"word" ~codec:"WordOwner"
-    (fun () -> ignore (Codec.set word_codec lookalike_word));
+    (fun () ->
+      let _f = Codec.set word_codec lookalike_word in
+      ());
 
   let flags = Field.v "flags" (bits ~width:4 U16be) in
   let flags_field = Codec.(flags $ Fun.id) in
@@ -293,7 +297,7 @@ let test_env_wrongcodec_with_action () =
   let codec_empty = Codec.v "NoParams" (fun v -> v) [ cf_w ] in
   let wrong_env = Codec.env codec_empty in
   match Codec.get ~env:wrong_env codec_with_action cf_v with
-  | _ -> Alcotest.fail "expected Invalid_argument for wrong env"
+  | _f -> Alcotest.fail "expected Invalid_argument for wrong env"
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
         "mentions codec name" true
@@ -331,7 +335,7 @@ let test_set_refusal_leaves_buffer_untouched () =
   let inner = Codec.v "SetRollbackInner" Fun.id Codec.[ inner_f $ Fun.id ] in
   let outer_f = Codec.(Field.v "v" (codec inner) $ Fun.id) in
   let outer = Codec.v "SetRollbackOuter" Fun.id Codec.[ outer_f ] in
-  let set = Staged.unstage (Codec.set outer outer_f) in
+  let set = Codec.set outer outer_f in
   let buf = Bytes.make 1 '\xee' in
   (match set buf 0 (UInt8.v 200) with
   | () -> Alcotest.fail "Codec.set accepted a value the sub-codec refuses"
@@ -387,7 +391,7 @@ let iter_bitpacks f =
 
 let test_get_bitfield_word_past_buffer () =
   iter_bitpacks (fun name word fname field codec ->
-      let get = Staged.unstage (Codec.get codec field) in
+      let get = Codec.get codec field in
       let expect_refusal len off =
         let buf = Bytes.make len '\xff' in
         match get buf off with
@@ -411,7 +415,7 @@ let test_get_bitfield_word_past_buffer () =
 
 let test_set_bitfield_word_past_buffer_writes_nothing () =
   iter_bitpacks (fun name word fname field codec ->
-      let set = Staged.unstage (Codec.set codec field) in
+      let set = Codec.set codec field in
       for len = 0 to word - 1 do
         let buf = Bytes.make len '\x00' in
         (match set buf 0 1 with
@@ -468,9 +472,9 @@ let test_get_static_optional_agrees_with_decode () =
   Alcotest.(check string) "span sized by the optional_or" "abc" (read cf_data);
   (* And the matching setter, so a field [get] can read is one [set] can
      write. The absent gates own no bytes, so writing them moves nothing. *)
-  Staged.unstage (Codec.set c cf_on) buf 0 (Some (UInt8.v 5));
-  Staged.unstage (Codec.set c cf_off) buf 0 None;
-  Staged.unstage (Codec.set c cf_or_off) buf 0 (UInt8.v 7);
+  Codec.set c cf_on buf 0 (Some (UInt8.v 5));
+  Codec.set c cf_off buf 0 None;
+  Codec.set c cf_or_off buf 0 (UInt8.v 7);
   Alcotest.(check (option int))
     "set then get, gate on" (Some 5)
     (Option.map UInt8.to_int (read cf_on));

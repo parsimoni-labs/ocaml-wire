@@ -102,7 +102,7 @@ let test_dep_bslice_sub () =
 let test_dep_bslice_set_length () =
   let buf = Bytes.create 6 in
   Bytes.set_uint16_be buf 0 4;
-  (Staged.unstage (Codec.set dep_slice_codec cf_ds_length)) buf 0 (UInt16.v 8);
+  Codec.set dep_slice_codec cf_ds_length buf 0 (UInt16.v 8);
   Alcotest.(check int)
     "set length" 8
     (UInt16.to_int ((reader dep_slice_codec cf_ds_length) buf 0))
@@ -185,8 +185,7 @@ let test_dep_trailer_set_checksum () =
   Bytes.set_uint8 buf 3 0x22;
   Bytes.set_uint8 buf 4 0x33;
   Bytes.set_uint16_be buf 5 0x0000;
-  (Staged.unstage (Codec.set trailer_codec cf_tr_checksum))
-    buf 0 (UInt16.v 0xCAFE);
+  Codec.set trailer_codec cf_tr_checksum buf 0 (UInt16.v 0xCAFE);
   Alcotest.(check int) "set checksum" 0xCAFE (Bytes.get_uint16_be buf 5)
 
 let test_dep_trailer_decode () =

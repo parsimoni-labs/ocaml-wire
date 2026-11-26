@@ -121,7 +121,7 @@ let check_string label expected actual =
 
 (* [Codec.get] of [f], unstaged, on bytes a positive holds. *)
 let getter codec f =
-  let read = Wire.Codec.get codec f |> Wire.Staged.unstage in
+  let read = Wire.Codec.get codec f in
   fun buf off ->
     match read buf off with
     | Ok v -> v
@@ -189,10 +189,10 @@ let check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
   let get_hi = getter codec bf_hi in
   let get_lo = getter codec bf_lo in
   let get_payload = getter codec bf_payload in
-  let set_a = Wire.Codec.set codec bf_a |> Wire.Staged.unstage in
-  let set_hi = Wire.Codec.set codec bf_hi |> Wire.Staged.unstage in
-  let set_lo = Wire.Codec.set codec bf_lo |> Wire.Staged.unstage in
-  let set_payload = Wire.Codec.set codec bf_payload |> Wire.Staged.unstage in
+  let set_a = Wire.Codec.set codec bf_a in
+  let set_hi = Wire.Codec.set codec bf_hi in
+  let set_lo = Wire.Codec.set codec bf_lo in
+  let set_payload = Wire.Codec.set codec bf_payload in
   set_a buf base (Wire.UInt8.v next_a);
   set_hi buf base next_hi;
   set_lo buf base next_lo;

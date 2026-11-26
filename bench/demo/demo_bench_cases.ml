@@ -137,7 +137,7 @@ let tcp_frame = (Net.tcp_frame_data 1).(0)
 
 (* The frame is written by [Net.tcp_frame_data], so its payloads are read. *)
 let payload codec field =
-  let read = Staged.unstage (Codec.get codec field) in
+  let read = Codec.get codec field in
   fun buf off ->
     match read buf off with
     | Ok s -> s
@@ -224,12 +224,8 @@ let tcp_syn_struct =
   project_one Net.tcp_codec ~name:"TCPSyn" ~keep:Net.f_tcp_syn
 
 let minimal_case =
-  let get =
-    Staged.unstage (Codec.get Demo.minimal_codec Demo.bf_minimal_value)
-  in
-  let set =
-    Staged.unstage (Codec.set Demo.minimal_codec Demo.bf_minimal_value)
-  in
+  let get = Codec.get Demo.minimal_codec Demo.bf_minimal_value in
+  let set = Codec.set Demo.minimal_codec Demo.bf_minimal_value in
   Read_case
     {
       id = Minimal;
@@ -249,8 +245,8 @@ let minimal_case =
     }
 
 let all_ints_case =
-  let get = Staged.unstage (Codec.get Demo.all_ints_codec Demo.bf_ints_u64be) in
-  let set = Staged.unstage (Codec.set Demo.all_ints_codec Demo.bf_ints_u64be) in
+  let get = Codec.get Demo.all_ints_codec Demo.bf_ints_u64be in
+  let set = Codec.set Demo.all_ints_codec Demo.bf_ints_u64be in
   Read_case
     {
       id = All_ints;
@@ -270,12 +266,8 @@ let all_ints_case =
     }
 
 let large_mixed_case =
-  let get =
-    Staged.unstage (Codec.get Demo.large_mixed_codec Demo.bf_mixed_timestamp)
-  in
-  let set =
-    Staged.unstage (Codec.set Demo.large_mixed_codec Demo.bf_mixed_timestamp)
-  in
+  let get = Codec.get Demo.large_mixed_codec Demo.bf_mixed_timestamp in
+  let set = Codec.set Demo.large_mixed_codec Demo.bf_mixed_timestamp in
   Read_case
     {
       id = Large_mixed;
@@ -295,8 +287,8 @@ let large_mixed_case =
     }
 
 let bitfield8_case =
-  let get = Staged.unstage (Codec.get Demo.bf8_codec Demo.bf_bf8_value) in
-  let set = Staged.unstage (Codec.set Demo.bf8_codec Demo.bf_bf8_value) in
+  let get = Codec.get Demo.bf8_codec Demo.bf_bf8_value in
+  let set = Codec.set Demo.bf8_codec Demo.bf_bf8_value in
   Read_case
     {
       id = Bitfield8;
@@ -316,8 +308,8 @@ let bitfield8_case =
     }
 
 let bitfield16_case =
-  let get = Staged.unstage (Codec.get Demo.bf16_codec Demo.bf_bf16_id) in
-  let set = Staged.unstage (Codec.set Demo.bf16_codec Demo.bf_bf16_id) in
+  let get = Codec.get Demo.bf16_codec Demo.bf_bf16_id in
+  let set = Codec.set Demo.bf16_codec Demo.bf_bf16_id in
   Read_case
     {
       id = Bitfield16;
@@ -337,8 +329,8 @@ let bitfield16_case =
     }
 
 let bitfield32_case =
-  let get = Staged.unstage (Codec.get Demo.bf32_codec Demo.bf_bf32_pri) in
-  let set = Staged.unstage (Codec.set Demo.bf32_codec Demo.bf_bf32_pri) in
+  let get = Codec.get Demo.bf32_codec Demo.bf_bf32_pri in
+  let set = Codec.set Demo.bf32_codec Demo.bf_bf32_pri in
   Read_case
     {
       id = Bitfield32;
@@ -358,12 +350,8 @@ let bitfield32_case =
     }
 
 let bool_fields_case =
-  let get =
-    Staged.unstage (Codec.get Demo.bool_fields_codec Demo.bf_bool_active)
-  in
-  let set =
-    Staged.unstage (Codec.set Demo.bool_fields_codec Demo.bf_bool_active)
-  in
+  let get = Codec.get Demo.bool_fields_codec Demo.bf_bool_active in
+  let set = Codec.set Demo.bool_fields_codec Demo.bf_bool_active in
   Read_case
     {
       id = Bool_fields;
@@ -383,8 +371,8 @@ let bool_fields_case =
     }
 
 let clcw_case =
-  let get = Staged.unstage (Codec.get Space.clcw_codec Space.bf_cw_report) in
-  let set = Staged.unstage (Codec.set Space.clcw_codec Space.bf_cw_report) in
+  let get = Codec.get Space.clcw_codec Space.bf_cw_report in
+  let set = Codec.set Space.clcw_codec Space.bf_cw_report in
   Read_case
     {
       id = Clcw_report;
@@ -404,8 +392,8 @@ let clcw_case =
     }
 
 let packet_case =
-  let get = Staged.unstage (Codec.get Space.packet_codec Space.bf_sp_apid) in
-  let set = Staged.unstage (Codec.set Space.packet_codec Space.bf_sp_apid) in
+  let get = Codec.get Space.packet_codec Space.bf_sp_apid in
+  let set = Codec.set Space.packet_codec Space.bf_sp_apid in
   Read_case
     {
       id = Space_packet_apid;
@@ -425,8 +413,8 @@ let packet_case =
     }
 
 let ipv4_case =
-  let get = Staged.unstage (Codec.get Net.ipv4_codec Net.bf_ip_src) in
-  let set = Staged.unstage (Codec.set Net.ipv4_codec Net.bf_ip_src) in
+  let get = Codec.get Net.ipv4_codec Net.bf_ip_src in
+  let set = Codec.set Net.ipv4_codec Net.bf_ip_src in
   Read_case
     {
       id = Ipv4_src;
@@ -446,8 +434,8 @@ let ipv4_case =
     }
 
 let tcp_case =
-  let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_dst_port) in
-  let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in
+  let get = Codec.get Net.tcp_codec Net.bf_tcp_dst_port in
+  let set = Codec.set Net.tcp_codec Net.bf_tcp_dst_port in
   Read_case
     {
       id = Tcp_dst_port;
@@ -467,8 +455,8 @@ let tcp_case =
     }
 
 let tcp_syn_case =
-  let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_syn) in
-  let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_syn) in
+  let get = Codec.get Net.tcp_codec Net.bf_tcp_syn in
+  let set = Codec.set Net.tcp_codec Net.bf_tcp_syn in
   Read_case
     {
       id = Tcp_syn;
@@ -488,8 +476,8 @@ let tcp_syn_case =
     }
 
 let mapped_case =
-  let get = Staged.unstage (Codec.get Demo.mapped_codec Demo.bf_mp_priority) in
-  let set = Staged.unstage (Codec.set Demo.mapped_codec Demo.bf_mp_priority) in
+  let get = Codec.get Demo.mapped_codec Demo.bf_mp_priority in
+  let set = Codec.set Demo.mapped_codec Demo.bf_mp_priority in
   Read_case
     {
       id = Mapped_priority;
@@ -509,8 +497,8 @@ let mapped_case =
     }
 
 let cases_case =
-  let get = Staged.unstage (Codec.get Demo.cases_demo_codec Demo.bf_cd_type) in
-  let set = Staged.unstage (Codec.set Demo.cases_demo_codec Demo.bf_cd_type) in
+  let get = Codec.get Demo.cases_demo_codec Demo.bf_cd_type in
+  let set = Codec.set Demo.cases_demo_codec Demo.bf_cd_type in
   Read_case
     {
       id = Cases_type;
@@ -530,8 +518,8 @@ let cases_case =
     }
 
 let enum_case =
-  let get = Staged.unstage (Codec.get Demo.enum_demo_codec Demo.bf_en_status) in
-  let set = Staged.unstage (Codec.set Demo.enum_demo_codec Demo.bf_en_status) in
+  let get = Codec.get Demo.enum_demo_codec Demo.bf_en_status in
+  let set = Codec.set Demo.enum_demo_codec Demo.bf_en_status in
   Read_case
     {
       id = Enum_status;
@@ -551,8 +539,8 @@ let enum_case =
     }
 
 let constrained_case =
-  let get = Staged.unstage (Codec.get Demo.constrained_codec Demo.bf_co_data) in
-  let set = Staged.unstage (Codec.set Demo.constrained_codec Demo.bf_co_data) in
+  let get = Codec.get Demo.constrained_codec Demo.bf_co_data in
+  let set = Codec.set Demo.constrained_codec Demo.bf_co_data in
   Read_case
     {
       id = Constrained_data;
@@ -628,8 +616,8 @@ let verify_nested_write ~label ~set ~get ~equal value () =
   | Ok _ | Error _ -> Fmt.failwith "%s write verification failed" label
 
 let nested_tcp_dst_write_case =
-  let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in
-  let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_dst_port) in
+  let set = Codec.set Net.tcp_codec Net.bf_tcp_dst_port in
+  let get = Codec.get Net.tcp_codec Net.bf_tcp_dst_port in
   let value = Wire.UInt16.v 8080 in
   {
     label = "Eth->TCP.dst_port (3 layers)";
@@ -640,8 +628,8 @@ let nested_tcp_dst_write_case =
   }
 
 let tcp_dst_port_write_case =
-  let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_dst_port) in
-  let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_dst_port) in
+  let set = Codec.set Net.tcp_codec Net.bf_tcp_dst_port in
+  let get = Codec.get Net.tcp_codec Net.bf_tcp_dst_port in
   let value = Wire.UInt16.v 8080 in
   {
     label = "TCP.dst_port (uint16be)";
@@ -652,8 +640,8 @@ let tcp_dst_port_write_case =
   }
 
 let nested_tcp_syn_write_case =
-  let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_syn) in
-  let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_syn) in
+  let set = Codec.set Net.tcp_codec Net.bf_tcp_syn in
+  let get = Codec.get Net.tcp_codec Net.bf_tcp_syn in
   let value = true in
   {
     label = "Eth->TCP.syn (3 layers)";
@@ -664,8 +652,8 @@ let nested_tcp_syn_write_case =
   }
 
 let tcp_syn_write_case =
-  let set = Staged.unstage (Codec.set Net.tcp_codec Net.bf_tcp_syn) in
-  let get = Staged.unstage (Codec.get Net.tcp_codec Net.bf_tcp_syn) in
+  let set = Codec.set Net.tcp_codec Net.bf_tcp_syn in
+  let get = Codec.get Net.tcp_codec Net.bf_tcp_syn in
   let value = true in
   {
     label = "TCP.syn (bool bf1, read-mod-write)";

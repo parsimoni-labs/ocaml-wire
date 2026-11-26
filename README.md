@@ -17,7 +17,7 @@ and the EverParse `.3d` schema that compiles to a verified C parser. Define
 the format, then:
 
 - **Name reusable fields** with `Field.v` and assemble records with `Codec`
-- **Read and write fields in-place** via staged `Codec.get` / `Codec.set` --
+- **Read and write fields in-place** via `Codec.get` / `Codec.set` --
   zero-copy, with zero per-call allocation for parameter-free immediate types
   (int, bool)
 - **Decode records** via `Codec.decode`, allocate validated encodings with
@@ -83,9 +83,9 @@ let decode_packet buf = Codec.decode ~consume:`All codec buf 0
 ### Zero-copy field access
 
 ```ocaml
-(* Staged for performance -- force once, reuse the closure *)
-let get_version = Staged.unstage (Codec.get codec bf_version)
-let set_version = Staged.unstage (Codec.set codec bf_version)
+(* Applied to the codec and the field once: the reader and the writer *)
+let get_version = Codec.get codec bf_version
+let set_version = Codec.set codec bf_version
 
 let buf =
   Codec.to_bytes codec

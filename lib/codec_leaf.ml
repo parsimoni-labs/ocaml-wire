@@ -777,7 +777,7 @@ let float_reader : type a. name:string -> a typ -> int -> a get option =
           else Ok (Uint_var.read endian buf (base + off) n))
   | _ -> None
 
-(* The reader [Codec.get] stages for a scalar field of type [typ] at [off] in
+(* The reader [Codec.get] makes for a scalar field of type [typ] at [off] in
    its record, named [name]; [None] for any other field. *)
 let build_immediate_get : type a. name:string -> a typ -> int -> a get option =
  fun ~name typ off ->

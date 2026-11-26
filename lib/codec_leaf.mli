@@ -132,7 +132,7 @@ val build_immediate_reader : 'a Types.typ -> int -> (bytes -> int -> 'a) option
     or [None] when the layout of [t] may consult one. *)
 
 type 'a get = bytes -> int -> ('a, Types.parse_error) result
-(** The reader {!Codec.get} stages: the value of a field of the record at an
+(** The reader {!Codec.get} makes: the value of a field of the record at an
     offset, or its error. *)
 
 val short_field :

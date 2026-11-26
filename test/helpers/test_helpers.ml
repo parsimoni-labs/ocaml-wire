@@ -114,7 +114,7 @@ let decode_ok = function
 let ok = function Ok v -> v | Error e -> Wire_runtime.Errors.fail e
 
 let reader ?env c f =
-  let read = Staged.unstage (Codec.get ?env c f) in
+  let read = Codec.get ?env c f in
   fun buf off -> decode_ok (read buf off)
 
 let expect_constraint_fail = function

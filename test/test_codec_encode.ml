@@ -160,7 +160,7 @@ let test_enum_over_carrier_base () =
   Codec.encode carrier_enum_codec (UInt32.of_int 1) buf 0;
   Alcotest.(check string)
     "encode listed code" "\x00\x00\x00\x01" (Bytes.to_string buf);
-  let set = Staged.unstage (Codec.set carrier_enum_codec carrier_enum_field) in
+  let set = Codec.set carrier_enum_codec carrier_enum_field in
   set buf 0 (UInt32.of_int 2);
   Alcotest.(check string) "set" "\x00\x00\x00\x02" (Bytes.to_string buf)
 
@@ -311,7 +311,7 @@ let test_decode_rejects_refined_byte () =
     (validate_result per_byte_var_codec "\002a\xff");
   (* [get] is documented as unchecked for other fields' constraints, but the
      span's own refinement travels with the reader, as a closed enum's does. *)
-  let get = Staged.unstage (Codec.get per_byte_codec per_byte_cf) in
+  let get = Codec.get per_byte_codec per_byte_cf in
   (match get (Bytes.of_string "a\xffb") 0 with
   | Ok s -> Alcotest.failf "get returned %S past the refinement" s
   | Error { Error.kind = Constraint_failed { which = Per_byte; _ }; _ } -> ()
@@ -462,44 +462,38 @@ let check_set_exact label ~before ~after ~oversized ~exact set =
 let test_set_exact_var_byte_array () =
   let codec, cf = set_var_codec (fun size -> byte_array ~size) in
   check_set_exact "byte_array at a static offset" ~before:set_var_before
-    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 let test_set_exact_var_byte_array_where () =
   let codec, cf =
     set_var_codec (fun size -> byte_array_where ~size ~per_byte:printable_byte)
   in
   check_set_exact "byte_array_where at a static offset" ~before:set_var_before
-    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 let test_set_exact_var_byte_slice () =
   let codec, cf = set_var_codec (fun size -> byte_slice ~size) in
   check_set_exact "byte_slice at a static offset" ~before:set_var_before
     ~after:set_var_after ~oversized:(slice_of_string "ABCD")
-    ~exact:(slice_of_string "XY")
-    (Staged.unstage (Codec.set codec cf))
+    ~exact:(slice_of_string "XY") (Codec.set codec cf)
 
 let test_set_exact_dyn_byte_array () =
   let codec, cf = set_dyn_codec (fun size -> byte_array ~size) in
   check_set_exact "byte_array at a run-time offset" ~before:set_dyn_before
-    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 let test_set_exact_dyn_byte_array_where () =
   let codec, cf =
     set_dyn_codec (fun size -> byte_array_where ~size ~per_byte:printable_byte)
   in
   check_set_exact "byte_array_where at a run-time offset" ~before:set_dyn_before
-    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 let test_set_exact_dyn_byte_slice () =
   let codec, cf = set_dyn_codec (fun size -> byte_slice ~size) in
   check_set_exact "byte_slice at a run-time offset" ~before:set_dyn_before
     ~after:set_dyn_after ~oversized:(slice_of_string "ABCD")
-    ~exact:(slice_of_string "XY")
-    (Staged.unstage (Codec.set codec cf))
+    ~exact:(slice_of_string "XY") (Codec.set codec cf)
 
 (* A byte field with a literal size takes the fixed-offset writer, which shares
    the encoder's exact-size blit. *)
@@ -512,8 +506,7 @@ let test_set_exact_fixed_byte_array () =
         [ cf; Field.v "trailer" uint8 $ snd ])
   in
   check_set_exact "byte_array at a literal size" ~before:"ab\xff\xee\xee"
-    ~after:"XY\xff\xee\xee" ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:"XY\xff\xee\xee" ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 (* A width-refined leaf -- [bits ~width], [uint size] -- is exact for a
    harsher reason than a fixed-size byte field. A masked value is still a legal
@@ -587,7 +580,7 @@ let test_set_exact_uint_width () =
       List.iter
         (fun (endian, ename) ->
           let codec, cf = uint_width_codec ~endian n in
-          let set = Staged.unstage (Codec.set codec cf) in
+          let set = Codec.set codec cf in
           let buf = Bytes.make 8 '\x00' in
           let label = Fmt.str "set uint(%d,%s) <- 0x%X" n ename over in
           expect_exact_width_error label
@@ -692,7 +685,7 @@ let test_set_exact_bits_width () =
   iter_bits_widths (fun ~base ~bname ~width ~bit_order ~oname ->
       let codec, cf = bits_width_codec ~bit_order ~width base in
       let size = Codec.wire_size codec in
-      let set = Staged.unstage (Codec.set codec cf) in
+      let set = Codec.set codec cf in
       let get = reader codec cf in
       let over = 1 lsl width in
       let buf = Bytes.make size '\x00' in
@@ -715,7 +708,7 @@ let test_set_exact_bits_width () =
 let test_set_bits_no_silent_truncation () =
   let cf = Codec.(Field.v "v" (bits ~width:3 U8) $ Fun.id) in
   let codec = Codec.v "SetBits3" Fun.id Codec.[ cf ] in
-  let set = Staged.unstage (Codec.set codec cf) in
+  let set = Codec.set codec cf in
   let buf = Bytes.make 1 '\x00' in
   (match set buf 0 0xFF with
   | () ->
@@ -729,7 +722,7 @@ let test_map_inherits_exact_width () =
   let typ = map ~decode:Fun.id ~encode:Fun.id (bits ~width:3 U8) in
   let cf = Codec.(Field.v "v" typ $ Fun.id) in
   let codec = Codec.v "MapBits3" Fun.id Codec.[ cf ] in
-  let set = Staged.unstage (Codec.set codec cf) in
+  let set = Codec.set codec cf in
   expect_exact_width_error "map(bits(3,U8)) to_string"
     ~sub:"does not fit an unsigned 3-bit field" (fun () ->
       Wire.to_string typ 0xFF);

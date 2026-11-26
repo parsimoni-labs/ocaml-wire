@@ -81,13 +81,10 @@ let written write =
   write buf 3;
   Bytes.to_string buf
 
-let set codec f v buf off = Staged.unstage (Codec.set codec f) buf off v
+let set codec f v buf off = Codec.set codec f buf off v
 
 let test_small_equals_set () =
-  let w3 =
-    Staged.unstage
-      (Codec.writer small_codec small_template [ s_id; s_len; s_lo ])
-  in
+  let w3 = Codec.writer small_codec small_template [ s_id; s_len; s_lo ] in
   let rand = Random.State.make [| 7 |] in
   for _ = 1 to 1000 do
     let id = Random.State.int rand 0x2000
@@ -106,25 +103,23 @@ let test_small_equals_set () =
 
 let test_small_arities () =
   let t = small_template in
-  let w0 = Staged.unstage (Codec.writer small_codec t []) in
+  let w0 = Codec.writer small_codec t [] in
   Alcotest.(check string)
     "no field writes the template"
     (expected small_codec t [])
     (written (fun buf off -> w0 buf off));
-  let w1 = Staged.unstage (Codec.writer small_codec t [ s_seq ]) in
+  let w1 = Codec.writer small_codec t [ s_seq ] in
   Alcotest.(check string)
     "one field"
     (expected small_codec t [ set small_codec s_seq (UInt8.v 200) ])
     (written (fun buf off -> w1 buf off (UInt8.v 200)));
-  let w2 = Staged.unstage (Codec.writer small_codec t [ s_lo; s_ver ]) in
+  let w2 = Codec.writer small_codec t [ s_lo; s_ver ] in
   Alcotest.(check string)
     "two fields, out of order"
     (expected small_codec t
        [ set small_codec s_lo 63; set small_codec s_ver 0 ])
     (written (fun buf off -> w2 buf off 63 0));
-  let w4 =
-    Staged.unstage (Codec.writer small_codec t [ s_ver; s_id; s_seq; s_hi ])
-  in
+  let w4 = Codec.writer small_codec t [ s_ver; s_id; s_seq; s_hi ] in
   Alcotest.(check string)
     "four fields"
     (expected small_codec t
@@ -136,8 +131,7 @@ let test_small_arities () =
        ])
     (written (fun buf off -> w4 buf off 7 1 (UInt8.v 0) 3));
   let w6 =
-    Staged.unstage
-      (Codec.writer small_codec t [ s_ver; s_id; s_seq; s_len; s_hi; s_lo ])
+    Codec.writer small_codec t [ s_ver; s_id; s_seq; s_len; s_hi; s_lo ]
   in
   Alcotest.(check string)
     "every field"
@@ -147,9 +141,7 @@ let test_small_arities () =
     (written (fun buf off -> w6 buf off 2 3 (UInt8.v 4) (UInt16.v 5) 2 1))
 
 let test_big_equals_set () =
-  let w =
-    Staged.unstage (Codec.writer big_codec big_template [ b_a; b_b; b_c ])
-  in
+  let w = Codec.writer big_codec big_template [ b_a; b_b; b_c ] in
   let b = SInt32.of_int (-70_000) in
   Alcotest.(check string)
     "copy and set"
@@ -162,9 +154,7 @@ let test_big_equals_set () =
     (written (fun buf off -> w buf off (UInt16.v 0xBEEF) b 31))
 
 let test_word_equals_set () =
-  let w =
-    Staged.unstage (Codec.writer word_codec word_template [ w_d; w_b; w_c ])
-  in
+  let w = Codec.writer word_codec word_template [ w_d; w_b; w_c ] in
   Alcotest.(check string)
     "32-bit word"
     (expected word_codec word_template
@@ -180,33 +170,33 @@ let expect_invalid label f =
    put together in an [int], which needs an [int] of 63 bits, is written after
    every check, so nothing is written then. *)
 let test_too_wide () =
-  let w =
-    Staged.unstage (Codec.writer small_codec small_template [ s_id; s_lo ])
-  in
+  let w = Codec.writer small_codec small_template [ s_id; s_lo ] in
   let buf = Bytes.make 16 '\xAA' in
   expect_invalid "lo past its 6 bits" (fun () -> w buf 3 1 64);
   expect_invalid "negative id" (fun () -> w buf 3 (-1) 0);
   if Sys.int_size >= 63 then
     Alcotest.(check string)
       "nothing written" (String.make 16 '\xAA') (Bytes.to_string buf);
-  let wb = Staged.unstage (Codec.writer big_codec big_template [ b_c ]) in
+  let wb = Codec.writer big_codec big_template [ b_c ] in
   expect_invalid "c past its 5 bits" (fun () -> wb buf 0 32)
 
 let test_short_buffer () =
-  let w = Staged.unstage (Codec.writer small_codec small_template [ s_seq ]) in
+  let w = Codec.writer small_codec small_template [ s_seq ] in
   let buf = Bytes.make 8 '\000' in
   expect_invalid "past the end" (fun () -> w buf 3 (UInt8.v 1));
   expect_invalid "negative offset" (fun () -> w buf (-1) (UInt8.v 1));
   w buf 2 (UInt8.v 1);
-  let wb = Staged.unstage (Codec.writer big_codec big_template [ b_d ]) in
+  let wb = Codec.writer big_codec big_template [ b_d ] in
   expect_invalid "big, past the end" (fun () -> wb buf 0 (UInt16.v 1))
 
 let test_staging_refusals () =
   expect_invalid "a field twice" (fun () ->
-      ignore (Codec.writer small_codec small_template [ s_id; s_id ]));
+      let _f = Codec.writer small_codec small_template [ s_id; s_id ] in
+      ());
   let lookalike = Codec.(Field.v "Seq" uint8 $ fun r -> r.seq) in
   expect_invalid "a field the codec does not hold" (fun () ->
-      ignore (Codec.writer small_codec small_template [ lookalike ]));
+      let _f = Codec.writer small_codec small_template [ lookalike ] in
+      ());
   let var_len = Field.v "N" uint8 in
   let var_codec =
     Codec.v "WriterVar"
@@ -218,7 +208,8 @@ let test_staging_refusals () =
         ]
   in
   expect_invalid "a variable-size codec" (fun () ->
-      ignore (Codec.writer var_codec (UInt8.v 0, "") []))
+      let _f = Codec.writer var_codec (UInt8.v 0, "") [] in
+      ())
 
 let per_call_words f =
   f ();
@@ -232,9 +223,7 @@ let per_call_words f =
 
 let test_no_allocation () =
   skip_unless_gc_counters ();
-  let w =
-    Staged.unstage (Codec.writer small_codec small_template [ s_id; s_len ])
-  in
+  let w = Codec.writer small_codec small_template [ s_id; s_len ] in
   let buf = Bytes.create 6 and len = UInt16.v 7 in
   Alcotest.(check int)
     "writer allocates nothing" 0

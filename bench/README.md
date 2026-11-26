@@ -13,8 +13,8 @@ compare the OCaml, OxCaml and Rust code generators across languages.
 
 Metrics: ns/op, allocation (words), ratio vs C, throughput.
 
-The C validator checks the schema as it extracts fields. A staged OCaml
-`Codec.get` reads the requested field and does not validate the whole record;
+The C validator checks the schema as it extracts fields. The reader OCaml
+`Codec.get c f` makes reads the requested field and does not validate the whole record;
 call `Codec.validate` separately when that is required. The timing ratio
 therefore includes different amounts of validation work.
 
@@ -278,7 +278,7 @@ build 16 CLCW words, with the byte order folded into the shifts. Stock OCaml
 also assembles the 32-bit word on tagged integers, with a `sxtw` on each
 side of the `rev` that does nothing (`sxtw x3, w2`, `rev w4, w3`,
 `sxtw x5, w4`, `str w5`), where OxCaml builds it untagged. `Wire.Codec`
-writes a header with one call to a staged `Codec.writer`, which puts the
+writes a header with one call to the writer `Codec.writer` makes, which puts the
 default header and the fields that vary together in an `int` and stores it.
 These headers are at most 6 bytes, so no row stores a 64-bit word: the
 generated writes are `str w` and `strh`, and the only `dmb ishld` OxCaml puts

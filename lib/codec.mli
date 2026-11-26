@@ -143,11 +143,6 @@ val decode :
     size to 0 and silently truncate the field, so it is rejected up front the
     same way {!encode} does. *)
 
-val decoder : 'r t -> (bytes -> int -> ('r, Types.parse_error) result) Staged.t
-(** [decoder c] is [decode c], staged: [c] is compiled when the stage is built,
-    and each call runs its decoder with no other dispatch. Unstage it once and
-    call the result per record. It raises what {!decode} raises. *)
-
 val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
 (** [encode ?env c r buf off] encodes record [r] into [buf] at offset [off].
 
@@ -199,10 +194,6 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
     partial record and must be treated as scrap. Only the single-field {!set}
     rolls its write back. *)
 
-val encoder : 'r t -> ('r -> bytes -> int -> unit) Staged.t
-(** [encoder c] is [encode c], staged as {!decoder} is. It raises what {!encode}
-    raises. *)
-
 val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
 (** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs the
     same validation pass as {!validate}. In particular, field [~action]s fire,
@@ -236,26 +227,29 @@ val get :
   ?env:Param.env ->
   'r t ->
   ('a, 'r) field ->
-  (bytes -> int -> ('a, Error.t) result) Staged.t
-(** [get ?env c f] is a staged zero-copy getter for field [f] in codec [c]. If
-    [f] has an action, it fires on every read. [env] syncs output parameters
-    after each action and supplies parameters for dependent field layouts; omit
-    it for parameter-free accessors. Raises [Invalid_argument] when the codec
-    has input params and [env] is omitted, or when it was created for another
-    codec, or when [f] was not bound from a source {!Field.t} used in [c]: an
-    unbound param reads 0, which would stage the reader onto the bytes in front
-    of the field, while a same-named lookalike could interpret those bytes with
-    a different wire type. The reader answers the error of bytes that make no
+  bytes ->
+  int ->
+  ('a, Error.t) result
+(** [get ?env c f buf off] is the field [f] of the record at [off] in [buf],
+    read in place. Apply it to [c] and [f] once: the reader is made then. If [f]
+    has an action, it fires on every read. [env] syncs output parameters after
+    each action and supplies parameters for dependent field layouts; omit it for
+    parameter-free accessors. Raises [Invalid_argument] when the codec has input
+    params and [env] is omitted, or when it was created for another codec, or
+    when [f] was not bound from a source {!Field.t} used in [c]: an unbound
+    param reads 0, which would place the reader on the bytes in front of the
+    field, while a same-named lookalike could interpret those bytes with a
+    different wire type. The reader answers the error of bytes that make no
     value of [f], under [f]'s name, and raises [Invalid_argument] on a negative
     offset. Does not check record-level where-clauses or other fields'
     constraints. On untrusted input use {!View}. *)
 
-val writer : 'r t -> 'r -> ('f, 'r) args -> (bytes -> int -> 'f) Staged.t
-(** [writer c template fields] is a staged writer of a record of [c]: called
-    with a buffer, an offset and one value per field of [fields], it writes
-    [template] at the offset with each of those fields set to its value, as
-    {!encode} of [template] then {!set} of each field would. A header that
-    differs from a template in a few fields is one call.
+val writer : 'r t -> 'r -> ('f, 'r) args -> bytes -> int -> 'f
+(** [writer c template fields buf off] writes [template] at [off] in [buf] with
+    each field of [fields] set to the value that follows, one per field, as
+    {!encode} of [template] then {!set} of each field would. Apply it to [c],
+    [template] and [fields] once: the writer is made then. A header that differs
+    from a template in a few fields is one call.
 
     A record of at most 7 bytes whose fields in [fields] are big-endian integers
     or bitfields of a byte or a big-endian 16- or 32-bit word is put together in
@@ -474,18 +468,15 @@ module View : sig
       check is refused when they move the sub-record out of [b]. *)
 end
 
-val set :
-  ?env:Param.env ->
-  'r t ->
-  ('a, 'r) field ->
-  (bytes -> int -> 'a -> unit) Staged.t
-(** Staged zero-copy field setter. [env] supplies the input params a dependent
-    field layout is measured from; omit it for parameter-free codecs. Raises
-    [Invalid_argument] when the codec has input params and [env] is omitted, or
-    when it was created for another codec, or when the field binding does not
-    share its source {!Field.t} with the field in the codec: an unbound param
-    reads 0, which would put the write on a field the caller never named and
-    leave the one it did name unchanged.
+val set : ?env:Param.env -> 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
+(** [set ?env c f buf off v] writes [v] as the field [f] of the record at [off]
+    in [buf], in place. Apply it to [c] and [f] once: the writer is made then.
+    [env] supplies the input params a dependent field layout is measured from;
+    omit it for parameter-free codecs. Raises [Invalid_argument] when the codec
+    has input params and [env] is omitted, or when it was created for another
+    codec, or when the field binding does not share its source {!Field.t} with
+    the field in the codec: an unbound param reads 0, which would put the write
+    on a field the caller never named and leave the one it did name unchanged.
 
     Raises [Invalid_argument], leaving the buffer untouched, on a value the
     field cannot represent: a byte string whose length differs from the declared
@@ -759,7 +750,7 @@ module Gen : sig
 
   val with_field_reader : 'r t -> string -> 'b field_k -> 'b option
   (** [with_field_reader t name k] is [k.k typ r], where [r] is the reader
-      {!get} stages for the field [name] of [t] and [typ] its type, or [None]
+      {!get} makes for the field [name] of [t] and [typ] its type, or [None]
       when [t] has no field [name]. *)
 
   (** {2 Maps} *)

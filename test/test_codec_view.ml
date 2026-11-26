@@ -58,7 +58,7 @@ let test_view_set_uint () =
   let buf = Bytes.create 4 in
   Bytes.set_uint16_be buf 0 0x1234;
   Bytes.set_uint16_be buf 2 0x5678;
-  (Staged.unstage (Codec.set codec cf_x)) buf 0 (UInt16.v 0xAAAA);
+  Codec.set codec cf_x buf 0 (UInt16.v 0xAAAA);
   Alcotest.(check int)
     "get x after set" 0xAAAA
     (UInt16.to_int ((reader codec cf_x) buf 0));
@@ -107,12 +107,12 @@ let test_view_set_bool () =
   in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0x00;
-  (Staged.unstage (Codec.set codec cf_flag)) buf 0 true;
+  Codec.set codec cf_flag buf 0 true;
   Alcotest.(check bool)
     "get flag after set true" true
     ((reader codec cf_flag) buf 0);
   Alcotest.(check int) "byte value (MSB-first)" 0x80 (Bytes.get_uint8 buf 0);
-  (Staged.unstage (Codec.set codec cf_flag)) buf 0 false;
+  Codec.set codec cf_flag buf 0 false;
   Alcotest.(check bool)
     "get flag after set false" false
     ((reader codec cf_flag) buf 0);
@@ -205,12 +205,12 @@ let test_view_shared_set_independent () =
   in
   (* Codec1's v is the top nibble; set to 0xA. *)
   let buf = Bytes.create 1 in
-  (Staged.unstage (Codec.set codec1 cf1)) buf 0 0xA;
+  Codec.set codec1 cf1 buf 0 0xA;
   Alcotest.(check int) "byte after set1" 0xA0 (Bytes.get_uint8 buf 0);
   (* Codec2's v is the bottom nibble -- should still be 0. *)
   Alcotest.(check int) "codec2 get after set1" 0 ((reader codec2 cf2) buf 0);
   (* Set codec2's v (bottom nibble) to 0x5. *)
-  (Staged.unstage (Codec.set codec2 cf2)) buf 0 0x5;
+  Codec.set codec2 cf2 buf 0 0x5;
   Alcotest.(check int) "byte after set2" 0xA5 (Bytes.get_uint8 buf 0);
   (* Codec1's v should still be 0xA. *)
   Alcotest.(check int) "codec1 get after set2" 0xA ((reader codec1 cf1) buf 0)
@@ -327,8 +327,8 @@ let test_raw_set_uint () =
   let codec = Codec.v "RawSU" (fun a b -> (a, b)) [ cf_a; cf_b ] in
   let buf = Bytes.create 3 in
   Bytes.fill buf 0 3 '\x00';
-  (Staged.unstage (Codec.set codec cf_a)) buf 0 (UInt16.v 0xABCD);
-  (Staged.unstage (Codec.set codec cf_b)) buf 0 (UInt8.v 0x42);
+  Codec.set codec cf_a buf 0 (UInt16.v 0xABCD);
+  Codec.set codec cf_b buf 0 (UInt8.v 0x42);
   Alcotest.(check int) "set a" 0xABCD (Bytes.get_uint16_be buf 0);
   Alcotest.(check int) "set b" 0x42 (Bytes.get_uint8 buf 2)
 
@@ -341,8 +341,8 @@ let test_raw_set_bitfield () =
   let codec = Codec.v "RawSBF" (fun hi lo -> (hi, lo)) [ cf_hi; cf_lo ] in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0x00;
-  (Staged.unstage (Codec.set codec cf_hi)) buf 0 0xC;
-  (Staged.unstage (Codec.set codec cf_lo)) buf 0 0x3;
+  Codec.set codec cf_hi buf 0 0xC;
+  Codec.set codec cf_lo buf 0 0x3;
   Alcotest.(check int) "set bf byte" 0xC3 (Bytes.get_uint8 buf 0)
 
 let test_raw_sub_nested () =
@@ -405,9 +405,7 @@ let test_raw_with_offset () =
   let codec = Codec.v "RawOff" (fun v -> v) [ cf_v ] in
   let buf = Bytes.create 20 in
   Bytes.fill buf 0 20 '\x00';
-  (Staged.unstage (Codec.set codec cf_v))
-    buf 10
-    (Wire.Private.UInt32.of_int32 0xDEADBEEFl);
+  Codec.set codec cf_v buf 10 (Wire.Private.UInt32.of_int32 0xDEADBEEFl);
   Alcotest.(check int32)
     "get at offset 10" 0xDEADBEEFl
     (UInt32.to_int32 ((reader codec cf_v) buf 10))

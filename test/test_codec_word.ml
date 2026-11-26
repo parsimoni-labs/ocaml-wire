@@ -159,7 +159,7 @@ let test_short_buffer_agrees_with_get () =
   if Sys.int_size >= 63 then begin
     let r = Codec.Word.reader hdr_codec in
     let get f =
-      let get = Staged.unstage (Codec.get hdr_codec f) in
+      let get = Codec.get hdr_codec f in
       fun buf off -> Result.map ignore (get buf off)
     in
     let gets =

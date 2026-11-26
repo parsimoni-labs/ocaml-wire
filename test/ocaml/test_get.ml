@@ -31,7 +31,7 @@ let test_getter_errors () =
     Alcotest.(check (result reject error)) name (Error expected) (get buf off);
     Alcotest.(check (result reject error))
       (name ^ ", as Codec.get") (Error expected)
-      (Staged.unstage (Codec.get codec field) buf off)
+      (Codec.get codec field buf off)
   in
   answers "a closed enum outside its cases" G_checked.Get.proto Schemas.checked
     Schemas.checked_proto

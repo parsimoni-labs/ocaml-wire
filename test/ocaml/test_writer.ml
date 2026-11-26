@@ -113,7 +113,7 @@ let viewed ?(fix = fun _ _ -> ()) codec ~read ~gets =
 
 let test_accessors () =
   let get codec field show =
-    let read = Staged.unstage (Codec.get codec field) in
+    let read = Codec.get codec field in
     fun buf -> show (ok (read buf 0))
   in
   let i32 v = string_of_int (SInt32.to_int v) in

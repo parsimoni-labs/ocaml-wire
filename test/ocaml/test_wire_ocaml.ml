@@ -628,7 +628,7 @@ let test_narrow_ints () =
 (* A generated getter reads what [Codec.get] reads, or raises what it raises,
    on random buffers and offsets around the field. *)
 let getter codec field ~get ~show =
-  let read = Staged.unstage (Codec.get codec field) in
+  let read = Codec.get codec field in
   let size = Codec.min_wire_size codec in
   for _ = 1 to 2000 do
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
@@ -660,7 +660,7 @@ let test_mapped () =
 
 (* A plain-[int] getter reads the [int] view of what [Codec.get] reads. *)
 let int_getter codec field ~get ~to_int =
-  let read = Staged.unstage (Codec.get codec field) in
+  let read = Codec.get codec field in
   let size = Codec.min_wire_size codec in
   for _ = 1 to 2000 do
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
@@ -708,7 +708,7 @@ let test_getters () =
    [off]. *)
 let test_view () =
   let get codec field show =
-    let read = Staged.unstage (Codec.get codec field) in
+    let read = Codec.get codec field in
     fun buf off -> show (ok (read buf off))
   in
   let frag =

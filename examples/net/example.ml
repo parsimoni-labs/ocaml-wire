@@ -9,7 +9,7 @@ module Slice = Bytesrw.Bytes.Slice
 
 (* [get c f buf off] is the field [f] of the record of [c] at [off]. *)
 let get c f =
-  let read = Staged.unstage (Codec.get c f) in
+  let read = Codec.get c f in
   fun buf off ->
     match read buf off with
     | Ok v -> v
@@ -45,8 +45,7 @@ let () =
     (UInt16.to_int dst_port) syn ack;
 
   (* In-place mutation: change destination port *)
-  (Staged.unstage (Codec.set tcp_codec bf_tcp_dst_port))
-    buf tcp_off (UInt16.v 8080);
+  Codec.set tcp_codec bf_tcp_dst_port buf tcp_off (UInt16.v 8080);
   Fmt.pr "After set: TCP dst_port=%d\n"
     (UInt16.to_int ((get tcp_codec bf_tcp_dst_port) buf tcp_off));
 

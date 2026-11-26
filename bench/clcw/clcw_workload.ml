@@ -16,7 +16,7 @@ let cf_retransmit = Space.bf_cw_retransmit
    meets words that fail it. *)
 let generate_stream n =
   let buf = Bytes.create (n * word_size) in
-  let set f = Wire.Staged.unstage (C.set Space.clcw_codec f) in
+  let set f = C.set Space.clcw_codec f in
   let set_report = set cf_report and set_lockout = set cf_lockout in
   let set_wait = set cf_wait and set_retransmit = set cf_retransmit in
   let report = ref 0 in
@@ -96,9 +96,8 @@ let run_all state =
 (* The word {!Space.clcw_default} encodes, COP-1 in effect on virtual channel
    7, every flag clear, with the four fields a FARM reports. *)
 let write_word =
-  Wire.Staged.unstage
-    (C.writer Space.clcw_codec Space.clcw_default
-       [ cf_lockout; cf_wait; cf_retransmit; cf_report ])
+  C.writer Space.clcw_codec Space.clcw_default
+    [ cf_lockout; cf_wait; cf_retransmit; cf_report ]
 
 let report ~out n =
   for i = 0 to n - 1 do

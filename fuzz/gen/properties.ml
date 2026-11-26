@@ -423,16 +423,16 @@ let addressed g =
   | fs ->
       { acodec = g.codec; achecks = fs; anames; ggeneral; ageneral = ggeneral }
 
-(* Staging refuses on a field whose access shape has no staged accessor, which
-   is a documented gap in the accessor API rather than a failure: skip. *)
+(* Making an accessor refuses on a field whose access shape has none, which is
+   a documented gap in the accessor API rather than a failure: skip. *)
 let stage_get ?env a field =
   match Wire.Codec.get ?env a.acodec field with
-  | staged -> Some (Wire.Staged.unstage staged)
+  | read -> Some read
   | exception Invalid_argument _ -> None
 
 let stage_set a field =
   match Wire.Codec.set a.acodec field with
-  | staged -> Some (Wire.Staged.unstage staged)
+  | write -> Some write
   | exception Invalid_argument _ -> None
 
 (* [Codec.get] against the value the canonical bytes were encoded from: the
@@ -1177,7 +1177,7 @@ let check_fast_general_core label kind ?env g general bs =
     bs
 
 let field_get ?env c f bs =
-  answer_result (fun () -> Wire.Staged.unstage (Wire.Codec.get ?env c f) bs 0)
+  answer_result (fun () -> (Wire.Codec.get ?env c f) bs 0)
 
 (* [check] then [read] of each field, against [validate] then [get] of the
    general codec, and [get] of each field on both. *)
@@ -1339,9 +1339,7 @@ let check_set_paths label a value bs =
         let buf = Bytes.copy bs in
         map_answer
           (fun () -> Bytes.to_string buf)
-          (answer (fun () ->
-               Wire.Staged.unstage (Wire.Codec.set c f.field) buf 0
-                 (f.proj value)))
+          (answer (fun () -> Wire.Codec.set c f.field buf 0 (f.proj value)))
       in
       check_answer label
         ("Codec.set of field " ^ f.name)

@@ -289,13 +289,13 @@ let test_view_set_bitfield () =
     (codec, cf_a, cf_d)
   in
   let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
-  (Staged.unstage (Codec.set codec cf_a)) buf 0 3;
+  Codec.set codec cf_a buf 0 3;
   Alcotest.(check int) "get a after set" 3 ((reader codec cf_a) buf 0);
   let r = decode_ok (Codec.decode codec buf 0) in
   Alcotest.(check int) "b preserved" 20 r.b;
   Alcotest.(check int) "c preserved" 0x1234 r.c;
   Alcotest.(check int) "d preserved" 0xAB r.d;
-  (Staged.unstage (Codec.set codec cf_d)) buf 0 0x42;
+  Codec.set codec cf_d buf 0 0x42;
   Alcotest.(check int) "get d after set" 0x42 ((reader codec cf_d) buf 0);
   let r = decode_ok (Codec.decode codec buf 0) in
   Alcotest.(check int) "a still 3" 3 r.a;

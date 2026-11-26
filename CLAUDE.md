@@ -130,7 +130,7 @@ codecs share one library, is in [docs/projection.md](docs/projection.md#generate
 The **only** goal of benchmarks is to compare these three tiers -- all derived
 from the same Wire DSL definition:
 
-1. **Pure OCaml** -- `Wire.Codec`'s staged reads and writes (zero-copy field access)
+1. **Pure OCaml** -- `Wire.Codec`'s reads and writes (zero-copy field access)
 2. **EverParse C** -- EverParse-generated verified C validator in a C loop
 3. **OCaml->C FFI** -- OCaml calling the EverParse-generated C validator
 
