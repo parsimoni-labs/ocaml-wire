@@ -110,11 +110,11 @@ type compared_field = { name : string; width : int }
 let compared_fields (Fuzz_gen.Pack g) =
   let s = Wire.Everparse.Raw.struct_of_codec (Fuzz_gen.codec g) in
   let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi s in
-  let reported_as_offset (p : Wire.Everparse.plug_field) =
+  let reported_as_offset (p : Wire.Everparse.visitor_field) =
     if String.ends_with ~suffix:"SetBytes" p.setter then Some p.name else None
   in
   let offsets =
-    List.filter_map reported_as_offset (Wire.Everparse.plug_fields schema)
+    List.filter_map reported_as_offset (Wire.Everparse.visitor_fields schema)
   in
   List.filter_map
     (fun (name, (slot : Wire.Everparse.Raw.int_slot)) ->

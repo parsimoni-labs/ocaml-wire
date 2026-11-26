@@ -232,7 +232,7 @@ type walk = {
   uses : (string, int) Hashtbl.t;
 }
 
-let plug_member name = Names.escape Names.c_keywords name
+let visitor_member name = Names.escape Names.c_keywords name
 let ctx_struct = Types.struct_ "WireCtx" []
 let ctx_param = Types.mutable_param "ctx" (Types.struct_typ ctx_struct)
 
@@ -471,7 +471,7 @@ let flatten schema (s : Types.struct_) =
   let slots = List.rev !(w.slots) in
   (* A path can spell a field's own name ([ip_src] beside [ip.src]): refuse it,
      as the visitor cannot hold both. Spellings that differ but fold alike are
-     refused where the visitor is written ([Wire_3d.check_plug_names]). *)
+     refused where the visitor is written ([Wire_3d.check_visitor_names]). *)
   let seen = Hashtbl.create 16 in
   List.iter
     (fun sl ->
@@ -737,7 +737,7 @@ let uses_wire_ctx s =
       | _ -> false)
     s.module_.decls
 
-type plug_field = {
+type visitor_field = {
   name : string;
   idx : int;
   c_type : string;
@@ -748,7 +748,7 @@ type plug_field = {
 (* A member holds what its setter is passed: a value as wide as the integer
    under any [map], [where], [enum] or optional, or the 32-bit offset
    [<Name>SetBytes] hands out. *)
-let plug_field (s : t) sl =
+let visitor_field (s : t) sl =
   let setter = slot_setter s.name sl in
   let (Types.Pack_typ val_typ) = setter.val_typ in
   let c_type = Types.c_type_of val_typ in
@@ -760,14 +760,14 @@ let plug_field (s : t) sl =
     val_c_type = c_type;
   }
 
-let plug_fields s =
+let visitor_fields s =
   match s.source with
   | None -> []
   | Some src ->
       let _, _, slots = flatten s.name src in
-      List.map (plug_field s) slots
+      List.map (visitor_field s) slots
 
-let plug_setters s =
+let visitor_setters s =
   let seen = Hashtbl.create 8 in
   List.filter_map
     (fun f ->
@@ -776,7 +776,7 @@ let plug_setters s =
         Hashtbl.add seen f.setter ();
         Some (f.setter, f.val_c_type)
       end)
-    (plug_fields s)
+    (visitor_fields s)
 
 let entrypoint_struct s =
   List.find_map

@@ -231,7 +231,7 @@ let fixed schema_dir =
    integer view, so neither is compared. *)
 let scalar_members (schema : Wire.Everparse.t) =
   List.filter_map
-    (fun (f : Wire.Everparse.plug_field) ->
+    (fun (f : Wire.Everparse.visitor_field) ->
       let bits =
         match f.c_type with
         | "uint8_t" -> Some 8
@@ -244,7 +244,7 @@ let scalar_members (schema : Wire.Everparse.t) =
       | Some bits when not (String.ends_with ~suffix:"SetBytes" f.setter) ->
           Some (f.name, bits)
       | _ -> None)
-    (Wire.Everparse.plug_fields schema)
+    (Wire.Everparse.visitor_fields schema)
 
 (* Each structured case through its FFI projection: the stub runs the verified
    validator with a zeroed default visitor, as the generated stubs do, and copies
@@ -269,7 +269,7 @@ let pp_scan_stub ppf i (schema : Wire.Everparse.t) members =
   List.iteri
     (fun k (member, _, _) ->
       Fmt.pf ppf "  Field(out, %d) = Val_long((intnat) f.%s);@\n" k
-        (Wire.Everparse.plug_member member))
+        (Wire.Everparse.visitor_member member))
     members;
   Fmt.pf ppf "  return Val_long((intnat) end);@\n}@\n"
 

@@ -158,13 +158,13 @@ val write_external_typedefs : outdir:string -> Wire.Everparse.t list -> unit
     declaring [WIRECTX] as a forward reference to the matching [<Name>Fields]
     visitor struct. *)
 
-val check_plug_names : Wire.Everparse.t -> unit
-(** [check_plug_names s] raises [Invalid_argument] naming both fields when two
-    of [s]'s fields would define one [_IDX_] macro or one struct member of its
-    default visitor: the macro upper-cases the field name ([X] and [x]); the
-    member's escape ({!Wire.Everparse.plug_member}) keeps names apart. It also
-    refuses a field whose name is not an identifier. {!write_fields} runs it
-    first. *)
+val check_visitor_names : Wire.Everparse.t -> unit
+(** [check_visitor_names s] raises [Invalid_argument] naming both fields when
+    two of [s]'s fields would define one [_IDX_] macro or one struct member of
+    its default visitor: the macro upper-cases the field name ([X] and [x]); the
+    member's escape ({!Wire.Everparse.visitor_member}) keeps names apart. It
+    also refuses a field whose name is not an identifier. {!write_fields} runs
+    it first. *)
 
 val write_fields : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_fields ~outdir schemas] writes the default [<Name>_Fields.{c,h}]

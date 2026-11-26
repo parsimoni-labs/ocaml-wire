@@ -826,10 +826,10 @@ let nested_stack () =
         $ fun (_, _, i) -> i );
       ]
 
-let plug_names s =
-  List.map (fun f -> f.Everparse.name) (Everparse.plug_fields s)
+let visitor_names s =
+  List.map (fun f -> f.Everparse.name) (Everparse.visitor_fields s)
 
-let test_ffi_nested_plug_paths () =
+let test_ffi_nested_visitor_paths () =
   let s = Everparse.project ~mode:`Ffi (nested_stack ()) in
   Alcotest.(check (list string))
     "one member per scalar, named by path, and a flag per optional"
@@ -850,8 +850,8 @@ let test_ffi_nested_plug_paths () =
       "ip_udp_len";
       "ip_pad_present";
     ]
-    (plug_names s);
-  let fields = Everparse.plug_fields s in
+    (visitor_names s);
+  let fields = Everparse.visitor_fields s in
   Alcotest.(check (list int))
     "indices follow declaration order"
     (List.init (List.length fields) Fun.id)
@@ -919,8 +919,8 @@ let test_ffi_member_widths () =
       ("i_g", "uint8_t", "uint8_t");
     ]
     (List.map
-       (fun (f : Everparse.plug_field) -> (f.name, f.c_type, f.val_c_type))
-       (Everparse.plug_fields (Everparse.project ~mode:`Ffi c)))
+       (fun (f : Everparse.visitor_field) -> (f.name, f.c_type, f.val_c_type))
+       (Everparse.visitor_fields (Everparse.project ~mode:`Ffi c)))
 
 (* An optional scalar of an embedded codec has a member after its flag, set
    by a codec of that one field that the optional's region parses. *)
@@ -941,7 +941,7 @@ let test_ffi_nested_optional_scalar () =
   Alcotest.(check (list string))
     "members"
     [ "t"; "i"; "i_k"; "i_o_present"; "i_o" ]
-    (plug_names s);
+    (visitor_names s);
   let out = flatten (to_3d s.module_) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
@@ -985,7 +985,7 @@ let test_ffi_nested_shared_codec () =
   Alcotest.(check (list string))
     "members"
     [ "a"; "a_x"; "a_y"; "b"; "b_x"; "b_y" ]
-    (plug_names s);
+    (visitor_names s);
   let out = flatten (to_3d s.module_) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
@@ -1019,7 +1019,7 @@ let test_ffi_single_field_codec () =
   Alcotest.(check (list string))
     "members"
     [ "g"; "a"; "b"; "b_present"; "b_x" ]
-    (plug_names s);
+    (visitor_names s);
   let out = flatten (to_3d s.module_) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
@@ -1041,14 +1041,14 @@ let test_ffi_unflattened_shapes () =
   in
   Alcotest.(check (list string))
     "no flag without nesting" [ "g"; "a" ]
-    (plug_names (Everparse.project ~mode:`Ffi flat));
+    (visitor_names (Everparse.project ~mode:`Ffi flat));
   let inner = Codec.v "ArrIn" Fun.id Codec.[ Field.v "x" uint8 $ Fun.id ] in
   let arr =
     Codec.v "ArrTop" Fun.id
       Codec.[ Field.v "xs" (array ~len:(int 2) (codec inner)) $ Fun.id ]
   in
   let s = Everparse.project ~mode:`Ffi arr in
-  Alcotest.(check (list string)) "array elements" [ "xs" ] (plug_names s);
+  Alcotest.(check (list string)) "array elements" [ "xs" ] (visitor_names s);
   Alcotest.(check bool)
     "the element struct takes no ctx" true
     (contains ~sub:"typedef struct WireArrIn\n{" (to_3d s.module_))
@@ -1919,7 +1919,7 @@ let suite =
       Alcotest.test_case "3d: optional over a parametric sub-codec" `Quick
         test_3d_optional_over_param_codec;
       Alcotest.test_case "ffi: nested visitor paths" `Quick
-        test_ffi_nested_plug_paths;
+        test_ffi_nested_visitor_paths;
       Alcotest.test_case "ffi: a member is as wide as its setter's value" `Quick
         test_ffi_member_widths;
       Alcotest.test_case "ffi: an optional scalar of an embedded codec" `Quick

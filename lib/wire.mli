@@ -1826,7 +1826,7 @@ module Everparse : sig
       [<Name>_ExternalTypedefs.h], so that file must be present at compile time.
       Schemas built via {!project} always satisfy this. *)
 
-  type plug_field = {
+  type visitor_field = {
     name : string;
     idx : int;
     c_type : string;
@@ -1834,21 +1834,21 @@ module Everparse : sig
     val_c_type : string;
   }
   (** Visitor info: the data needed to materialise a typed struct and
-      [<Name>Set*] dispatchers for a schema. See {!Everparse.plug_field}. *)
+      [<Name>Set*] dispatchers for a schema. See {!Everparse.visitor_field}. *)
 
-  val plug_member : string -> string
-  (** [plug_member name] is the visitor struct member a field named [name]
+  val visitor_member : string -> string
+  (** [visitor_member name] is the visitor struct member a field named [name]
       takes: [name] escaped against C's keywords and the macros of the headers
       the visitor includes ([int_], [NULL_], and [int__] for [int_]), so
       distinct names stay distinct members. *)
 
-  val plug_fields : t -> plug_field list
-  (** [plug_fields s] enumerates the named fields of the source struct in
+  val visitor_fields : t -> visitor_field list
+  (** [visitor_fields s] enumerates the named fields of the source struct in
       declaration order. Returns [[]] for schemas without a source struct. *)
 
-  val plug_setters : t -> (string * string) list
-  (** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
-      [(setter, val_c_type)] pairs. *)
+  val visitor_setters : t -> (string * string) list
+  (** [visitor_setters s] lists the unique [WireSet*] setters referenced by [s]
+      as [(setter, val_c_type)] pairs. *)
 
   val entrypoint_struct : t -> struct_ option
   (** Entrypoint typedef struct in the schema's module, if any. *)

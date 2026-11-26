@@ -40,9 +40,9 @@ let pp_c_stub_bounds ppf ~lower =
   Fmt.pf ppf "  uint32_t len = (uint32_t)(buf_len - (mlsize_t) off);@\n"
 
 (* The C side reads each field from the default visitor, whose member escapes C's
-   keywords ([Wire.Everparse.plug_member]). *)
+   keywords ([Wire.Everparse.visitor_member]). *)
 let pp_field_value ppf (fname, kind) =
-  let fname = Wire.Everparse.plug_member fname in
+  let fname = Wire.Everparse.visitor_member fname in
   match kind with
   | Wire.Everparse.Raw.Int64 ->
       Fmt.pf ppf "caml_copy_int64((int64_t) fields.%s)" fname
@@ -342,7 +342,7 @@ let of_structs ~schema_dir ~outdir structs =
 let check_names s =
   let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi s in
   ignore (Wire.Everparse.Raw.to_3d schema.module_ : string);
-  Wire_3d.check_plug_names schema;
+  Wire_3d.check_visitor_names schema;
   check_labels s (Wire.Everparse.Raw.field_kinds s)
 
 let generate ~schema_dir ~outdir codecs =

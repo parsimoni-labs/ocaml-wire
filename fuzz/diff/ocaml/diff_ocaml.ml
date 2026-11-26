@@ -633,7 +633,7 @@ let restrict (Reference r) fields got =
 (* The visitor members a reference states, each with the value its C member
    holds: the field's low [bits] bits, so a signed field reads as its two's
    complement there, and an absent one as 0. *)
-let plug_snapshot (Reference r) fields pairs =
+let visitor_snapshot (Reference r) fields pairs =
   let fields =
     match r.known with
     | None -> fields
@@ -665,8 +665,8 @@ let scan_oracle (Reference r as ref_) oracle bounded value buf off len =
         (fun pairs ->
           scan_same r.label "EverParse C visitor scalars"
             (fun l -> show_snapshot (Some l))
-            (plug_snapshot ref_ o.fields pairs)
-            (plug_snapshot ref_ o.fields members))
+            (visitor_snapshot ref_ o.fields pairs)
+            (visitor_snapshot ref_ o.fields members))
         value)
     oracle
 

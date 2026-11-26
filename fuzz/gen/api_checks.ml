@@ -435,12 +435,12 @@ let check_everparse_schema raw_struct =
   (match Wire.Everparse.entrypoint_struct schema with
   | Some _ -> ()
   | None -> Alcobar.failf "schema_of_struct has no entrypoint");
-  let plug_fields = Wire.Everparse.plug_fields schema in
-  assert_contains "Everparse.plug_fields"
-    (List.map (fun f -> f.Wire.Everparse.name) plug_fields)
+  let visitor_fields = Wire.Everparse.visitor_fields schema in
+  assert_contains "Everparse.visitor_fields"
+    (List.map (fun f -> f.Wire.Everparse.name) visitor_fields)
     [ "Len"; "Data" ];
-  if Wire.Everparse.plug_setters schema = [] then
-    Alcobar.failf "Everparse.plug_setters empty";
+  if Wire.Everparse.visitor_setters schema = [] then
+    Alcobar.failf "Everparse.visitor_setters empty";
   if Wire.Everparse.extern_fn_names schema = [] then
     Alcobar.failf "Everparse.extern_fn_names empty"
 

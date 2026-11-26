@@ -325,7 +325,7 @@ let test_extern_names_wrapped () =
     Wire.Everparse.Raw.project_struct ~mode:`Ffi
       (struct_ base [ field "f0" uint16be; field "f1" uint8 ])
   in
-  let setters = Wire.Everparse.plug_setters schema in
+  let setters = Wire.Everparse.visitor_setters schema in
   (* EverParse changes the case of a setter's name, nothing else. *)
   let symbol i = String.lowercase_ascii (fst (List.nth setters i)) in
   let wrapped =
@@ -379,7 +379,7 @@ let test_extern_names_by_name () =
     Wire.Everparse.Raw.project_struct ~mode:`Ffi
       (struct_ "order_by_name" [ field "f0" uint16be; field "f1" uint8 ])
   in
-  let setters = Wire.Everparse.plug_setters schema in
+  let setters = Wire.Everparse.visitor_setters schema in
   Alcotest.(check int) "two setters to pair" 2 (List.length setters);
   let declared name =
     String.lowercase_ascii (String.concat "" (String.split_on_char '_' name))
@@ -416,11 +416,11 @@ let test_extern_names_by_name () =
 (* The default visitor of a schema, written next to a stand-in for the
    [_ExternalAPI.h] 3d.exe would emit, which declares each setter under its
    own name. *)
-let plug_of fields =
+let visitor_of fields =
   let schema =
     Wire.Everparse.Raw.project_struct ~mode:`Ffi (struct_ "Kw" fields)
   in
-  let dir = Filename.temp_dir "wire_3d_plug" "" in
+  let dir = Filename.temp_dir "wire_3d_visitor" "" in
   Fun.protect
     ~finally:(fun () -> Wire_3d.rm_rf dir)
     (fun () ->
@@ -430,7 +430,7 @@ let plug_of fields =
              (fun (setter, c_type) ->
                Fmt.str "extern void %s(WIRECTX *ctx, uint32_t idx, %s v);\n"
                  setter c_type)
-             (Wire.Everparse.plug_setters schema))
+             (Wire.Everparse.visitor_setters schema))
       in
       Out_channel.with_open_bin (Filename.concat dir "Kw_ExternalAPI.h")
         (fun oc -> Out_channel.output_string oc api);
@@ -461,9 +461,9 @@ let plug_of fields =
    and [x] would define one macro twice, which is refused naming the two
    fields. The struct member escapes C's keywords injectively, so [restrict]
    and [restrict_] are the members [restrict_] and [restrict__]. *)
-let test_plug_names () =
+let test_visitor_names () =
   let rejects what subs fields =
-    match plug_of fields with
+    match visitor_of fields with
     | _ -> Alcotest.failf "%s: accepted" what
     | exception Invalid_argument msg ->
         List.iter
@@ -477,7 +477,7 @@ let test_plug_names () =
     [ field "X" uint8; field "x" uint8 ];
   rejects "a-b" [ "\"a-b\""; "identifier" ] [ field "a-b" uint8 ];
   let header, impl, compiles =
-    plug_of
+    visitor_of
       [
         field "int" uint8;
         field "restrict" uint8;
@@ -561,7 +561,7 @@ let suite =
       Alcotest.test_case "bare uint64 projects" `Slow test_bare_uint64_projects;
       Alcotest.test_case "nested field projects through EverParse" `Slow
         test_nested_field_projects;
-      Alcotest.test_case "visitor: field names" `Quick test_plug_names;
+      Alcotest.test_case "visitor: field names" `Quick test_visitor_names;
       Alcotest.test_case "keyword field names (needs 3d.exe)" `Quick
         test_keyword_fields_e2e;
     ] )

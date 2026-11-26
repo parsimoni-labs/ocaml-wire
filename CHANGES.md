@@ -18,6 +18,10 @@
 - `Wire.Codec.decoder` and `Wire.Codec.encoder` are removed: apply
   `Codec.decode c` and `Codec.encode c` once (#570, @samoht)
 
+- "plug" is "visitor" throughout: `Wire.Everparse.plug_field`, `plug_member`,
+  `plug_fields` and `plug_setters` are `visitor_field`, `visitor_member`,
+  `visitor_fields` and `visitor_setters` (#570, @samoht)
+
 - The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
   `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)
@@ -272,7 +276,7 @@
 - `wire` builds on OxCaml, and `wire.3d` and the fuzz suites run on Windows
   (#436, #443, @samoht)
 
-- `Wire_stubs.check_names` and `Wire_3d.check_plug_names`: check a codec's
+- `Wire_stubs.check_names` and `Wire_3d.check_visitor_names`: check a codec's
   field names before generating stubs or C (#434, @samoht)
 
 - A `paranoid` dune profile that bounds-checks every read, for tests (#435,

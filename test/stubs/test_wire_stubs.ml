@@ -705,22 +705,24 @@ let check_action_forms codec =
           (pp_action_form expected) (pp_action_form form))
     (Wire.Everparse.field_action_forms ep)
 
-let plug_field_names s =
-  List.map (fun f -> f.Wire.Everparse.name) (Wire.Everparse.plug_fields s)
+let visitor_field_names s =
+  List.map (fun f -> f.Wire.Everparse.name) (Wire.Everparse.visitor_fields s)
 
-(* Invariant 2: [plug_fields] enumerates exactly the named fields of the
+(* Invariant 2: [visitor_fields] enumerates exactly the named fields of the
    source struct in declaration order, with consecutive indices starting at
    0. Catches indexing drift between the schema pipeline and the visitor
    generator. *)
-let check_plug_completeness codec =
+let check_visitor_completeness codec =
   let schema = Wire.Everparse.project ~mode:`Ffi codec in
   let source = Option.get schema.source in
   let expected = Wire.Everparse.Raw.field_names source in
-  let got = plug_field_names schema in
+  let got = visitor_field_names schema in
   Alcotest.(check (list string))
-    "plug_fields matches named source fields" expected got;
+    "visitor_fields matches named source fields" expected got;
   let idxs =
-    List.map (fun f -> f.Wire.Everparse.idx) (Wire.Everparse.plug_fields schema)
+    List.map
+      (fun f -> f.Wire.Everparse.idx)
+      (Wire.Everparse.visitor_fields schema)
   in
   let expected_idxs = List.init (List.length idxs) Fun.id in
   Alcotest.(check (list int)) "indices consecutive from 0" expected_idxs idxs
@@ -730,7 +732,7 @@ let check_plug_completeness codec =
 let check_setter_scoping codec_a codec_b =
   let sa = Wire.Everparse.project ~mode:`Ffi codec_a in
   let sb = Wire.Everparse.project ~mode:`Ffi codec_b in
-  let names s = List.map fst (Wire.Everparse.plug_setters s) in
+  let names s = List.map fst (Wire.Everparse.visitor_setters s) in
   let na = names sa in
   let nb = names sb in
   let intersection =
@@ -744,9 +746,9 @@ let check_setter_scoping codec_a codec_b =
         Alcotest.failf "setter %s missing schema prefix %s" n sa.name)
     na
 
-(* Invariant 4: every setter appears in plug_setters, and every setter in
-   plug_setters is actually declared in the module as an extern_fn. Catches
-   drift between what plug_fields claims and what the 3D module declares. *)
+(* Invariant 4: every setter appears in visitor_setters, and every setter in
+   visitor_setters is actually declared in the module as an extern_fn. Catches
+   drift between what visitor_fields claims and what the 3D module declares. *)
 let check_setter_declarations codec =
   let schema = Wire.Everparse.project ~mode:`Ffi codec in
   let declared_externs = Wire.Everparse.extern_fn_names schema in
@@ -754,15 +756,16 @@ let check_setter_declarations codec =
     (fun (setter, _) ->
       if not (List.mem setter declared_externs) then
         Alcotest.failf
-          "plug_setters claims %s but module has no Extern_fn for it" setter)
-    (Wire.Everparse.plug_setters schema);
+          "visitor_setters claims %s but module has no Extern_fn for it" setter)
+    (Wire.Everparse.visitor_setters schema);
   List.iter
     (fun f ->
       let setter = f.Wire.Everparse.setter in
-      if not (List.mem_assoc setter (Wire.Everparse.plug_setters schema)) then
-        Alcotest.failf "field %s references setter %s not in plug_setters"
+      if not (List.mem_assoc setter (Wire.Everparse.visitor_setters schema))
+      then
+        Alcotest.failf "field %s references setter %s not in visitor_setters"
           f.Wire.Everparse.name setter)
-    (Wire.Everparse.plug_fields schema)
+    (Wire.Everparse.visitor_fields schema)
 
 (* Test fixtures. Each codec exercises a specific combination so invariants
    1-4 cover mixed/pure/byte/constrained/action scenarios. *)
@@ -838,9 +841,13 @@ let test_action_forms_constrained () = check_action_forms constrained_codec
 let test_action_forms_with_action () =
   check_action_forms with_existing_action_codec
 
-let test_plug_completeness_scalars () = check_plug_completeness scalars_codec
-let test_plug_completeness_mixed () = check_plug_completeness mixed_codec
-let test_plug_completeness_bytes () = check_plug_completeness byte_array_codec
+let test_visitor_completeness_scalars () =
+  check_visitor_completeness scalars_codec
+
+let test_visitor_completeness_mixed () = check_visitor_completeness mixed_codec
+
+let test_visitor_completeness_bytes () =
+  check_visitor_completeness byte_array_codec
 
 let test_setter_scoping () =
   check_setter_scoping scalars_codec mixed_codec;
@@ -1140,11 +1147,11 @@ let suite =
       Alcotest.test_case "action forms: with user action" `Quick
         test_action_forms_with_action;
       Alcotest.test_case "visitor completeness: scalars" `Quick
-        test_plug_completeness_scalars;
+        test_visitor_completeness_scalars;
       Alcotest.test_case "visitor completeness: mixed" `Quick
-        test_plug_completeness_mixed;
+        test_visitor_completeness_mixed;
       Alcotest.test_case "visitor completeness: bytes" `Quick
-        test_plug_completeness_bytes;
+        test_visitor_completeness_bytes;
       Alcotest.test_case "setter scoping: disjoint across schemas" `Quick
         test_setter_scoping;
       Alcotest.test_case "setter declarations: scalars" `Quick

@@ -380,20 +380,21 @@ let write_external_typedefs ~outdir schemas =
       end)
     schemas
 
-let plug_prefix s =
+let visitor_prefix s =
   String.uppercase_ascii (c_ident s) |> fun p ->
   String.map (fun c -> if c = '-' then '_' else c) p
 
-let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
+let index_macro s name =
+  visitor_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
 
 (* The visitor names each field twice in C: the [_IDX_] macro upper-cases the
    name, so [X] and [x] would define one macro twice. The struct member's
    escape is injective, so only the macro can clash, but both are checked.
    Refuse naming both fields before writing either file. *)
-let check_plug_names s =
-  let fields = Wire.Everparse.plug_fields s in
+let check_visitor_names s =
+  let fields = Wire.Everparse.visitor_fields s in
   List.iter
-    (fun (f : Wire.Everparse.plug_field) ->
+    (fun (f : Wire.Everparse.visitor_field) ->
       if not (Wire.Private.Names.is_identifier f.name) then
         Fmt.invalid_arg
           "Wire_3d: in %S, field %S is not an identifier \
@@ -414,12 +415,12 @@ let check_plug_names s =
           s.name a b what id
   in
   check "macro" (index_macro s);
-  check "struct member" Wire.Everparse.plug_member
+  check "struct member" Wire.Everparse.visitor_member
 
 (* Typed-struct visitor: one C struct per schema with one member per named field,
    plus a [WireSet*] implementation that switches on idx to populate it. *)
 let write_fields_header ~outdir s =
-  let fields = Wire.Everparse.plug_fields s in
+  let fields = Wire.Everparse.visitor_fields s in
   let base = file_base s in
   let ident = c_ident s in
   let path = Filename.concat outdir (base ^ "_Fields.h") in
@@ -447,7 +448,7 @@ let write_fields_header ~outdir s =
   List.iter
     (fun f ->
       pr "  %s %s;@\n" f.Wire.Everparse.c_type
-        (Wire.Everparse.plug_member f.name))
+        (Wire.Everparse.visitor_member f.name))
     fields;
   if fields = [] then pr "  int _unused;@\n";
   pr "} %sFields;@\n" ident;
@@ -461,7 +462,7 @@ let write_fields_header ~outdir s =
    float; everyone else takes a value cast. *)
 let emit_setter_case ppf logical f =
   if String.equal f.Wire.Everparse.setter logical then
-    let member = Wire.Everparse.plug_member f.name in
+    let member = Wire.Everparse.visitor_member f.name in
     match f.c_type with
     | "float" | "double" ->
         Fmt.pf ppf
@@ -501,8 +502,8 @@ let physical_setter_names ~outdir s setters =
     setters
 
 let write_fields_impl ~outdir s =
-  let fields = Wire.Everparse.plug_fields s in
-  let setters = Wire.Everparse.plug_setters s in
+  let fields = Wire.Everparse.visitor_fields s in
+  let setters = Wire.Everparse.visitor_setters s in
   let base = file_base s in
   let ident = c_ident s in
   let physical_names = physical_setter_names ~outdir s setters in
@@ -535,7 +536,7 @@ let write_fields_impl ~outdir s =
 
 let write_fields ~outdir schemas =
   check_name_collisions schemas;
-  List.iter check_plug_names schemas;
+  List.iter check_visitor_names schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin

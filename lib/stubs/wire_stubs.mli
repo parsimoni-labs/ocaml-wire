@@ -44,8 +44,8 @@ val check_names : Wire.Everparse.Raw.struct_ -> unit
 (** [check_names s] raises [Invalid_argument] naming both fields when
     {!of_structs} would refuse [s] because two of its fields spell one
     identifier: one 3D name in its FFI projection, one macro or member of its
-    visitor ({!Wire_3d.check_plug_names}), or one record label of its stubs. It
-    writes nothing. *)
+    visitor ({!Wire_3d.check_visitor_names}), or one record label of its stubs.
+    It writes nothing. *)
 
 (** {1 Individual generators}
 
