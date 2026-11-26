@@ -66,7 +66,11 @@
 
 ; The packet-stack scanner, on OCaml and on OxCaml: every read of fold,
 ; frames_record and fold_frames in bounds, the fields fold_frames loads ahead
-; of frames_record included, and no input raising.
+; of frames_record included, and no input raising. The OxCaml half takes
+; Z3 about two thirds of the time every other rule of verify takes, the
+; reads of its unrolled loop running past the bit-vector query's time limit
+; before linear arithmetic proves them, so it runs on its own:
+; BUILD_EVERPARSE=1 dune build @verify/bounds-ox.
 
 (rule
  (alias runtest)
@@ -74,13 +78,26 @@
   (and
    (= %{env:BUILD_EVERPARSE=} "1")
    %{bin-available:z3}))
- (deps %{project_root}/examples/generated/stack.ml Stack.3d stack_ox.gen)
+ (deps %{project_root}/examples/generated/stack.ml Stack.3d)
  (action
   (run
    ./main.exe
    --bounds-only
    .
-   %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128
+   %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128)))
+
+(rule
+ (alias bounds-ox)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   %{bin-available:z3}))
+ (deps Stack.3d stack_ox.gen)
+ (action
+  (run
+   ./main.exe
+   --bounds-only
+   .
    stack_ox.gen:scanner-ox/34:Stack.WireEthernetStack:128)))
 
 ; The scanner's answers against the specification, on every window of up to
