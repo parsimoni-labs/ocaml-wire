@@ -14,6 +14,10 @@ val read : Types.struct_ -> bytes -> int -> t
 (** [read s buf off] is the outputs of the record of [s] at [off], an absent
     field as [0] or [false]. The record must be one the codec of [s] accepts. *)
 
+val values : t -> int64 array
+(** [values o] is the outputs of [o] in the order of {!names}, a presence as
+    [1L] or [0L]. *)
+
 val int : t -> string -> int64
 (** [int o name] is the integer output [name] of [o]. Raises [Invalid_argument]
     if [o] has no integer output [name]. *)

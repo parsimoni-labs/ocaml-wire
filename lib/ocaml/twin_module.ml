@@ -130,24 +130,28 @@ let pp_types ppf name =
      @\n"
     (name ^ ".get: the check failed")
 
-(* The arguments [valid] takes from the outputs [o]: each integer as an
-   [int], or with a visitor as an [int64]. *)
-let args ~visitor (selected : output list) =
+(* The arguments [valid] takes from the outputs [o], each found by its place
+   among [all]: each integer as an [int], or with a visitor as an [int64]. *)
+let args ~all ~visitor (selected : output list) =
+  let place (o : output) =
+    let rec go i = function
+      | [] -> Fmt.invalid_arg "Wire_ocaml: no output %s" o.name
+      | (p : output) :: rest -> if p.name = o.name then i else go (i + 1) rest
+    in
+    go 0 all
+  in
   if selected = [] then "()"
   else
     String.concat " "
       (List.map
          (fun (o : output) ->
-           if o.is_bool then
-             Fmt.str "~%s:(%s.Outputs.bool o %S)" o.name gen o.name
-           else if visitor then
-             Fmt.str "~%s:(%s.Outputs.int o %S)" o.name gen o.name
-           else
-             Fmt.str "~%s:(Int64.to_int (%s.Outputs.int o %S))" o.name gen
-               o.name)
+           let i = place o in
+           if o.is_bool then Fmt.str "~%s:(o.(%d) <> 0L)" o.name i
+           else if visitor then Fmt.str "~%s:o.(%d)" o.name i
+           else Fmt.str "~%s:(Int64.to_int o.(%d))" o.name i)
          selected)
 
-let pp_fold ppf (f : Scan_module.fold) =
+let pp_fold ~all ppf (f : Scan_module.fold) =
   let n = f.name and o = if f.selected = [] then "_" else "o" in
   match f.visitor with
   | None ->
@@ -164,9 +168,9 @@ let pp_fold ppf (f : Scan_module.fold) =
         \      | Some %s -> valid acc %s)@\n\
          @\n"
         n o
-        (args ~visitor:false f.selected)
+        (args ~all ~visitor:false f.selected)
         n gen (n ^ "_frames") o
-        (args ~visitor:false f.selected)
+        (args ~all ~visitor:false f.selected)
   | Some m ->
       Fmt.pf ppf
         "let %s buf off len ~init =@\n\
@@ -183,7 +187,7 @@ let pp_fold ppf (f : Scan_module.fold) =
         \      %s buf off len ~init:acc)@\n\
          @\n"
         n m o m
-        (args ~visitor:true f.selected)
+        (args ~all ~visitor:true f.selected)
         n gen (n ^ "_frames") n n gen (n ^ "_index") n
 
 let header ppf ~codec =
@@ -210,7 +214,7 @@ let pp_functor ppf ~digest =
      let () = %s.check C.codec %S@\n"
     gen digest
 
-let ml ~codec ~digest ~(views : V.t option) ~folds =
+let ml ~codec ~digest ~(plan : plan) ~(views : V.t option) ~folds =
   Fmt.str "%a"
     (fun ppf () ->
       header ppf ~codec;
@@ -246,7 +250,7 @@ let ml ~codec ~digest ~(views : V.t option) ~folds =
          let validate buf off = Wire.Codec.validate C.codec buf off@\n";
       if folds <> [] then begin
         Fmt.pf ppf "let scan' = %s.scan C.codec@\n@\n" gen;
-        List.iter (pp_fold ppf) folds
+        List.iter (pp_fold ~all:plan.outputs ppf) folds
       end;
       Fmt.pf ppf "end@\n")
     ()

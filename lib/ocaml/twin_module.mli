@@ -5,12 +5,14 @@
 val ml :
   codec:string ->
   digest:string ->
+  plan:Planner.plan ->
   views:View_module.t option ->
   folds:Scan_module.fold list ->
   string
-(** [ml ~codec ~digest ~views ~folds] is the source of the twin of the module of
-    the codec named [codec] whose shape has [digest], with [views] and [folds].
-    Raises [Invalid_argument] for a field the twin cannot place. *)
+(** [ml ~codec ~digest ~plan ~views ~folds] is the source of the twin of the
+    module of the codec named [codec] whose shape has [digest], with [views] and
+    [folds], whose outputs are those of [plan]. Raises [Invalid_argument] for a
+    field the twin cannot place. *)
 
 val mli :
   codec:string ->

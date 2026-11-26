@@ -141,6 +141,12 @@ let names s =
 
 let read s buf off = walk ~live:true s buf off
 
+let values o =
+  Array.of_list
+    (List.map
+       (function _, Value v -> v | _, Bool b -> if b then 1L else 0L)
+       o)
+
 let find o name =
   match List.assoc_opt name o with
   | Some v -> v

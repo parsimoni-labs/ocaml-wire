@@ -1574,8 +1574,6 @@ module Gen = struct
     | String : string kind
     | Slice : Bytesrw.Bytes.Slice.t kind
 
-  module Outputs = Scan_outputs
-
   (* {2 The interpreted twin} *)
 
   type record = Record : 'r View.named -> record
@@ -1771,7 +1769,7 @@ module Gen = struct
       else
         let frame = Bytes.sub buf off len in
         match validate c frame 0 with
-        | Ok () -> Some (Scan_outputs.read s frame 0)
+        | Ok () -> Some (Scan_outputs.values (Scan_outputs.read s frame 0))
         | Error _ -> None
 
   let frames ~name buf off len ~stride ~init f =

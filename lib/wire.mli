@@ -2224,23 +2224,6 @@ module Private : sig
       | String : string kind
       | Slice : Bytesrw.Bytes.Slice.t kind
 
-    (** The outputs of a record as a fold hands them out, by name: each named
-        scalar field, its name the path of field labels joined with ['_'], and
-        for each optional field [<path>_present]. An absent field is [0] or
-        [false]. *)
-    module Outputs : sig
-      type t
-      (** The type for the outputs of one record. *)
-
-      val int : t -> string -> int64
-      (** [int o name] is the integer output [name] of [o]. Raises
-          [Invalid_argument] if [o] has no integer output [name]. *)
-
-      val bool : t -> string -> bool
-      (** [bool o name] is the presence [name] of [o]. Raises [Invalid_argument]
-          if [o] has no presence [name]. *)
-    end
-
     (** {2 The interpreted twin}
 
         What the interpreted twin of a generated module ([Wire_ocaml]) reads its
@@ -2310,9 +2293,11 @@ module Private : sig
     val set_at : record -> int -> 'a kind -> 'a writer
     (** [set_at r i k] writes the field [i] of [r], as {!Codec.set} does. *)
 
-    val scan : 'r Codec.t -> bytes -> int -> int -> Outputs.t option
+    val scan : 'r Codec.t -> bytes -> int -> int -> int64 array option
     (** [scan c buf off len] is the outputs of the record in the [len] bytes at
-        [off], which the codec accepts on their own, or [None]. *)
+        [off], which the codec accepts on their own, or [None]: each named
+        scalar field, and for each optional field its presence as [1L] or [0L],
+        in declaration order, an absent field [0L]. *)
 
     val frames :
       name:string ->
