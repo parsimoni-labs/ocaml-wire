@@ -47,26 +47,6 @@ type t = {
 }
 (** The type for CLCW records. *)
 
-val v :
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  int ->
-  t
-(** [v controlwordtype clcwversion statusfield copineffect vcid spare norf
-     nobitlock lockout wait retransmit farmbcounter spare2 reportvalue] is the
-    record of these fields. *)
-
 val pp : Format.formatter -> t -> unit
 (** [pp ppf r] prints an unspecified representation of [r] on [ppf]. *)
 

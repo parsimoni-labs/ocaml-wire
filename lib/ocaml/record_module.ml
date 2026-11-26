@@ -117,15 +117,16 @@ let cold_attr = function
   | `OxCaml -> "[@inline never][@zero_alloc assume error]"
   | `OCaml -> "[@inline never]"
 
-(* A decoder: the frame, the walk binding every field, then [call] on their
-   [value]s, by default their typed values; [fail] where a check fails. *)
-let pp_decode ?(src = bytes_src) ?(ox = false) ?(value = typed_value) ppf ~plan
-    ~size ~head ~fail ~call =
+(* [decode]: the frame, the walk binding every field, then the record of
+   their typed values; the record's error where a check fails. *)
+let pp_decode ~src ppf ~plan ~size =
   let fields = all_fields plan in
-  let value = value ~src in
+  let fail = "error buf off" in
   Fmt.pf ppf
-    "%s =@\n  if off < 0 || off > %s buf - min_size then %s@\n  else@\n" head
-    src.len fail;
+    "let decode %s off =@\n\
+    \  if off < 0 || off > %s buf - min_size then %s@\n\
+    \  else@\n"
+    src.buf src.len fail;
   (* A 32-bit field is handed out as its [int32], bound whether live or not;
      its [int] is live only where a check reads it. *)
   let outputs =
@@ -134,9 +135,13 @@ let pp_decode ?(src = bytes_src) ?(ox = false) ?(value = typed_value) ppf ~plan
         match f.store with Int { width = 32; _ } -> None | _ -> Some f.id)
       fields
   in
-  let m = hot ~ox ~raw32:true ~src ~live:(live plan ~outputs) ~fail () in
+  let m = hot ~raw32:true ~src ~live:(live plan ~outputs) ~fail () in
   pp_fixed ppf ~m ~plan ~size (fun () ->
-      Fmt.pf ppf "%s@\n" (call (List.map value fields)));
+      Fmt.pf ppf "Ok { %a }@\n"
+        Fmt.(list ~sep:(any "; ") string)
+        (List.map
+           (fun f -> Fmt.str "%s = %s" f.label (typed_value ~src f))
+           fields));
   Fmt.pf ppf "@\n"
 
 (* [is_valid] answers with a boolean, loading only the fields a test reads, so
@@ -764,9 +769,7 @@ let pp_record ~maps ppf fields =
   List.iter
     (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (record_type ~maps f))
     fields;
-  Fmt.pf ppf "}@\n@\nlet v %a = { %a }@\n@\n" pp_vars fields
-    Fmt.(list ~sep:(any "; ") string)
-    (List.map (fun f -> Fmt.str "%s = %s" f.label f.id) fields)
+  Fmt.pf ppf "}@\n@\n"
 
 (* [pp ppf r] prints [r] as an OCaml record, with [Format]'s primitives
    only: the module links no [Fmt]. A bitfield and a byte array print through
@@ -1262,8 +1265,7 @@ let pp_codec ~src ~getters ppf ~target ~plan ~size =
   pp_cold ~src ppf ~target ~plan ~size;
   pp_validate ~src ppf ~target ~plan ~size;
   if has_checks plan then pp_validate_written ~src ppf ~target;
-  pp_decode ~src ppf ~plan ~size ~head:(Fmt.str "let decode %s off" src.buf)
-    ~fail:"error buf off" ~call:(fun args -> Fmt.str "Ok (v %a)" pp_list args);
+  pp_decode ~src ppf ~plan ~size;
   pp_write ~src ppf ~target ~plan;
   if getters then pp_getters ~src ppf ~target (all_fields plan)
 
@@ -1304,7 +1306,6 @@ let own_names =
     "enum_failed";
     "field_eof";
     "Get";
-    "v";
     "encode";
     "min_size";
     "t";

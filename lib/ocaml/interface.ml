@@ -227,9 +227,6 @@ let pp_record_type ppf r =
   Fmt.pf ppf "}@\n";
   pp_doc ppf (Fmt.str "The type for %s records." r.plan.record);
   Fmt.pf ppf "@\n";
-  pp_val r.target ppf "v"
-    (arrows (List.map (typed ~maps:r.maps) r.fields @ [ "t" ]))
-    (Fmt.str "[v%s] is the record of these fields." (args r.fields));
   pp_val r.target ppf "pp" "Format.formatter -> t -> unit"
     "[pp ppf r] prints an unspecified representation of [r] on [ppf]."
 

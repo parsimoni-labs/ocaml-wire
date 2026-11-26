@@ -2,11 +2,11 @@
 
     A codec decodes and encodes through closures built when it is compiled.
     [Wire_ocaml] writes the same work out as OCaml source, with every offset a
-    constant, so the compiler sees straight-line loads and stores and a direct
-    call to the record's constructor. Its code holds no integer literal wider
-    than 31 bits, so js_of_ocaml and wasm_of_ocaml compile it as written; a
-    module that reads a 32-bit field into an [int] raises [Invalid_argument]
-    when it loads on a target whose ints have 32 bits or fewer.
+    constant, so the compiler sees straight-line loads and stores and the record
+    built in place. Its code holds no integer literal wider than 31 bits, so
+    js_of_ocaml and wasm_of_ocaml compile it as written; a module that reads a
+    32-bit field into an [int] raises [Invalid_argument] when it loads on a
+    target whose ints have 32 bits or fewer.
 
     {b Runtime.} The generated module links [wire.runtime] (and so [optint]),
     not [wire], and needs no codec at run time: it can be embedded in a program
