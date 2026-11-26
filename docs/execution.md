@@ -153,17 +153,17 @@ field under a map, has no views and reads each field with `Get.<field> buf
 off`, a bounds-checked load at a constant offset. `Wire_ocaml.v` declares
 the module, `Wire_ocaml.main` writes it, one dune rule per module.
 
-A fold `n` without a visitor takes its consumer as arguments (`n`,
-`n_frames`). A fold with a
-visitor calls it by name (`n`, `n_frames`, `n_index`): the visitor is a
-source file the generation rule names (`--visitor n=%{dep:flow_step.ml}`),
-whose module the generator derives from the file, so dune rebuilds the module
-when the visitor changes and no module path is typed by hand. OCaml without
+A fold `n` calls its visitor by name (`n`, `n_frames`, `n_index`): the
+visitor is a source file the generation rule names
+(`--visitor n=%{dep:flow_step.ml}`), whose module the generator derives from
+the file, so dune rebuilds the module when the visitor changes and no module
+path is typed by hand; a fold no visitor names is refused. OCaml without
 flambda never inlines a function passed as an argument, nor a function whose
-body defines a closure, so `n_frames` rejects a frame with no closure of its
-own, and the folds with a visitor call it with no closure call. They allocate
-nothing per frame where the compiler inlines the visitor and the runtime's
-loads, which the release profile does across units. OCaml without flambda
+body defines a closure, so a fold takes no consumer as an argument:
+`n_frames` rejects a frame with no closure of its own, and every fold calls
+its visitor with no closure call. It allocates nothing per frame where the
+compiler inlines the visitor and the runtime's loads, which the release
+profile does across units. OCaml without flambda
 inlines the visitor's `valid` only when its body defines no function, a
 partial application or a primitive used as a value included; otherwise each
 call boxes the `int64` values it is passed. A visitor in its own unit states

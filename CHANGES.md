@@ -169,11 +169,12 @@
 
 ### Added
 
-- `Wire_ocaml.fstar`: an F* proof that the `fold` of a generated scanner
-  accepts what the parser EverParse writes for the codec accepts, and hands
-  out the same values, for records with variable-size fields, nested and
-  optional codecs and sized regions. `make prove` checks it for the codecs
-  `proofs/fstar-gen` lists (@samoht)
+- `Wire_ocaml.fstar`: an F* proof that a fold of a generated scanner, and
+  the walk of a frame of its loops, accepts what the parser EverParse writes
+  for the codec accepts, and hands its visitor the same values, for records
+  with variable-size fields, nested and optional codecs and sized regions.
+  `make prove` checks it for the codecs `proofs/fstar-gen` lists (#571,
+  @samoht)
 
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an
   earlier integer field (#414, #450, @samoht)
@@ -226,13 +227,13 @@
   proves the checks a generated scanner performs (#513, #519,
   @samoht)
 
-- `Wire_ocaml.fold`: a module declares its folds, each with its outputs. One
-  without a visitor takes its consumer as arguments; one whose visitor's
-  source file the dune rule names (`--visitor n=%{dep:v.ml}`) calls it by
-  name, with no closure call, as `n`, `n_frames` and `n_index`, which folds
-  frames of any length, such as the packets of a capture, with the
-  accumulator in a register, on OxCaml an unboxed tuple too (#539, #566,
-  @samoht)
+- `Wire_ocaml.fold`: a module declares its folds, none by default, each
+  with its outputs and a visitor whose source file the dune rule names
+  (`--visitor n=%{dep:v.ml}`). It calls the visitor by name, with no closure
+  call, as `n`, `n_frames` and `n_index`, which folds frames of any length,
+  such as the packets of a capture, with the accumulator in a register, on
+  OxCaml an unboxed tuple too; a fold no visitor names is refused (#539,
+  #566, #571, @samoht)
 
 - A generated module checks a record once (`check`, `ok`, `get`), then reads
   a field with its accessor or writes one with `set_<field>`, with no bounds
@@ -259,8 +260,8 @@
   without building a value. It skips a bound check that a
   later check, a region's constant start or the range of a region's size
   already covers, and tests two adjacent bitfields with one comparison.
-  A fold's `n_frames` walks four frames per loop iteration. A fold with a
-  visitor passes integer outputs to it as `int64`, which OCaml keeps in
+  A fold's `n_frames` walks four frames per loop iteration. A fold passes
+  integer outputs to its visitor as `int64`, which OCaml keeps in
   registers. `Wire_ocaml.Plan` gives its plan to other
   backends (#447, #473, #498, #501, #504, #509, #510, #517, #520, @samoht)
 
