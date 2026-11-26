@@ -1,15 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-opam repository add tangled git+https://tangled.org/gazagnaire.org/opam-overlay.git --rank=-1
+# merlint's dependencies use wire (nox-git does), and setup-ocaml pins wire
+# in the project switch to the tree under test, so built there they compile
+# against that tree and a change to wire's API breaks the linter's install.
+# merlint gets a switch of its own, which never sees the pin. It reads the
+# project with readers the project's compiler builds; its own compiler is
+# the project's version only so that its dependencies build as they did.
+switch=merlint
+
+if ! opam switch list --short | grep -Fx -- "$switch" >/dev/null; then
+  compiler=$(opam exec -- ocamlc -version)
+  opam switch create "$switch" "ocaml-base-compiler.$compiler" --no-switch \
+    --repositories=default,tangled=git+https://tangled.org/gazagnaire.org/opam-overlay.git
+fi
 opam update tangled
 
-# setup-ocaml can restore installed dev packages whose version has not changed
-# while their source has. Upgrade the overlay packages before compiling merlint.
-packages=$(opam list --installed --short --repos=tangled)
+# A switch kept from an earlier run can hold installed dev packages whose
+# version has not changed while their source has. Upgrade the overlay
+# packages before compiling merlint.
+packages=$(opam list --switch="$switch" --installed --short --repos=tangled)
 if [[ -n "$packages" ]]; then
   # opam package names have no whitespace or glob characters.
   # shellcheck disable=SC2086
-  opam upgrade $packages
+  opam upgrade --switch="$switch" $packages
 fi
-opam install merlint
+opam install --switch="$switch" merlint

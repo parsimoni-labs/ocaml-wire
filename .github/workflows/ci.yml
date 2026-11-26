@@ -251,7 +251,9 @@ jobs:
       # merlint --build runs this itself but reports only the exit code, so
       # run it here first to get the compiler error on its own line.
       - run: opam exec -- dune build @check
-      - run: opam exec -- merlint --build
+      # merlint runs from the switch install-merlint builds it in, with the
+      # project switch's dune and compiler.
+      - run: opam exec -- "$(opam var --switch=merlint bin)/merlint" --build
 
   # Static analysis over the hand-written C. EverParse proves the parsers it
   # generates, but nothing covered the benchmark C written by hand around them,
