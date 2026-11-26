@@ -1330,8 +1330,9 @@ let test_size () =
    allocates nothing where it calls its consumer by name, beyond the floats
    of the measure: a frame with no optional field gives zeros, one with all
    twelve levels a one for each of its 35 outputs. Dune's dev profile compiles
-   wire.runtime [-opaque], so its 64-bit load returns a boxed [int64]: the
-   batch then allocates and only the answers are checked. *)
+   wire.runtime [-opaque], so its 64-bit load returns a boxed [int64], and on
+   OxCaml the library of these tests, whose visitor [Nested_step] is a unit of
+   its own: the batch then allocates and only the answers are checked. *)
 let test_nested_no_alloc () =
   let stride = 32 and frames = 4096 in
   let len = stride * frames in
