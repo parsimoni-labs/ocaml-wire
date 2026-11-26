@@ -165,21 +165,21 @@ let test_repeat_primitive () =
     "values" [ 0x1111; 0x2222; 0x3333 ]
     (List.map UInt16.to_int r.values)
 
-(* [Codec.size_of_value] counts a [Field.repeat]'s elements, including under a
-   dynamic byte budget, so a buffer sized from [size_of_value] holds the whole
+(* [Codec.encoded_size] counts a [Field.repeat]'s elements, including under a
+   dynamic byte budget, so a buffer sized from [encoded_size] holds the whole
    encoding. *)
 let test_repeat_size_of_value () =
   let v =
     { count = UInt8.v 6; values = List.map UInt16.v [ 0x1111; 0x2222; 0x3333 ] }
   in
   (* Count (1) + 3 * uint16be (6) = 7 *)
-  let n = Codec.size_of_value repeat_int_codec v in
+  let n = Codec.encoded_size repeat_int_codec v in
   Alcotest.(check int) "size_of_value" 7 n;
   let buf = Bytes.create n in
   Codec.encode repeat_int_codec v buf 0;
   Alcotest.(check int)
     "wire_size_at" 7
-    (decode_ok (Codec.wire_size_at repeat_int_codec buf 0));
+    (decode_ok (Codec.size_at repeat_int_codec buf 0));
   let r = decode_ok (Codec.decode repeat_int_codec buf 0) in
   Alcotest.(check (list int))
     "roundtrip"

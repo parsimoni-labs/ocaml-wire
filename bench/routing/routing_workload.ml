@@ -28,7 +28,7 @@ let generate_stream n =
   let wrap = min n (max 1 (n / 64)) in
   let whole = n - wrap in
   let total = ref 0 in
-  let hdr = Wire.Codec.wire_size Space.packet_codec in
+  let hdr = Wire.Codec.min_size Space.packet_codec in
   for i = 0 to whole - 1 do
     let apid = apid_of_index i in
     total := !total + hdr + payload_size_of_apid apid
@@ -74,7 +74,7 @@ let pp_counts ppf (hk, sci, diag, idle) =
   Fmt.pf ppf "(hk=%d sci=%d diag=%d idle=%d)" hk sci diag idle
 
 let route_of_apid apid = routing_table.(apid)
-let hdr = Wire.Codec.wire_size Space.packet_codec
+let hdr = Wire.Codec.min_size Space.packet_codec
 
 (* A header is read once, then its APID and data length taken from it. *)
 module W = C.Word

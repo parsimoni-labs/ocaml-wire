@@ -1285,7 +1285,7 @@ let pp ~codec ppf c =
   in
   match layout plan with
   | exception Unsupported reason -> refuse ~codec reason
-  | _, size, _ when Wire.Codec.wire_size_opt c <> Some size ->
+  | _, size, _ when Wire.Codec.size c <> Some size ->
       refuse ~codec "its size is not fixed"
   | fields, size, where ->
       check_names ~codec fields;

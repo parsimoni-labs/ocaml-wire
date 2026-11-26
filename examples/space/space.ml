@@ -45,7 +45,7 @@ let packet_codec =
       ]
 
 let packet_struct = Everparse.Raw.struct_of_codec packet_codec
-let packet_size = Codec.wire_size packet_codec
+let packet_size = Codec.min_size packet_codec
 
 let packet_default =
   {
@@ -178,7 +178,7 @@ let clcw_codec =
       ]
 
 let clcw_struct = Everparse.Raw.struct_of_codec clcw_codec
-let clcw_size = Codec.wire_size clcw_codec
+let clcw_size = Codec.min_size clcw_codec
 
 let clcw_default =
   {
@@ -282,7 +282,7 @@ let tm_frame_codec =
       ]
 
 let tm_frame_struct = Everparse.Raw.struct_of_codec tm_frame_codec
-let tm_frame_size = Codec.wire_size tm_frame_codec
+let tm_frame_size = Codec.min_size tm_frame_codec
 
 let tm_frame_default =
   {
@@ -383,7 +383,7 @@ let inner_cmd_codec =
         (Field.v "Flags" uint8 $ fun (c : inner_cmd) -> c.flags);
       ]
 
-let inner_cmd_size = Codec.wire_size inner_cmd_codec
+let inner_cmd_size = Codec.min_size inner_cmd_codec
 
 type outer_hdr = {
   version : UInt8.t;
@@ -411,7 +411,7 @@ let outer_hdr_codec =
         bf_oh_payload;
       ]
 
-let outer_hdr_size = Codec.min_wire_size outer_hdr_codec + inner_cmd_size
+let outer_hdr_size = Codec.min_size outer_hdr_codec + inner_cmd_size
 
 let nested_data n =
   Array.init n (fun i ->

@@ -15,7 +15,7 @@ open Dsl
    refuse instead. *)
 let unsized_field what =
   Fmt.invalid_arg
-    "Codec.size_of_value: the %s field's size is an input parameter; pass ?env \
+    "Codec.encoded_size: the %s field's size is an input parameter; pass ?env \
      so it can be resolved."
     what
 
@@ -128,7 +128,7 @@ let rec size_of_typ_value : type a.
       (* Tag bytes plus the matched case's body: find the branch whose
          [project] accepts [v], then size its inner from the projected body.
          Without this the value-driven size dropped the whole casetype to 0,
-         so [Codec.size_of_value] under-allocated and [encode] ran off the
+         so [Codec.encoded_size] under-allocated and [encode] ran off the
          buffer. A value no branch projects has no size for the same reason it
          has no bytes, and says so rather than answering with the tag width a
          caller would then allocate for. *)

@@ -29,7 +29,7 @@ static void init_routing_table(void) {
 }
 
 static void route_counts(uint8_t *buf, int total_bytes, int n, int counts[4]) {
-  int hdr = 6;  /* Wire.Codec.wire_size Space.packet_codec */
+  int hdr = 6;  /* Wire.Codec.min_size Space.packet_codec */
   int off = 0;
   SpacePacketFields fields = {0};
 

@@ -369,11 +369,11 @@ let stack_answer show f =
 
 let stack_slot = Param.input "stack_slot" uint8
 
-let stack_frame size name =
+let stack_frame span name =
   Codec.v name Fun.id
     Codec.
       [
-        Field.v "packet" (nested_at_most ~size (codec Packet_stack.codec))
+        Field.v "packet" (nested_at_most ~size:span (codec Packet_stack.codec))
         $ Fun.id;
       ]
 

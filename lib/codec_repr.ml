@@ -1112,13 +1112,13 @@ type ('f, 'r) record =
       (* The fields' descriptor writes, while every field has one. *)
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
-             seal we sum them into [size_of_value]; encode uses that
+             seal we sum them into [encoded_size]; encode uses that
              instead of the buffer-driven [wire_size.compute] when sizing
              scratch buffers, because the latter misreads variable tails
              (all_bytes / rest_bytes / all_zeros) as "remaining buffer". *)
       value_ints_rev : (string * ('r -> int option)) list;
           (* Each named field's integer view, read from the record value: what
-             a size naming an earlier field resolves to when [size_of_value]
+             a size naming an earlier field resolves to when [encoded_size]
              measures the value, as decode reads it from the buffer. *)
       min_wire_size : int;
           (* sum of all fixed-size fields -- minimum buffer size *)

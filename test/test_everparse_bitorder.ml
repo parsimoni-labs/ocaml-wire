@@ -168,13 +168,14 @@ let msb_group_positions (name, inner) =
   let case =
     ( Fmt.str "%s in a casetype case" name,
       fun () ->
+        let body = name ^ "Body" in
         Everparse.project ~mode:`Ffi
           (Codec.v (name ^ "Case")
              (fun v -> v)
              Codec.
                [
                  ( Field.v "v"
-                     (casetype (name ^ "Body") uint8
+                     (casetype body uint8
                         [
                           case ~index:(UInt8.v 1) (codec inner)
                             ~inject:(fun v -> `G v)

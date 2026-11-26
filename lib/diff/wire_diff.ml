@@ -23,12 +23,12 @@ type result =
   | Only_c_ok of string
   | Only_ocaml_ok of string
 
-let wire_size (Harness h) = Wire.Codec.wire_size h.codec
+let wire_size (Harness h) = Wire.Codec.min_size h.codec
 let string_of_record codec v = Wire.Codec.to_string codec v
 let record_of_string codec s = Wire.Codec.decode codec (Bytes.of_string s) 0
 
 let default_ocaml_read codec project buf =
-  let buf_too_short = String.length buf < Wire.Codec.wire_size codec in
+  let buf_too_short = String.length buf < Wire.Codec.min_size codec in
   if String.length buf = 0 || buf_too_short then None
   else
     match record_of_string codec buf with

@@ -180,7 +180,7 @@ module Codec = struct
               (fun (s : env_strategy) -> s.positive (Wire.Codec.env codec))
               env_strategy
           in
-          let buf = Bytes.create (Wire.Codec.size_of_value codec v) in
+          let buf = Bytes.create (Wire.Codec.encoded_size codec v) in
           Wire.Codec.encode ?env codec v buf 0;
           (v, buf))
     in

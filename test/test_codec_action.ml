@@ -273,7 +273,7 @@ let test_embed_param_sized () =
     Codec.v "EmbOuter" (fun s -> s) Codec.[ Field.v "s" (codec sub) $ Fun.id ]
   in
   let env = Codec.env outer |> Param.bind elen (UInt8.v 3) in
-  let n = Codec.size_of_value outer "abc" in
+  let n = Codec.encoded_size outer "abc" in
   Alcotest.(check int) "wire size" 3 n;
   let buf = Bytes.create n in
   Codec.encode ~env outer "abc" buf 0;
@@ -439,7 +439,7 @@ let test_embed_param_repeat () =
   in
   let v = (UInt8.v 3, List.map UInt8.v [ 1; 5; 9 ]) in
   let env = Codec.env outer |> Param.bind rlim (UInt8.v 100) in
-  let n = Codec.size_of_value outer v in
+  let n = Codec.encoded_size outer v in
   let buf = Bytes.create n in
   Codec.encode ~env outer v buf 0;
   let dn, dxs = decode_ok (Codec.decode ~env outer buf 0) in
@@ -603,8 +603,8 @@ let sized_show (n, p, s) =
 let sized_entries name c =
   let field typ = Codec.v (name ^ typ) Fun.id in
   let frame = field "Frame" Codec.[ Field.v "r" (codec c) $ Fun.id ] in
-  let region size =
-    Codec.[ Field.v "r" (nested_at_most ~size (codec c)) $ Fun.id ]
+  let region span =
+    Codec.[ Field.v "r" (nested_at_most ~size:span (codec c)) $ Fun.id ]
   in
   let fixed = field "Region" (region (int 4)) in
   let sized = field "ParamRegion" (region (Param.expr sized_slot)) in

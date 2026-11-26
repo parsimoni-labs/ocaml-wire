@@ -374,7 +374,7 @@ let record_spans codec env b =
   | Ok _ -> (
       match Wire.Codec.validate ?env codec b 0 with
       | Error _ -> false
-      | Ok () -> Wire.Codec.wire_size_at ?env codec b 0 = Ok (Bytes.length b))
+      | Ok () -> Wire.Codec.size_at ?env codec b 0 = Ok (Bytes.length b))
 
 (* Shapes whose accepting side the seeder cannot construct, so
    [generate_corpus] refuses rather than emit a corpus that says the same thing
@@ -466,15 +466,15 @@ let accepted_agrees g codec env b =
   | Error _ -> None
   | Ok v -> (
       let len = Bytes.length b in
-      match Wire.Codec.size_of_value ?env codec v with
+      match Wire.Codec.encoded_size ?env codec v with
       | exception Invalid_argument m ->
           Fmt.kstr
             (fun s -> Some s)
-            "size_of_value refused an accepted record: %s" m
+            "encoded_size refused an accepted record: %s" m
       | sz when not (Int.equal sz len) ->
           Fmt.kstr
             (fun s -> Some s)
-            "size_of_value answers %d for a %d byte record" sz len
+            "encoded_size answers %d for a %d byte record" sz len
       | sz -> reencodes g codec env v sz)
 
 (* A rejected record: the offset is a real position, and a failure about one

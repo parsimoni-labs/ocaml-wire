@@ -20,7 +20,7 @@
 
 /* Must match gateway_bench.ml -- derived from Space.tm_frame_codec / Space.packet_codec */
 static const int CADU_SIZE = 1115;
-static const int TM_HDR = 6;       /* Wire.Codec.wire_size Space.tm_frame_codec */
+static const int TM_HDR = 6;       /* Wire.Codec.min_size Space.tm_frame_codec */
 static const int PKT_SIZE = 70;    /* sp_hdr (6) + pkt_payload (64) */
 static const int DATA_FIELD_SIZE = 1115 - 6;  /* CADU_SIZE - TM_HDR */
 

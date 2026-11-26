@@ -49,7 +49,7 @@ let signed_codec =
    offset of a random buffer: from 8 bytes before its end, where one 8-byte
    load reads the record, to the last offset that holds it. *)
 let check_parts codec parts =
-  let size = Codec.wire_size codec in
+  let size = Codec.min_size codec in
   let rand = Random.State.make [| 3 |] in
   let buf = Bytes.init 64 (fun _ -> Char.chr (Random.State.int rand 256)) in
   let r = Codec.Word.reader codec in

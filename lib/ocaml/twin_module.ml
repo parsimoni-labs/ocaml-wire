@@ -242,7 +242,7 @@ let ml ~codec ~digest ~(views : V.t option) ~folds =
           pp_members ppf t t.root);
       Fmt.pf ppf
         "@\n\
-         let min_size = Wire.Codec.min_wire_size C.codec@\n\
+         let min_size = Wire.Codec.min_size C.codec@\n\
          let validate buf off = Wire.Codec.validate C.codec buf off@\n";
       if folds <> [] then begin
         Fmt.pf ppf "let scan' = %s.scan C.codec@\n@\n" gen;

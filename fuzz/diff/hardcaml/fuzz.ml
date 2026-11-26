@@ -137,7 +137,7 @@ let reference_consumed codec oracle buf off len =
       match Wire.Codec.decode codec frame 0 with
       | Error _ -> -1
       | Ok _ -> (
-          match Wire.Codec.wire_size_at codec frame 0 with
+          match Wire.Codec.size_at codec frame 0 with
           | Ok n -> n
           | Error _ -> -1))
 

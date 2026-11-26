@@ -344,13 +344,13 @@ let skipped =
 type huge = UInt8.t * Bytesrw.Bytes.Slice.t * UInt8.t
 
 let huge =
-  let size = 0xFFFF_FFFF - 8 in
+  let span = 0xFFFF_FFFF - 8 in
   Codec.v "Huge"
     (fun flag body tail -> (flag, body, tail))
     Codec.
       [
         (Field.v "Flag" uint8 $ fun (f, _, _) -> f);
-        (Field.v "Body" (byte_slice ~size:(int size)) $ fun (_, b, _) -> b);
+        (Field.v "Body" (byte_slice ~size:(int span)) $ fun (_, b, _) -> b);
         (Field.v "Tail" uint8 $ fun (_, _, t) -> t);
       ]
 

@@ -5,9 +5,9 @@
 module C = Wire.Codec
 
 let cadu_size = 1115
-let hdr = Wire.Codec.wire_size Space.tm_frame_codec
+let hdr = Wire.Codec.min_size Space.tm_frame_codec
 let data_field_size = cadu_size - hdr
-let sp_hdr = Wire.Codec.wire_size Space.packet_codec
+let sp_hdr = Wire.Codec.min_size Space.packet_codec
 let pkt_payload = 64
 let pkt_size = sp_hdr + pkt_payload
 let cf_tf_vcid = Space.bf_tf_vcid

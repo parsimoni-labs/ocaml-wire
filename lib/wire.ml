@@ -118,8 +118,8 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
   let codec_returns_slice = struct_returns_slice codec_struct in
-  let codec_size_of_value = Codec.size_of_value_ctx c in
-  let codec_min_size = Codec.min_wire_size c in
+  let codec_size_of_value = Codec.encoded_size_ctx c in
+  let codec_min_size = Codec.min_size c in
   let codec_ref = Codec.embed_ref c in
   match Codec.wire_size_info_ctx c with
   | `Fixed n ->
@@ -1148,18 +1148,6 @@ let to_bytes typ v =
 let to_string typ v = Bytes.unsafe_to_string (to_bytes typ v)
 
 type 'r codec = 'r Codec.t
-
-let pp_value (type r) (c : r Codec.t) ppf (v : r) =
-  let buf = to_bytes (codec c) v in
-  let readers = Codec.field_readers c in
-  Fmt.pf ppf "@[<hv 2>%s {" (Codec.name c);
-  List.iter
-    (fun (name, reader) ->
-      match reader buf 0 with
-      | Ok n -> Fmt.pf ppf "@ %s = %d;" name n
-      | Error e -> Fmt.pf ppf "@ %s = <%a>;" name Error.pp e)
-    readers;
-  Fmt.pf ppf "@ }@]"
 
 module UInt64 = UInt64
 module SInt32 = SInt32

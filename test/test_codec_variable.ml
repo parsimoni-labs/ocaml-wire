@@ -17,7 +17,7 @@ let zt_rep_codec =
 
 let test_repeat_zeroterm_element () =
   let v = { zn = UInt16.v 12; names = [ "abc"; "de"; "fghi" ] } in
-  let sz = Codec.size_of_value zt_rep_codec v in
+  let sz = Codec.encoded_size zt_rep_codec v in
   Alcotest.(check int) "wire size" 14 sz;
   let buf = Bytes.create sz in
   Codec.encode zt_rep_codec v buf 0;
@@ -54,7 +54,7 @@ let opt_var_codec =
       ]
 
 let roundtrip codec v =
-  let n = Codec.size_of_value codec v in
+  let n = Codec.encoded_size codec v in
   let buf = Bytes.create n in
   Codec.encode codec v buf 0;
   (n, decode_ok (Codec.decode codec buf 0))
@@ -199,7 +199,7 @@ let arr_chunks_codec =
 
 let test_array_byte_array_element () =
   let v = { atag = UInt8.v 7; addrs = [ "aaaa"; "bbbb"; "cccc" ] } in
-  let sz = Codec.size_of_value arr_chunks_codec v in
+  let sz = Codec.encoded_size arr_chunks_codec v in
   Alcotest.(check int) "wire size" 13 sz;
   let buf = Bytes.create sz in
   Codec.encode arr_chunks_codec v buf 0;
@@ -740,7 +740,7 @@ let sub_min_outer =
 (* A sub-codec's [min_size] counts in its parent's: the inner record holds at
    least 3 bytes, so the outer one holds at least 4. *)
 let test_sub_codec_min_size () =
-  Alcotest.(check int) "min_wire_size" 4 (Codec.min_wire_size sub_min_outer);
+  Alcotest.(check int) "min_wire_size" 4 (Codec.min_size sub_min_outer);
   let buf = Bytes.of_string "\000\001" in
   check_located_eof "decode" ~at:0 ~expected:4 ~got:2
     (Result.map ignore (Codec.decode sub_min_outer buf 0));

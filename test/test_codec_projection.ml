@@ -118,7 +118,7 @@ let test_array_record_element () =
         ];
     }
   in
-  let sz = Codec.size_of_value arr_recs_codec v in
+  let sz = Codec.encoded_size arr_recs_codec v in
   Alcotest.(check int) "wire size" 7 sz;
   let buf = Bytes.create sz in
   Codec.encode arr_recs_codec v buf 0;
@@ -160,7 +160,7 @@ let test_nested_over_array () =
         ]
   in
   let v = List.map UInt64.of_int64 [ 1L; 2L ] in
-  let buf = Bytes.create (Codec.size_of_value codec v) in
+  let buf = Bytes.create (Codec.encoded_size codec v) in
   Codec.encode codec v buf 0;
   Alcotest.(check bool)
     "roundtrip" true
@@ -178,7 +178,7 @@ let test_nested_at_most_over_array () =
         ]
   in
   let v = List.map UInt64.of_int64 [ 7L; 9L ] in
-  let buf = Bytes.create (Codec.size_of_value codec v) in
+  let buf = Bytes.create (Codec.encoded_size codec v) in
   Codec.encode codec v buf 0;
   Alcotest.(check bool)
     "roundtrip" true
@@ -200,7 +200,7 @@ let test_nested_exact_region () =
   Alcotest.(check string)
     "compiled exact accepts full consumption" "ABC"
     (decode_ok (Codec.decode exact (Bytes.of_string "ABC\x00") 0));
-  (match Codec.size_of_value exact "A" with
+  (match Codec.encoded_size exact "A" with
   | _ -> Alcotest.fail "compiled exact nested encode accepted padding"
   | exception Invalid_argument msg ->
       Alcotest.(check bool) "nested error" true (contains ~sub:"nested" msg));
@@ -230,7 +230,7 @@ let nest_case_codec =
 let test_casetype_nested_case_body () =
   List.iter
     (fun v ->
-      let buf = Bytes.create (Codec.size_of_value nest_case_codec v) in
+      let buf = Bytes.create (Codec.encoded_size nest_case_codec v) in
       Codec.encode nest_case_codec v buf 0;
       Alcotest.(check bool)
         "roundtrip" true
@@ -253,7 +253,7 @@ let rep_chunks_codec =
 
 let test_repeat_byte_array_element () =
   let v = { rn = UInt16.v 8; chunks = [ "aaaa"; "bbbb" ] } in
-  let sz = Codec.size_of_value rep_chunks_codec v in
+  let sz = Codec.encoded_size rep_chunks_codec v in
   Alcotest.(check int) "wire size" 10 sz;
   let buf = Bytes.create sz in
   Codec.encode rep_chunks_codec v buf 0;
@@ -428,7 +428,7 @@ let test_array_scalar_element_projects () =
   (* and it still round-trips *)
   let c = arr_field (array ~len:(int 2) float64be) in
   let v = [ 1.5; -2.25 ] in
-  let buf = Bytes.create (Codec.size_of_value c v) in
+  let buf = Bytes.create (Codec.encoded_size c v) in
   Codec.encode c v buf 0;
   match Codec.decode c buf 0 with
   | Ok d -> Alcotest.(check (list (float 0.0))) "float array" v d
@@ -503,7 +503,7 @@ let test_greedy_not_last_rejected () =
       Codec.[ Field.v "n" uint8 $ fst; Field.v "rest" all_bytes $ snd ]
   in
   let v = (UInt8.v 5, "tail") in
-  let buf = Bytes.create (Codec.size_of_value c v) in
+  let buf = Bytes.create (Codec.encoded_size c v) in
   Codec.encode c v buf 0;
   Alcotest.(check bool)
     "greedy last roundtrip" true

@@ -126,7 +126,7 @@ val check_frame_extent :
 val check_short_prefix :
   string -> string -> ?env:Wire.Param.env -> 'a t -> bytes -> unit
 (** [check_short_prefix label kind ?env g bs] requires nothing shorter than
-    [min_wire_size] to decode. *)
+    [min_size] to decode. *)
 
 val check_read_purity :
   string ->

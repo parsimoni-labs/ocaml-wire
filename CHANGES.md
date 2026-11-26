@@ -6,6 +6,15 @@
   `Codec.set c f` and `Codec.writer c template fields`, applied once, are the
   reader or the writer; drop `Staged.unstage` (#570, @samoht)
 
+- The sizes of `Wire.Codec` are `size` (was `wire_size_opt`, and `wire_size`
+  for a codec of constant size, now `min_size` or `Option.get (size c)`),
+  `min_size` (was `min_wire_size`), `size_at` (was `wire_size_at`) and
+  `encoded_size` (was `size_of_value`) (#570, @samoht)
+
+- `Wire.pp_value` is `Wire.Codec.pp_value`, and `Wire.Codec.name` is public: a
+  `Codec.(...)` or `Codec.[...]` that names a local `name` or `size` now finds
+  the codec function, so rename the local (#570, @samoht)
+
 - `Wire.Codec.decoder` and `Wire.Codec.encoder` are removed: apply
   `Codec.decode c` and `Codec.encode c` once (#570, @samoht)
 

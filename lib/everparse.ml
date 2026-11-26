@@ -343,7 +343,7 @@ let boxed : type a. walk -> path:string -> a Types.typ -> a Types.typ =
       fields = List.map (fun f -> with_setter_calls f calls) s.fields;
     }
   in
-  let size = Codec.min_wire_size c in
+  let size = Codec.min_size c in
   Types.Codec
     {
       codec_name = s.name;
@@ -357,7 +357,7 @@ let boxed : type a. walk -> path:string -> a Types.typ -> a Types.typ =
       codec_fixed_size = Some size;
       codec_min_size = size;
       codec_size_of = (fun _ _ _ _ -> size);
-      codec_size_of_value = Codec.size_of_value_ctx c;
+      codec_size_of_value = Codec.encoded_size_ctx c;
       codec_field_readers = Codec.field_readers_ctx c;
       codec_returns_slice = false;
       codec_struct;

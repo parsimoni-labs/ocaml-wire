@@ -52,7 +52,7 @@ let packet kind body =
   }
 
 let encoded codec v =
-  let buf = Bytes.create (Codec.size_of_value codec v) in
+  let buf = Bytes.create (Codec.encoded_size codec v) in
   Codec.encode codec v buf 0;
   Bytes.to_string buf
 
@@ -167,7 +167,7 @@ let test_wide_tags () =
   in
   List.iter
     (fun (v, expected) ->
-      let buf = Bytes.create (Codec.size_of_value wide_codec v) in
+      let buf = Bytes.create (Codec.encoded_size wide_codec v) in
       Codec.encode wide_codec v buf 0;
       Alcotest.(check string) "bytes" expected (Bytes.to_string buf);
       let back = decode_ok (Codec.decode wide_codec buf 0) in
@@ -195,7 +195,7 @@ let test_bitfield_tag () =
         ]
   in
   let v = (5, 0xa, Either.Right (UInt8.v 0x42)) in
-  let buf = Bytes.create (Codec.size_of_value c v) in
+  let buf = Bytes.create (Codec.encoded_size c v) in
   Codec.encode c v buf 0;
   Alcotest.(check int) "size" 2 (Bytes.length buf);
   let back = decode_ok (Codec.decode c buf 0) in

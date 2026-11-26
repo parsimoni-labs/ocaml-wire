@@ -144,7 +144,7 @@ let test_cases ?(validate = true) label g =
    The size-source field is drawn from several int-valued field types -- in
    particular [optional_or], whose present-or-default value the size expression
    reads. Each source builds a two-field [(len, data)] codec round-tripped
-   through [test_cases], which checks decode, [size_of_value], and re-encode
+   through [test_cases], which checks decode, [encoded_size], and re-encode
    against canonical bytes assembled here (the length-field bytes followed by
    [len] data bytes). *)
 let u8_size_bytes n =
@@ -187,7 +187,7 @@ let sized_source ~of_len name make_len bytes_of_len =
   }
 
 (* A region sized by the length field. Its size names a field of the record,
-   which [size_of_value] has to read from the value as decode reads it from the
+   which [encoded_size] has to read from the value as decode reads it from the
    buffer; the [byte_array] sources above measure the string instead, so they
    never reach that path. *)
 let region_source name region ~min ?(count = 7) data =
@@ -272,7 +272,7 @@ let sized_cases group =
     ]
 
 (* Drive a freshly generated nested composition per sample: the positive case
-   asserts round-trip (and so [size_of_value] / [encode] consistency across the
+   asserts round-trip (and so [encoded_size] / [encode] consistency across the
    whole nesting), the other two assert the decoder never raises. Generated
    codecs never reference [Param.input], so no env is threaded. *)
 type nested_sample = NS : 'a t * string * ('a * bytes) * 'a -> nested_sample

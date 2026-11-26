@@ -164,12 +164,12 @@ let test_arith_presence_and_size () =
           Field.optional "d" ~present:(present (Field.ref n)) uint8 $ snd;
         ]
   in
-  let sized typ size () =
+  let sized typ span () =
     let n = Field.v "n" typ in
     Codec.v "Sized"
       (fun n d -> (n, d))
       Codec.
-        [ n $ fst; Field.v "d" (byte_array ~size:(size (Field.ref n))) $ snd ]
+        [ n $ fst; Field.v "d" (byte_array ~size:(span (Field.ref n))) $ snd ]
   in
   projects_to "an int8 presence"
     (gated int8 Expr.(fun n -> n >= int 5) ())
@@ -267,19 +267,19 @@ let test_arith_wide () =
 let test_arith_regions_and_actions () =
   let inner = Codec.v "Inner" Fun.id Codec.[ Field.v "x" uint8 $ Fun.id ] in
   let a = Field.v "a" uint8 in
-  let sized size = nested ~size:(size (Field.ref a)) (codec inner) in
-  let region size () =
+  let sized span = nested ~size:(span (Field.ref a)) (codec inner) in
+  let region span () =
     Codec.v "Region"
       (fun a r -> (a, r))
-      Codec.[ a $ fst; Field.v "r" (sized size) $ snd ]
+      Codec.[ a $ fst; Field.v "r" (sized span) $ snd ]
   in
-  let optional size () =
+  let optional span () =
     Codec.v "OptRegion"
       (fun a r -> (a, r))
       Codec.
         [
           a $ fst;
-          Field.optional "r" ~present:Expr.(Field.ref a > int 0) (sized size)
+          Field.optional "r" ~present:Expr.(Field.ref a > int 0) (sized span)
           $ snd;
         ]
   in

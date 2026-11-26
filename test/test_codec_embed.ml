@@ -62,8 +62,8 @@ let test_codec_embed_roundtrip () =
     (UInt8.to_int original.trailer)
     (UInt8.to_int decoded.trailer)
 
-let test_codec_embed_wire_size () =
-  Alcotest.(check int) "wire_size" 5 (Codec.wire_size outer_codec)
+let test_codec_embed_size () =
+  Alcotest.(check int) "size" 5 (Codec.min_size outer_codec)
 
 (* Nested codec with bitfields *)
 
@@ -304,7 +304,7 @@ let suite =
       Alcotest.test_case "embed: decode" `Quick test_codec_embed_decode;
       Alcotest.test_case "embed: encode" `Quick test_codec_embed_encode;
       Alcotest.test_case "embed: roundtrip" `Quick test_codec_embed_roundtrip;
-      Alcotest.test_case "embed: wire_size" `Quick test_codec_embed_wire_size;
+      Alcotest.test_case "embed: size" `Quick test_codec_embed_size;
       Alcotest.test_case "embed: bitfield" `Quick test_codec_embed_bitfield;
       Alcotest.test_case "embed: nested" `Quick test_codec_embed_nested;
       Alcotest.test_case "embed: nested roundtrip" `Quick

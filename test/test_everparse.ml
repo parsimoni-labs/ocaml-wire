@@ -435,13 +435,14 @@ let test_casetype_case_bodies_keep_refinements () =
    the case-index projection can render. *)
 let test_casetype_integer_tags_dispatch () =
   let dispatches name tag lift =
+    let body = name ^ "Body" in
     let c =
       Codec.v name
         (fun v -> v)
         Codec.
           [
             ( Field.v "b"
-                (casetype (name ^ "Body") tag
+                (casetype body tag
                    [
                      case ~index:(lift 0) uint8 ~inject:Fun.id
                        ~project:Option.some;
@@ -469,13 +470,13 @@ let test_casetype_integer_tags_dispatch () =
    behind a [where], or over a 64-bit base. Each still names one integer per
    case, so each must project to a switch on the enum constant. *)
 let test_3d_casetype_tag_int_carriers () =
-  let dispatch name tag index =
-    Codec.v name
+  let dispatch label tag index =
+    Codec.v label
       (fun v -> v)
       Codec.
         [
           ( Field.v "u"
-              (casetype ("Sel" ^ name) tag
+              (casetype ("Sel" ^ label) tag
                  [ case ~index uint8 ~inject:Fun.id ~project:Option.some ])
           $ fun v -> v );
         ]
@@ -1306,7 +1307,7 @@ let test_if_then_else_projects () =
   (* Expr.if_then_else projects to a 3D conditional, e.g. a size where a 0 field
      means a maximum: [byte-size (... ? 65536 : N)]. *)
   let f_n = Field.v "N" uint16be in
-  let size =
+  let span =
     Expr.if_then_else Expr.(Field.ref f_n = int 0) (int 65536) (Field.ref f_n)
   in
   let c =
@@ -1315,7 +1316,7 @@ let test_if_then_else_projects () =
       Codec.
         [
           (f_n $ fun (n, _) -> n);
-          (Field.v "Data" (byte_array ~size) $ fun (_, d) -> d);
+          (Field.v "Data" (byte_array ~size:span) $ fun (_, d) -> d);
         ]
   in
   let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
@@ -1787,10 +1788,10 @@ let test_lookup_index_bound_exhaustive () =
 let test_optional_scalar_regions () =
   List.iter
     (fun at_most ->
-      let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
+      let tag = Field.v "tag" uint8 and size_f = Field.v "size" uint8 in
       let region =
         (if at_most then nested_at_most else nested)
-          ~size:(Field.ref size) uint16be
+          ~size:(Field.ref size_f) uint16be
       in
       let c =
         Codec.v "OptionalRegion"
@@ -1798,7 +1799,7 @@ let test_optional_scalar_regions () =
           Codec.
             [
               (tag $ fun (t, _, _) -> t);
-              (size $ fun (_, s, _) -> s);
+              (size_f $ fun (_, s, _) -> s);
               ( Field.optional "value"
                   ~present:Expr.(Field.ref tag = int 1)
                   region

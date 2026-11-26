@@ -455,7 +455,7 @@ let test_view_read () =
 let test_view_short_frames () =
   let check_codec (type r) name (c : r Codec.t) fields =
     let module V = (val Codec.View.codec c) in
-    let size = Codec.wire_size c in
+    let size = Codec.min_size c in
     for i = 0 to 63 do
       let buf =
         Bytes.init (size + 3) (fun j ->
@@ -1017,9 +1017,9 @@ let test_fresh_domain_validate_flat_in_validator_count () =
       (fun x -> x)
       Codec.[ (Field.v "x" uint8 $ fun x -> x) ]
   in
-  (* [wire_size_opt] forces the compile, which builds the validator. *)
+  (* [Codec.size] forces the compile, which builds the validator. *)
   for i = 1 to 10_000 do
-    ignore (Sys.opaque_identity (Codec.wire_size_opt (Fmt.kstr mk "S%d" i)))
+    ignore (Sys.opaque_identity (Codec.size (Fmt.kstr mk "S%d" i)))
   done;
   let c = mk "Last" in
   let buf = Bytes.make 8 '\007' in

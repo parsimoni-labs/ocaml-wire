@@ -32,9 +32,9 @@ let bf16_codec =
       (Field.v "len" (bits ~width:2 U16be) $ fun t -> t.len);
     ]
 
-let test_codec_bitfield_wire_size () =
-  Alcotest.(check int) "bf32 wire_size" 4 (Codec.wire_size bf32_codec);
-  Alcotest.(check int) "bf16 wire_size" 4 (Codec.wire_size bf16_codec)
+let test_codec_bitfield_size () =
+  Alcotest.(check int) "bf32 size" 4 (Codec.min_size bf32_codec);
+  Alcotest.(check int) "bf16 size" 4 (Codec.min_size bf16_codec)
 
 let test_codec_bitfield_roundtrip () =
   let original = { a = 5; b = 20; c = 0x1234; d = 0xAB } in
@@ -140,7 +140,7 @@ let test_codec_bitfield_overflow_1bit () =
   (* Single-bit field: only 0 and 1 are valid *)
   let f = Field.v "flag" (bits ~width:1 U8) in
   let codec = Codec.v "OneBit" Fun.id Codec.[ f $ Fun.id ] in
-  let ws = Codec.wire_size codec in
+  let ws = Codec.min_size codec in
   let buf = Bytes.create ws in
   (try
      Codec.encode codec 2 buf 0;
@@ -155,9 +155,7 @@ let test_fixed_byte_region_size_of_value () =
     let codec = Codec.v label Fun.id Codec.[ Field.v "data" typ $ Fun.id ] in
     List.iter
       (fun (case, value, expected) ->
-        Alcotest.(check int)
-          (case ^ " size") 3
-          (Codec.size_of_value codec value);
+        Alcotest.(check int) (case ^ " size") 3 (Codec.encoded_size codec value);
         let buf = Bytes.create 3 in
         Codec.encode codec value buf 0;
         Alcotest.(check bytes) case (Bytes.of_string expected) buf)
@@ -188,7 +186,7 @@ let test_fixed_byte_region_size_of_value () =
       in
       Alcotest.(check int)
         (case ^ " slice size") 3
-        (Codec.size_of_value codec slice);
+        (Codec.encoded_size codec slice);
       let buf = Bytes.create 3 in
       Codec.encode codec slice buf 0;
       Alcotest.(check bytes) (case ^ " slice") (Bytes.of_string expected) buf)
@@ -201,8 +199,8 @@ let test_packed_bf_size () =
     Codec.v "Packed" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ]
   in
   Alcotest.(check int)
-    "size_of_value matches wire_size" (Codec.wire_size codec)
-    (Codec.size_of_value codec (0, 0))
+    "encoded_size matches min_size" (Codec.min_size codec)
+    (Codec.encoded_size codec (0, 0))
 
 type packed_bool_header = {
   magic : string;
@@ -227,11 +225,11 @@ let test_packed_mapped_bf_size () =
     { magic = "dtn!"; version = UInt8.v 4; reserved = 0; flag = true }
   in
   Alcotest.(check int)
-    "wire_size counts packed bool bitfield once" 6
-    (Codec.wire_size packed_bool_header_codec);
+    "min_size counts packed bool bitfield once" 6
+    (Codec.min_size packed_bool_header_codec);
   Alcotest.(check int)
-    "size_of_value matches wire_size" 6
-    (Codec.size_of_value packed_bool_header_codec value);
+    "encoded_size matches min_size" 6
+    (Codec.encoded_size packed_bool_header_codec value);
   let buf = Bytes.create 6 in
   Codec.encode packed_bool_header_codec value buf 0;
   Alcotest.(check string)
@@ -424,7 +422,7 @@ let test_bitorder_diff_start_newword () =
   (* Two fields with the same base but different [bit_order] must NOT share
      a base word -- the codec allocates a fresh byte for each. Catches any
      regression that would let mismatched bit orders silently collide. *)
-  Alcotest.(check int) "wire size = 2" 2 (Codec.wire_size bit_order_split_codec);
+  Alcotest.(check int) "wire size = 2" 2 (Codec.min_size bit_order_split_codec);
   let buf = Bytes.create 2 in
   Codec.encode bit_order_split_codec { x = 0xA; y = 0x5 } buf 0;
   Alcotest.(check int)
@@ -435,8 +433,7 @@ let test_bitorder_diff_start_newword () =
 let suite =
   ( "codec_bitfield",
     [
-      Alcotest.test_case "codec bitfield: wire_size" `Quick
-        test_codec_bitfield_wire_size;
+      Alcotest.test_case "codec bitfield: size" `Quick test_codec_bitfield_size;
       Alcotest.test_case "codec bitfield: roundtrip" `Quick
         test_codec_bitfield_roundtrip;
       Alcotest.test_case "codec bitfield: byte layout" `Quick

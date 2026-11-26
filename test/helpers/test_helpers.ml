@@ -156,7 +156,7 @@ let encode_record codec v = Ok (Codec.to_string codec v)
 
 (* Helper: decode record from string using Codec API *)
 let decode_record codec s =
-  let ws = Codec.wire_size codec in
+  let ws = Codec.min_size codec in
   if String.length s < ws then
     Error
       {

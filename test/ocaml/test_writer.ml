@@ -97,7 +97,7 @@ let fix_checked buf off =
    reads, where [Codec.validate] accepts the record; [read buf] raises
    the codec's error otherwise. *)
 let viewed ?(fix = fun _ _ -> ()) codec ~read ~gets =
-  let size = Codec.min_wire_size codec in
+  let size = Codec.min_size codec in
   for _ = 1 to 2000 do
     let len = size + Random.State.int rand 4 - 1 in
     let buf = Bytes.init (max 0 len) (fun _ -> byte ()) in

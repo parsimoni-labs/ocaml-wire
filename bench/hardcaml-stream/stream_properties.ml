@@ -25,14 +25,14 @@ let keep_equivalence () =
 
 let plan () =
   let open Wire in
-  let size = Field.v "size" uint8 in
+  let size_f = Field.v "size" uint8 in
   let codec =
     Codec.v "StreamProof"
       (fun n payload -> (n, payload))
       Codec.
         [
-          size $ fst;
-          Field.v "payload" (byte_slice ~size:(Field.ref size)) $ snd;
+          size_f $ fst;
+          Field.v "payload" (byte_slice ~size:(Field.ref size_f)) $ snd;
         ]
   in
   Wire_ocaml.Plan.v codec

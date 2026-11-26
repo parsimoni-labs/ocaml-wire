@@ -920,8 +920,7 @@ let test_zeroterm_extent_and_attribution () =
       Codec.[ Field.v "s" (zeroterm_at_most ~size:(int 8)) $ Fun.id ]
   in
   Alcotest.(check int)
-    "the region is the minimum size" 8
-    (Codec.min_wire_size bounded);
+    "the region is the minimum size" 8 (Codec.min_size bounded);
   (match Codec.decode bounded (Bytes.of_string "abcdefgh") 0 with
   | Ok _ -> Alcotest.fail "expected a missing terminator"
   | Error { Error.kind = Missing_terminator; _ } -> ()
@@ -1010,7 +1009,7 @@ let test_size_of_value_resolves_param_sizes () =
   in
   (* Reporting 0 here is what let a caller allocate a buffer encode then ran
      off the end of, so the answer has to be refused, not guessed. *)
-  (match Codec.size_of_value c (UInt16.v 7) with
+  (match Codec.encoded_size c (UInt16.v 7) with
   | n -> Alcotest.failf "expected a refusal without ?env, got %d" n
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
@@ -1024,7 +1023,7 @@ let test_size_of_value_resolves_param_sizes () =
    the parameter. An unbound one reads 0, which puts the accessor on the wrong
    bytes: [get] answers with the padding it should have skipped, and [set]
    writes there, corrupting a field the caller never named while leaving the one
-   it did name untouched. [decode], [validate] and [wire_size_at] already refuse
+   it did name untouched. [decode], [validate] and [size_at] already refuse
    without an env; the accessors must not answer where those refuse. *)
 let param_offset_codec () =
   let p = Param.input "n" uint8 in
@@ -1077,7 +1076,7 @@ let test_repeat_budget_mismatch_names_the_remedy () =
     Codec.v "Region" Fun.id
       Codec.[ Field.repeat "items" ~size:(int 0) uint16be $ Fun.id ]
   in
-  match Codec.size_of_value c [ UInt16.v 1; UInt16.v 2 ] with
+  match Codec.encoded_size c [ UInt16.v 1; UInt16.v 2 ] with
   | _ -> Alcotest.fail "expected the budget mismatch to be refused"
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
@@ -1445,7 +1444,7 @@ let eight_codec =
     [ eight_p; eight_q; eight_r; eight_s ]
 
 let random_frame rand codec =
-  let size = Codec.min_wire_size codec in
+  let size = Codec.min_size codec in
   let off = Random.State.int rand 4 in
   let buf =
     Bytes.init

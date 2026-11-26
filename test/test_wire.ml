@@ -981,7 +981,7 @@ let direct_encoding typ value =
 
 let compiled_encoding codec value =
   try
-    let buf = Bytes.create (Codec.size_of_value codec value) in
+    let buf = Bytes.create (Codec.encoded_size codec value) in
     Codec.encode codec value buf 0;
     Encoded (Bytes.unsafe_to_string buf)
   with Invalid_argument _ -> Rejected
@@ -1013,7 +1013,7 @@ let check_invariant_encoding ~equal label typ codec value =
       Alcotest.(check int)
         (label ^ ": compiled sizing")
         (String.length bytes)
-        (Codec.size_of_value codec value);
+        (Codec.encoded_size codec value);
       Alcotest.(check bool)
         (label ^ ": direct round-trip")
         true

@@ -107,7 +107,7 @@ let test_undecodable_description_is_invalid_argument () =
                  ]) );
     ]
 
-(* [Codec.size_of_value] answers how many bytes [Codec.encode] will write, and a
+(* [Codec.encoded_size] answers how many bytes [Codec.encode] will write, and a
    caller sizes its buffer from that answer. For a casetype value no case
    projects there are no such bytes: encode refuses it. Answering with the tag
    width instead sent the caller off to allocate for a write that cannot happen
@@ -120,12 +120,12 @@ let test_size_of_value_refuses_unmatched_case () =
   let buf = Bytes.make 8 '\000' in
   let sized =
     invalid_argument_message (fun () ->
-        ignore (Codec.size_of_value misuse_casetype_codec (Other 5) : int))
+        ignore (Codec.encoded_size misuse_casetype_codec (Other 5) : int))
   in
   (match sized with
   | None ->
       Alcotest.fail
-        "Codec.size_of_value answered with a size for a value no case projects"
+        "Codec.encoded_size answered with a size for a value no case projects"
   | Some _ -> ());
   let encoded =
     invalid_argument_message (fun () ->
@@ -134,7 +134,7 @@ let test_size_of_value_refuses_unmatched_case () =
   Alcotest.(check (option string))
     "size_of_value refuses in encode's own words" encoded sized;
   (* The control: a value a case does project still sizes what encode writes. *)
-  let n = Codec.size_of_value misuse_casetype_codec (B (UInt8.v 9)) in
+  let n = Codec.encoded_size misuse_casetype_codec (B (UInt8.v 9)) in
   Codec.encode misuse_casetype_codec (B (UInt8.v 9)) buf 0;
   Alcotest.(check int) "a projected value sizes its tag and its body" 2 n;
   Alcotest.(check string)
@@ -385,7 +385,7 @@ let iter_bitpacks f =
   List.iter
     (fun (name, base, bit_order, widths) ->
       let codec, fields = bounds_bitpack base bit_order widths in
-      let word = Codec.wire_size codec in
+      let word = Codec.min_size codec in
       List.iter (fun (fname, field) -> f name word fname field codec) fields)
     bitpack_bases
 
@@ -557,7 +557,7 @@ let test_repeat_bounded_element_roundtrips () =
       (UInt8.v 1, (UInt8.v 2, "\000\000")); (UInt8.v 3, (UInt8.v 4, "\000\000"));
     ]
   in
-  let buf = Bytes.create (Codec.size_of_value outer xs) in
+  let buf = Bytes.create (Codec.encoded_size outer xs) in
   Codec.encode outer xs buf 0;
   let ys = decode_ok (Codec.decode outer buf 0) in
   let elem_equal (a, (b, s)) (a', (b', s')) =
@@ -585,7 +585,7 @@ let test_encode_impure_byte_array_getter () =
           (Field.v "d" (byte_array ~size:(int 16)) $ fun () -> data ());
         ]
   in
-  ignore (Codec.wire_size c);
+  ignore (Codec.min_size c : int);
   let buf = Bytes.make 17 '\x00' in
   for start = 0 to 1 do
     calls := start;

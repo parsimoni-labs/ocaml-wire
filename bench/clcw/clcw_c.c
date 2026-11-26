@@ -16,7 +16,7 @@
 #include "bench_common.h"
 
 /* Must match clcw_bench.ml -- derived from Space.clcw_codec */
-static const int WORD_SIZE = 4;  /* Wire.Codec.wire_size Space.clcw_codec */
+static const int WORD_SIZE = 4;  /* Wire.Codec.min_size Space.clcw_codec */
 
 static int count_anomalies(uint8_t *buf, int n_words, int n_iters) {
   int anomalies = 0;

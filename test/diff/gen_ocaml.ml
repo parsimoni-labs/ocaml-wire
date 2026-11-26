@@ -438,7 +438,7 @@ let pp_view_backend ppf ~m ~codec c =
   (* A codec of constant size is checked at an offset, as Codec.View checks
      it: on the frame's own bytes. *)
   let frame, check =
-    match Wire.Codec.wire_size_opt c with
+    match Wire.Codec.size c with
     | None -> ("", Fmt.str "%s.check bb len ~off:o ~len:n" m)
     | Some _ ->
         ( "if o < 0 || n < 0 || n > Bytes.length b - o then None else let b = \

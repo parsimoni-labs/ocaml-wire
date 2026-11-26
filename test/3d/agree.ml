@@ -59,7 +59,7 @@ let corpus_line name c hex accepted =
   let codec_accepts =
     match Codec.decode c buf 0 with
     | Error _ -> false
-    | Ok _ -> Codec.wire_size_at c buf 0 = Ok (Bytes.length buf)
+    | Ok _ -> Codec.size_at c buf 0 = Ok (Bytes.length buf)
   in
   Alcotest.(check bool) (name ^ " " ^ hex) accepted codec_accepts;
   Fmt.str "%s - %s %d" name hex (Bool.to_int accepted)

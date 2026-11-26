@@ -1153,7 +1153,7 @@ let codec_verdict ?env c buf =
       match Wire.Codec.validate ?env c buf 0 with
       | Error e -> `Reject e
       | Ok () -> (
-          match Wire.Codec.wire_size_at ?env c buf 0 with
+          match Wire.Codec.size_at ?env c buf 0 with
           | Error e -> `Reject e
           | Ok n -> if n = Bytes.length buf then `Accept else `Resize n))
 
@@ -1427,7 +1427,7 @@ let corpus_of_codec ~count ppf (Pack c) =
     | Some source -> Raw.field_seeds source
     | None -> []
   in
-  let center = Wire.Codec.min_wire_size c in
+  let center = Wire.Codec.min_size c in
   let draw_params () = List.map (fun _ -> fuzz_param_value rng center) pnames in
   let env_of pvals =
     match pnames with

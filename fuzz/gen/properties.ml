@@ -66,7 +66,7 @@ let direct_encodes g value =
   | exception Invalid_argument _ -> `Refused
 
 let codec_encodes g value =
-  match Wire.Codec.size_of_value g.codec value with
+  match Wire.Codec.encoded_size g.codec value with
   | exception Invalid_argument _ -> `Refused
   | sz -> (
       let buf = Bytes.create sz in
@@ -90,12 +90,12 @@ let check_direct_codec_encode_agree label kind g value =
           kind
 
 (* Round-trip one positive sample: decode the canonical bytes back to the
-   value, then re-encode into a buffer sized from [size_of_value] and require
-   the two to agree. Sizing from [size_of_value] (rather than from the
+   value, then re-encode into a buffer sized from [encoded_size] and require
+   the two to agree. Sizing from [encoded_size] (rather than from the
    canonical bytes) drives the value-driven size for every combinator,
    including ones whose [positive] bytes are hand-assembled (casetype,
-   nested_at_most) and so never otherwise exercise [encode] / [size_of_value].
-   A wrong [size_of_value] then shows up here as a mismatch -- or, if it
+   nested_at_most) and so never otherwise exercise [encode] / [encoded_size].
+   A wrong [encoded_size] then shows up here as a mismatch -- or, if it
    under-counts, as an [encode] overrun -- rather than silently. *)
 let check_positive_decode label g value bs env =
   match Wire.Codec.decode ?env g.codec bs 0 with
@@ -113,45 +113,43 @@ let input_param_names g =
     (Wire.Everparse.Raw.struct_of_codec g.codec)
 
 let check_positive_size label g value bs env =
-  let sz = Wire.Codec.size_of_value g.codec value in
+  let sz = Wire.Codec.encoded_size g.codec value in
   if sz <> Bytes.length bs then
-    Alcobar.failf "%s size_of_value = %d but canonical encoding is %d" label sz
+    Alcobar.failf "%s encoded_size = %d but canonical encoding is %d" label sz
       (Bytes.length bs);
-  (* [size_of_value] measures the value, not the buffer, so it answers without
+  (* [encoded_size] measures the value, not the buffer, so it answers without
      an env; threading one must not change the answer. *)
   match env with
   | None -> sz
   | Some env ->
-      let with_env = Wire.Codec.size_of_value ~env g.codec value in
+      let with_env = Wire.Codec.encoded_size ~env g.codec value in
       if with_env <> sz then
-        Alcobar.failf "%s size_of_value = %d with an env bound, %d without"
-          label with_env sz;
+        Alcobar.failf "%s encoded_size = %d with an env bound, %d without" label
+          with_env sz;
       sz
 
-(* [wire_size_at] measures the buffer, so a parametric field's width comes from
+(* [size_at] measures the buffer, so a parametric field's width comes from
    the env: with one bound it must span exactly the canonical encoding, the same
    contract the env-free codecs are held to. The env branch used to be skipped
    whole, which is how a param-sized field measured as empty stayed invisible. *)
 let check_positive_size_metadata label g bs env =
   let len = Bytes.length bs in
-  let min_sz = Wire.Codec.min_wire_size g.codec in
+  let min_sz = Wire.Codec.min_size g.codec in
   if min_sz > len then
-    Alcobar.failf "%s min_wire_size = %d but canonical encoding is %d" label
-      min_sz len;
-  (match Wire.Codec.wire_size_at ?env g.codec bs 0 with
+    Alcobar.failf "%s min_size = %d but canonical encoding is %d" label min_sz
+      len;
+  (match Wire.Codec.size_at ?env g.codec bs 0 with
   | Ok actual ->
       if actual <> len then
-        Alcobar.failf "%s wire_size_at = %d but canonical encoding is %d" label
+        Alcobar.failf "%s size_at = %d but canonical encoding is %d" label
           actual len
   | Error e ->
-      Alcobar.failf "%s wire_size_at refused a positive: %a" label Wire.Error.pp
-        e
+      Alcobar.failf "%s size_at refused a positive: %a" label Wire.Error.pp e
   | exception Invalid_argument m ->
-      Alcobar.failf "%s wire_size_at raised on a positive: %s" label m);
-  match Wire.Codec.wire_size_opt g.codec with
+      Alcobar.failf "%s size_at raised on a positive: %s" label m);
+  match Wire.Codec.size g.codec with
   | Some fixed when fixed <> len ->
-      Alcobar.failf "%s wire_size = %d but canonical encoding is %d" label fixed
-        len
+      Alcobar.failf "%s size = %d but canonical encoding is %d" label fixed len
   | Some _ | None -> ()
 
 (* The other half of the parametric-size contract: with no env, a codec that
@@ -162,11 +160,10 @@ let check_env_required label g bs =
   match input_param_names g with
   | [] -> ()
   | _ :: _ -> (
-      (match Wire.Codec.wire_size_at g.codec bs 0 with
-      | Ok n ->
-          Alcobar.failf "%s wire_size_at answered %d with no env bound" label n
+      (match Wire.Codec.size_at g.codec bs 0 with
+      | Ok n -> Alcobar.failf "%s size_at answered %d with no env bound" label n
       | Error e ->
-          Alcobar.failf "%s wire_size_at answered %a with no env bound" label
+          Alcobar.failf "%s size_at answered %a with no env bound" label
             Wire.Error.pp e
       | exception Invalid_argument _ -> ());
       (match Wire.Codec.decode g.codec bs 0 with
@@ -242,12 +239,12 @@ let check_decode_safety label kind ?env g bs =
 (* The bytes a hostile value encodes to, or [None] when encode refused it, which
    is one of the two outcomes [check_encode_safety] allows. *)
 let hostile_encoding label ?env g value =
-  match Wire.Codec.size_of_value g.codec value with
+  match Wire.Codec.encoded_size g.codec value with
   | exception Invalid_argument _ -> None
   | sz -> (
       match Bytes.create sz with
       | exception Invalid_argument _ ->
-          Alcobar.failf "%s encode safety: size_of_value returned %d" label sz
+          Alcobar.failf "%s encode safety: encoded_size returned %d" label sz
       | buf -> (
           match Wire.Codec.encode ?env g.codec value buf 0 with
           | exception Invalid_argument _ -> None
@@ -516,7 +513,7 @@ let check_field_set label ~strict a target bs =
    length changes the frame's size instead of overflowing a declared one, so
    the two are answering different questions. *)
 let check_field_set_refusal label a record bs =
-  if Option.is_some (Wire.Codec.wire_size_opt a.acodec) then
+  if Option.is_some (Wire.Codec.size a.acodec) then
     List.iter
       (fun (Field_check f) ->
         match stage_set a f.field with
@@ -566,7 +563,7 @@ let field_snapshot ?env a buf fc =
 let check_field_locality label a target bs =
   let checks = a.achecks in
   if
-    Option.is_some (Wire.Codec.wire_size_opt a.acodec)
+    Option.is_some (Wire.Codec.size a.acodec)
     && List.compare_length_with checks 1 > 0
   then
     List.iter
@@ -638,7 +635,7 @@ let check_field_write_back label a bs =
    as soon as one field has no staged writer or refuses its own value. *)
 let check_field_set_sweep label a value bs =
   let checks = a.achecks in
-  if Option.is_some (Wire.Codec.wire_size_opt a.acodec) && checks <> [] then begin
+  if Option.is_some (Wire.Codec.size a.acodec) && checks <> [] then begin
     let buf = Bytes.make (Bytes.length bs) '\x00' in
     let wrote fc =
       match fc with
@@ -752,7 +749,7 @@ let noise_gen =
       bytes_of_string (if String.length s > 8 then String.sub s 0 8 else s))
 
 let size_at g bs off =
-  match Wire.Codec.wire_size_at g.codec bs off with
+  match Wire.Codec.size_at g.codec bs off with
   | Ok n -> Some n
   | Error _ -> None
   | exception Invalid_argument _ -> None
@@ -806,19 +803,18 @@ let check_offset_invariance label ?env a g pad bs =
     check_shifted label "Codec.validate" ~k
       ~same:(fun () () -> true)
       (validate_at ?env g bs 0) (validate_at ?env g bs' k);
-    (* [wire_size_at] takes no env, so on a codec with an input param it would
+    (* [size_at] takes no env, so on a codec with an input param it would
        resolve the parametric size to 0 at both bases and compare two wrong
        answers. The question is not statable through that entry point. *)
     (if Option.is_none g.env then
        match (size_at g bs 0, size_at g bs' k) with
        | Some at0, Some atk when at0 <> atk ->
-           Alcobar.failf
-             "%s: Codec.wire_size_at is %d at base 0 and %d at base %d" label
-             at0 atk k
+           Alcobar.failf "%s: Codec.size_at is %d at base 0 and %d at base %d"
+             label at0 atk k
        | Some _, None ->
-           Alcobar.failf "%s: Codec.wire_size_at raised at base %d only" label k
+           Alcobar.failf "%s: Codec.size_at raised at base %d only" label k
        | None, Some _ ->
-           Alcobar.failf "%s: Codec.wire_size_at raised at base 0 only" label
+           Alcobar.failf "%s: Codec.size_at raised at base 0 only" label
        | _ -> ());
     List.iter
       (fun fc ->
@@ -845,7 +841,7 @@ let check_offset_invariance label ?env a g pad bs =
 let check_offset_encode label ?env g value bs pad =
   let k = Bytes.length pad in
   if k > 0 then
-    match Wire.Codec.size_of_value g.codec value with
+    match Wire.Codec.encoded_size g.codec value with
     | exception Invalid_argument _ -> ()
     | sz -> (
         let out = Bytes.make (k + sz + k) '\xa5' in
@@ -874,7 +870,7 @@ let check_offset_encode label ?env g value bs pad =
 
 (* {1 Framing}
 
-   An accepted frame declares its own extent through [wire_size_at], and a
+   An accepted frame declares its own extent through [size_at], and a
    reassembler advances by exactly that to find the next one. Two things have
    to hold for that loop to stay in step, and neither is checked anywhere but
    on a positive, where the extent is true by construction: the frame must not
@@ -895,17 +891,17 @@ let check_frame_fits_declared label ?env g v sz bs =
   | Accepted v' ->
       if not (g.equal v v') then
         Alcobar.failf
-          "%s: cutting the buffer to the frame's own wire_size_at (%d) changed \
-           the decoded value"
+          "%s: cutting the buffer to the frame's own size_at (%d) changed the \
+           decoded value"
           label sz
   | Rejected e ->
       Alcobar.failf
-        "%s: the frame does not decode inside its own wire_size_at (%d): %a"
-        label sz Wire.Error.pp e
+        "%s: the frame does not decode inside its own size_at (%d): %a" label sz
+        Wire.Error.pp e
   | Crashed ->
       Alcobar.failf
-        "%s: cutting the buffer to the frame's own wire_size_at (%d) crashed \
-         the decoder"
+        "%s: cutting the buffer to the frame's own size_at (%d) crashed the \
+         decoder"
         label sz
 
 (* The appended-bytes clause, with the greedy-tail carve-out written as its own
@@ -917,8 +913,8 @@ let check_frame_ignores_tail label ?env g v ~sz ~len tail bs =
   match size_at g bs' 0 with
   | None ->
       Alcobar.failf
-        "%s: Codec.wire_size_at raised after %d bytes were appended to an \
-         accepted frame"
+        "%s: Codec.size_at raised after %d bytes were appended to an accepted \
+         frame"
         label n_tail
   | Some sz' when sz' = sz -> (
       match decode_at ?env g bs' 0 with
@@ -949,7 +945,7 @@ let check_frame_ignores_tail label ?env g v ~sz ~len tail bs =
 
 let check_frame_extent label kind ?env g tail bs =
   (* Same reason as in [check_offset_invariance]: with an input param bound,
-     the size this codec declares is not reachable through [wire_size_at]. *)
+     the size this codec declares is not reachable through [size_at]. *)
   if Option.is_none g.env then
     match decode_at ?env g bs 0 with
     | Crashed | Rejected _ -> ()
@@ -958,35 +954,33 @@ let check_frame_extent label kind ?env g tail bs =
         let len = Bytes.length bs in
         match size_at g bs 0 with
         | None ->
-            Alcobar.failf
-              "%s: Codec.wire_size_at raised on a frame decode accepted" label
+            Alcobar.failf "%s: Codec.size_at raised on a frame decode accepted"
+              label
         | Some sz ->
-            let min_sz = Wire.Codec.min_wire_size g.codec in
+            let min_sz = Wire.Codec.min_size g.codec in
             if sz < min_sz || sz > len then
               Alcobar.failf
-                "%s: Codec.wire_size_at = %d on an accepted %d-byte frame, \
-                 outside [%d, %d]"
+                "%s: Codec.size_at = %d on an accepted %d-byte frame, outside \
+                 [%d, %d]"
                 label sz len min_sz len;
             check_frame_fits_declared label ?env g v sz bs;
             if Bytes.length tail > 0 then
               check_frame_ignores_tail label ?env g v ~sz ~len tail bs)
 
-(* Nothing shorter than [min_wire_size] may decode. A reassembler holds off
+(* Nothing shorter than [min_size] may decode. A reassembler holds off
    until it has that many bytes, so a codec that accepts fewer has a minimum
    that does not mean what its caller reads it as. *)
 let check_short_prefix label kind ?env g bs =
-  let min_sz = Wire.Codec.min_wire_size g.codec in
+  let min_sz = Wire.Codec.min_size g.codec in
   if min_sz > 0 && Bytes.length bs >= min_sz then
     match decode_at ?env g (Bytes.sub bs 0 (min_sz - 1)) 0 with
     | Rejected _ -> ()
     | Crashed ->
-        Alcobar.failf
-          "%s %s: decode crashed on %d bytes, below min_wire_size %d" label kind
-          (min_sz - 1) min_sz
+        Alcobar.failf "%s %s: decode crashed on %d bytes, below min_size %d"
+          label kind (min_sz - 1) min_sz
     | Accepted _ ->
-        Alcobar.failf
-          "%s %s: decode accepted %d bytes where min_wire_size is %d" label kind
-          (min_sz - 1) min_sz
+        Alcobar.failf "%s %s: decode accepted %d bytes where min_size is %d"
+          label kind (min_sz - 1) min_sz
 
 (* {1 Idempotence and non-interference} *)
 
@@ -1050,8 +1044,7 @@ let check_frame_isolation label kind ?env a g bs interloper =
     alone_validate (validate_at ?env g bs 0);
   if alone_size <> size_at g bs 0 then
     Alcobar.failf
-      "%s: Codec.wire_size_at answered differently once another frame had been \
-       read"
+      "%s: Codec.size_at answered differently once another frame had been read"
       label;
   List.iter
     (fun (name, same) ->
@@ -1126,7 +1119,7 @@ let check_answer label what ?(pp = pp_some) ~equal (na, a) (nb, b) =
 
 (* A codec compiled before the call under test, so the call takes the path a
    warm codec takes. *)
-let warm c = ignore (Wire.Codec.min_wire_size c)
+let warm c = ignore (Wire.Codec.min_size c)
 
 let decode_answer ?env c bs =
   answer_result (fun () -> Wire.Codec.decode ?env c bs 0)
@@ -1242,7 +1235,7 @@ let check_staged_intervals label kind g bs =
         true
   in
   if agree "" bs then
-    for bit = 0 to (8 * Wire.Codec.min_wire_size g.codec) - 1 do
+    for bit = 0 to (8 * Wire.Codec.min_size g.codec) - 1 do
       let buf = Bytes.copy bs in
       let i = bit / 8 in
       Bytes.set_uint8 buf i (Bytes.get_uint8 buf i lxor (1 lsl (bit mod 8)));
@@ -1309,7 +1302,7 @@ let encode_answer ?env c v ~len ~off =
    one behind a prefix, on the fast, the general and a cold codec. *)
 let check_encode_paths label kind ?env a g value =
   if pure_value g value then
-    match Wire.Codec.size_of_value ?env g.codec value with
+    match Wire.Codec.encoded_size ?env g.codec value with
     | exception Invalid_argument _ -> ()
     | n ->
         warm g.codec;

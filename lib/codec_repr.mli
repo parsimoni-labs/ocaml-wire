@@ -606,7 +606,7 @@ val field_scalar :
   min_wire_size:int -> field_access -> 'a Types.typ -> 'a scalar option
 (** [field_scalar ~min_wire_size access typ] is the scalar a field of type [typ]
     at [access] is, when it is a bare scalar at a fixed offset inside the first
-    [min_wire_size] bytes or packed in an 8- or 16-bit word. *)
+    [min_size] bytes or packed in an 8- or 16-bit word. *)
 
 val alloc_slots : int -> slots
 (** [alloc_slots n] is a fresh scratch of [n] zeroed slots. *)

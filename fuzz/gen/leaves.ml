@@ -271,7 +271,7 @@ let all_bytes =
     Alcobar.map
       Alcobar.[ value_gen ]
       (fun s ->
-        let sz = Wire.Codec.size_of_value codec s in
+        let sz = Wire.Codec.encoded_size codec s in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec s buf 0;
         (s, buf))
@@ -300,7 +300,7 @@ let all_zeros =
     Alcobar.map
       Alcobar.[ zeros_gen ]
       (fun s ->
-        let sz = Wire.Codec.size_of_value codec s in
+        let sz = Wire.Codec.encoded_size codec s in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec s buf 0;
         (s, buf))
@@ -342,7 +342,7 @@ let zeroterm =
     Alcobar.map
       Alcobar.[ nul_free_gen ]
       (fun s ->
-        let sz = Wire.Codec.size_of_value codec s in
+        let sz = Wire.Codec.encoded_size codec s in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec s buf 0;
         (s, buf))
@@ -380,7 +380,7 @@ let zeroterm_at_most n =
     Alcobar.map
       Alcobar.[ value_gen ]
       (fun s ->
-        let sz = Wire.Codec.size_of_value codec s in
+        let sz = Wire.Codec.encoded_size codec s in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec s buf 0;
         (s, buf))
@@ -795,13 +795,13 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
        a budget that is not a multiple of the element size encodes fewer bytes
        than the budget, and the prefix must match what is written. *)
     let items_bytes =
-      match Wire.Codec.wire_size_opt inner.codec with
+      match Wire.Codec.size inner.codec with
       | Some size -> fun xs -> Wire.UInt16.v (size * List.length xs)
       | None ->
           fun xs ->
             Wire.UInt16.v
               (List.fold_left
-                 (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
+                 (fun acc v -> acc + Wire.Codec.encoded_size inner.codec v)
                  0 xs)
     in
     Wire.Codec.v name
@@ -849,7 +849,7 @@ let repeat ?(name = "_rep") ~bytes inner =
 let codec_wrap (c : 'a Wire.Codec.t) ~value_gen ~equal =
   let typ = Wire.codec c in
   let encode v =
-    let sz = Wire.Codec.size_of_value c v in
+    let sz = Wire.Codec.encoded_size c v in
     let buf = Bytes.create sz in
     Wire.Codec.encode c v buf 0;
     buf

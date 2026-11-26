@@ -15,7 +15,7 @@ let equal_snapshot (v, s, a, n, c) (v', s', a', n', c') =
 let expected bytes =
   match
     ( Wire.Codec.decode Packet_stack.codec bytes 0,
-      Wire.Codec.wire_size_at Packet_stack.codec bytes 0 )
+      Wire.Codec.size_at Packet_stack.codec bytes 0 )
   with
   | Error _, _ | _, Error _ ->
       { accepted = false; consumed = 0; contribution = 0L }

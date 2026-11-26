@@ -70,7 +70,7 @@ let encoded size encode decode buf off =
   Bytes.to_string out
 
 let reads ?(fix = fun _ _ -> ()) codec ~decode ~validate =
-  let size = Codec.min_wire_size codec in
+  let size = Codec.min_size codec in
   let enc v = Codec.to_string codec v in
   for _ = 1 to 3000 do
     let buf, off = input ~size ~fix in
@@ -93,7 +93,7 @@ let reads ?(fix = fun _ _ -> ()) codec ~decode ~validate =
    record fits; any other writes what the codec writes, or raises what it
    raises. *)
 let writes codec ~write values =
-  let size = Codec.min_wire_size codec in
+  let size = Codec.min_size codec in
   List.iter
     (fun v ->
       let len = size + Random.State.int rand 3 in
@@ -121,7 +121,7 @@ let writes codec ~write values =
 
 (* Values that decode, from random buffers. *)
 let decoded ?(fix = fun _ _ -> ()) codec n =
-  let size = Codec.min_wire_size codec in
+  let size = Codec.min_size codec in
   List.filter_map
     (fun _ ->
       let buf = Bytes.init size (fun _ -> byte ()) in
@@ -146,7 +146,7 @@ let test_ipv4 () =
     (decoded Schemas.ipv4 200)
 
 let test_ipv4_record () =
-  let size = Codec.min_wire_size Schemas.ipv4 in
+  let size = Codec.min_size Schemas.ipv4 in
   for _ = 1 to 1000 do
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
     let via_gen () =
@@ -225,7 +225,7 @@ let test_eth () =
    that raises. *)
 let test_write_int () =
   let wild k = Random.State.int rand (k + 40) - 20 in
-  let size = Codec.min_wire_size Schemas.checked in
+  let size = Codec.min_size Schemas.checked in
   for _ = 1 to 2000 do
     let a = wild 16 and b = wild 16 and c = wild 0x10000 and d = wild 256 in
     let e = List.nth [ 1; 6; 17; 9; 300 ] (Random.State.int rand 5) in
@@ -249,7 +249,7 @@ let test_write_int () =
            G_checked.write_int buf off ~version:a ~ihl:b ~length:c ~ttl:d
              ~proto:e))
   done;
-  let size = Codec.min_wire_size Schemas.mixed in
+  let size = Codec.min_size Schemas.mixed in
   for _ = 1 to 2000 do
     let a = wild 0x10000 and b = wild 0x10000 - 0x8000 in
     let c = wild 256 - 128 and d = wild 0x10000 - 0x8000 in
@@ -372,7 +372,7 @@ let test_packed () =
           ~h:r.h ~i:r.i ~j:r.j ~k:r.k ~l:r.l)
     (decoded packed 300);
   let wild k = Random.State.int rand (k + 40) - 20 in
-  let size = Codec.min_wire_size packed in
+  let size = Codec.min_size packed in
   for _ = 1 to 2000 do
     let a = wild 256 - 128 and b = wild 256 and c = wild 0x10000 - 0x8000 in
     let d = wild 0x10000 and e = wild 512 in
@@ -629,7 +629,7 @@ let test_narrow_ints () =
    on random buffers and offsets around the field. *)
 let getter codec field ~get ~show =
   let read = Codec.get codec field in
-  let size = Codec.min_wire_size codec in
+  let size = Codec.min_size codec in
   for _ = 1 to 2000 do
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
     Alcotest.(check string)
@@ -661,7 +661,7 @@ let test_mapped () =
 (* A plain-[int] getter reads the [int] view of what [Codec.get] reads. *)
 let int_getter codec field ~get ~to_int =
   let read = Codec.get codec field in
-  let size = Codec.min_wire_size codec in
+  let size = Codec.min_size codec in
   for _ = 1 to 2000 do
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
     Alcotest.(check string)
@@ -721,7 +721,7 @@ let test_view () =
         string_of_int (UInt8.to_int v))
   in
   for _ = 1 to 2000 do
-    let size = Codec.min_wire_size Schemas.ipv4 in
+    let size = Codec.min_size Schemas.ipv4 in
     let len = size + Random.State.int rand 8 in
     let buf = Bytes.init len (fun _ -> byte ()) in
     let off = Random.State.int rand (len - size + 3) - 1 in
@@ -758,7 +758,7 @@ let test_view () =
     Alcotest.(check string) "ipv4 view" expected got
   done;
   for _ = 1 to 2000 do
-    let size = Codec.min_wire_size Schemas.checked in
+    let size = Codec.min_size Schemas.checked in
     let len = size + Random.State.int rand 8 in
     let buf = Bytes.init len (fun _ -> byte ()) in
     let off = Random.State.int rand (len - size + 3) - 1 in
@@ -854,7 +854,7 @@ let bigstring buf =
     (Bytes.get buf)
 
 let same_on_bigstring ?(fix = fun _ _ -> ()) codec ~on_bytes ~on_big =
-  let size = Codec.min_wire_size codec in
+  let size = Codec.min_size codec in
   for _ = 1 to 2000 do
     let buf, off = input ~size ~fix in
     Alcotest.(check string)
@@ -925,7 +925,7 @@ let test_bigstring () =
       string_of_int (G_wide.c_of_word (ok (G_wide.Get.c_word b o))))
     ~on_big:(fun b o ->
       string_of_int (G_wide.c_of_word (ok (G_wide_big.Get.c_word b o))));
-  let size = Codec.min_wire_size Schemas.checked in
+  let size = Codec.min_size Schemas.checked in
   for _ = 1 to 2000 do
     let w k = Random.State.int rand (k + 40) - 20 in
     let a = w 16 and b = w 16 and c = w 0x10000 and d = w 256 in
@@ -1749,14 +1749,14 @@ let test_constant_region () =
    it, which covers its bytes; one whose contents are read checks its own. *)
 let test_region_left_to_next () =
   let open Wire_ocaml.Plan in
-  let size = Field.v "size" uint8 in
+  let size_f = Field.v "size" uint8 in
   let c =
     Codec.v "Exact"
-      (fun size value tail -> (size, value, tail))
+      (fun size_f value tail -> (size_f, value, tail))
       Codec.
         [
-          (size $ fun (x, _, _) -> x);
-          ( Field.v "value" (nested ~size:(Field.ref size) uint16be)
+          (size_f $ fun (x, _, _) -> x);
+          ( Field.v "value" (nested ~size:(Field.ref size_f) uint16be)
           $ fun (_, x, _) -> x );
           (Field.v "tail" uint8 $ fun (_, _, x) -> x);
         ]

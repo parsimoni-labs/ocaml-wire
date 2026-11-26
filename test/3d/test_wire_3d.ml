@@ -685,16 +685,16 @@ let diff_span_sub_codec =
 
 let diff_opt_region_codec name region =
   let open Wire in
-  let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
+  let tag = Field.v "tag" uint8 and size_f = Field.v "size" uint8 in
   Codec.v name
     (fun t s v -> (t, s, v))
     Codec.
       [
         (tag $ fun (t, _, _) -> t);
-        (size $ fun (_, s, _) -> s);
+        (size_f $ fun (_, s, _) -> s);
         ( Field.optional "value"
             ~present:Expr.(Field.ref tag = int 1)
-            (region ~size:(Field.ref size) uint16be)
+            (region ~size:(Field.ref size_f) uint16be)
         $ fun (_, _, v) -> v );
       ]
 
@@ -1479,28 +1479,28 @@ let test_main_exists () =
   in
   ()
 
-(* Adversarial: [schema.wire_size] must agree with [Codec.wire_size] AND with
+(* Adversarial: [schema.wire_size] must agree with [Codec.min_size] AND with
    the byte count we expect by hand for every bitfield layout. Two layers:
-   if the projection silently drifts from [Codec.wire_size] we validate the
+   if the projection silently drifts from [Codec.min_size] we validate the
    wrong amount of data; if the expected value is itself wrong, hand-computed
    constants catch that too. *)
 let check_size ~name ~expected codec =
   let schema = Everparse.project ~mode:`Ffi codec in
-  let codec_size = Codec.wire_size codec in
+  let codec_size = Codec.min_size codec in
   Alcotest.(check int)
-    (Fmt.str "%s: Codec.wire_size = %d" name expected)
+    (Fmt.str "%s: Codec.min_size = %d" name expected)
     expected codec_size;
   Alcotest.(check (option int))
     (Fmt.str "%s: schema.wire_size = %d" name expected)
     (Some expected) schema.Everparse.wire_size
 
-let pack_four_u8 name ta tb tc td =
+let pack_four_u8 label ta tb tc td =
   let fa = Field.v "a" ta in
   let fb = Field.v "b" tb in
   let fc = Field.v "c" tc in
   let fd = Field.v "d" td in
   let open Codec in
-  v name
+  v label
     (fun a b c d -> (a, b, c, d))
     [
       (fa $ fun (a, _, _, _) -> a);
@@ -1735,7 +1735,7 @@ let arith_codecs =
     in
     let ok =
       match Codec.validate c buf 0 with
-      | Ok () -> Codec.wire_size_at c buf 0 = Ok (Bytes.length buf)
+      | Ok () -> Codec.size_at c buf 0 = Ok (Bytes.length buf)
       | Error _ -> false
       | exception Invalid_argument _ -> false
     in

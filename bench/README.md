@@ -213,7 +213,7 @@ generated reads and writes are not where the gap is: each field is one
 load, a swap and a mask, or one merged store, as in the crates. Two
 differences came from the harness, where the OCaml loops differed from the
 Rust ones, and are gone: the gateway loops took the packet size from
-`Gateway_workload.pkt_size`, which `Codec.wire_size` computes when the
+`Gateway_workload.pkt_size`, which `Codec.min_size` computes when the
 program starts, where the Rust rows use the constant `space_packet::SIZE +
 64`, so OxCaml added it as a variable and built the data length's bytes
 again per packet (`asr`, `rev16`, `uxth`); and `routing_write` kept each

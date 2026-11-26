@@ -126,7 +126,7 @@ let read_guard : type a r.
 (* A fixed-width field after a variable one is the only record reader whose
    position can outrun the buffer without the whole-record bounds check seeing
    it: a trailing greedy field can resolve the final end back to the buffer
-   length. Static reads are covered by [min_wire_size], while variable reads
+   length. Static reads are covered by [min_size], while variable reads
    guard their own spans, so keep their hot paths unchanged. *)
 let guarded_dynamic_reader : type a r.
     (a, r) compiled_field ->

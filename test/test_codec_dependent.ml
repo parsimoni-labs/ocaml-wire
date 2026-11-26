@@ -71,7 +71,7 @@ let test_dep_bslice_roundtrip () =
   (* Verify wire_size_at reads the buffer correctly *)
   Alcotest.(check int)
     "wire_size_at" 6
-    (decode_ok (Codec.wire_size_at dep_slice_codec buf 0));
+    (decode_ok (Codec.size_at dep_slice_codec buf 0));
   let decoded = decode_ok (Codec.decode dep_slice_codec buf 0) in
   Alcotest.(check int) "roundtrip length" 4 (UInt16.to_int decoded.length);
   Alcotest.(check int) "roundtrip payload len" 4 (Bs.length decoded.payload);
@@ -220,38 +220,29 @@ let test_dep_trailer_roundtrip () =
   Alcotest.(check int) "rt payload len" 2 (Bs.length decoded.payload);
   Alcotest.(check int) "rt checksum" 0x1234 (UInt16.to_int decoded.checksum)
 
-(* -- wire_size API for variable codecs -- *)
+(* -- size API for variable codecs -- *)
 
 let test_dep_wire_size_metadata () =
   Alcotest.(check (option int))
     "fixed codec size" (Some 7)
-    (Codec.wire_size_opt simple_record_codec);
+    (Codec.size simple_record_codec);
   Alcotest.(check (option int))
     "dependent slice is variable" None
-    (Codec.wire_size_opt dep_slice_codec);
+    (Codec.size dep_slice_codec);
   Alcotest.(check (option int))
-    "trailer is variable" None
-    (Codec.wire_size_opt trailer_codec);
-  (* wire_size raises Invalid_argument for variable-size codecs *)
-  (match Codec.wire_size dep_slice_codec with
-  | _ -> Alcotest.fail "expected Invalid_argument from wire_size"
-  | exception Invalid_argument _ -> ());
-  (match Codec.wire_size trailer_codec with
-  | _ -> Alcotest.fail "expected Invalid_argument from wire_size"
-  | exception Invalid_argument _ -> ());
-  (* wire_size succeeds for fixed codecs *)
-  Alcotest.(check int) "fixed wire_size" 7 (Codec.wire_size simple_record_codec)
+    "trailer is variable" None (Codec.size trailer_codec);
+  Alcotest.(check int) "fixed min size" 7 (Codec.min_size simple_record_codec)
 
 let test_dep_min_wire_size () =
-  (* min_wire_size for dep_slice_codec: just uint16be = 2 *)
-  Alcotest.(check int) "dep_slice min" 2 (Codec.min_wire_size dep_slice_codec);
-  (* min_wire_size for trailer_codec: uint16be + uint16be = 4 (variable payload excluded) *)
-  Alcotest.(check int) "trailer min" 4 (Codec.min_wire_size trailer_codec);
-  (* min_wire_size for fixed codec equals wire_size *)
+  (* min_size for dep_slice_codec: just uint16be = 2 *)
+  Alcotest.(check int) "dep_slice min" 2 (Codec.min_size dep_slice_codec);
+  (* min_size for trailer_codec: uint16be + uint16be = 4 (variable payload excluded) *)
+  Alcotest.(check int) "trailer min" 4 (Codec.min_size trailer_codec);
+  (* min_size for fixed codec equals wire_size *)
   Alcotest.(check int)
     "fixed min"
-    (Codec.wire_size simple_record_codec)
-    (Codec.min_wire_size simple_record_codec)
+    (Codec.min_size simple_record_codec)
+    (Codec.min_size simple_record_codec)
 
 let test_dep_compute_wire_size () =
   (* dep_slice: length=4 -> total = 2 + 4 = 6 *)
@@ -259,25 +250,25 @@ let test_dep_compute_wire_size () =
   Bytes.set_uint16_be buf 0 4;
   Alcotest.(check int)
     "dep_slice compute" 6
-    (decode_ok (Codec.wire_size_at dep_slice_codec buf 0));
+    (decode_ok (Codec.size_at dep_slice_codec buf 0));
   (* dep_slice: length=0 -> total = 2 + 0 = 2 *)
   Bytes.set_uint16_be buf 0 0;
   Alcotest.(check int)
     "dep_slice compute 0" 2
-    (decode_ok (Codec.wire_size_at dep_slice_codec buf 0));
+    (decode_ok (Codec.size_at dep_slice_codec buf 0));
   (* trailer: length=3 -> total = 2 + 3 + 2 = 7 *)
   let buf2 = Bytes.create 7 in
   Bytes.set_uint16_be buf2 0 3;
   Alcotest.(check int)
     "trailer compute" 7
-    (decode_ok (Codec.wire_size_at trailer_codec buf2 0));
+    (decode_ok (Codec.size_at trailer_codec buf2 0));
   (* fixed codec: compute returns fixed size without reading buffer *)
   Alcotest.(check int)
     "fixed compute"
-    (Codec.wire_size simple_record_codec)
-    (decode_ok (Codec.wire_size_at simple_record_codec (Bytes.create 7) 0))
+    (Codec.min_size simple_record_codec)
+    (decode_ok (Codec.size_at simple_record_codec (Bytes.create 7) 0))
 
-(* [wire_size_at] reads a record's sizes from the buffer, so bytes that hold
+(* [size_at] reads a record's sizes from the buffer, so bytes that hold
    no size are input: it answers the end-of-input error of the bytes it reads
    a size from, and raises [Invalid_argument] only on a negative offset. *)
 let test_dep_wire_size_at_bad_bytes () =
@@ -285,7 +276,7 @@ let test_dep_wire_size_at_bad_bytes () =
   let answers name codec buf off ~expected =
     Alcotest.(check (result int error))
       name (Error expected)
-      (Codec.wire_size_at codec buf off)
+      (Codec.size_at codec buf off)
   in
   answers "a length the buffer cuts" dep_slice_codec (Bytes.of_string "\x00") 0
     ~expected:
@@ -295,9 +286,7 @@ let test_dep_wire_size_at_bad_bytes () =
     5
     ~expected:
       { at = 5; field = []; kind = Unexpected_eof { expected = 2; got = 0 } };
-  match
-    Codec.wire_size_at dep_slice_codec (Bytes.of_string "\x00\x00") (-1)
-  with
+  match Codec.size_at dep_slice_codec (Bytes.of_string "\x00\x00") (-1) with
   | _ -> Alcotest.fail "a negative offset answered a size"
   | exception Invalid_argument _ -> ()
 
@@ -377,13 +366,11 @@ let test_dep_ref_size_eval () =
   in
   let buf = Bytes.create 11 in
   Bytes.set_uint8 buf 0 10;
-  Alcotest.(check int)
-    "compute size" 11
-    (decode_ok (Codec.wire_size_at codec buf 0));
+  Alcotest.(check int) "compute size" 11 (decode_ok (Codec.size_at codec buf 0));
   Bytes.set_uint8 buf 0 0;
   Alcotest.(check int)
     "compute size 0" 1
-    (decode_ok (Codec.wire_size_at codec buf 0))
+    (decode_ok (Codec.size_at codec buf 0))
 
 let signed_magnitude_seek_codec =
   let f_seek =

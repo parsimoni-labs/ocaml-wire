@@ -77,43 +77,39 @@ val v :
     field, a field type the codec has no reader or writer for, or fixed fields
     that add up to more than a buffer can hold. *)
 
-val wire_size_opt : 'r t -> int option
-(** Fixed wire size in bytes, or [None] if the codec is variable-length. *)
+val size : 'r t -> int option
+(** [size c] is the number of bytes of every record of [c], or [None] if [c] is
+    of variable size. *)
 
-val wire_size : 'r t -> int
-(** Fixed wire size in bytes.
+val min_size : 'r t -> int
+(** [min_size c] is the fewest bytes a record of [c] takes: its size when [c] is
+    of constant size. *)
 
-    Raises [Invalid_argument] if the codec is variable-length. *)
-
-val min_wire_size : 'r t -> int
-(** Minimum wire size in bytes (for variable-length codecs). *)
-
-val wire_size_at :
-  ?env:Param.env -> 'r t -> bytes -> int -> (int, Error.t) result
-(** [wire_size_at c buf off] is the size of the record at [off] in [buf], read
-    from the sizes the buffer holds, or the error of bytes that hold none: the
-    end of input where the buffer cuts a length field. It does not check that
-    the record fits in [buf].
+val size_at : ?env:Param.env -> 'r t -> bytes -> int -> (int, Error.t) result
+(** [size_at c buf off] is the size of the record at [off] in [buf], read from
+    the sizes the buffer holds, or the error of bytes that hold none: the end of
+    input where the buffer cuts a length field. It does not check that the
+    record fits in [buf].
 
     Raises [Invalid_argument] on a negative [off], and when [c]'s field sizes
     are driven by an input param and [?env] is omitted, the same as {!decode}:
     an unbound param reads 0, which would silently measure a param-sized field
     as empty and report an extent shorter than the record. *)
 
-val size_of_value : ?env:Param.env -> 'r t -> 'r -> int
-(** [size_of_value c v] returns the number of bytes that [encode c v] will
-    write. Computed from [v], not from a buffer: works for variable-size codecs
-    whose tail is [all_bytes] / [rest_bytes] / [all_zeros], where the
-    buffer-driven {!wire_size_at} cannot distinguish "value's tail" from
-    "remaining buffer space". Fixed-size byte arrays and slices contribute their
-    declared region size, which {!encode} requires the value to match exactly.
+val encoded_size : ?env:Param.env -> 'r t -> 'r -> int
+(** [encoded_size c v] is the number of bytes [encode c v] writes. Computed from
+    [v], not from a buffer: works for variable-size codecs whose tail is
+    [all_bytes] / [rest_bytes] / [all_zeros], where the buffer-driven {!size_at}
+    cannot distinguish "value's tail" from "remaining buffer space". Fixed-size
+    byte arrays and slices contribute their declared region size, which
+    {!encode} requires the value to match exactly.
 
     Raises [Invalid_argument] for a value {!encode} would refuse, such as a
     casetype value no case projects: there is no size to report for bytes that
     cannot be written. *)
 
-val size_of_value_ctx : 'r t -> Types.eval_ctx -> 'r -> int
-(** Context-threaded {!size_of_value}, for an embedded sub-codec whose parent
+val encoded_size_ctx : 'r t -> Types.eval_ctx -> 'r -> int
+(** Context-threaded {!encoded_size}, for an embedded sub-codec whose parent
     already holds the evaluation context. Internal use. *)
 
 val env : 'r t -> Param.env
@@ -593,6 +589,10 @@ val field_readers_ctx :
 
 val pp : Format.formatter -> 'r t -> unit
 (** Pretty-print a codec (shows its name). *)
+
+val pp_value : 'r t -> 'r Fmt.t
+(** [pp_value c] prints a record of [c] field by field, each integer field with
+    its value as {!field_readers} reads it from the record's encoding. *)
 
 val field_ref : ('a, 'r) field -> int Types.expr
 (** Expression referencing a field by name. *)

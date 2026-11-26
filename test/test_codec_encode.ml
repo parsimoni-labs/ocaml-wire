@@ -671,7 +671,7 @@ let test_encode_exact_bits_width () =
           Codec.encode codec over buf 0;
           Bytes.to_string buf);
       let widest = over - 1 in
-      let buf = Bytes.make (Codec.wire_size codec) '\x00' in
+      let buf = Bytes.make (Codec.min_size codec) '\x00' in
       Codec.encode codec widest buf 0;
       Alcotest.(check string)
         (label ^ ": widest legal value agrees across entry points")
@@ -684,7 +684,7 @@ let test_encode_exact_bits_width () =
 let test_set_exact_bits_width () =
   iter_bits_widths (fun ~base ~bname ~width ~bit_order ~oname ->
       let codec, cf = bits_width_codec ~bit_order ~width base in
-      let size = Codec.wire_size codec in
+      let size = Codec.min_size codec in
       let set = Codec.set codec cf in
       let get = reader codec cf in
       let over = 1 lsl width in
@@ -922,8 +922,8 @@ let test_constant_size_expression_folds () =
   Codec.encode folded "abcd" buf 0;
   Alcotest.(check string) "constant exact" "abcd" (Bytes.to_string buf);
   (* 2. wire_size *)
-  Alcotest.(check int) "literal wire_size" 4 (Codec.wire_size lit);
-  Alcotest.(check int) "constant wire_size" 4 (Codec.wire_size folded);
+  Alcotest.(check int) "literal wire_size" 4 (Codec.min_size lit);
+  Alcotest.(check int) "constant wire_size" 4 (Codec.min_size folded);
   (* 3. the uint_var 1-7 range guard after constant folding *)
   let uint_var_rejects label size =
     match uint_var size with
@@ -1058,14 +1058,14 @@ let test_fixed_encode_allocates_nothing () =
         Alcotest.failf "%d encodes allocated %.0f words" n words
 
 (* A region sized by an earlier field of the record: encoding the decoded value
-   writes back the bytes, and [size_of_value] is what decode consumed. The size
+   writes back the bytes, and [encoded_size] is what decode consumed. The size
    comes from the record, not from a parameter, so neither needs an [env]. *)
 let region_roundtrip label codec input =
   let v = decode_ok (Codec.decode codec (Bytes.of_string input) 0) in
   Alcotest.(check int)
     (label ^ ": size_of_value")
     (String.length input)
-    (Codec.size_of_value codec v);
+    (Codec.encoded_size codec v);
   let out = Bytes.make (String.length input) '\xff' in
   Codec.encode codec v out 0;
   Alcotest.(check string) (label ^ ": encode") input (Bytes.to_string out)

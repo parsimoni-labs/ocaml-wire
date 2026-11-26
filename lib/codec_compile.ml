@@ -22,7 +22,7 @@ type ('a, 'r) compiled_field = {
       (* Writers that run strictly before [raw_writer] -- e.g. a bf_clear that
          opens a new packed base word. Returns the input [write_off] unchanged. *)
   field_access : field_access;
-  size_delta : int; (* added to [min_wire_size] *)
+  size_delta : int; (* added to [min_size] *)
   next_off : next_off; (* new [next_off] *)
   bf_after : bf_codec_state option;
   int_reader : runtime -> Input_end.t -> bytes -> int -> int;

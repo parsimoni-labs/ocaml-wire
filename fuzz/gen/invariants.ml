@@ -493,7 +493,7 @@ let check_path_coverage () =
    registry codec whose check pass stages them, so one must. *)
 let check_staged_coverage () =
   let staged (_, Pack g) =
-    let buf = Bytes.make (Wire.Codec.min_wire_size g.codec) '\000' in
+    let buf = Bytes.make (Wire.Codec.min_size g.codec) '\000' in
     Option.is_some (Wire.Private.Testing.staged_intervals g.codec buf 0)
   in
   if Sys.int_size >= 63 && not (List.exists staged registry) then

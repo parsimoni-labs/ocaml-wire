@@ -35,7 +35,7 @@ let packet_tests () =
           let expected =
             match
               ( Wire.Codec.decode c.codec frame 0,
-                Wire.Codec.wire_size_at c.codec frame 0 )
+                Wire.Codec.size_at c.codec frame 0 )
             with
             | Error _, _ | _, Error _ -> None
             | Ok value, Ok n -> Some (n, c.project value)

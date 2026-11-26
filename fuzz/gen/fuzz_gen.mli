@@ -46,14 +46,14 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     other drops shows up here rather than in the generated C.
 
     A positive also has to agree about its own size, under whatever env it
-    needs. {!Wire.Codec.size_of_value} measures the value and must answer the
-    encoded length with an env bound and without one; {!Wire.Codec.wire_size_at}
+    needs. {!Wire.Codec.encoded_size} measures the value and must answer the
+    encoded length with an env bound and without one; {!Wire.Codec.size_at}
     measures the buffer, so a parametric field's width comes out of the env, and
     with one bound it must span exactly the canonical encoding. Without one, a
-    codec that reads an input param must refuse: decode, validate and
-    [wire_size_at] all raise rather than resolve the unbound param to 0 and
-    measure a param-sized field as empty, which would read as a valid short
-    record instead of an error.
+    codec that reads an input param must refuse: decode, validate and [size_at]
+    all raise rather than resolve the unbound param to 0 and measure a
+    param-sized field as empty, which would read as a valid short record instead
+    of an error.
 
     Every rejection also has to say which field it is about, and mean it: each
     name on a parse error's field path must be a field the codec declares
@@ -74,19 +74,19 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
 
     On top of that each stream is transformed in ways the answer must not depend
     on. Prepending [k] arbitrary bytes and reading the frame at offset [k] must
-    give decode, validate, [wire_size_at] and every [get] the answer they gave
-    at offset 0, must report a rejection for the same reason with every offset
+    give decode, validate, [size_at] and every [get] the answer they gave at
+    offset 0, must report a rejection for the same reason with every offset
     shifted by exactly [k], and must let [encode] write the same bytes without
     touching one outside the frame. An accepted frame must decode the same after
-    the buffer is cut to the [wire_size_at] it declares, and appending bytes may
+    the buffer is cut to the [size_at] it declares, and appending bytes may
     change what it reads only if its declared size grew to cover them, which is
     how a greedy {!Wire.all_bytes} / {!Wire.all_zeros} / {!Wire.rest_bytes} tail
     is allowed its end-of-buffer semantics without the rest of the registry
-    being excused with it. Nothing shorter than [min_wire_size] may decode.
-    Finally, every read path must leave the buffer byte-identical, and running
-    one frame through all of them must not change the answer a later read of a
-    different frame gives, which is what the shared per-domain decode scratch
-    makes possible.
+    being excused with it. Nothing shorter than [min_size] may decode. Finally,
+    every read path must leave the buffer byte-identical, and running one frame
+    through all of them must not change the answer a later read of a different
+    frame gives, which is what the shared per-domain decode scratch makes
+    possible.
 
     Every stream is also run through the codec with its fast paths off
     ({!Wire.Private.Testing.general}) and through one not yet compiled
@@ -116,7 +116,7 @@ val nested_cases : string -> int -> Alcobar.test_case list
     runs the same checks as {!test_cases}, including the per-field accessor
     properties, which reach the generated records' own fields, and the offset,
     framing and read-purity properties. This exercises compositions no curated
-    list enumerates, surfacing offset / [size_of_value] drift that only shows up
+    list enumerates, surfacing offset / [encoded_size] drift that only shows up
     when combinators nest. *)
 
 val validate_agrees_cases : string -> int -> Alcobar.test_case list
@@ -157,9 +157,9 @@ val api_cases : string -> Alcobar.test_case list
 (** [api_cases label] exercises Wire API surfaces that are not naturally covered
     by value round-trips over one typ: staged [Codec.get] / [set] accessors,
     slice navigation, batch bitfield extraction, custom sequence maps, direct
-    struct validators, metadata helpers, [Wire.size], [pp_value], and cheap
-    Everparse / Raw projection helpers. File-writing projection helpers are
-    guarded to run once per process so repeated fuzz loops stay fast. *)
+    struct validators, metadata helpers, [Wire.size], [Codec.pp_value], and
+    cheap Everparse / Raw projection helpers. File-writing projection helpers
+    are guarded to run once per process so repeated fuzz loops stay fast. *)
 
 val direct_cases : string -> 'a t -> Alcobar.test_case list
 (** [direct_cases label g] round-trips a gen through {!Wire.of_string} and
@@ -289,7 +289,7 @@ val sized_cases : string -> Alcobar.test_case list
     length/region codec whose {!Wire.nested}, {!Wire.nested_at_most} or
     {!Wire.zeroterm_at_most} region is sized by the length field. Regression
     coverage for cross-field size expressions that read an unusual size-source
-    field, and for {!Wire.Codec.size_of_value} reading such a size from the
+    field, and for {!Wire.Codec.encoded_size} reading such a size from the
     value. *)
 
 val span_fault_cases : string -> Alcobar.test_case list

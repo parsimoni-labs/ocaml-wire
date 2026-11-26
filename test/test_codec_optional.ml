@@ -121,7 +121,7 @@ let test_bytearray_sized_by_optional_or () =
         ]
   in
   let rt v expected =
-    let buf = Bytes.create (Codec.size_of_value c v) in
+    let buf = Bytes.create (Codec.encoded_size c v) in
     Codec.encode c v buf 0;
     Alcotest.(check string) "encoded bytes" expected (Bytes.to_string buf);
     match Codec.decode c buf 0 with
@@ -138,10 +138,10 @@ let test_bytearray_sized_by_optional_or () =
   rt (UInt8.zero, UInt8.v 3, "xyz") "\x00\x03xyz"
 
 let test_optional_wire_size_present () =
-  Alcotest.(check int) "wire_size present" 4 (Codec.wire_size opt_codec_present)
+  Alcotest.(check int) "wire_size present" 4 (Codec.min_size opt_codec_present)
 
 let test_optional_wire_size_absent () =
-  Alcotest.(check int) "wire_size absent" 2 (Codec.wire_size opt_codec_absent)
+  Alcotest.(check int) "wire_size absent" 2 (Codec.min_size opt_codec_absent)
 
 (* Optional with codec inner type *)
 
@@ -311,14 +311,14 @@ let test_dyn_opt_get_trail () =
 let check_dyn_opt_roundtrip label expected_len expected_bytes original =
   Alcotest.(check int)
     (label ^ " size_of_value") expected_len
-    (Codec.size_of_value dyn_opt_codec original);
+    (Codec.encoded_size dyn_opt_codec original);
   let buf = Bytes.create expected_len in
   Codec.encode dyn_opt_codec original buf 0;
   Alcotest.(check string)
     (label ^ " bytes") expected_bytes (Bytes.to_string buf);
   Alcotest.(check int)
     (label ^ " wire_size_at") expected_len
-    (decode_ok (Codec.wire_size_at dyn_opt_codec buf 0));
+    (decode_ok (Codec.size_at dyn_opt_codec buf 0));
   let decoded = decode_ok (Codec.decode dyn_opt_codec buf 0) in
   Alcotest.(check int)
     (label ^ " flags")
@@ -345,7 +345,7 @@ let test_field_optional_dynamic_roundtrip () =
 
 let test_dyn_opt_reject_gate () =
   let check_reject label v =
-    let len = Codec.size_of_value dyn_opt_codec v + 4 in
+    let len = Codec.encoded_size dyn_opt_codec v + 4 in
     match Codec.encode dyn_opt_codec v (Bytes.create len) 0 with
     | () -> Alcotest.failf "%s: encode unexpectedly succeeded" label
     | exception Invalid_argument _ -> ()
@@ -361,12 +361,12 @@ let test_dyn_opt_reject_gate () =
 
 let test_encode_totality () =
   let check_exact label original =
-    let len = Codec.size_of_value dyn_opt_codec original in
+    let len = Codec.encoded_size dyn_opt_codec original in
     let buf = Bytes.create len in
     Codec.encode dyn_opt_codec original buf 0;
     Alcotest.(check int)
       (label ^ " wire_size_at") len
-      (decode_ok (Codec.wire_size_at dyn_opt_codec buf 0));
+      (decode_ok (Codec.size_at dyn_opt_codec buf 0));
     if len > 0 then
       match Codec.encode dyn_opt_codec original (Bytes.create (len - 1)) 0 with
       | () -> Alcotest.failf "%s: short buffer accepted" label

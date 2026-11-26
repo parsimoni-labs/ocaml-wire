@@ -127,7 +127,7 @@ let tlv_codec =
 
 let test_casetype_default_recovers_tag () =
   let v = Unknown (UInt8.v 0x42, "ab") in
-  let buf = Bytes.create (Codec.size_of_value tlv_codec v) in
+  let buf = Bytes.create (Codec.encoded_size tlv_codec v) in
   Codec.encode tlv_codec v buf 0;
   Alcotest.(check int)
     "encode writes the captured tag" 0x42 (Bytes.get_uint8 buf 0);
@@ -146,12 +146,12 @@ let test_casetype_field_roundtrip () =
   Alcotest.(check int64) "ts roundtrip" original.ts decoded.ts;
   Alcotest.(check bool) "data roundtrip" true (original.data = decoded.data)
 
-(* [Codec.size_of_value] counts a casetype field's tag plus its matched-case
+(* [Codec.encoded_size] counts a casetype field's tag plus its matched-case
    body, so a buffer sized from it holds the whole encoding. *)
 let test_casetype_size_of_value () =
   let original = { ts = 123L; data = `Login (UInt16.v 0xabcd) } in
   (* ts (8) + tag (1) + Login body uint16be (2) = 11 *)
-  let n = Codec.size_of_value casetype_field_codec original in
+  let n = Codec.encoded_size casetype_field_codec original in
   Alcotest.(check int) "size_of_value" 11 n;
   let buf = Bytes.create n in
   Codec.encode casetype_field_codec original buf 0;
@@ -301,7 +301,7 @@ let zt_codec =
 
 let test_repeat_casetype_zeroterm_at_most () =
   let v = [ Str "hi"; Num (UInt8.v 7); Str "" ] in
-  let buf = Bytes.create (Codec.size_of_value zt_codec v) in
+  let buf = Bytes.create (Codec.encoded_size zt_codec v) in
   Codec.encode zt_codec v buf 0;
   Alcotest.(check bool)
     "roundtrip" true
@@ -341,7 +341,7 @@ let bf_codec =
 
 let test_repeat_casetype_bits_case () =
   let v = [ Bf 5; Raw (UInt8.v 9); Bf 0 ] in
-  let buf = Bytes.create (Codec.size_of_value bf_codec v) in
+  let buf = Bytes.create (Codec.encoded_size bf_codec v) in
   Codec.encode bf_codec v buf 0;
   Alcotest.(check bool)
     "roundtrip" true

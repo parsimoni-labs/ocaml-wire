@@ -497,18 +497,18 @@ let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~structs ~module_ ~test_ml
    EverParse emits: a capital after a digit, and a lower-case first letter. *)
 let test_e2e_no_params () =
   List.iter
-    (fun name ->
+    (fun label ->
       let f_version = Wire.Field.v "version" uint8 in
       let f_length = Wire.Field.v "length" uint16be in
       let codec =
         let open Wire.Codec in
-        v name
+        v label
           (fun version length -> (version, length))
           [ (f_version $ fun (v, _) -> v); (f_length $ fun (_, l) -> l) ]
       in
       let schema = Wire.Everparse.project ~mode:`Ffi codec in
       let s = Wire.Everparse.Raw.struct_of_codec codec in
-      e2e ~name ~structs:[ s ] ~module_:schema.module_
+      e2e ~name:label ~structs:[ s ] ~module_:schema.module_
         ~test_ml:
           (Fmt.str
              {|let () =
@@ -519,7 +519,7 @@ let test_e2e_no_params () =
   assert (r.Stubs.version = 1);
   assert (r.Stubs.length = 42)
 |}
-             (String.lowercase_ascii name))
+             (String.lowercase_ascii label))
         ())
     [ "TestHeader"; "Foo2Bar"; "myField" ]
 

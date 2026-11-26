@@ -11,7 +11,7 @@ type case = { id : Demo_bench_cases.id; label : string; packed : Wire_diff.t }
 
 let of_case (type a) (Read_case c : a read_case) =
   let stubs = C_stubs.stubs_of_name (Everparse.Raw.struct_name c.struct_) in
-  let size = Codec.wire_size c.codec in
+  let size = Codec.min_size c.codec in
   let c_parse : bytes -> a =
     match c.of_c_field with
     | Int f -> fun buf -> f (stubs.projected_int buf 0)

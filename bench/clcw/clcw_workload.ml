@@ -4,7 +4,7 @@
 module C = Wire.Codec
 module W = C.Word
 
-let word_size = Wire.Codec.wire_size Space.clcw_codec
+let word_size = Wire.Codec.min_size Space.clcw_codec
 let cf_report = Space.bf_cw_report
 let cf_lockout = Space.bf_cw_lockout
 let cf_wait = Space.bf_cw_wait

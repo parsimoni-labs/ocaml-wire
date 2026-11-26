@@ -120,7 +120,7 @@ let specialisable c =
   s.params = []
   && Option.fold ~none:true ~some:expr_ok s.where
   && List.for_all field_ok s.fields
-  && Option.is_some (Wire.Codec.wire_size_opt c)
+  && Option.is_some (Wire.Codec.size c)
 
 (* A refusal is expected of a codec outside that set, and of one whose field
    names would spell the same OCaml name twice. *)
@@ -277,7 +277,7 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
    around it, too short, and at an offset out of range. *)
 let encodes_at case (Fuzz_gen.Pack g) buf off =
   let c = Fuzz_gen.codec g in
-  let size = Wire.Codec.wire_size c in
+  let size = Wire.Codec.min_size c in
   match Wire.Codec.decode c buf off with
   | Error _ | (exception Invalid_argument _) -> ()
   | Ok v ->
@@ -323,7 +323,7 @@ let valid case (Fuzz_gen.Pack g) buf =
 
 let check label (Fuzz_gen.Pack g as codec) m =
   let c = Fuzz_gen.codec g in
-  let size = Wire.Codec.wire_size c in
+  let size = Wire.Codec.min_size c in
   let refs =
     List.sort_uniq compare (List.map (fun (n, _, _) -> n) m.bytes.gets)
     |> List.map (fun n -> (n, reference c n))
@@ -493,19 +493,19 @@ let codec_value codec frame =
   match Wire.Codec.decode codec frame 0 with
   | Error e -> Error e
   | Ok x ->
-      (* [Codec.size_of_value] takes no size a field gives a region, so the
+      (* [Codec.encoded_size] takes no size a field gives a region, so the
          codec's record is measured where it encoded it. *)
       let out = Bytes.make (Bytes.length frame) '\000' in
       Wire.Codec.encode codec x out 0;
       Result.map
         (fun n -> Bytes.sub_string out 0 n)
-        (Wire.Codec.wire_size_at codec out 0)
+        (Wire.Codec.size_at codec out 0)
 
 let same_result ok a b = Result.equal ~ok ~error:Wire.Error.equal a b
 
 (* The module's record of a frame against the codec's: the same bytes written
    back, or the same error. The codec cannot encode a record whose region a
-   field sizes ([Codec.size_of_value] asks for an env): the module's bytes
+   field sizes ([Codec.encoded_size] asks for an env): the module's bytes
    must then decode with the codec, to as many bytes as the frame's. *)
 let check_decoded ~name codec frame got =
   match (codec_value codec frame, got) with
@@ -515,7 +515,7 @@ let check_decoded ~name codec frame got =
           Alcobar.failf "%s: the module refuses %S" name (Bytes.to_string frame)
       | Ok s ->
           if
-            Wire.Codec.wire_size_at codec frame 0 <> Ok (String.length s)
+            Wire.Codec.size_at codec frame 0 <> Ok (String.length s)
             || Result.is_error (Wire.Codec.decode codec (Bytes.of_string s) 0)
           then
             Alcobar.failf "%s: on %S the module writes back %S" name
@@ -651,7 +651,7 @@ let scan_oracle (Reference r as ref_) oracle bounded value buf off len =
       let consumed =
         match (bounded, value) with
         | Some b, Some _ -> (
-            match Wire.Codec.wire_size_at r.codec b 0 with
+            match Wire.Codec.size_at r.codec b 0 with
             | Ok n -> n
             | Error _ -> -1)
         | _ -> -1

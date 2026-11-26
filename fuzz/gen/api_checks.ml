@@ -223,7 +223,7 @@ let check_api_accessors a hi lo payload_s next_a next_hi next_lo next_payload_s
   let payload = slice_of_string payload_s in
   let value = { a = Wire.UInt8.v a; hi; lo; payload } in
   let base = 1 in
-  let sz = Wire.Codec.wire_size codec in
+  let sz = Wire.Codec.min_size codec in
   let buf = Bytes.make (sz + 2) '\xCC' in
   Wire.Codec.encode codec value buf base;
   check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo payload_s;
@@ -402,7 +402,9 @@ let check_metadata_helpers () =
       (fun src copy -> (src, copy))
       Wire.Codec.[ f_src $ fst; f_copy $ snd ]
   in
-  let pp_value = Fmt.str "%a" (pp_value pp_codec) (UInt8.v 7, UInt8.v 1) in
+  let pp_value =
+    Fmt.str "%a" (Codec.pp_value pp_codec) (UInt8.v 7, UInt8.v 1)
+  in
   if not (String.contains pp_value 'S') then
     Alcobar.failf "pp_value did not include field output: %S" pp_value;
   let _ = Wire.Codec.field_ref Wire.Codec.(f_src $ fst) in

@@ -85,7 +85,7 @@ let test_agrees_with_codec () =
       | _ -> assert false)
   in
   let values = [ 5; 17; 99; 3000; 2; 41; 0xABCDE ] in
-  let size = Codec.wire_size c in
+  let size = Codec.min_size c in
   let buf = Bytes.make size '\000' in
   Codec.encode c values buf 0;
   let laid, laid_size = place spec in

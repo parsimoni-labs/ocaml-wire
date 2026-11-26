@@ -57,7 +57,7 @@ let test_getter_errors () =
 (* A field taken out of its word reads what its own getter reads, from a
    checked load or through a view. *)
 let test_words () =
-  let size = Codec.min_wire_size Schemas.wide in
+  let size = Codec.min_size Schemas.wide in
   for _ = 1 to 2000 do
     let buf, off = input ~size in
     let fields =

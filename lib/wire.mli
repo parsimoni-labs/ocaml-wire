@@ -1191,38 +1191,36 @@ module Codec : sig
       generically built codec a unique, meaningful name for projection or code
       generation. *)
 
+  val name : 'r t -> string
+  (** [name c] is the name of [c], which {!rename} sets. *)
+
   val doc : 'r t -> string option
   (** [doc c] is the note attached via {!v}'s [?doc], if any. *)
 
-  val wire_size_opt : 'r t -> int option
-  (** Fixed wire size of the codec, or [None] if it is variable-size. *)
+  val min_size : 'r t -> int
+  (** [min_size c] is the fewest bytes a record of [c] takes: its size when [c]
+      is of constant size. *)
 
-  val wire_size : 'r t -> int
-  (** Fixed wire size of the codec.
+  val size : 'r t -> int option
+  (** [size c] is the number of bytes of every record of [c], or [None] if [c]
+      is of variable size. *)
 
-      Raises [Invalid_argument] if the codec is variable-size. *)
-
-  val min_wire_size : 'r t -> int
-  (** Minimum wire size of the codec. *)
-
-  val wire_size_at :
-    ?env:Param.env -> 'r t -> bytes -> int -> (int, Error.t) result
-  (** [wire_size_at c buf off] is the size of the record at [off] in [buf], read
-      from the sizes the buffer holds, or the error of bytes that hold none: the
-      end of input where the buffer cuts a length field. It does not check that
-      the record fits in [buf].
+  val size_at : ?env:Param.env -> 'r t -> bytes -> int -> (int, Error.t) result
+  (** [size_at c buf off] is the size of the record at [off] in [buf], read from
+      the sizes the buffer holds, or the error of bytes that hold none: the end
+      of input where the buffer cuts a length field. It does not check that the
+      record fits in [buf].
 
       Raises [Invalid_argument] on a negative [off], and when [c]'s field sizes
       are driven by an input param and [?env] is omitted, the same as {!decode}:
       an unbound param reads 0, which would silently measure a param-sized field
       as empty and report an extent shorter than the record. *)
 
-  val size_of_value : ?env:Param.env -> 'r t -> 'r -> int
-  (** [size_of_value c v] returns the number of bytes that [encode c v] will
-      write for value [v]. For fixed-size codecs, this is the same as
-      {!wire_size}; for dynamic-size codecs, the result depends on [v]. Raises
-      [Invalid_argument] for a value {!encode} would refuse, such as a casetype
-      value no case projects. *)
+  val encoded_size : ?env:Param.env -> 'r t -> 'r -> int
+  (** [encoded_size c v] is the number of bytes [encode c v] writes. For a codec
+      of constant size it is {!size}; for dynamic-size codecs, the result
+      depends on [v]. Raises [Invalid_argument] for a value {!encode} would
+      refuse, such as a casetype value no case projects. *)
 
   val env : 'r t -> Param.env
   (** [env c] creates a fresh parameter environment for codec [c]. *)
@@ -1287,6 +1285,17 @@ module Codec : sig
   val to_string : ?env:Param.env -> 'r t -> 'r -> string
   (** String counterpart of {!to_bytes}. The result is backed by the fresh
       encoding buffer; no mutable alias to that buffer escapes. *)
+
+  val pp_value : 'r t -> 'r Fmt.t
+  (** [pp_value c] prints a record of [c] field by field: integer-valued fields
+      show as [name = value], the others are skipped. Use it with [%a]:
+      [Fmt.pr "%a@." (Codec.pp_value c) v].
+
+      It encodes the value to read the fields back and threads no {!Param.env},
+      so on a codec whose sizes or constraints reference a
+      {!module-Param.val-input} it raises [Invalid_argument]: with no binding
+      those params read as zero, and the record that comes out is not one the
+      codec accepts. *)
 
   val validate :
     ?env:Param.env -> 'r t -> bytes -> int -> (unit, Error.t) result
@@ -1732,16 +1741,6 @@ end
 type 'r codec = 'r Codec.t
 (** Convenience alias so callers can write [Wire.codec] instead of
     [Wire.Codec.t]. *)
-
-val pp_value : 'r codec -> 'r Fmt.t
-(** [pp_value c] is a formatter that prints a record field-by-field through
-    codec [c]. Integer-valued fields show as [name = value]; non-integer fields
-    are skipped. Use with [%a]: [Fmt.pr "%a@." (Wire.pp_value c) v].
-
-    It encodes the value to read the fields back and threads no {!Param.env}, so
-    on a codec whose sizes or constraints reference a {!module-Param.val-input}
-    it raises [Invalid_argument]: with no binding those params read as zero, and
-    the record that comes out is not one the codec accepts. *)
 
 (** {1 Nested Codec Combinators}
 

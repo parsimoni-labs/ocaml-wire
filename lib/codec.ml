@@ -189,23 +189,15 @@ let rec compile (t : 'r t) : 'r compiled =
 let[@inline] compiled (t : 'r t) : 'r compiled =
   match Atomic.get t.compiled with Some c -> c | None -> compile t
 
-let wire_size_opt (t : _ t) =
+let size (t : _ t) =
   match (compiled t).wire_size with Fixed n -> Some n | Variable _ -> None
 
-let wire_size (t : _ t) =
-  match (compiled t).wire_size with
-  | Fixed n -> n
-  | Variable _ ->
-      invalid_arg
-        "Codec.wire_size: variable-size codec (use wire_size_opt or \
-         wire_size_at instead)"
-
-let min_wire_size (t : _ t) =
+let min_size (t : _ t) =
   match (compiled t).wire_size with
   | Fixed n -> n
   | Variable { min_size; _ } -> min_size
 
-let size_of_value_ctx (t : _ t) = (compiled t).size_of_value
+let encoded_size_ctx (t : _ t) = (compiled t).size_of_value
 
 let raw_decode (t : _ t) buf off =
   (compiled t).decode no_runtime (Input_end.of_bytes buf) buf off
@@ -260,8 +252,8 @@ let require_env ~op t = function
    with input params refuses here exactly as it does on [decode] rather than
    answering. Bytes that hold no size are input, answered with their error; a
    negative offset is misuse. *)
-let wire_size_at ?env:e (t : _ t) buf off =
-  require_env ~op:"wire_size_at" t e;
+let size_at ?env:e (t : _ t) buf off =
+  require_env ~op:"size_at" t e;
   if off < 0 then Errors.negative_offset off
   else
     match (compiled t).wire_size with
@@ -275,12 +267,12 @@ let wire_size_at ?env:e (t : _ t) buf off =
 (* A parametric field size resolves through [env], as it does for {!encode}.
    Without one the size stays symbolic and a field measured by it refuses
    rather than reporting 0, which a caller would allocate from. *)
-let size_of_value ?env:e (t : _ t) v =
+let encoded_size ?env:e (t : _ t) v =
   (* An env that is given must be this codec's and fully bound, as for encode.
      One that is absent is not an error: a caller legitimately asks for the size
      before it has a budget to bind, and every extent the value itself settles
      still answers. *)
-  (match e with None -> () | Some _ -> require_env ~op:"size_of_value" t e);
+  (match e with None -> () | Some _ -> require_env ~op:"encoded_size" t e);
   (compiled t).size_of_value (runtime ?env:e ()) v
 
 let raw_encode ?env:e t v buf off =
@@ -526,7 +518,7 @@ let encode_slow e t v buf off =
      of the value. Overrun is loud already. *)
   if actual < expected then
     Fmt.invalid_arg
-      "Codec.encode %s: size_of_value reported %d bytes but the encoded form \
+      "Codec.encode %s: encoded_size reported %d bytes but the encoded form \
        spans %d -- writer wrote fewer bytes than promised"
       t.name expected actual
 
@@ -588,7 +580,7 @@ let validate ?env t buf off =
       Error e
 
 let encode_fresh ~op ?env t v =
-  let buf = Bytes.create (size_of_value ?env t v) in
+  let buf = Bytes.create (encoded_size ?env t v) in
   encode ?env t v buf 0;
   (try validate_exn ?env t buf 0
    with exn when Types.is_parse_error exn ->
@@ -1132,6 +1124,19 @@ let field_readers t =
               Error e ))
     (field_readers_ctx t)
 
+let pp_value (t : _ t) ppf v =
+  let ctx = Types.unbound_eval_ctx in
+  let buf = Bytes.create (encoded_size_ctx t ctx v) in
+  let _ : int = embed_encode_ctx t v ctx buf 0 in
+  Fmt.pf ppf "@[<hv 2>%s {" t.name;
+  List.iter
+    (fun (name, reader) ->
+      match reader buf 0 with
+      | Ok n -> Fmt.pf ppf "@ %s = %d;" name n
+      | Error e -> Fmt.pf ppf "@ %s = <%a>;" name Error.pp e)
+    (field_readers t);
+  Fmt.pf ppf "@ }@]"
+
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
 
 (* -- Record words -- *)
@@ -1507,7 +1512,7 @@ module Testing = struct
   let staged_intervals t buf off =
     match (compiled t).plain_pass with
     | Intervals { words = Some f; flat; tables; _ }
-      when off >= 0 && off <= Bytes.length buf - min_wire_size t ->
+      when off >= 0 && off <= Bytes.length buf - min_size t ->
         let scan =
           Codec_intervals.scan_intervals flat tables buf off (Array.length flat)
             0

@@ -366,7 +366,7 @@ let () =
       (fun (label, Fuzz_gen.Pack g) ->
         let c = Fuzz_gen.codec g in
         match Wire_rust.rs ~codec:label c with
-        | src -> Left (label, fields c, Wire.Codec.wire_size c, src)
+        | src -> Left (label, fields c, Wire.Codec.min_size c, src)
         | exception Invalid_argument msg -> Right (label, msg))
       Diff_ocaml.codecs
   in

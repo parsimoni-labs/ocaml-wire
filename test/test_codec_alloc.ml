@@ -544,7 +544,7 @@ let check_no_per_call_allocation name f =
 
 let test_get_allocates_its_answer () =
   skip_unless_gc_counters ();
-  let buf = Bytes.make (Codec.wire_size alloc_accessor_codec) '\007' in
+  let buf = Bytes.make (Codec.min_size alloc_accessor_codec) '\007' in
   let get f = Codec.get alloc_accessor_codec f in
   let get_hi = get alloc_bf_hi
   and get_u8 = get alloc_bf_u8
@@ -564,7 +564,7 @@ let test_get_allocates_its_answer () =
 
 let test_set_no_allocation () =
   skip_unless_gc_counters ();
-  let buf = Bytes.make (Codec.wire_size alloc_accessor_codec) '\007' in
+  let buf = Bytes.make (Codec.min_size alloc_accessor_codec) '\007' in
   let set f = Codec.set alloc_accessor_codec f in
   let set_hi = set alloc_bf_hi
   and set_u8 = set alloc_bf_u8
