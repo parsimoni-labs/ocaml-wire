@@ -355,7 +355,46 @@ let le2 (b:buf) (o:nat)
     assert (Plan.Word.be (byte b) (o + 1) 1 == byte b (o + 1))
 
 (* A field inside a 64-bit word, as the OxCaml scanner reads one: shifted
-   to the top, then down. *)
+   to the top, then down. Each step is a lemma of its own, its exponents
+   related by a linear precondition, so that no query depends on Z3
+   finding the products of powers of two: they hold with Z3's nonlinear
+   arithmetic off. *)
+
+#push-options "--z3rlimit 20 --fuel 0 --ifuel 0 --z3smtopt '(set-option :smt.arith.nl false)'"
+let pow2_split (a b c:nat)
+  : Lemma (requires a == b + c) (ensures pow2 a == pow2 b * pow2 c)
+  = M.pow2_plus b c
+
+(* Shifted left by [s] modulo 2^64, a pattern keeps its low [64 - s]
+   bits. *)
+let shl_mod (w:nat) (s:nat{s <= 64})
+  : Lemma ((w * pow2 s) % pow2 64 == (w % pow2 (64 - s)) * pow2 s)
+  = pow2_split 64 (64 - s) s;
+    let r = w % pow2 (64 - s) in
+    let q = w / pow2 (64 - s) in
+    M.lemma_div_mod w (pow2 (64 - s));
+    M.distributivity_add_left (q * pow2 (64 - s)) r (pow2 s);
+    M.paren_mul_right q (pow2 (64 - s)) (pow2 s);
+    M.lemma_mod_lt w (pow2 (64 - s));
+    M.lemma_mult_lt_right (pow2 s) r (pow2 (64 - s));
+    M.lemma_mod_plus (r * pow2 s) q (pow2 64);
+    M.small_mod (r * pow2 s) (pow2 64)
+
+(* Shifted left by [s], then right by [t = s + u], a value is shifted right
+   by [u]. *)
+let shr_shl (r:nat) (s u t:nat)
+  : Lemma (requires t == s + u) (ensures (r * pow2 s) / pow2 t == r / pow2 u)
+  = pow2_split t s u;
+    M.division_multiplication_lemma (r * pow2 s) (pow2 s) (pow2 u);
+    M.cancel_mul_div r (pow2 s)
+
+(* The low [a = u + n] bits shifted right by [u] are the [n] bits from bit
+   [u] up. *)
+let low_shr (w:nat) (u n a:nat)
+  : Lemma (requires a == u + n) (ensures (w % pow2 a) / pow2 u == (w / pow2 u) % pow2 n)
+  = pow2_split a u n;
+    M.modulo_division_lemma w (pow2 u) (pow2 n)
+
 let shift_pair (w:int64) (k m:nat)
   : Lemma (requires 1 <= k /\ 1 <= m /\ k + m <= 8)
           (ensures shift_right_logical (shift_left w (8 * k)) (64 - 8 * m) ==
@@ -365,26 +404,10 @@ let shift_pair (w:int64) (k m:nat)
     let t = 64 - 8 * m in
     shift_left_def w s;
     shift_right_logical_def (shift_left w s) t;
-    M.pow2_plus (64 - s) s;
-    M.lemma_div_mod w (pow2 (64 - s));
-    let r = w % pow2 (64 - s) in
-    let q = w / pow2 (64 - s) in
-    M.distributivity_add_left (q * pow2 (64 - s)) r (pow2 s);
-    M.paren_mul_right q (pow2 (64 - s)) (pow2 s);
-    M.lemma_mod_lt w (pow2 (64 - s));
-    M.lemma_mult_lt_right (pow2 s) r (pow2 (64 - s));
-    M.lemma_mod_plus (r * pow2 s) q (pow2 64);
-    M.small_mod (r * pow2 s) (pow2 64);
-    assert ((w * pow2 s) % pow2 64 == r * pow2 s);
-    M.pow2_plus s u;
-    assert (pow2 t == pow2 s * pow2 u);
-    M.division_multiplication_lemma (r * pow2 s) (pow2 s) (pow2 u);
-    M.cancel_mul_div r (pow2 s);
-    assert ((r * pow2 s) / pow2 t == r / pow2 u);
-    M.pow2_plus u (8 * m);
-    assert (pow2 (64 - s) == pow2 u * pow2 (8 * m));
-    M.modulo_division_lemma w (pow2 u) (pow2 (8 * m));
-    assert (r / pow2 u == (w / pow2 u) % pow2 (8 * m))
+    shl_mod w s;
+    shr_shl (w % pow2 (64 - s)) s u t;
+    low_shr w u (8 * m) (64 - s)
+#pop-options
 
 (* The [m] bytes at [o + k] out of the big-endian word at [o]. *)
 let word_bytes (b:bytes) (o:nat) (k:nat) (m:nat)
