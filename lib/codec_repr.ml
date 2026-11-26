@@ -432,7 +432,7 @@ let access_at : field_access -> runtime -> Input_end.t -> bytes -> int -> int =
    failed, so a field an earlier variable-size one moves pays nothing to locate
    itself when the check passes. *)
 let[@inline never] relocate at runtime input_end buf base e =
-  raise (Parse_error { e with at = at runtime input_end buf base })
+  raise_parse_error { e with at = at runtime input_end buf base }
 
 (* [access_at] for the environment-free readers, which never see an offset that
    depends on the buffer: [build_immediate_staged_reader] hands back [None] for
@@ -749,8 +749,11 @@ let bytes_leaves
 
 let eval_buffer_expr f runtime input_end buf base =
   try f runtime input_end buf base
-  with Parse_error ({ kind = Value_out_of_range _ | Zero_divisor; _ } as e) ->
-    raise (Parse_error { e with at = base })
+  with exn when is_parse_error exn -> (
+    match parse_error_of exn with
+    | { kind = Value_out_of_range _ | Zero_divisor; _ } as e ->
+        raise_parse_error { e with at = base }
+    | _ -> raise exn)
 
 let compile_expr ?sizeof_this env e =
   let f = Expr_compiler.compile_int (bytes_leaves ?sizeof_this env) e in
@@ -898,7 +901,9 @@ let rec compile_bool_arr cc (e : bool expr) : slots -> bool =
   | _ -> general ()
 
 let eval_arr_at ~at f arr =
-  try f arr with Parse_error e -> raise (Parse_error { e with at })
+  try f arr
+  with exn when is_parse_error exn ->
+    raise_parse_error { (parse_error_of exn) with at }
 
 (* Compile action statements to operate on an int array instead of Eval.ctx.
    Assign updates the mutable parameter's array slot.

@@ -420,7 +420,10 @@ let[@inline never] fail buf off =
   no_error ()
 
 let[@inline never] error buf off =
-  try fail buf off with Wire_runtime.Errors.Parse_error e -> Error e
+  match fail buf off with
+  | r -> r
+  | exception exn when Wire_runtime.Errors.is_error exn ->
+      Error (Wire_runtime.Errors.error_of exn)
 
 let[@inline never] too_short buf off =
   Wire_runtime.Errors.encode_too_short ~name:codec_name ~size

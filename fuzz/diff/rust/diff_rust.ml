@@ -50,11 +50,20 @@ let contains s sub =
   in
   go 0
 
-(* The codec's error, raised as a reader raises it, so the two compare the
-   same. *)
-let ok = function
-  | Ok v -> v
-  | Error e -> raise (Wire.Private.Types.Parse_error e)
+(* The codec's error, raised to stop where it is answered, so a result and a
+   reader that stops compare the same. *)
+exception Refused of Wire.Error.t
+
+let ok = function Ok v -> v | Error e -> raise (Refused e)
+
+let refused ~field = function
+  | { Wire.Error.kind = Unexpected_eof _; _ } -> "short"
+  | { Wire.Error.kind = Constraint_failed _; at; field = p } ->
+      Fmt.str "constraint %S at %d" (field p) at
+  | { Wire.Error.kind = Invalid_enum { value; _ }; at; field = p } ->
+      Fmt.str "enum %S at %d value %d" (field p) at value
+  | { Wire.Error.kind = Value_out_of_range _; _ } -> "overflow"
+  | e -> Fmt.str "parse error %a" Wire.Error.pp e
 
 let outcome ?(named = true) f =
   let field path =
@@ -62,24 +71,7 @@ let outcome ?(named = true) f =
   in
   match f () with
   | s -> "ok " ^ s
-  | exception
-      Wire.Private.Types.Parse_error { Wire.Error.kind = Unexpected_eof _; _ }
-    ->
-      "short"
-  | exception
-      Wire.Private.Types.Parse_error
-        { Wire.Error.kind = Constraint_failed _; at; field = p } ->
-      Fmt.str "constraint %S at %d" (field p) at
-  | exception
-      Wire.Private.Types.Parse_error
-        { Wire.Error.kind = Invalid_enum { value; _ }; at; field = p } ->
-      Fmt.str "enum %S at %d value %d" (field p) at value
-  | exception
-      Wire.Private.Types.Parse_error
-        { Wire.Error.kind = Value_out_of_range _; _ } ->
-      "overflow"
-  | exception Wire.Private.Types.Parse_error e ->
-      Fmt.str "parse error %a" Wire.Error.pp e
+  | exception Refused e -> refused ~field e
   (* A getter's bounds-checked load or copy past the buffer, or encode's
      frame check. *)
   | exception Invalid_argument m

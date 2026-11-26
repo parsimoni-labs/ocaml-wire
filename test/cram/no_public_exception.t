@@ -1,7 +1,8 @@
 No decoder raises on bad input, so the exception the interpreter and the
 generated code stop at internally is no name a program can catch: bad
-input is an [Error] value. The runtime hands out its raisers and
-[Errors.of_exn] for the code [Wire_ocaml] writes, not the exception.
+input is an [Error] value. The runtime hands out its raisers,
+[Errors.is_error] and [Errors.error_of] for the code [Wire_ocaml] writes,
+not the exception.
 
   $ cat > dune-project << 'EOF'
   > (lang dune 3.0)

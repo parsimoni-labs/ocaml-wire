@@ -19,34 +19,41 @@ let to_string pp v =
 
 (* {1 Raising} *)
 
-let fail ~at ~field kind = raise (Parse_error { Error.at; field; kind })
+let fail e = raise (Parse_error e)
+let is_error = function Parse_error _ -> true | _ -> false
+
+let error_of = function
+  | Parse_error e -> e
+  | exn -> Printexc.raise_with_backtrace exn (Printexc.get_raw_backtrace ())
+
+let raise_at ~at ~field kind = fail { Error.at; field; kind }
 
 let[@inline never] negative_offset off =
   invalid [ "Codec: negative offset "; int off ]
 
 let[@inline never] eof ~at ~expected ~got =
-  fail ~at ~field:[] (Error.Unexpected_eof { expected; got })
+  raise_at ~at ~field:[] (Error.Unexpected_eof { expected; got })
 
 let[@inline never] frame ~size ~len off =
   if off < 0 then negative_offset off;
   eof ~at:off ~expected:size ~got:(max 0 (len - off))
 
 let[@inline never] field_constraint ~at ~field value =
-  fail ~at ~field:[ field ]
+  raise_at ~at ~field:[ field ]
     (Error.Constraint_failed
        { which = Field; value = Some (Int64.of_int value) })
 
 let[@inline never] invalid_enum ~at ~field ~value ~valid =
-  fail ~at ~field (Error.Invalid_enum { value; valid })
+  raise_at ~at ~field (Error.Invalid_enum { value; valid })
 
 let[@inline never] invalid_tag ~at ~field tag =
-  fail ~at ~field:[ field ] (Error.Invalid_tag tag)
+  raise_at ~at ~field:[ field ] (Error.Invalid_tag tag)
 
 let[@inline never] where_clause ~at =
-  fail ~at ~field:[] (Error.Constraint_failed { which = Where; value = None })
+  raise_at ~at ~field:[]
+    (Error.Constraint_failed { which = Where; value = None })
 
-let[@inline never] relocate ~at ~field e =
-  raise (Parse_error { e with Error.at; field })
+let[@inline never] relocate ~at ~field e = fail { e with Error.at; field }
 
 (* {1 Encoding} *)
 

@@ -132,9 +132,10 @@ type parse_error = Error.t = {
   kind : error_kind;
 }
 
-exception Parse_error = Errors.Parse_error
-
-let raise_error ~at kind = raise (Parse_error { at; field = []; kind })
+let raise_parse_error = Errors.fail
+let is_parse_error = Errors.is_error
+let parse_error_of = Errors.error_of
+let raise_error ~at kind = raise_parse_error { at; field = []; kind }
 
 let check_consumption mode ~consumed ~available =
   match mode with
@@ -159,7 +160,9 @@ let map_decode ~index_bound decode =
   | None -> fun ~at:_ v -> decode v
   | Some _ -> (
       fun ~at v ->
-        try decode v with Parse_error e -> raise (Parse_error { e with at }))
+        try decode v
+        with exn when is_parse_error exn ->
+          raise_parse_error { (parse_error_of exn) with at })
 
 (* [int_of_exn] is handed a value and nothing else, so an out-of-range one has
    no offset to name and reports 0, the same blind spot [map_decode] covers for
@@ -167,7 +170,9 @@ let map_decode ~index_bound decode =
    there; only a carrier wider than the native int can raise, and the handler is
    installed only for those, so a byte- or word-wide read pays nothing. *)
 let relocate_at ~at f =
-  try f () with Parse_error e -> raise (Parse_error { e with at })
+  try f ()
+  with exn when is_parse_error exn ->
+    raise_parse_error { (parse_error_of exn) with at }
 
 let raise_invalid_enum ~at ~value ~valid =
   raise_error ~at (Invalid_enum { value; valid })

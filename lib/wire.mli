@@ -2123,7 +2123,8 @@ module Private : sig
     (** Convert a typed value to [int], [None] when it does not fit. *)
 
     val int_of_exn : 'a Types.typ -> 'a -> int
-    (** {!val-int_of} without the option; raises {!Types.Parse_error}. *)
+    (** {!val-int_of} without the option; stops at the parse error
+        {!Types.is_parse_error} finds. *)
   end
 
   module Expr_compiler = Expr_compiler

@@ -1136,13 +1136,15 @@ let compile_var_size_fn : type a.
    is recorded without a path. *)
 let prepend_field name f runtime input_end buf base =
   try f runtime input_end buf base
-  with Types.Parse_error e ->
-    raise (Types.Parse_error { e with field = name :: e.field })
+  with exn when Types.is_parse_error exn ->
+    let e = Types.parse_error_of exn in
+    Types.raise_parse_error { e with field = name :: e.field }
 
 let prepend_field_check name f arr runtime input_end buf base =
   try f arr runtime input_end buf base
-  with Types.Parse_error e ->
-    raise (Types.Parse_error { e with field = name :: e.field })
+  with exn when Types.is_parse_error exn ->
+    let e = Types.parse_error_of exn in
+    Types.raise_parse_error { e with field = name :: e.field }
 
 let compile_var_bytes : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =
@@ -1521,7 +1523,9 @@ let checked_read cf check read =
       fun runtime input_end buf base ->
         let v = read runtime input_end buf base in
         try check ~at:base v
-        with Parse_error e -> relocate at runtime input_end buf base e)
+        with exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
+          relocate at runtime input_end buf base e)
 
 (* An enum's populate: the base's, then membership on the slot's int. A wide
    carrier's value can be refused by the conversion to that int, which reports
@@ -1537,7 +1541,9 @@ let enum_populate ~base cf int_check =
     fun arr runtime input_end buf base ->
       cf.populate arr runtime input_end buf base;
       try ignore (int_check ~at:base (cf.int_reader runtime input_end buf base))
-      with Parse_error e -> relocate at runtime input_end buf base e
+      with exn when Types.is_parse_error exn ->
+        let e = Types.parse_error_of exn in
+        relocate at runtime input_end buf base e
 
 let rec compile_field : type a r.
     layout_ctx -> (a, r) field -> (a, r) compiled_field =

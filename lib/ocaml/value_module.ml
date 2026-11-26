@@ -515,7 +515,7 @@ let helpers ~uses =
       (if uses "fail_unless" || eof_if || field_unless then
          Fmt.str
            "let[@inline never] fail at field kind =\n\
-            raise (%s.Parse_error { at; field; kind })\n\n"
+            %s.fail { at; field; kind }\n\n"
            errors
        else "");
       (if uses "fail_unless" then
@@ -924,7 +924,7 @@ let ml_root ppf t (r : V.record) =
      let[@inline never] first_error buf off =@\n\
      match error_at buf (Bytes.length buf) off [] with@\n\
      | _ -> no_error ()@\n\
-     | exception %s.Parse_error e -> Error e@\n\
+     | exception exn when %s.is_error exn -> Error (%s.error_of exn)@\n\
      @\n\
      let is_valid buf off =@\n\
      off >= 0 &&@\n\
@@ -943,7 +943,7 @@ let ml_root ppf t (r : V.record) =
      if off < 0 then %s.negative_offset off;@\n\
      if is_valid buf off then Ok () else first_error buf off@\n\
      @\n"
-    (min_size r) errors
+    (min_size r) errors errors
     (root_check t ~stop:"Bytes.length buf" ())
     errors
     (root_check t ~len:"len" ~stop:"Bytes.length buf" ())

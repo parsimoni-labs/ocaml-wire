@@ -314,7 +314,8 @@ let rec build_immediate_get : type a.
               else
                 match decode ~at:(at + off) (read buf at) with
                 | d -> Ok d
-                | exception Types.Parse_error e ->
+                | exception exn when Types.is_parse_error exn ->
+                    let e = Types.parse_error_of exn in
                     Error { e with field = name :: e.field })
       | _ -> None)
   | Enum _, _ -> None

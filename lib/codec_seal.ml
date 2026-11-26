@@ -189,7 +189,9 @@ let field_validators ~field_idx ~access ~populate ~check ~act =
             raise_field_constraint ~field_idx
               ~at:(at runtime input_end buf base)
               arr
-        | exception Parse_error e -> relocate at runtime input_end buf base e)
+        | exception exn when Types.is_parse_error exn ->
+            let e = Types.parse_error_of exn in
+            relocate at runtime input_end buf base e)
     | None -> ()
   in
   let full arr runtime input_end buf base =
@@ -197,7 +199,9 @@ let field_validators ~field_idx ~access ~populate ~check ~act =
     match act with
     | Some f -> (
         try f arr
-        with Parse_error e -> relocate at runtime input_end buf base e)
+        with exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
+          relocate at runtime input_end buf base e)
     | None -> ()
   in
   (check_only, full)
@@ -935,23 +939,25 @@ let validation_runtime param_slots arr =
 (* A failed [Check], off the hot path. *)
 let check_failed ~name ~slot ~voff arr base =
   try raise_field_constraint ~field_idx:slot ~at:(at_of base voff) arr
-  with Types.Parse_error e ->
-    raise (Types.Parse_error { e with field = name :: e.field })
+  with exn when Types.is_parse_error exn ->
+    let e = Types.parse_error_of exn in
+    Types.raise_parse_error { e with field = name :: e.field }
 
 (* A failed [Range], with the value it read. *)
 let range_failed ~name ~voff v base =
   try
     raise_constraint ~at:(at_of base voff) ~which:Field ~value:(Int64.of_int v)
       ()
-  with Types.Parse_error e ->
-    raise (Types.Parse_error { e with field = name :: e.field })
+  with exn when Types.is_parse_error exn ->
+    let e = Types.parse_error_of exn in
+    Types.raise_parse_error { e with field = name :: e.field }
 
 let check_cond ~name ~voff cond arr base =
   try cond arr
-  with Types.Parse_error e ->
-    raise
-      (Types.Parse_error
-         { e with at = at_of base voff; field = name :: e.field })
+  with exn when Types.is_parse_error exn ->
+    let e = Types.parse_error_of exn in
+    Types.raise_parse_error
+      { e with at = at_of base voff; field = name :: e.field }
 
 (* A failed set test: the field's general validator raises the field's own
    error. It always does, as the set is what its checks accept; the constraint
@@ -1393,7 +1399,8 @@ let build_record_encoder name writers size_of_value ~check =
     | None -> ()
     | Some f -> (
         try f runtime buf off
-        with Types.Parse_error e ->
+        with exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
           Fmt.invalid_arg
             "Codec.encode %s: the encoded record is rejected by its own \
              constraints (%a)"
@@ -1637,7 +1644,9 @@ let build_plain_encode name n puts check =
     | No_checks -> ()
     | pass -> (
         try run_plain_pass pass (Input_end.of_bytes buf) buf off
-        with Types.Parse_error e -> encode_rejected name e)
+        with exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
+          encode_rejected name e)
   in
   let slow v buf off =
     if off < 0 || off > Bytes.length buf - n then
@@ -1752,7 +1761,7 @@ let check_end ~layout =
         else
           match run_plain_pass fast input_end buf off with
           | () -> e
-          | exception Types.Parse_error _ -> -1)
+          | exception exn when Types.is_parse_error exn -> -1)
 
 (* [validate_sized] of a record without parameters: the same bounds checks on
    the measured end, then the layout pass's checks when it accepts, else the

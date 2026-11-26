@@ -485,7 +485,10 @@ let size ~size prefix e = fn (root (env ~sizeof:true ~size prefix) e)
    its own, rebased to the record by [decode]. *)
 let guard env f =
   if not env.checked then f
-  else fun c -> match f c with b -> b | exception Parse_error _ -> unwalked ()
+  else fun c ->
+    match f c with
+    | b -> b
+    | exception exn when is_parse_error exn -> unwalked ()
 
 let cond ~size prefix e =
   let env = env ~size prefix in
@@ -571,7 +574,7 @@ let span kind size : _ Types.walk =
   }
 
 let with_name name (e : parse_error) =
-  Parse_error { e with field = name :: e.field }
+  raise_parse_error { e with field = name :: e.field }
 
 (* [run], naming the errors under it with [name] as the check pass does. Only
    the [wnames] walks call it, so the walk that accepts sets up no handler. *)
@@ -579,7 +582,10 @@ let named name run =
   match name with
   | None -> run
   | Some name -> (
-      fun c -> try run c with Parse_error e -> raise (with_name name e))
+      fun c ->
+        try run c
+        with exn when is_parse_error exn ->
+          with_name name (parse_error_of exn))
 
 (* A sub-codec in a region of [size] bytes, checked against the region's end,
    which it must reach unless [at_most]; the cursor goes on at the region's
@@ -1148,21 +1154,23 @@ let named_error walk general buf off =
   match walk.wnames c with
   | v -> v
   | exception Types.Unwalked -> general buf off
-  | exception
-      Parse_error
-        ({ kind = Value_out_of_range _ | Zero_divisor; at = 0; _ } as e) ->
-      raise (Parse_error { e with at = c.wbase })
+  | exception exn when is_parse_error exn -> (
+      match parse_error_of exn with
+      | { kind = Value_out_of_range _ | Zero_divisor; at = 0; _ } as e ->
+          raise_parse_error { e with at = c.wbase }
+      | _ -> raise exn)
 
 (* A decode through [walk], or [general] when the walk can neither accept nor
    name an error. *)
 let decode walk general buf off =
   match walk.wvalue (cursor buf off (Input_end.of_bytes buf)) with
   | v -> v
-  | exception (Types.Unwalked | Parse_error _) ->
-      named_error walk general buf off
+  | exception Types.Unwalked -> named_error walk general buf off
+  | exception exn when is_parse_error exn -> named_error walk general buf off
 
 (* Whether [walk] accepts the record at [off], the bytes stopping at [wend]. *)
 let accepts walk buf off wend =
   match walk.wskip (cursor buf off wend) with
   | () -> true
-  | exception (Types.Unwalked | Types.Parse_error _) -> false
+  | exception Types.Unwalked -> false
+  | exception exn when Types.is_parse_error exn -> false

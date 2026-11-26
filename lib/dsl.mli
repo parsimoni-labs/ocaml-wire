@@ -133,7 +133,7 @@ type parse_error = Error.t = {
     leaf, empty at a top-level or anonymous position) and the failure kind. *)
 
 val check_consumption : consumption -> consumed:int -> available:int -> unit
-(** Enforce a bytes-backed decoder's consumption mode. Raises {!Parse_error}
+(** Enforce a bytes-backed decoder's consumption mode. Stops at the parse error
     carrying {!constructor-Trailing_bytes} at [consumed] when [`All] leaves
     bytes before [available]. Internal to decoder entry points. *)
 
@@ -597,23 +597,23 @@ module Expr : sig
 end
 
 val checked_add : int -> int -> int
-(** Native-integer addition that raises {!exception-Parse_error} with
+(** Native-integer addition that raises the parse error with
     {!constructor-Value_out_of_range} on overflow. *)
 
 val checked_sub : int -> int -> int
-(** Native-integer subtraction that raises {!exception-Parse_error} with
+(** Native-integer subtraction that raises the parse error with
     {!constructor-Value_out_of_range} on overflow. *)
 
 val checked_mul : int -> int -> int
-(** Native-integer multiplication that raises {!exception-Parse_error} with
+(** Native-integer multiplication that raises the parse error with
     {!constructor-Value_out_of_range} on overflow. *)
 
 val checked_div : int -> int -> int
-(** Native-integer division that raises {!exception-Parse_error} with
+(** Native-integer division that raises the parse error with
     {!constructor-Zero_divisor} when its divisor is zero. *)
 
 val checked_mod : int -> int -> int
-(** Native-integer modulo that raises {!exception-Parse_error} with
+(** Native-integer modulo that raises the parse error with
     {!constructor-Zero_divisor} when its divisor is zero. *)
 
 (** {1 Type Constructors} *)
@@ -747,7 +747,7 @@ val has_int64_slot : 'a typ -> bool
 
 val int_of_exn : 'a typ -> 'a -> int
 (** [int_of_exn typ v] is {!val-int_of} without the [option]: it returns the
-    [int] directly (no boxing on the numeric path) and raises {!Parse_error}
+    [int] directly (no boxing on the numeric path) and stops at the parse error
     ({!constructor-Value_out_of_range}) for a value beyond the native int range,
     [Invalid_argument] for a type with no integer view. *)
 
@@ -814,10 +814,10 @@ val byte_array_where :
   size:int expr -> per_byte:(int expr -> bool expr) -> string typ
 (** [byte_array_where ~size ~per_byte] is a byte span of [size] bytes where each
     byte must satisfy [per_byte]. The argument to [per_byte] is an expression
-    bound to the current byte's integer value. Decode raises
-    {!exception:Parse_error} on the first byte that violates the constraint;
-    encode raises [Invalid_argument]. Encoding otherwise follows {!byte_array}:
-    the value's length must equal [size]. *)
+    bound to the current byte's integer value. Decode raises the parse error on
+    the first byte that violates the constraint; encode raises
+    [Invalid_argument]. Encoding otherwise follows {!byte_array}: the value's
+    length must equal [size]. *)
 
 val synth_name_of_elt_var : string -> string
 (** [synth_name_of_elt_var ev] is the 3D-side synthesised refinement-typedef
@@ -1042,43 +1042,54 @@ type module_ = { doc : string option; decls : decl list }
     The {!predicate}, {!error_kind}, and {!parse_error} types are declared near
     the top of this interface. *)
 
-exception Parse_error of parse_error
+val raise_parse_error : parse_error -> 'a
+(** [raise_parse_error e] stops at the parse error [e], as {!Errors.fail} does.
+*)
+
+val is_parse_error : exn -> bool
+(** [is_parse_error exn] is [true] iff [exn] is how a parse stopped at an error.
+*)
+
+val parse_error_of : exn -> parse_error
+(** [parse_error_of exn] is the error a parse stopped at with [exn]. Raises
+    [exn] again if it is no such stop. *)
 
 val raise_error : at:int -> error_kind -> 'a
-(** Raise {!Parse_error} with an empty field path. *)
+(** Stop at the parse error with an empty field path. *)
 
 val raise_eof : at:int -> expected:int -> got:int -> 'a
-(** Raise {!Parse_error} for unexpected end-of-input. *)
+(** Stop at the parse error for unexpected end-of-input. *)
 
 val raise_invalid_tag : at:int -> int -> 'a
-(** Raise {!Parse_error} for a tag or lookup index with no matching case. *)
+(** Stop at the parse error for a tag or lookup index with no matching case. *)
 
 val map_decode : index_bound:int option -> ('w -> 'a) -> at:int -> 'w -> 'a
-(** [map_decode ~index_bound decode ~at v] is [decode v], with any
-    {!Parse_error} it raises moved to [at]. A {!constructor-Map}'s [decode] sees
-    only the value, so the bound a {!cases} map enforces can only be reported at
-    offset 0; [at] is the absolute offset the reader took [v] from, which is
-    what {!parse_error} promises. Maps with no [index_bound] reject nothing and
-    are called directly. *)
+(** [map_decode ~index_bound decode ~at v] is [decode v], with any parse error
+    it stops at moved to [at]. A {!constructor-Map}'s [decode] sees only the
+    value, so the bound a {!cases} map enforces can only be reported at offset
+    0; [at] is the absolute offset the reader took [v] from, which is what
+    {!parse_error} promises. Maps with no [index_bound] reject nothing and are
+    called directly. *)
 
 val raise_invalid_enum : at:int -> value:int -> valid:int list -> 'a
-(** Raise {!Parse_error} for an enum value outside its named set. *)
+(** Stop at the parse error for an enum value outside its named set. *)
 
 val raise_missing_terminator : at:int -> 'a
-(** Raise {!Parse_error} for a NUL-terminated string with no terminator. *)
+(** Stop at the parse error for a NUL-terminated string with no terminator. *)
 
 val raise_non_zero_padding : at:int -> 'a
-(** Raise {!Parse_error} for a non-zero byte where zero padding is required. *)
+(** Stop at the parse error for a non-zero byte where zero padding is required.
+*)
 
 val raise_out_of_range : at:int -> int64 -> 'a
-(** Raise {!Parse_error} for an integer beyond the native integer range. *)
+(** Stop at the parse error for an integer beyond the native integer range. *)
 
 val raise_zero_divisor : at:int -> 'a
-(** Raise {!Parse_error} for division or modulo by zero. *)
+(** Stop at the parse error for division or modulo by zero. *)
 
 val raise_constraint : at:int -> which:predicate -> ?value:int64 -> unit -> 'a
-(** Raise {!Parse_error} for a violated predicate [which], optionally carrying
-    the offending field's [value]. *)
+(** Stop at the parse error for a violated predicate [which], optionally
+    carrying the offending field's [value]. *)
 
 val is_greedy : 'a typ -> bool
 (** Whether a type reads "the rest of the buffer" (a greedy byte span, through

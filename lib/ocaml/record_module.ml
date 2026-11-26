@@ -276,12 +276,14 @@ let pp_cold ~src ppf ~target ~plan ~size =
   Fmt.pf ppf
     "@\n\
      let[@inline never] error %s off =@\n\
-    \  try fail buf off with %s.Parse_error e -> Error e@\n\
+    \  match fail buf off with@\n\
+    \  | r -> r@\n\
+    \  | exception exn when %s.is_error exn -> Error (%s.error_of exn)@\n\
      @\n\
      let%s too_short %s off =@\n\
     \  %s.encode_too_short ~name:codec_name ~size ~len:(%s buf) off@\n\
      @\n"
-    src.buf errors (cold_attr target) src.buf errors src.len
+    src.buf errors errors (cold_attr target) src.buf errors src.len
 
 let type_of f =
   let t = Fmt.str "%s.%s.t" rt in
@@ -1303,13 +1305,15 @@ let pp_view ?(src = bytes_src) ?(views = false) ppf ~target ~plan ~size =
 let pp_validate_written ~src ppf ~target =
   Fmt.pf ppf
     "let%s rejected %s off =@\n\
-    \  try fail buf off@\n\
-    \  with %s.Parse_error e -> %s.encode_rejected ~name:codec_name e@\n\
+    \  match fail buf off with@\n\
+    \  | r -> r@\n\
+    \  | exception exn when %s.is_error exn ->@\n\
+    \      %s.encode_rejected ~name:codec_name (%s.error_of exn)@\n\
      @\n\
      let%s validate_written %s off =@\n\
     \  if not (is_valid buf off) then rejected buf off@\n\
      @\n"
-    (cold_attr target) src.buf errors errors
+    (cold_attr target) src.buf errors errors errors
     (match target with `OxCaml -> "[@inline][@zero_alloc]" | `OCaml -> "")
     src.buf
 

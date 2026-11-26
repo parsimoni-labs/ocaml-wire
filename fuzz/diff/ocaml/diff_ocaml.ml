@@ -179,8 +179,7 @@ let ok = function Ok v -> v | Error e -> raise (Refused e)
 let outcome f =
   match f () with
   | s -> "ok " ^ s
-  | exception (Refused e | Wire.Private.Types.Parse_error e) ->
-      Fmt.str "parse error %a" Wire.Error.pp e
+  | exception Refused e -> Fmt.str "parse error %a" Wire.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
 (* A word load raises [Invalid_argument] where its word is not in the buffer,

@@ -781,7 +781,9 @@ let test_error_order () =
   let answer f =
     match f () with
     | () -> "ok"
-    | exception Wire_runtime.Errors.Parse_error e -> Fmt.str "%a" Error.pp e
+    | exception exn when Wire.Private.Types.is_parse_error exn ->
+        let e = Wire.Private.Types.parse_error_of exn in
+        Fmt.str "%a" Error.pp e
   in
   let answers c buf =
     [

@@ -621,7 +621,7 @@ let check_entry_points_agree (type r) what (c : r Codec.t) bytes =
   let verdict f =
     match f () with
     | () -> "ok"
-    | exception Wire_runtime.Errors.Parse_error _ -> "refused"
+    | exception exn when Wire.Private.Types.is_parse_error exn -> "refused"
   in
   let decoded =
     match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"

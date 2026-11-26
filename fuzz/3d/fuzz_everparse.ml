@@ -443,8 +443,11 @@ let corpus_oracle_case (label, Fuzz_gen.Pack g) =
 let reencodes g codec env v sz =
   let buf = Bytes.create sz in
   match Wire.Codec.encode ?env codec v buf 0 with
-  | exception Wire.Private.Types.Parse_error e ->
-      Fmt.kstr (fun s -> Some s) "re-encoding raised %a" Wire.Error.pp e
+  | exception exn when Wire.Private.Types.is_parse_error exn ->
+      Fmt.kstr
+        (fun s -> Some s)
+        "re-encoding raised %a" Wire.Error.pp
+        (Wire.Private.Types.parse_error_of exn)
   | () -> (
       match Wire.Codec.decode ?env codec buf 0 with
       | Error e ->

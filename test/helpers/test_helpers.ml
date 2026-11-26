@@ -111,9 +111,7 @@ let decode_ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected parse error: %a" Error.pp e
 
-let ok = function
-  | Ok v -> v
-  | Error e -> raise (Wire_runtime.Errors.Parse_error e)
+let ok = function Ok v -> v | Error e -> Wire_runtime.Errors.fail e
 
 let reader ?env c f =
   let read = Staged.unstage (Codec.get ?env c f) in

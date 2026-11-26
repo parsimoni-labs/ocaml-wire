@@ -363,7 +363,9 @@ let show_stack (p : Packet_stack.t) =
 let stack_answer show f =
   match f () with
   | v -> "ok " ^ show v
-  | exception Wire_runtime.Errors.Parse_error e -> Fmt.str "error %a" Error.pp e
+  | exception exn when Wire.Private.Types.is_parse_error exn ->
+      let e = Wire.Private.Types.parse_error_of exn in
+      Fmt.str "error %a" Error.pp e
 
 let stack_slot = Param.input "stack_slot" uint8
 

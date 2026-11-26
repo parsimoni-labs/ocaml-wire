@@ -713,7 +713,7 @@ let[@inline never] refuse what = invalid_arg (codec_name ^ ": " ^ what)
 let[@inline] refuse_if c what = if c then refuse what
 
 let[@inline never] fail at field kind =
-  raise (Wire_runtime.Errors.Parse_error { at; field; kind })
+  Wire_runtime.Errors.fail { at; field; kind }
 
 let[@inline] eof_if c at expected got field =
   if c then fail at field (Wire_runtime.Error.Unexpected_eof { expected; got })
@@ -1924,7 +1924,8 @@ let min_size = 14
 let[@inline never] first_error buf off =
   match error_at buf (Bytes.length buf) off [] with
   | _ -> no_error ()
-  | exception Wire_runtime.Errors.Parse_error e -> Error e
+  | exception exn when Wire_runtime.Errors.is_error exn ->
+      Error (Wire_runtime.Errors.error_of exn)
 
 let is_valid buf off =
   off >= 0

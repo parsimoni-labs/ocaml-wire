@@ -209,7 +209,8 @@ let test_codec_embed_tail () =
   let answer f =
     match f () with
     | v -> "ok " ^ v
-    | exception Wire_runtime.Errors.Parse_error e ->
+    | exception exn when Wire.Private.Types.is_parse_error exn ->
+        let e = Wire.Private.Types.parse_error_of exn in
         Fmt.str "error %a" Error.pp e
   in
   let show (a, r) = Fmt.str "%d %S" (UInt8.to_int a) r in

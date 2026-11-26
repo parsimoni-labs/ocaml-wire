@@ -74,8 +74,9 @@ val decode_ok : ('a, Error.t) result -> 'a
 (** [decode_ok r] returns the decoded value, failing the test on [Error]. *)
 
 val ok : ('a, Error.t) result -> 'a
-(** [ok r] is the value of [r], its error raised as the runtime's [Parse_error],
-    for a check that compares an answer with what a field reader raises. *)
+(** [ok r] is the value of [r], its error raised as {!Wire_runtime.Errors.fail}
+    raises it, for a check that compares an answer with what a field reader
+    raises. *)
 
 val reader :
   ?env:Param.env -> 'r Codec.t -> ('a, 'r) Codec.field -> bytes -> int -> 'a

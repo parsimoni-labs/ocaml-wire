@@ -57,9 +57,10 @@ let test_read () =
 let outcome f =
   match f () with
   | () -> "ok"
-  | exception Wire_runtime.Errors.Parse_error e ->
-      Fmt.str "parse error %a" Wire_runtime.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
+  | exception exn when Wire_runtime.Errors.is_error exn ->
+      Fmt.str "parse error %a" Wire_runtime.Error.pp
+        (Wire_runtime.Errors.error_of exn)
 
 let test_write () =
   for _ = 1 to 2000 do

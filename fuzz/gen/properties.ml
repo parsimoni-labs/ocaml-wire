@@ -749,7 +749,7 @@ let size_at g bs off =
   match Wire.Codec.wire_size_at g.codec bs off with
   | n -> Some n
   | exception Invalid_argument _ -> None
-  | exception Wire.Private.Types.Parse_error _ -> None
+  | exception exn when Wire.Private.Types.is_parse_error exn -> None
 
 let pad_before pad bs =
   let k = Bytes.length pad in
@@ -1079,7 +1079,9 @@ type 'a answer = Value of 'a | Parse of Wire.Error.t | Invalid of string
 let answer f =
   match f () with
   | v -> Value v
-  | exception Wire.Private.Types.Parse_error e -> Parse e
+  | exception exn when Wire.Private.Types.is_parse_error exn ->
+      let e = Wire.Private.Types.parse_error_of exn in
+      Parse e
   | exception Invalid_argument m -> Invalid m
 
 let answer_result f =
@@ -1105,7 +1107,7 @@ let same_answer equal a b =
 let pp_answer pp_value ppf = function
   | Value v -> pp_value ppf v
   | Parse e ->
-      Fmt.pf ppf "Parse_error (%a, field [%s])" Wire.Error.pp e
+      Fmt.pf ppf "parse error (%a, field [%s])" Wire.Error.pp e
         (String.concat "." e.Wire.Error.field)
   | Invalid m -> Fmt.pf ppf "Invalid_argument %S" m
 

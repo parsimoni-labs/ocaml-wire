@@ -32,7 +32,8 @@ let test_runtime_errors () =
   in
   match Wire_runtime.Errors.field_constraint ~at:3 ~field:"TTL" 0 with
   | _ -> Alcotest.fail "no exception raised"
-  | exception Wire_runtime.Errors.Parse_error got ->
+  | exception exn when Wire_runtime.Errors.is_error exn ->
+      let got = Wire_runtime.Errors.error_of exn in
       Alcotest.(check bool) "same error" true (Wire.Error.equal e got)
 
 let suite =

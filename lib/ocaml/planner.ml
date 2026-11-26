@@ -126,7 +126,9 @@ let store_range = function
 
 let corners op (lo, hi) (lo', hi') =
   let apply a b =
-    match op a b with v -> Some v | exception Types.Parse_error _ -> None
+    match op a b with
+    | v -> Some v
+    | exception exn when Types.is_parse_error exn -> None
   in
   let ends = [ apply lo lo'; apply lo hi'; apply hi lo'; apply hi hi' ] in
   if List.mem None ends then None
@@ -835,7 +837,7 @@ let sum_add a b =
     { terms; const }
   with
   | s -> Some s
-  | exception Types.Parse_error _ -> None
+  | exception exn when Types.is_parse_error exn -> None
 
 let sum_neg s =
   match
@@ -845,7 +847,7 @@ let sum_neg s =
     }
   with
   | s -> Some s
-  | exception Types.Parse_error _ -> None
+  | exception exn when Types.is_parse_error exn -> None
 
 let sum_sub a b = Option.bind (sum_neg b) (sum_add a)
 
@@ -893,4 +895,4 @@ let sum_fails d =
     else (Option.value lhs ~default:(int 0), minus rhs (T.checked_sub 0 d.const))
   with
   | sides -> Some sides
-  | exception Types.Parse_error _ -> None
+  | exception exn when Types.is_parse_error exn -> None

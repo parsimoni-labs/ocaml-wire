@@ -275,8 +275,9 @@ let parse_codec_typ ~copy_input decode fixed_size min_size size_of buf off len =
     let copy_end = Input_end.of_bytes copy in
     match decode ctx copy_end copy 0 with
     | value -> (value, off + sz)
-    | exception Parse_error error ->
-        raise (Parse_error { error with at = off + error.at })
+    | exception exn when is_parse_error exn ->
+        let error = parse_error_of exn in
+        raise_parse_error { error with at = off + error.at }
 
 (* Only a closed enum enforces membership; an open enum names known codes but
    accepts any value. [Codec.decode] gates on [closed] the same way, so the two
@@ -328,7 +329,7 @@ let parse_struct_typ s buf off len =
   check_span len ~off ~n:sz;
   (match Codec.validate_struct v buf off with
   | Ok () -> ()
-  | Error e -> raise (Parse_error e));
+  | Error e -> raise_parse_error e);
   ((), off + sz)
 
 let parse_fixed size get buf off len =
@@ -555,7 +556,9 @@ let parse_all ~copy_slices consume typ buf =
     value
   with
   | value -> Ok value
-  | exception Parse_error e -> Error e
+  | exception exn when is_parse_error exn ->
+      let e = parse_error_of exn in
+      Error e
 
 let of_string ?(consume = `Prefix) typ s =
   parse_all ~copy_slices:true consume typ (Bytes.unsafe_of_string s)
@@ -631,9 +634,9 @@ let parse_or_rewind typ reader bytes len =
   | v, off ->
       push_back_bytes reader bytes off (len - off);
       v
-  | exception Parse_error e ->
+  | exception exn when is_parse_error exn ->
       push_back_bytes reader bytes 0 len;
-      raise (Parse_error e)
+      raise exn
 
 (* A growable scratch the incremental reader accumulates slices into, so
    retrying a parse costs nothing beyond the retry. [Buffer.to_bytes] rebuilt
@@ -719,7 +722,7 @@ let of_reader_incremental typ reader =
   let s = scratch_create () in
   let give_up e =
     push_back_bytes reader s.buf 0 s.filled;
-    raise (Parse_error e)
+    raise_parse_error e
   in
   (* Both recoverable kinds read ahead and retry, and give up only when the read
      yields nothing at all. What differs is how far ahead to read. *)
@@ -728,7 +731,8 @@ let of_reader_incremental typ reader =
     | v, off ->
         push_back_bytes reader s.buf off (s.filled - off);
         v
-    | exception Parse_error e -> (
+    | exception exn when is_parse_error exn -> (
+        let e = parse_error_of exn in
         let before = s.filled in
         match e.kind with
         (* A search ran the length of the buffer without meeting its terminator,
@@ -766,7 +770,9 @@ let read_value typ reader =
 let of_reader typ reader =
   match read_value typ reader with
   | v -> Ok v
-  | exception Parse_error e -> Error e
+  | exception exn when is_parse_error exn ->
+      let e = parse_error_of exn in
+      Error e
 (* Binary encoding with Bytesrw.Bytes.Writer *)
 
 module Writer = Bytesrw.Bytes.Writer

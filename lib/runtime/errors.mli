@@ -1,16 +1,28 @@
-(** The exception a codec and the code generated from one raise to stop at the
-    first error, and the functions that raise it.
+(** How a codec and the code generated from one stop at the first error, and
+    find it again.
 
     This is plumbing for the code [Wire_ocaml] generates and for the codec
-    interpreter, not an API: every decoder catches {!exception-Parse_error} and
-    answers its {!Error.t} as a value. *)
+    interpreter, not an API: the exception they stop with has no name outside
+    this module, and every decoder answers its {!Error.t} as a value. *)
 
-exception Parse_error of Error.t
+val fail : Error.t -> 'a
+(** [fail e] stops at the error [e]. *)
+
+val is_error : exn -> bool
+(** [is_error exn] is [true] iff [exn] is how {!fail}, or a raiser below,
+    stopped at an error. A handler catches it with no cost on the path that does
+    not raise:
+    [match f x with v -> Ok v | exception exn when is_error exn -> Error
+     (error_of exn)]. *)
+
+val error_of : exn -> Error.t
+(** [error_of exn] is the error [exn] stopped at, where {!is_error} holds of it.
+    Raises [exn] again otherwise. *)
 
 (** {1 Raising}
 
-    What a fixed-size record raises, for code generated from it. Each raises
-    {!exception-Parse_error}, or [Invalid_argument] where noted. *)
+    What a fixed-size record raises, for code generated from it. Each stops as
+    {!fail} does, or raises [Invalid_argument] where noted. *)
 
 val negative_offset : int -> 'a
 (** [negative_offset off] raises [Invalid_argument]: a record cannot start at

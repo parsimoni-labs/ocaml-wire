@@ -15,14 +15,13 @@ let contains s sub =
 
 (* A result's value, its error raised as a getter raises it, so that the
    two compare the same. *)
-let ok = function
-  | Ok v -> v
-  | Error e -> raise (Wire_runtime.Errors.Parse_error e)
+let ok = function Ok v -> v | Error e -> Wire_runtime.Errors.fail e
 
 let outcome f =
   match f () with
   | s -> "ok " ^ s
-  | exception Wire_runtime.Errors.Parse_error e ->
+  | exception exn when Wire.Private.Types.is_parse_error exn ->
+      let e = Wire.Private.Types.parse_error_of exn in
       Fmt.str "parse error %a" Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 

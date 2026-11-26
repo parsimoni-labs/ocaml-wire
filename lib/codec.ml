@@ -30,7 +30,9 @@ let validator_of_struct = Codec_struct.v
 let validate_struct v buf off =
   match Codec_struct.validate v buf off with
   | () -> Ok ()
-  | exception Types.Parse_error e -> Error e
+  | exception exn when Types.is_parse_error exn ->
+      let e = Types.parse_error_of exn in
+      Error e
 
 let struct_size_of = Codec_struct.size_of
 let struct_min_size = Codec_struct.min_size
@@ -498,8 +500,10 @@ let decode_exn ?consume ?env:e t buf off =
   | _ -> decode_general (Option.value consume ~default:`Prefix) e t buf off
 
 let decode ?consume ?env t buf off =
-  try Ok (decode_exn ?consume ?env t buf off)
-  with Types.Parse_error e -> Error e
+  match decode_exn ?consume ?env t buf off with
+  | v -> Ok v
+  | exception exn when Types.is_parse_error exn ->
+      Error (Types.parse_error_of exn)
 
 let decoder t =
   let c = compiled t in
@@ -511,7 +515,9 @@ let decoder t =
   Staged.stage (fun buf off ->
       match decode buf off with
       | v -> Ok v
-      | exception Types.Parse_error e -> Error e)
+      | exception exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
+          Error e)
 
 let encode_slow e t v buf off =
   if off < 0 then
@@ -591,13 +597,16 @@ let validate_exn ?env:e (t : _ t) buf off =
 let validate ?env t buf off =
   match validate_exn ?env t buf off with
   | () -> Ok ()
-  | exception Types.Parse_error e -> Error e
+  | exception exn when Types.is_parse_error exn ->
+      let e = Types.parse_error_of exn in
+      Error e
 
 let encode_fresh ~op ?env t v =
   let buf = Bytes.create (size_of_value ?env t v) in
   encode ?env t v buf 0;
   (try validate_exn ?env t buf 0
-   with Types.Parse_error e ->
+   with exn when Types.is_parse_error exn ->
+     let e = Types.parse_error_of exn in
      Fmt.invalid_arg
        "Codec.%s %s: the encoded record is rejected by validation (%a)" op
        t.name Error.pp e);
@@ -670,7 +679,10 @@ let action_reader ?env (codec : _ t) (c : _ compiled) rt access act read name =
     clear_slots arr n;
     blit_input arr;
     populate arr rt input_end buf off;
-    (try act arr with Parse_error e -> relocate at rt input_end buf off e);
+    (try act arr
+     with exn when Types.is_parse_error exn ->
+       let e = Types.parse_error_of exn in
+       relocate at rt input_end buf off e);
     sync arr;
     v
   in
@@ -679,7 +691,9 @@ let action_reader ?env (codec : _ t) (c : _ compiled) rt access act read name =
       else
         match run buf off with
         | v -> Ok v
-        | exception Parse_error e -> field_error name e)
+        | exception exn when Types.is_parse_error exn ->
+            let e = Types.parse_error_of exn in
+            field_error name e)
 
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
     (bytes -> int -> (a, parse_error) result) Staged.t =
@@ -712,14 +726,18 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
               else
                 match read buf base with
                 | v -> Ok v
-                | exception Parse_error e -> field_error name e)
+                | exception exn when Types.is_parse_error exn ->
+                    let e = Types.parse_error_of exn in
+                    field_error name e)
       | _ ->
           Staged.stage (fun buf base ->
               if base < 0 then Errors.negative_offset base
               else
                 match read rt (Input_end.of_bytes buf) buf base with
                 | v -> Ok v
-                | exception Parse_error e -> field_error name e))
+                | exception exn when Types.is_parse_error exn ->
+                    let e = Types.parse_error_of exn in
+                    field_error name e))
   | Some act -> action_reader ?env codec c rt access act read name
 
 let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
@@ -808,7 +826,7 @@ let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
 let[@inline never] steps_pass pass input_end buf off =
   match run_plain_pass pass input_end buf off with
   | () -> true
-  | exception Types.Parse_error _ -> false
+  | exception exn when Types.is_parse_error exn -> false
 
 let[@inline] passes pass input_end buf off =
   match pass with
@@ -826,7 +844,7 @@ let[@inline never] accepts_slow env (t : 'r t) buf off =
   &&
   match validate_exn ?env t buf off with
   | () -> true
-  | exception Types.Parse_error _ -> false
+  | exception exn when Types.is_parse_error exn -> false
 
 (* Whether the record at [off] passes [validate], without its error. Small
    enough to inline: the frame and the tests of a fixed-size codec, every
@@ -1082,14 +1100,16 @@ module View = struct
       | _, Walked at -> walked at buf r
     with
     | o -> if o >= 0 && o <= len - s.sub_frame then o else -1
-    | exception (Types.Parse_error _ | Types.Unwalked) -> -1
+    | exception Types.Unwalked -> -1
+    | exception exn when Types.is_parse_error exn -> -1
 
   (* A sub-record the walk places, which has no gate of its own: one call
      with no dispatch. *)
   let[@inline never] enter_walked at buf len r frame =
     match walked at buf r with
     | o -> if o >= 0 && o <= len - frame then o else -1
-    | exception (Types.Parse_error _ | Types.Unwalked) -> -1
+    | exception Types.Unwalked -> -1
+    | exception exn when Types.is_parse_error exn -> -1
 
   let[@inline] enter s b len r =
     let buf = (b : _ Buf.t :> bytes) and len = (len : _ Buf.length :> int) in
@@ -1121,7 +1141,9 @@ let field_readers t =
         fun buf off ->
           match read no_runtime (Input_end.of_bytes buf) buf off with
           | v -> Ok v
-          | exception Types.Parse_error e -> Error e ))
+          | exception exn when Types.is_parse_error exn ->
+              let e = Types.parse_error_of exn in
+              Error e ))
     (field_readers_ctx t)
 
 let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
@@ -1439,7 +1461,9 @@ module Gen_core = struct
   let map_get decode ~at ~field x =
     match decode ~at x with
     | a -> Ok a
-    | exception Parse_error e -> Error { e with field = field :: e.field }
+    | exception exn when Types.is_parse_error exn ->
+        let e = Types.parse_error_of exn in
+        Error { e with field = field :: e.field }
 
   type 'w view = { of_raw : int -> 'w; to_raw : 'w -> int }
   type 'w view32 = { of_raw32 : int32 -> 'w; to_raw32 : 'w -> int32 }

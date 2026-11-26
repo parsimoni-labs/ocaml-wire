@@ -88,7 +88,8 @@ let test_bad_input () =
         ()
     | Ok _ | Error _ ->
         Alcotest.failf "decode disagrees on %S at %d" (Bytes.to_string b) off
-    | exception Wire_runtime.Errors.Parse_error e ->
+    | exception exn when Wire.Private.Types.is_parse_error exn ->
+        let e = Wire.Private.Types.parse_error_of exn in
         Alcotest.failf "decode raised %a on %S" Error.pp e (Bytes.to_string b)
     | exception Invalid_argument m ->
         Alcotest.failf "decode raised Invalid_argument %s on %S" m

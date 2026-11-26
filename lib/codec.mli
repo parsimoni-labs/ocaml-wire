@@ -495,8 +495,8 @@ val set :
 
 val zeroterm_nul_pos : bytes -> first:int -> limit:int -> int
 (** [zeroterm_nul_pos buf ~first ~limit] is the index of the first NUL byte in
-    [\[first, limit)], raising [Parse_error] on an unterminated run. Internal
-    use (shared with the streaming decoders). *)
+    [\[first, limit)], stopping at a parse error on an unterminated run.
+    Internal use (shared with the streaming decoders). *)
 
 val raw_decode : 'r t -> bytes -> int -> 'r
 (** [raw_decode c buf off] decodes without validation. Internal use. *)
