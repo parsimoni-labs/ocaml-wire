@@ -54,10 +54,13 @@ let walk_part ~maps c =
     | exception Unsupported reason -> Error reason
     | plan -> Ok plan
 
-(* The record's names: its own, those [Get]'s reads call, and each field's.
-   A later definition would shadow an earlier one of the same name. *)
-let record_names (plan, _) =
-  let calls, fields = field_names (all_fields plan) in
+(* The record's names: its own, and without views those [Get]'s reads call
+   and each field's. A later definition would shadow an earlier one of the
+   same name. *)
+let record_names ~views (plan, _) =
+  let calls, fields =
+    if views then ([], []) else field_names (all_fields plan)
+  in
   List.map (fun n -> (`Own, n)) (own_names @ calls)
   @ List.concat_map
       (fun (f, names) -> List.map (fun n -> (`Field f, n)) names)
@@ -79,13 +82,13 @@ let clash ~codec names =
 
 (* A record whose members would define a name twice has none, unless they
    are what the caller needs. *)
-let checked_record ~codec ~needed record =
+let checked_record ~codec ~needed ~views record =
   match record with
   | Error _ -> None
   | Ok r when needed ->
-      clash ~codec (record_names r);
+      clash ~codec (record_names ~views r);
       Some r
-  | Ok r -> if Names.clash (record_names r) = None then Some r else None
+  | Ok r -> if Names.clash (record_names ~views r) = None then Some r else None
 
 (* The names a fold defines: without a visitor, its consumer's form and on
    OxCaml the unboxed one; with one, the step forms. *)
@@ -155,7 +158,7 @@ let checked_walk ~codec ~record ~folds c = function
         | Some r ->
             List.filter
               (function `Own, _ -> false | _ -> true)
-              (record_names r)
+              (record_names ~views:true r)
       in
       clash ~codec (accessors @ fields);
       Some { plan; folds; views }
@@ -181,7 +184,9 @@ let v ?(target = `OCaml) ?(buffer = `Bytes) ?(simd = false) ?(maps = []) ?folds
     | `Record, _ | `Any, Ok _ -> true
     | `Walk, _ | `Any, Error _ -> false
   in
-  let record = checked_record ~codec ~needed record in
+  let record =
+    checked_record ~codec ~needed ~views:(Result.is_ok walk) record
+  in
   if simd && target <> `OxCaml then
     refuse ~codec "~simd needs the OxCaml target";
   let folds =
@@ -254,20 +259,15 @@ let body ?decide t =
   let size =
     match t.record with Some _ -> "let size (_ : t) = min_size\n" | None -> ""
   in
-  let record, after =
+  let record =
     match t.record with
-    | None -> ("", "")
-    | Some (plan, size) -> (
+    | None -> ""
+    | Some (plan, size) ->
         let maps = List.map (fun (path, ocaml, _) -> (path, ocaml)) t.maps in
-        ( text (fun ppf ->
-              pp_maps ppf (all_fields plan);
-              pp_body ~simd:t.simd ?accessor ~buffer:t.buffer ~maps ppf
-                ~target:t.target ~plan ~size),
-          match accessor with
-          | None -> ""
-          | Some _ ->
-              text (fun ppf -> pp_after_views ppf ~target:t.target ~plan ~size)
-        ))
+        text (fun ppf ->
+            pp_maps ppf (all_fields plan);
+            pp_body ~simd:t.simd ?accessor ~buffer:t.buffer ~maps ppf
+              ~target:t.target ~plan ~size)
   in
   let walk, views, views_mask32 =
     match t.walk with
@@ -304,7 +304,7 @@ let body ?decide t =
         in
         (walk, Scan_module.without_dead_bindings views, mask32)
   in
-  (walk ^ record, views ^ after ^ size, views_mask32)
+  (walk ^ record, views ^ size, views_mask32)
 
 let ml ?decide t =
   let code, views, _ = body ?decide t in
@@ -364,12 +364,7 @@ let mli t =
                     Value_module.mli_root ppf ~target:t.target w.views r
                   else Value_module.mli_record ppf ~target:t.target w.views r)
           in
-          View_module.mli ?values ppf ~target:t.target w.views;
-          Option.iter
-            (fun (plan, size) ->
-              Interface.record_after_views ppf ~target:t.target ~simd:t.simd
-                ~maps:t.maps ~codec:t.codec ~plan ~size)
-            t.record)
+          View_module.mli ?values ppf ~target:t.target w.views)
         t.walk)
 
 let views t = Option.map (fun w -> w.views) t.walk

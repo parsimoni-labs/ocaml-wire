@@ -63,12 +63,13 @@ let test_fixed () =
               UInt8.to_int (G_checked.proto b v);
             ]
           and get =
+            let r = ok (G_checked.decode buf off) in
             [
-              (ok (G_checked.Get.version buf off) :> int);
-              (ok (G_checked.Get.ihl buf off) :> int);
-              UInt16.to_int (ok (G_checked.Get.length buf off));
-              UInt8.to_int (ok (G_checked.Get.ttl buf off));
-              UInt8.to_int (ok (G_checked.Get.proto buf off));
+              r.version;
+              r.ihl;
+              UInt16.to_int r.length;
+              UInt8.to_int r.ttl;
+              UInt8.to_int r.proto;
             ]
           in
           Alcotest.(check (list int)) "accessors" get read;
@@ -132,7 +133,7 @@ let test_accessors () =
       let v = G_ipv4.get (G_ipv4.check b (Buf.length b) 0) in
       [
         string_of_int (UInt16.to_int (G_ipv4.frag b v));
-        string_of_int (G_ipv4.view_src_int b v);
+        i32 (G_ipv4.src b v);
         u32 (G_ipv4.dst b v);
       ]);
   viewed ~fix:fix_checked Schemas.checked
@@ -210,26 +211,27 @@ let test_escaped () =
     [ ("ok", false); ("b", false) ]
     (Wire_ocaml.outputs (pair "ok" "b"))
 
-(* Names a record's members would define twice refuse [ml], which needs
-   them, and leave them out of the module [scanner] writes. *)
+(* A record with views has no getters, so a field named as a getter's helper
+   defines nothing twice; on a bigarray, whose module reads with [Get], it
+   refuses the module. *)
 let test_record_clash () =
   let c = pair "cast" "b" in
-  (match ml c with
-  | _ -> Alcotest.fail "ml: a field Get.cast"
-  | exception Invalid_argument _ -> ());
-  let src = scanner c in
+  let src = ml c in
   Alcotest.(check bool) "folds" true (contains src "fold ");
-  Alcotest.(check bool) "no record" false (contains src "module Get")
+  Alcotest.(check bool) "no getters" false (contains src "module Get");
+  match Wire_ocaml.(to_ml (v ~buffer:`Bigstring c)) with
+  | _ -> Alcotest.fail "a bigarray module with a field Get.cast"
+  | exception Invalid_argument _ -> ()
 
-(* The fields of the record at [off], read with no check of its
+(* The fields of the record [v] in [b], read with no check of its
    constraints. *)
-let fields buf off =
+let fields b v =
   [
-    (ok (G_checked.Get.version buf off) :> int);
-    (ok (G_checked.Get.ihl buf off) :> int);
-    UInt16.to_int (ok (G_checked.Get.length buf off));
-    UInt8.to_int (ok (G_checked.Get.ttl buf off));
-    UInt8.to_int (ok (G_checked.Get.proto buf off));
+    G_checked.version b v;
+    G_checked.ihl b v;
+    UInt16.to_int (G_checked.length b v);
+    UInt8.to_int (G_checked.ttl b v);
+    UInt8.to_int (G_checked.proto b v);
   ]
 
 (* A setter writes its field in place and leaves the bytes of every other
@@ -243,7 +245,7 @@ let test_setters () =
         let c = G_checked.check b (Buf.length b) off in
         if G_checked.ok c then begin
           let v = G_checked.get c in
-          let before = fields buf off in
+          let before = fields b v in
           let i = Random.State.int rand 5 in
           let x = Random.State.int rand (if i < 2 then 16 else 256) in
           (match i with
@@ -257,7 +259,7 @@ let test_setters () =
               (fun j y -> if j = i then if i = 2 then x * 251 else x else y)
               before
           in
-          Alcotest.(check (list int)) "set" want (fields buf off);
+          Alcotest.(check (list int)) "set" want (fields b v);
           let copy = Bytes.copy buf in
           (match G_checked.set_ihl b v 16 with
           | () -> Alcotest.fail "set_ihl 16"

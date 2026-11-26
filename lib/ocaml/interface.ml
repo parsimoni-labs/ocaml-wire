@@ -455,10 +455,10 @@ let pp_view_module ppf r b =
      otherwise.";
   Fmt.pf ppf "end@\n@\n"
 
-let pp_view ?(views = false) ppf r b =
+let pp_view ppf r b =
   let target = r.target in
-  if not views then pp_view_module ppf r b;
-  let view_t = if views then "'b view" else "'b View.t" in
+  pp_view_module ppf r b;
+  let view_t = "'b View.t" in
   List.iter
     (fun f ->
       let l = f.label in
@@ -469,11 +469,10 @@ let pp_view ?(views = false) ppf r b =
           (arrows [ named b; view_t; typ ])
           doc
       in
-      if not views then
-        view ~portable:(Option.is_none f.map) ""
-          (checked_type ~maps:r.maps f)
-          (Fmt.str "[view_%s b v] is %s of the record [v] in [b]." l
-             (checked_what f));
+      view ~portable:(Option.is_none f.map) ""
+        (checked_type ~maps:r.maps f)
+        (Fmt.str "[view_%s b v] is %s of the record [v] in [b]." l
+           (checked_what f));
       match f.store with
       | Int { width = 32; _ } ->
           view "_int" "int"
@@ -571,10 +570,10 @@ let pp_buffer ?(views = false) ppf r b =
   if b.typ = "bytes" && r.target = `OxCaml then pp_oxcaml_decoders ppf r;
   pp_section ppf "writes" "Writing";
   pp_writes ppf r b;
-  pp_section ppf "reads" "Reading fields";
-  pp_get ppf r b;
-  pp_of_words ppf r;
   if not views then begin
+    pp_section ppf "reads" "Reading fields";
+    pp_get ppf r b;
+    pp_of_words ppf r;
     pp_valid ppf r b;
     pp_section ppf "views" "Views";
     pp_view ppf r b
@@ -635,11 +634,6 @@ let pp_record ?(views = false) ?(buffer = `Bytes) ppf r =
         | Some l -> pp_x4 ppf r l
         | None -> ())
 
-(* What reads through the module's views, after them. *)
-let pp_after_views ppf r =
-  pp_section ppf "words" "Words of a view";
-  pp_view ~views:true ppf r (bytes_buf r.target)
-
 let record ~target ~simd ~maps ~codec ~plan ~size =
   let fields = all_fields plan in
   {
@@ -658,9 +652,6 @@ let record_preamble ppf ~target ~simd ~maps ~codec ~plan ~size =
 
 let record_members ?views ?buffer ppf ~target ~simd ~maps ~codec ~plan ~size =
   pp_record ?views ?buffer ppf (record ~target ~simd ~maps ~codec ~plan ~size)
-
-let record_after_views ppf ~target ~simd ~maps ~codec ~plan ~size =
-  pp_after_views ppf (record ~target ~simd ~maps ~codec ~plan ~size)
 
 (* {2 The scanner} *)
 

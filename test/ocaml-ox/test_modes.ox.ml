@@ -9,14 +9,18 @@ let packet =
 
 let size = String.length packet
 
-(* What the getters read of the header in [b], folded into one [int]. *)
+(* What the accessors read of the header in [b], folded into one [int]. *)
 let[@inline] fields (b @ local) =
-  Bool.to_int (G_ipv4.is_valid b 0)
-  + (Result.get_ok (G_ipv4.Get.versionihl b 0) :> int)
-  + (Result.get_ok (G_ipv4.Get.ttl b 0) :> int)
-  + (Result.get_ok (G_ipv4.Get.frag b 0) :> int)
-  + Result.get_ok (G_ipv4.Get.src_int b 0)
-  + Result.get_ok (G_ipv4.Get.dst_int b 0)
+  let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
+  if G_ipv4.ok c then
+    let v = G_ipv4.get c in
+    (G_ipv4.versionihl n v :> int)
+    + (G_ipv4.ttl n v :> int)
+    + (G_ipv4.frag n v :> int)
+    + Wire_runtime.SInt32.to_int (G_ipv4.src n v)
+    + Wire_runtime.UInt32.to_int (G_ipv4.dst n v)
+  else -1
 
 let stack_fields () =
   let b = Bytes.create__stack size in
@@ -40,14 +44,17 @@ let stack_view () =
   let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
   if G_ipv4.ok c then
     let v = G_ipv4.get c in
-    Wire_runtime.UInt8.to_int (G_ipv4.ttl n v) + G_ipv4.view_src_int n v
+    Wire_runtime.UInt8.to_int (G_ipv4.ttl n v)
+    + Wire_runtime.SInt32.to_int (G_ipv4.src n v)
   else -1
 
+let decoded () = Result.get_ok (G_ipv4_record.decode (Bytes.of_string packet) 0)
+
 let test_stack_view () =
+  let r = decoded () in
   Alcotest.(check int)
     "same fields"
-    ((Result.get_ok (G_ipv4.Get.ttl (Bytes.of_string packet) 0) :> int)
-    + Result.get_ok (G_ipv4.Get.src_int (Bytes.of_string packet) 0))
+    ((r.ttl :> int) + Wire_runtime.SInt32.to_int r.src)
     (stack_view ())
 
 (* What a decoded header holds, folded into one [int]. *)
@@ -80,8 +87,6 @@ let stack_decode () =
   in
   with_ + folded b
 
-let decoded () = Result.get_ok (G_ipv4_record.decode (Bytes.of_string packet) 0)
-
 let test_stack_decode () =
   let r = decoded () in
   let want =
@@ -108,15 +113,15 @@ let test_bigstring () =
   let local_ b = heap in
   Alcotest.(check int)
     "src"
-    (Result.get_ok (G_ipv4.Get.src_int (Bytes.of_string packet) 0))
+    (Wire_runtime.SInt32.to_int (decoded ()).src)
     (Result.get_ok (G_ipv4_big.Get.src_int b 0))
 
 (* A portable function may call the generated code, as a parallel task does. *)
 let (portable_read @ portable) =
  fun buf ->
-  if G_ipv4.is_valid buf 0 then
-    Result.get_ok (G_ipv4.Get.src_int buf 0) + (Result.get_ok (G_ipv4.Get.ttl buf 0) :> int)
-  else -1
+  match G_ipv4.decode buf 0 with
+  | Ok r -> Wire_runtime.SInt32.to_int r.G_ipv4.src + (r.ttl :> int)
+  | Error _ -> -1
 
 (* The runtime itself is portable: each module the generated code calls. *)
 let (portable_runtime @ portable) =
@@ -133,9 +138,10 @@ let (portable_runtime @ portable) =
 
 let test_portable () =
   let b = Bytes.of_string packet in
+  let r = decoded () in
   Alcotest.(check int)
     "read"
-    (Result.get_ok (G_ipv4.Get.src_int b 0) + (Result.get_ok (G_ipv4.Get.ttl b 0) :> int))
+    (Wire_runtime.SInt32.to_int r.src + (r.ttl :> int))
     (portable_read b);
   Alcotest.(check int)
     "runtime"

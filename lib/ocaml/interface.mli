@@ -34,22 +34,8 @@ val record_members :
   unit
 (** [record_members ?views ?buffer ppf ~target ~simd ~maps ~codec ~plan ~size]
     states the members a fixed record adds: its size, record, decoders, writes,
-    reads and views, on [buffer] (default [`Bytes]). With [views], the module's
-    views read the fields on [bytes], and {!record_after_views} states what
-    reads through them. *)
-
-val record_after_views :
-  Format.formatter ->
-  target:target ->
-  simd:bool ->
-  maps:(string * string * Planner.typ) list ->
-  codec:string ->
-  plan:Planner.plan ->
-  size:int ->
-  unit
-(** [record_after_views ppf ~target ~simd ~maps ~codec ~plan ~size] states the
-    reads of a word or of a 32-bit [int] of a view, the field handles and
-    [Global], after the module's views. *)
+    and, unless [views], its reads and views, on [buffer] (default [`Bytes]).
+    With [views], the module's views read the fields. *)
 
 val scan_preamble :
   Format.formatter -> codec:string -> plan:Planner.plan -> unit

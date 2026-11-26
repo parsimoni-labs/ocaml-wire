@@ -86,19 +86,8 @@ val pp_body :
     record's members for a record of [size] bytes, reading [buffer] (default
     [`Bytes]); see {!Wire_ocaml.v}. A field under a map holds the OCaml type
     [maps] gives its path. With [accessor], the name of each field's accessor in
-    the module's views, it writes neither [Valid] and [read_<field>] nor [View]
-    and [view_<field>], which the views make, and leaves to {!pp_after_views}
-    what reads through them. *)
-
-val pp_after_views :
-  Format.formatter ->
-  target:[ `OCaml | `OxCaml ] ->
-  plan:plan ->
-  size:int ->
-  unit
-(** [pp_after_views ppf ~target ~plan ~size] writes, after the module's views,
-    the reads with no accessor of their own ([view_<field>_int],
-    [view_<field>_word]) on its ['b view]. *)
+    the module's views, it writes none of [Get], [Valid] and [read_<field>],
+    [View] and [view_<field>]: the views read the fields. *)
 
 val ident : string -> string
 (** [ident name] is the OCaml label of the field [name]. *)

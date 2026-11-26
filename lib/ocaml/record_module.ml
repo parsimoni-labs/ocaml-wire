@@ -1134,20 +1134,18 @@ let pp_view_module ~src ppf ~target ~plan ~size =
      @\n"
     attr attr
 
-(* The reads of a view. Beside the views of the module of the codec ([views]),
-   which read each field with its accessor, only those with no such
-   accessor remain, on the module's ['b view]: a 32-bit field's [int] and a
-   bitfield's word. *)
-let pp_view ?(src = bytes_src) ?(views = false) ppf ~target ~plan ~size =
+(* The view module of a record and its reads: each field's, a 32-bit field's
+   [int] and a bitfield's word. *)
+let pp_view ?(src = bytes_src) ppf ~target ~plan ~size =
   let fields = all_fields plan in
   let ox = target = `OxCaml in
-  if not views then pp_view_module ~src ppf ~target ~plan ~size;
+  pp_view_module ~src ppf ~target ~plan ~size;
   let b =
     match target with
     | `OxCaml -> Fmt.str "((b : 'b %s.t) @@ local)" src.brand
     | `OCaml -> Fmt.str "(b : 'b %s.t)" src.brand
   in
-  let view_t = if views then "view" else "View.t" in
+  let view_t = "View.t" in
   let head attr name =
     Fmt.pf ppf
       "let%s %s %s (v : 'b %s) =@\n\
@@ -1162,7 +1160,7 @@ let pp_view ?(src = bytes_src) ?(views = false) ppf ~target ~plan ~size =
         pp_read ~src ~ox ~size ppf f;
         Fmt.pf ppf "  %s@\n@\n" result
       in
-      if not views then view ~suffix:"" ~result:(checked_value ~src f);
+      view ~suffix:"" ~result:(checked_value ~src f);
       match f.store with
       | Int { width = 32; _ } -> view ~suffix:"_int" ~result:(int_view ~src f)
       | Bits { base; _ } ->
@@ -1464,8 +1462,9 @@ let src_of ~target = function
       | `OxCaml -> local_bigstring_src
       | `OCaml -> bigstring_src)
 
-(* The checks, decoders, writes and reads of a fixed record on [src]. *)
-let pp_codec ~src ~bytes ppf ~target ~plan ~size =
+(* The checks, decoders and writes of a fixed record on [src], and with
+   [getters] its reads. *)
+let pp_codec ~src ~bytes ~getters ppf ~target ~plan ~size =
   pp_cold ~src ppf ~target ~plan ~size;
   pp_validate ~src ppf ~target ~plan ~size;
   if has_checks plan then pp_validate_written ~src ppf ~target;
@@ -1473,7 +1472,7 @@ let pp_codec ~src ~bytes ppf ~target ~plan ~size =
     ~fail:"error buf off" ~call:(fun args -> Fmt.str "Ok (v %a)" pp_list args);
   if target = `OxCaml && bytes then pp_oxcaml ~src ppf ~plan ~size;
   pp_write ~src ppf ~target ~plan;
-  pp_getters ~src ppf ~target (all_fields plan)
+  if getters then pp_getters ~src ppf ~target (all_fields plan)
 
 let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
     ~size =
@@ -1484,23 +1483,16 @@ let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
   pp_printer ppf fields;
   let src = src_of ~target buffer in
   let bytes = buffer = `Bytes in
-  pp_codec ~src ~bytes ppf ~target ~plan ~size;
-  (* Beside the module's views, [Valid] and [View] would be second checks,
-     and [read_<field>] and [view_<field>] second reads of each field. *)
+  (* Beside the module's views, [Get] would be second reads of each field,
+     [Valid] and [View] second checks, and [read_<field>] and [view_<field>]
+     second reads again: a module without views keeps them as its reads. *)
+  pp_codec ~src ~bytes ~getters:(not views) ppf ~target ~plan ~size;
   if not views then begin
     pp_valid ~src ppf ~target ~plan;
     pp_view ~src ppf ~target ~plan ~size
   end;
   if simd then pp_x4 ~src ppf ~plan ~size;
   pp_encode ~src ppf fields
-
-(* The members that read through the module's views, written after them: the
-   reads with no accessor of their own. *)
-let pp_after_views ppf ~target ~plan ~size =
-  let src =
-    match target with `OxCaml -> local_bytes_src | `OCaml -> bytes_src
-  in
-  pp_view ~src ~views:true ppf ~target ~plan ~size
 
 let refuse ~codec reason =
   Fmt.invalid_arg "Wire_ocaml: cannot specialise %s: %s" codec reason

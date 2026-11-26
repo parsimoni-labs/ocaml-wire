@@ -1,5 +1,5 @@
 (* [X4] against one record at a time: on random buffers and offsets, a read of
-   four records holds in each lane what [Get.<field>] reads of that record, or
+   four records holds in each lane what the accessors read of that record, or
    fails exactly when 16 bytes do not fit; a write of four records leaves the
    same bytes, and raises the same error, as four [write]. *)
 
@@ -10,16 +10,18 @@ module Buf = Wire_runtime.Buf
 let rand = Random.State.make [| 42 |]
 let widths = [| 4; 4; 8; 3; 5; 6; 2 |]
 
-let per_record buf off =
-  let open Wire_runtime in
+(* The fields of the record at [off] in [b], through its view: a record of
+   [G] has no check, so one that fits passes. *)
+let per_record b off =
+  let v = G.get (G.check b (Buf.length b) off) in
   [
-    (Result.get_ok (G.Get.a buf off) :> int);
-    (Result.get_ok (G.Get.b buf off) :> int);
-    UInt8.to_int (Result.get_ok (G.Get.c buf off));
-    (Result.get_ok (G.Get.d buf off) :> int);
-    (Result.get_ok (G.Get.e buf off) :> int);
-    (Result.get_ok (G.Get.f buf off) :> int);
-    (Result.get_ok (G.Get.g buf off) :> int);
+    G.a b v;
+    G.b b v;
+    Wire_runtime.UInt8.to_int (G.c b v);
+    G.d b v;
+    G.e b v;
+    G.f b v;
+    G.g b v;
   ]
 
 let lanes w k =
@@ -46,7 +48,7 @@ let test_read () =
     in
     let want =
       if off >= 0 && off + 16 <= len then
-        Some (List.init 4 (fun k -> per_record buf (off + (4 * k))))
+        Some (List.init 4 (fun k -> per_record b (off + (4 * k))))
       else None
     in
     Alcotest.(check (option (list (list int))))
@@ -89,8 +91,9 @@ let test_write () =
           for k = 0 to 3 do
             let f i = fields.(i).(k) in
             let c = Wire_runtime.UInt8.v (f 2) in
-            G.write s (off + (4 * k)) ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4)
-              ~f:(f 5) ~g:(f 6)
+            G.write s
+              (off + (4 * k))
+              ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
           done)
     in
     let name = Fmt.str "len %d off %d" len off in
@@ -103,16 +106,18 @@ let test_write () =
    the same error where the four do not fit. [<field>_of] answers the same
    part when the lanes fit, and raises what [write] raises otherwise. *)
 let test_parts () =
-  let parts =
-    G.X4.[| a_bits; b_bits; c_bits; d_bits; e_bits; f_bits; g_bits |]
+  let parts = G.X4.[| a_bits; b_bits; c_bits; d_bits; e_bits; f_bits; g_bits |]
   and checked = G.X4.[| a_of; b_of; c_of; d_of; e_of; f_of; g_of |] in
   for _ = 1 to 2000 do
     let len = Random.State.int rand 40 in
     let off = Random.State.int rand (len + 5) - 2 in
-    let lanes = Array.init 7 (fun _ -> Array.init 4 (fun _ -> Random.State.int rand 1024)) in
+    let lanes =
+      Array.init 7 (fun _ -> Array.init 4 (fun _ -> Random.State.int rand 1024))
+    in
     let vec i = V.v4 lanes.(i).(0) lanes.(i).(1) lanes.(i).(2) lanes.(i).(3) in
     let part =
-      Array.fold_left G.X4.( ++ ) G.X4.zero (Array.mapi (fun i f -> f (vec i)) parts)
+      Array.fold_left G.X4.( ++ ) G.X4.zero
+        (Array.mapi (fun i f -> f (vec i)) parts)
     in
     let a = Bytes.make len '\000' and s = Bytes.make len '\000' in
     let (Buf.Any ba) = Buf.v a in
@@ -122,8 +127,9 @@ let test_parts () =
           for k = 0 to 3 do
             let f i = lanes.(i).(k) land ((1 lsl widths.(i)) - 1) in
             let c = Wire_runtime.UInt8.v (f 2) in
-            G.write s (off + (4 * k)) ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4)
-              ~f:(f 5) ~g:(f 6)
+            G.write s
+              (off + (4 * k))
+              ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
           done)
     in
     let name = Fmt.str "len %d off %d" len off in
@@ -137,7 +143,9 @@ let test_parts () =
           if fits then "ok"
           else
             outcome (fun () ->
-                let bad = Array.find_opt (fun x -> x lsr widths.(i) <> 0) lanes.(i) in
+                let bad =
+                  Array.find_opt (fun x -> x lsr widths.(i) <> 0) lanes.(i)
+                in
                 Wire_runtime.Errors.unsigned_too_wide ~bits:widths.(i)
                   (Option.get bad))
         in
@@ -155,8 +163,11 @@ let test_fill () =
     let parts =
       Array.init count (fun _ ->
           G.X4.c_bits
-            (V.v4 (Random.State.int rand 256) (Random.State.int rand 256)
-               (Random.State.int rand 256) (Random.State.int rand 256)))
+            (V.v4
+               (Random.State.int rand 256)
+               (Random.State.int rand 256)
+               (Random.State.int rand 256)
+               (Random.State.int rand 256)))
     in
     let a = Bytes.make len '\000' and s = Bytes.make len '\000' in
     let (Buf.Any ba) = Buf.v a in

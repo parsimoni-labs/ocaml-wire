@@ -165,17 +165,14 @@ let pp_ops ppf ~m ~buf ~brand ~back fields =
     Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
     reads
 
-(* A read of the view [v] of [bb] through the module's accessors: a
-   32-bit field's [int] through [view_<f>_int], which has no accessor. *)
-let pp_access ppf (f, v) =
-  match v with
-  | Diff_ocaml.Get -> Fmt.pf ppf "%s (M.%s bb v)" f.plain f.acc
-  | _ -> Fmt.pf ppf "string_of_int (M.view_%s_int bb v)" f.ident
+(* A read of the view [v] of [bb] through the module's accessor of [f]. *)
+let pp_access ppf (f, _) = Fmt.pf ppf "%s (M.%s bb v)" f.plain f.acc
 
 (* The glue over [M] whose views are the module's: [check], [ok], [get] and
-   an accessor per field, where [Valid.v] and [View] were. *)
+   an accessor per field, which read the fields where [Get], [Valid.v] and
+   [View] would. *)
 let pp_ops_views ppf fields =
-  let reads = reads fields in
+  let reads = List.filter (fun (_, v) -> v = Diff_ocaml.Get) (reads fields) in
   Fmt.pf ppf
     "{@\n\
     \      Diff_ocaml.decode =@\n\
@@ -190,8 +187,7 @@ let pp_ops_views ppf fields =
     \        (fun s b o ->@\n\
     \          let r = Result.get_ok (M.decode (Bytes.of_string s) 0) in@\n\
     \          M.encode r b o);@\n\
-    \      gets = [@\n\
-     %a      ];@\n\
+    \      gets = [];@\n\
     \      reads = [ %a ];@\n\
     \      valid =@\n\
     \        (fun b ->@\n\
@@ -222,8 +218,6 @@ let pp_ops_views ppf fields =
     \                (true, [ %a ])@\n\
     \              else (false, []));@\n\
     \    }"
-    Fmt.(list ~sep:nop (pp_gets ~m:"M" ~buf:"b"))
-    fields
     Fmt.(
       list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
     reads
@@ -446,9 +440,10 @@ let pp_view_backend ppf ~m ~codec c =
     (view_outputs ~m ~path:m (Wire_ocaml.views c))
 
 (* Whether the module holds a fixed record's members, which the record
-   glue reads; without them its values go through the walk. *)
+   glue reads: its [encode] is its [write]. Without them its values go through
+   the walk. *)
 let has_record src =
-  let sub = "module Get" in
+  let sub = " off = write buf off " in
   let n = String.length sub in
   let rec go i =
     i + n <= String.length src
@@ -633,7 +628,11 @@ let cases () =
     List.partition_map
       (fun (label, Fuzz_gen.Pack g) ->
         let c = Fuzz_gen.codec g in
-        match Wire_ocaml.to_ml (Wire_ocaml.v ~target c) with
+        (* The case compares the module on bytes and on a bigarray. *)
+        match
+          ignore (Wire_ocaml.v ~target ~buffer:`Bigstring c : Wire_ocaml.t);
+          Wire_ocaml.to_ml (Wire_ocaml.v ~target c)
+        with
         | src when has_record src ->
             let intf = Wire_ocaml.to_mli (Wire_ocaml.v ~target c) in
             Left (label, Fuzz_gen.Pack g, (src, intf))

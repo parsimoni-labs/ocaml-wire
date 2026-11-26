@@ -1,5 +1,6 @@
-(* The getters of a generated module on bytes that make no value of their
-   field, against [Codec.get]. *)
+(* The getters of a generated module with no views, on bytes that make no
+   value of their field, against [Codec.get]: the module of a record on a
+   bigarray. *)
 
 open Wire
 
@@ -22,6 +23,8 @@ let outcome f =
   | s -> "ok " ^ s
   | exception Invalid_argument m -> "invalid " ^ m
 
+let big = Diff_ocaml.big
+
 (* A generated getter answers the error [Codec.get] answers where the bytes
    make no value of its field: a closed enum outside its cases, a field the
    buffer cuts. *)
@@ -33,8 +36,9 @@ let test_getter_errors () =
       (name ^ ", as Codec.get") (Error expected)
       (Codec.get codec field buf off)
   in
-  answers "a closed enum outside its cases" G_checked.Get.proto Schemas.checked
-    Schemas.checked_proto
+  answers "a closed enum outside its cases"
+    (fun b o -> G_checked_big.Get.proto (big b) o)
+    Schemas.checked Schemas.checked_proto
     (Bytes.of_string "\x45\x00\x14\x40\x07")
     0
     ~expected:
@@ -43,8 +47,9 @@ let test_getter_errors () =
         field = [ "Proto" ];
         kind = Invalid_enum { value = 7; valid = [ 1; 6; 17 ] };
       };
-  answers "a field the buffer cuts" G_ipv4.Get.frag Schemas.ipv4
-    Schemas.ipv4_frag
+  answers "a field the buffer cuts"
+    (fun b o -> G_ipv4_big.Get.frag (big b) o)
+    Schemas.ipv4 Schemas.ipv4_frag
     (Bytes.of_string "\x00\x45\x00\x00\x14\x00\x00\x40")
     1
     ~expected:
@@ -60,8 +65,9 @@ let test_words () =
   let size = Codec.min_size Schemas.wide in
   for _ = 1 to 2000 do
     let buf, off = input ~size in
+    let buf = big buf in
     let fields =
-      G_wide.
+      G_wide_big.
         [
           (Get.a, Get.a_word, a_of_word);
           (Get.c, Get.c_word, c_of_word);
@@ -81,24 +87,26 @@ let test_words () =
           (outcome (fun () -> show (Result.map of_word (word buf off)))))
       fields;
     (* The same through a view, whose word reads have no check of their own. *)
-    match Wire_runtime.Buf.v buf with
-    | Wire_runtime.Buf.Any b ->
-        let c = G_wide.check b (Wire_runtime.Buf.length b) off in
-        if G_wide.ok c then begin
-          let v = G_wide.get c in
+    let module B = Wire_runtime.Buf.Bigstring in
+    match B.v buf with
+    | B.Any b ->
+        let c = G_wide_big.View.check b (B.length b) off in
+        if G_wide_big.View.ok c then begin
+          let w = G_wide_big.View.get c in
           let check name get of_view = Alcotest.(check int) name get of_view in
+          let open G_wide_big in
           check "view a"
-            (Result.get_ok (G_wide.Get.a buf off) :> int)
-            (G_wide.a_of_word (G_wide.view_a_word b v));
+            (Result.get_ok (Get.a buf off))
+            (a_of_word (view_a_word b w));
           check "view c"
-            (Result.get_ok (G_wide.Get.c buf off) :> int)
-            (G_wide.c_of_word (G_wide.view_c_word b v));
+            (Result.get_ok (Get.c buf off))
+            (c_of_word (view_c_word b w));
           check "view e"
-            (Result.get_ok (G_wide.Get.e buf off) :> int)
-            (G_wide.e_of_word (G_wide.view_e_word b v));
+            (Result.get_ok (Get.e buf off))
+            (e_of_word (view_e_word b w));
           check "view f"
-            (Result.get_ok (G_wide.Get.f buf off) :> int)
-            (G_wide.f_of_word (G_wide.view_f_word b v))
+            (Result.get_ok (Get.f buf off))
+            (f_of_word (view_f_word b w))
         end
   done
 
@@ -110,14 +118,15 @@ let test_word_bad_input () =
   let answers name load buf off ~expected =
     Alcotest.(check (result int error)) name (Error expected) (load buf off)
   in
-  answers "a word the buffer cuts" G_wide.Get.f_word (Bytes.make 10 '\x00') 0
+  let f_word b o = G_wide_big.Get.f_word (big b) o in
+  answers "a word the buffer cuts" f_word (Bytes.make 10 '\x00') 0
     ~expected:
       {
         at = 8;
         field = [ "F" ];
         kind = Unexpected_eof { expected = 4; got = 2 };
       };
-  match G_wide.Get.f_word (Bytes.make 12 '\x00') (-4) with
+  match f_word (Bytes.make 12 '\x00') (-4) with
   | _ ->
       Alcotest.fail "a negative offset loaded the word in front of the record"
   | exception Invalid_argument _ -> ()

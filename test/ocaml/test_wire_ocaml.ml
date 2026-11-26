@@ -519,8 +519,8 @@ let test_clash () =
       (fun a b -> (a, b))
       Codec.[ Field.v n1 t1 $ fst; Field.v n2 t2 $ snd ]
   in
-  let refused ?(target = `OCaml) what c names =
-    match ml ~target c with
+  let refused ?(target = `OCaml) ?buffer what c names =
+    match ml ~target ?buffer c with
     | _ -> Alcotest.failf "%s: generated" what
     | exception Invalid_argument m ->
         List.iter
@@ -530,11 +530,15 @@ let test_clash () =
               true (contains m n))
           names
   in
-  refused "a 32-bit x and x_int"
-    (pair "x_int" uint8 "x" uint32be)
+  (* [Get.x_int] and [Get.x_word] exist only in a module whose views do not
+     read the fields, on a bigarray. *)
+  let x_int = pair "x_int" uint8 "x" uint32be in
+  ignore (ml x_int : string);
+  refused ~buffer:`Bigstring "a 32-bit x and x_int" x_int
     [ "\"x_int\""; "\"x\"" ];
-  refused "a bitfield x and x_word"
-    (pair "x" (bits ~width:3 U8) "x_word" uint8)
+  let x_word = pair "x" (bits ~width:3 U8) "x_word" uint8 in
+  ignore (ml x_word : string);
+  refused ~buffer:`Bigstring "a bitfield x and x_word" x_word
     [ "\"x\""; "\"x_word\"" ];
   refused "X and x" (pair "X" uint8 "x" uint8) [ "\"X\""; "\"x\"" ];
   refused "a-b and a_b" (pair "a-b" uint8 "a_b" uint8) [ "\"a-b\""; "\"a_b\"" ];
@@ -546,14 +550,14 @@ let test_clash () =
     "end and end_ apart" true
     (contains src "  end_ :" && contains src "  end__ :");
   (* A getter in [Get] would shadow a helper the getters after it call. *)
-  refused "cast"
+  refused ~buffer:`Bigstring "cast"
     (Codec.v "C" Fun.id Codec.[ Field.v "cast" uint8 $ Fun.id ])
     [ "\"cast\""; "Get.cast" ];
   (* Outside [Get], a field may take a name the module uses for itself. *)
   let c = Codec.v "C" Fun.id Codec.[ Field.v "size" uint8 $ Fun.id ] in
   Alcotest.(check bool)
     "size getter" true
-    (contains (ml c) "let[@inline] size buf off");
+    (contains (ml ~buffer:`Bigstring c) "let[@inline] size buf off");
   (* An OxCaml keyword is escaped for the default target too, so its code
      compiles on an OxCaml compiler. *)
   let c = Codec.v "C" Fun.id Codec.[ Field.v "local_" uint8 $ Fun.id ] in
@@ -676,30 +680,40 @@ let int_getter codec field ~get ~to_int =
       (outcome (fun () -> string_of_int (ok (get buf off))))
   done
 
+(* A module with no views reads its fields with [Get]: the module of a record
+   on a bigarray, here read from a copy of the bytes. *)
 let test_getters () =
+  let big get b o = get (Diff_ocaml.big b) o in
   let u8 v = string_of_int (UInt8.to_int v)
   and u16 v = string_of_int (UInt16.to_int v) in
-  getter Schemas.ipv4 Schemas.ipv4_frag ~get:G_ipv4.Get.frag ~show:u16;
-  getter Schemas.ipv4 Schemas.ipv4_proto ~get:G_ipv4.Get.proto ~show:u8;
-  getter Schemas.ipv4 Schemas.ipv4_src ~get:G_ipv4.Get.src ~show:(fun v ->
-      string_of_int (SInt32.to_int v));
-  getter Schemas.ipv4 Schemas.ipv4_dst ~get:G_ipv4.Get.dst ~show:(fun v ->
-      string_of_int (UInt32.to_int v));
-  int_getter Schemas.ipv4 Schemas.ipv4_src ~get:G_ipv4.Get.src_int
+  getter Schemas.ipv4 Schemas.ipv4_frag ~get:(big G_ipv4_big.Get.frag) ~show:u16;
+  getter Schemas.ipv4 Schemas.ipv4_proto ~get:(big G_ipv4_big.Get.proto)
+    ~show:u8;
+  getter Schemas.ipv4 Schemas.ipv4_src ~get:(big G_ipv4_big.Get.src)
+    ~show:(fun v -> string_of_int (SInt32.to_int v));
+  getter Schemas.ipv4 Schemas.ipv4_dst ~get:(big G_ipv4_big.Get.dst)
+    ~show:(fun v -> string_of_int (UInt32.to_int v));
+  int_getter Schemas.ipv4 Schemas.ipv4_src
+    ~get:(big G_ipv4_big.Get.src_int)
     ~to_int:SInt32.to_int;
-  int_getter Schemas.ipv4 Schemas.ipv4_dst ~get:G_ipv4.Get.dst_int
+  int_getter Schemas.ipv4 Schemas.ipv4_dst
+    ~get:(big G_ipv4_big.Get.dst_int)
     ~to_int:UInt32.to_int;
-  int_getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.Get.f_int
+  int_getter Schemas.mixed Schemas.mixed_f
+    ~get:(big G_mixed_big.Get.f_int)
     ~to_int:SInt32.to_int;
-  getter Schemas.checked Schemas.checked_proto ~get:G_checked.Get.proto ~show:u8;
-  getter Schemas.mixed Schemas.mixed_b ~get:G_mixed.Get.b ~show:(fun v ->
-      string_of_int (SInt16.to_int v));
-  getter Schemas.mixed Schemas.mixed_e ~get:G_mixed.Get.e ~show:(fun v ->
-      string_of_int (UInt32.to_int v));
-  getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.Get.f ~show:(fun v ->
-      string_of_int (SInt32.to_int v));
-  getter Schemas.mixed Schemas.mixed_h ~get:G_mixed.Get.h ~show:string_of_int;
-  getter Schemas.eth Schemas.eth_src ~get:G_eth.Get.src ~show:Fun.id
+  getter Schemas.checked Schemas.checked_proto
+    ~get:(big G_checked_big.Get.proto)
+    ~show:u8;
+  getter Schemas.mixed Schemas.mixed_b ~get:(big G_mixed_big.Get.b)
+    ~show:(fun v -> string_of_int (SInt16.to_int v));
+  getter Schemas.mixed Schemas.mixed_e ~get:(big G_mixed_big.Get.e)
+    ~show:(fun v -> string_of_int (UInt32.to_int v));
+  getter Schemas.mixed Schemas.mixed_f ~get:(big G_mixed_big.Get.f)
+    ~show:(fun v -> string_of_int (SInt32.to_int v));
+  getter Schemas.mixed Schemas.mixed_h ~get:(big G_mixed_big.Get.h)
+    ~show:string_of_int;
+  getter Schemas.eth Schemas.eth_src ~get:(big G_eth_big.Get.src) ~show:Fun.id
 
 (* [is_valid buf off] holds exactly when [Codec.validate] accepts the
    record at [off]. In the buffer named [b] of length [len],
@@ -744,7 +758,7 @@ let test_view () =
     let read v =
       string_of_int (UInt16.to_int (G_ipv4.frag b v))
       ^ ","
-      ^ string_of_int (G_ipv4.view_src_int b v)
+      ^ string_of_int (SInt32.to_int (G_ipv4.src b v))
     in
     let c = G_ipv4.check b len off in
     Alcotest.(check bool) "check" (G_ipv4.is_valid buf off) (G_ipv4.ok c);
@@ -896,35 +910,17 @@ let test_bigstring () =
     ~on_big:(fun b o ->
       big G_mixed_big.min_size G_mixed_big.encode G_mixed_big.decode b o);
   same_on_bigstring Schemas.eth
-    ~on_bytes:(fun b o ->
-      encoded G_eth.min_size G_eth.encode G_eth.decode b o
-      ^ (ok (G_eth.Get.src b o) :> string))
+    ~on_bytes:(fun b o -> encoded G_eth.min_size G_eth.encode G_eth.decode b o)
     ~on_big:(fun b o ->
-      big G_eth_big.min_size G_eth_big.encode G_eth_big.decode b o
-      ^ (ok (G_eth_big.Get.src b o) :> string));
-  same_on_bigstring Schemas.ipv4
-    ~on_bytes:(fun b o ->
-      string_of_int
-        (ok (G_ipv4.Get.src_int b o) + (ok (G_ipv4.Get.proto b o) :> int)))
-    ~on_big:(fun b o ->
-      string_of_int
-        (ok (G_ipv4_big.Get.src_int b o)
-        + (ok (G_ipv4_big.Get.proto b o) :> int)));
+      big G_eth_big.min_size G_eth_big.encode G_eth_big.decode b o);
   same_on_bigstring ~fix:fix_checked Schemas.checked
     ~on_bytes:(fun b _ ->
-      ok (G_checked.validate b 0);
-      string_of_int
-        ((ok (G_checked.Get.proto b 0) :> int)
-        + (ok (G_checked.Get.ihl b 0) :> int)))
+      let r = ok (G_checked.decode b 0) in
+      string_of_int (UInt8.to_int r.proto + r.ihl))
     ~on_big:(fun b _ ->
       let v = ok (G_checked_big.Valid.v b) in
       string_of_int
         ((G_checked_big.read_proto v :> int) + (G_checked_big.read_ihl v :> int)));
-  same_on_bigstring Schemas.wide
-    ~on_bytes:(fun b o ->
-      string_of_int (G_wide.c_of_word (ok (G_wide.Get.c_word b o))))
-    ~on_big:(fun b o ->
-      string_of_int (G_wide.c_of_word (ok (G_wide_big.Get.c_word b o))));
   let size = Codec.min_size Schemas.checked in
   for _ = 1 to 2000 do
     let w k = Random.State.int rand (k + 40) - 20 in
@@ -992,11 +988,11 @@ let test_oxcaml () =
     [
       "let[@inline][@zero_alloc] is_valid";
       "let[@inline always] check (_b : 'b Wire_runtime.Buf.t @ local)";
-      "view_src_int ((b : 'b Wire_runtime.Buf.t) @ local) (v : 'b view)";
+      "let[@inline always] src (b : 'b Wire_runtime.Buf.t @ local) (v : 'b \
+       view)";
       "[@zero_alloc assume error] fail";
       "let[@inline] decode_with (make @ local) ~(fail @ local) (buf @ local) \
        off";
-      "let[@inline] src (buf @ local) off";
       "let[@inline][@zero_alloc] write (buf @ local) off";
       "module Int32_u = Wire_runtime.Target.Int32_u";
     ];

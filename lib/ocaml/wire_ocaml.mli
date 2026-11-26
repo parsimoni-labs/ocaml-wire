@@ -51,10 +51,14 @@
     constant size also has [write buf off ~f1 ... ~fn], which writes the record
     of these field values, each of the type its accessor returns, and raises
     [Invalid_argument] for a bitfield wider than its field or a string of
-    another length than its byte array; [Get.<field> buf off], which reads one
-    field with one bounds-checked load at a constant offset, and, for a
-    bitfield, [Get.<field>_word] and [<field>_of_word], so fields packed in one
-    word share one load. Bad input never makes a decoder raise.
+    another length than its byte array. Bad input never makes a decoder raise.
+
+    The views read every field of a codec the walk covers. A fixed record it
+    does not cover, one with a map or an integer wider than 32 bits, has no
+    views, and reads its fields instead with [Get.<field> buf off], one
+    bounds-checked load at a constant offset, and, for a bitfield,
+    [Get.<field>_word] and [<field>_of_word], so fields packed in one word share
+    one load.
 
     With [~buffer:`Bigstring] the module reads and writes a bigarray of bytes
     instead, with the same functions and the same errors, and no walk:
@@ -76,12 +80,12 @@ type buffer = [ `Bytes | `Bigstring ]
 
 val ident : string -> string
 (** [ident name] is the OCaml name a generated module derives from the field
-    [name], for either target: its getter is [Get.<ident name>] and its record
-    field [ident name]. It is [name] lower-cased, any character other than a
-    letter, a digit or ['_'] turned into ['_'], prefixed with ["f_"] when that
-    is empty or starts with a digit, and suffixed with ['_'] when it is a
-    keyword of OCaml or of OxCaml, so the code for the default target compiles
-    on an OxCaml compiler too. *)
+    [name], for either target: its record field is [ident name], and so is its
+    accessor unless the module defines that name ({{!views}Views}). It is [name]
+    lower-cased, any character other than a letter, a digit or ['_'] turned into
+    ['_'], prefixed with ["f_"] when that is empty or starts with a digit, and
+    suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the code
+    for the default target compiles on an OxCaml compiler too. *)
 
 type map
 (** The type for a {!Wire.map} the generated code calls by its OCaml path. *)
@@ -181,9 +185,10 @@ val v :
     [maps] does not name; for [folds], [~maps] or [~simd:true] on a codec the
     walk, or the fixed record, does not cover; for [~simd:true] with the
     [`OCaml] target; naming both fields when two of them would define the same
-    OCaml name ({!ident}), or one of them a getter that would shadow a name the
-    getters call, such as [Get.cast]; and naming the names, for a fold whose
-    functions take a name the module defines or another fold's. *)
+    OCaml name ({!ident}), or, in a module that reads with [Get], one of them a
+    getter that would shadow a name the getters call, such as [Get.cast]; and
+    naming the names, for a fold whose functions take a name the module defines
+    or another fold's. *)
 
 val name : t -> string
 (** [name t] is the name of [t]'s module: its file is [name t ^ ".ml"]. *)

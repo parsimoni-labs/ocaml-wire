@@ -145,12 +145,14 @@ the codec's error for a fixed record, `check`, and each fold the module
 declares (`Wire_ocaml.fold`), for a codec of any shape in scope. One writer
 (`Writer`) puts them in one module per codec, whatever its shape: the walks,
 the check and the views of every codec the walk covers, and the members of a
-fixed record of named scalars (its record, decoder, writes, `Get`) where the
+fixed record of named scalars (its record, decoder and write) where the
 codec is one. The views read the fields: a fixed record has no second check
-(`Valid`, `View`) nor second reads (`read_<field>`, `view_<field>`) beside
-them. A module reads one buffer, chosen when it is generated:
-`~buffer:`Bigstring` writes a fixed record's members on a bigarray, with no
-walk, where `Valid` and `View` remain its views. `Wire_ocaml.v` declares the
+(`Valid`, `View`) nor second reads (`Get`, `read_<field>`, `view_<field>`,
+a word and its fields) beside them. A fixed record the walk does not cover,
+one with a map or an integer wider than 32 bits, reads its fields with `Get`.
+A module reads one buffer, chosen when it is generated: `~buffer:`Bigstring`
+writes a fixed record's members on a bigarray, with no walk, where `Get`,
+`Valid` and `View` remain its reads and views. `Wire_ocaml.v` declares the
 module, `Wire_ocaml.main` writes it, one dune rule per module.
 
 A fold `n` without a visitor takes its consumer as arguments (`n`,

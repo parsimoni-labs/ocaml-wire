@@ -325,7 +325,9 @@ let check label (Fuzz_gen.Pack g as codec) m =
   let c = Fuzz_gen.codec g in
   let size = Wire.Codec.min_size c in
   let refs =
-    List.sort_uniq compare (List.map (fun (n, _, _) -> n) m.bytes.gets)
+    List.sort_uniq compare
+      (List.map (fun (n, _, _) -> n) m.bigstring.gets
+      @ List.map fst m.bytes.reads)
     |> List.map (fun n -> (n, reference c n))
   in
   let case = { label; m; refs } in
@@ -341,7 +343,7 @@ let check label (Fuzz_gen.Pack g as codec) m =
 let pp ppf m =
   Fmt.pf ppf "@[<h>%a@]"
     Fmt.(list ~sep:sp (fun ppf (n, v, _) -> string ppf (view_name n v)))
-    m.bytes.gets
+    m.bigstring.gets
 
 (* {1 Refusals} *)
 
