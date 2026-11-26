@@ -335,19 +335,6 @@ let rec build_populate : type a.
       fun _slots runtime input_end buf base ->
         ignore (reader runtime input_end buf base)
 
-(* Bitfield extraction descriptor: word reader + packed shift/mask.
-   Packing shift and mask into a single int lets [extract] be a direct
-   [@inline always] function instead of an indirect closure call. *)
-(* The word travels as [Optint.t] so a 32-bit base word survives a narrow-int
-   platform: an unboxed native [int] on a 64-bit host, a boxed [int32] where
-   the int cannot hold the word. *)
-type bf_info = {
-  word_reader : bytes -> int -> (Optint.t, Types.parse_error) result;
-  bf_shift : int;
-  bf_mask : Optint.t;
-  bf_mask_int : int;
-}
-
 let no_runtime = Types.unbound_eval_ctx
 
 (* Saturating addition of an offset and a size. A saturated sum lies outside

@@ -165,18 +165,6 @@ let test_set_field_notin_codec () =
   | _ -> Alcotest.fail "expected Invalid_argument for unknown field"
   | exception Invalid_argument _ -> ()
 
-let test_bitfield_on_non_bitfield () =
-  (* [bitfield] takes an int-valued field; a whole byte mapped to [int] is one
-     that is still not a bitfield. *)
-  let cf_x =
-    Codec.(
-      Field.v "x" (map ~decode:UInt8.to_int ~encode:UInt8.v uint8) $ fun v -> v)
-  in
-  let codec = Codec.v "NoBf" (fun v -> v) [ cf_x ] in
-  match Codec.bitfield codec cf_x with
-  | _ -> Alcotest.fail "expected error for non-bitfield"
-  | exception Invalid_argument _ -> ()
-
 let expect_foreign_field ~op ~field ~codec f =
   match f () with
   | () -> Alcotest.failf "expected Invalid_argument from %s" op
@@ -205,8 +193,8 @@ let test_lookalike_field_handles () =
   let flags_field = Codec.(flags $ Fun.id) in
   let lookalike_flags = Codec.(Field.v "flags" (bits ~width:4 U16) $ Fun.id) in
   let flags_codec = Codec.v "FlagsOwner" Fun.id [ flags_field ] in
-  expect_foreign_field ~op:"Codec.bitfield" ~field:"flags" ~codec:"FlagsOwner"
-    (fun () -> ignore (Codec.bitfield flags_codec lookalike_flags));
+  expect_foreign_field ~op:"Codec.Word.field" ~field:"flags" ~codec:"FlagsOwner"
+    (fun () -> ignore (Codec.Word.field flags_codec lookalike_flags));
 
   let payload = Field.v "payload" (byte_slice ~size:(int 2)) in
   let payload_field = Codec.(payload $ Fun.id) in
@@ -400,12 +388,9 @@ let iter_bitpacks f =
 let test_get_bitfield_word_past_buffer () =
   iter_bitpacks (fun name word fname field codec ->
       let get = Staged.unstage (Codec.get codec field) in
-      let load =
-        Staged.unstage (Codec.load_word (Codec.bitfield codec field))
-      in
       let expect_refusal len off =
         let buf = Bytes.make len '\xff' in
-        (match get buf off with
+        match get buf off with
         | Error { Error.kind = Unexpected_eof _; _ } -> ()
         | Error e ->
             Alcotest.failf "%s field %s: %a at offset %d of a %d-byte buffer"
@@ -413,18 +398,7 @@ let test_get_bitfield_word_past_buffer () =
         | Ok v ->
             Alcotest.failf
               "%s field %s: read %d at offset %d of a %d-byte buffer" name fname
-              v off len);
-        match (load buf off, get buf off) with
-        | Error e, Error e' when Error.equal e e' -> ()
-        | Error e, _ ->
-            Alcotest.failf
-              "%s field %s: the load answers %a, not Codec.get's error, at \
-               offset %d of a %d-byte buffer"
-              name fname Error.pp e off len
-        | Ok v, _ ->
-            Alcotest.failf
-              "%s field %s: loaded %d at offset %d of a %d-byte buffer" name
-              fname (Optint.to_int v) off len
+              v off len
       in
       (* No room for the word at all, and room for it but not where the frame
          starts. *)
@@ -434,44 +408,6 @@ let test_get_bitfield_word_past_buffer () =
       for off = 1 to word do
         expect_refusal word off
       done)
-
-(* [Codec.load_word] takes the record's offset from the application. A buffer
-   that cuts the word is input: the load answers the error [Codec.get] answers
-   for the field. A negative offset is misuse and raises, even where it puts
-   the word inside the buffer, in front of the record. *)
-let test_load_word_bad_input () =
-  let h = Codec.(Field.v "h" uint8 $ fun (h, _, _) -> h) in
-  let a = Codec.(Field.v "a" (bits ~width:4 U16be) $ fun (_, a, _) -> a) in
-  let b = Codec.(Field.v "b" (bits ~width:12 U16be) $ fun (_, _, b) -> b) in
-  let c = Codec.v "LoadWord" (fun h a b -> (h, a, b)) Codec.[ h; a; b ] in
-  let load = Staged.unstage (Codec.load_word (Codec.bitfield c a)) in
-  let error = Alcotest.testable Error.pp Error.equal in
-  let optint = Alcotest.testable Optint.pp Optint.equal in
-  let answers name buf off ~expected =
-    Alcotest.(check (result optint error)) name (Error expected) (load buf off)
-  in
-  answers "a word the buffer cuts"
-    (Bytes.of_string "\x00\x12")
-    0
-    ~expected:
-      {
-        at = 1;
-        field = [ "a" ];
-        kind = Unexpected_eof { expected = 2; got = 1 };
-      };
-  answers "a word past the buffer"
-    (Bytes.of_string "\x00\x12\x34")
-    2
-    ~expected:
-      {
-        at = 3;
-        field = [ "a" ];
-        kind = Unexpected_eof { expected = 2; got = 0 };
-      };
-  match load (Bytes.of_string "\x00\x12\x34") (-1) with
-  | _ ->
-      Alcotest.fail "a negative offset loaded the word in front of the record"
-  | exception Invalid_argument _ -> ()
 
 let test_set_bitfield_word_past_buffer_writes_nothing () =
   iter_bitpacks (fun name word fname field codec ->
@@ -889,8 +825,6 @@ let suite =
         test_get_field_notin_codec;
       Alcotest.test_case "misuse: set field not in codec" `Quick
         test_set_field_notin_codec;
-      Alcotest.test_case "misuse: bitfield on non-bitfield" `Quick
-        test_bitfield_on_non_bitfield;
       Alcotest.test_case "misuse: lookalike field handles" `Quick
         test_lookalike_field_handles;
       Alcotest.test_case "misuse: foreign env codec operations" `Quick
@@ -913,8 +847,6 @@ let suite =
         test_size_of_value_refuses_unmatched_case;
       Alcotest.test_case "get: a bitfield word past the buffer is an error"
         `Quick test_get_bitfield_word_past_buffer;
-      Alcotest.test_case "load_word: bad input is an error, misuse raises"
-        `Quick test_load_word_bad_input;
       Alcotest.test_case "set: a bitfield word past the buffer writes nothing"
         `Quick test_set_bitfield_word_past_buffer_writes_nothing;
       Alcotest.test_case "get: statically gated optionals agree with decode"

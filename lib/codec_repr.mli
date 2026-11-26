@@ -46,14 +46,6 @@ val build_populate :
     value [reader] reads at [base] into slot [idx] of [arr], or runs [reader]
     for its checks when [t] has no int slot. *)
 
-type bf_info = {
-  word_reader : bytes -> int -> (Optint.t, Types.parse_error) result;
-  bf_shift : int;
-  bf_mask : Optint.t;
-  bf_mask_int : int;
-}
-(** A bitfield accessor: its base word reader and the field's shift and mask. *)
-
 val no_runtime : Types.eval_ctx
 (** The context with no parameter bindings. *)
 

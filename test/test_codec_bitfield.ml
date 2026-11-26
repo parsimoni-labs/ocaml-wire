@@ -302,7 +302,7 @@ let test_view_set_bitfield () =
   Alcotest.(check int) "b still 20" 20 r.b;
   Alcotest.(check int) "c still 0x1234" 0x1234 r.c
 
-(* -- Bitfield batch access -- *)
+(* -- Bitfields read from a record's word -- *)
 
 type bf_rec = { hi : int; lo : int }
 
@@ -314,70 +314,28 @@ let bf_cf_lo = Codec.(bf_f_lo $ fun r -> r.lo)
 let bf_codec =
   Codec.v "BfBatch" (fun hi lo -> { hi; lo }) Codec.[ bf_cf_hi; bf_cf_lo ]
 
-let test_bitfield_extract () =
+let test_bitfield_word_read () =
   (* Default [bit_order = Msb_first]: [hi] is the top nibble. *)
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xA7;
-  let hi = Codec.bitfield bf_codec bf_cf_hi in
-  let lo = Codec.bitfield bf_codec bf_cf_lo in
-  let load = Staged.unstage (Codec.load_word hi) in
-  let w = decode_ok (load buf 0) in
-  let hi = Codec.extract hi w in
-  let lo = Codec.extract lo w in
-  (* Compare against Codec.get *)
+  let k = Codec.Word.(check (reader bf_codec)) buf 0 in
+  let w = Codec.Word.get k in
+  let hi = Codec.Word.(read (field bf_codec bf_cf_hi)) w in
+  let lo = Codec.Word.(read (field bf_codec bf_cf_lo)) w in
   let get_hi = reader bf_codec bf_cf_hi in
   let get_lo = reader bf_codec bf_cf_lo in
-  Alcotest.(check int) "extract hi = get hi" (get_hi buf 0) hi;
-  Alcotest.(check int) "extract lo = get lo" (get_lo buf 0) lo;
+  Alcotest.(check int) "Word.read hi = get hi" (get_hi buf 0) hi;
+  Alcotest.(check int) "Word.read lo = get lo" (get_lo buf 0) lo;
   Alcotest.(check int) "hi" 0xA hi;
   Alcotest.(check int) "lo" 0x7 lo
 
-let test_bitfield_non_bf_raises () =
+let test_bitfield_word_non_bf_raises () =
   let f_x = Field.v "x" (map ~decode:UInt8.to_int ~encode:UInt8.v uint8) in
   let cf_x = Codec.(f_x $ fun x -> x) in
   let codec = Codec.v "NonBf" (fun x -> x) Codec.[ cf_x ] in
-  match Codec.bitfield codec cf_x with
+  match Codec.Word.field codec cf_x with
   | _ -> Alcotest.fail "expected Invalid_argument"
   | exception Invalid_argument _ -> ()
-
-let test_bitfield_short_buffer () =
-  (* Reading a uint32be bitfield from a 2-byte buffer should not segfault *)
-  let f_a = Field.v "a" (bits ~width:8 U32be) in
-  let cf_a = Codec.(f_a $ fun a -> a) in
-  let codec = Codec.v "Short" (fun a -> a) Codec.[ cf_a ] in
-  let bf = Codec.bitfield codec cf_a in
-  let load = Staged.unstage (Codec.load_word bf) in
-  (* Short buffer -- should read garbage but not crash *)
-  let buf = Bytes.create 8 in
-  Bytes.set_int32_be buf 0 0x12345678l;
-  let w = decode_ok (load buf 0) in
-  let v = Codec.extract bf w in
-  Alcotest.(check int) "extract from valid buf" 0x12 v
-
-let test_bitfield_load_shared () =
-  (* Two fields in the same base word should get the same word value *)
-  let f_a = Field.v "a" (bits ~width:4 U32be) in
-  let f_b = Field.v "b" (bits ~width:4 U32be) in
-  let cf_a = Codec.(f_a $ fst) in
-  let cf_b = Codec.(f_b $ snd) in
-  let codec = Codec.v "Shared" (fun a b -> (a, b)) Codec.[ cf_a; cf_b ] in
-  let a = Codec.bitfield codec cf_a in
-  let b = Codec.bitfield codec cf_b in
-  let load_a = Staged.unstage (Codec.load_word a) in
-  let load_b = Staged.unstage (Codec.load_word b) in
-  let buf = Bytes.create 4 in
-  Bytes.set_int32_be buf 0 0xABCDEF01l;
-  let wa = decode_ok (load_a buf 0) in
-  let wb = decode_ok (load_b buf 0) in
-  (* Same base word, same value *)
-  (* [Codec.load_word] hands back the bitfield's raw base word, an [Optint.t],
-     not a uint32 field value. *)
-  Alcotest.check (Alcotest.testable Optint.pp Optint.equal) "same word" wa wb;
-  let a = Codec.extract a wa in
-  let b = Codec.extract b wa in
-  (* a = top 4 bits of 0xABCDEF01 = 0xA, b = next 4 bits = 0xB *)
-  Alcotest.(check int) "a" 0xA a;
-  Alcotest.(check int) "b" 0xB b
 
 (* -- Adversarial bit-order tests --
 
@@ -517,12 +475,8 @@ let suite =
         test_bitorder_lsbfirst_opt_in;
       Alcotest.test_case "bit_order: different orders separate words" `Quick
         test_bitorder_diff_start_newword;
-      Alcotest.test_case "bitfield: extract matches get" `Quick
-        test_bitfield_extract;
-      Alcotest.test_case "bitfield: non-bf field raises" `Quick
-        test_bitfield_non_bf_raises;
-      Alcotest.test_case "bitfield: short buffer" `Quick
-        test_bitfield_short_buffer;
-      Alcotest.test_case "bitfield: load_word shared" `Quick
-        test_bitfield_load_shared;
+      Alcotest.test_case "bitfield: Word.read matches get" `Quick
+        test_bitfield_word_read;
+      Alcotest.test_case "bitfield: a mapped field is no word field" `Quick
+        test_bitfield_word_non_bf_raises;
     ] )

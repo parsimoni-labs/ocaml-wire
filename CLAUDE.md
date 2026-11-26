@@ -45,7 +45,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
   - `examples/net/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo
 - `bench/` -- benchmarks using schemas from `examples/`
   - `bench/demo/` -- field-level codec benchmark (EverParse C validation vs FFI vs OCaml `Codec.get`/`Codec.set`)
-  - `bench/clcw/` -- CLCW polling loop, uses `Codec.bitfield`/`load_word`/`extract`
+  - `bench/clcw/` -- CLCW polling loop, uses `Codec.Word`
   - `bench/routing/` -- APID demux throughput
   - `bench/gateway/` -- TM frame reassembly
   - `bench/apps/` -- the routing, gateway and CLCW workloads in Wire.Codec, generated OCaml/OxCaml, generated Rust and crates
@@ -158,9 +158,9 @@ measures the trick, not the library, and its win belongs in the generator.
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
 does the same work with the codec's read and write API, as a user would:
-`Codec.Word.check`, `ok` and `get` once per header and `Codec.Word.read`
-per field (`Codec.load_word` and `Codec.extract` for CLCW), `Codec.writer` per header
-written, and `Codec.get`/`Codec.set` for a lone field.
+`Codec.Word.check`, `ok` and `get` once per header (or CLCW word) and
+`Codec.Word.read` per field, `Codec.writer` per header written, and
+`Codec.get`/`Codec.set` for a lone field.
 
 **Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one
 exception to the three tiers: it measures the code generators against

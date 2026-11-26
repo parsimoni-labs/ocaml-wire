@@ -38,6 +38,10 @@
   `Codec.Word.get`, and ask `Codec.Word.error` for the error of a refused
   record (#569, @samoht)
 
+- `Wire.Codec.bitfield`, `load_word` and `extract` are removed: read the
+  bitfields of a record of at most 7 bytes with `Codec.Word.check` and
+  `Codec.Word.read`, and of any other record with `Codec.View` (#569, @samoht)
+
 - `read_<field>` and `view_<field>` of a field under a map, in a module
   `Wire_ocaml` writes, answer `('a, Wire.Error.t) result`: bytes rewritten
   after the check that the map refuses, such as a lookup index past its

@@ -1629,42 +1629,6 @@ module Codec : sig
       validator field by field. A reader answers an error when the field's bytes
       are out of the buffer, or when the value does not fit an OCaml [int]. *)
 
-  (** {2 Bitfield batch access}
-
-      For multiple bitfield fields sharing the same base word, {!load_word}
-      reads the word once and {!extract} retrieves individual fields with pure
-      shift+mask -- no redundant memory loads.
-
-      The word is read with a bounds check and no other check of the record; on
-      untrusted input use {!View}. These stay for unchecked reads of several
-      bitfields of one word of a record shorter than 8 bytes, such as the 4-byte
-      words of [bench/clcw]: a view reads such a field out of line, where
-      {!extract} is a shift and a mask. *)
-
-  type bitfield
-  (** A bitfield accessor -- shift and mask for one field in a packed word. *)
-
-  val bitfield : 'r t -> (int, 'r) field -> bitfield
-  (** [bitfield codec field] returns a bitfield accessor. Raises
-      [Invalid_argument] if [field] was not bound from the source {!Field.t}
-      used in [codec]. *)
-
-  val load_word :
-    bitfield -> (bytes -> int -> (Optint.t, Error.t) result) Staged.t
-  (** Staged word reader. Force once, reuse for every read. Fields in the same
-      base word share the same underlying reader -- call once and use {!extract}
-      on the result for each field. The word is an [Optint.t] so a 32-bit base
-      survives a platform whose int is narrower: an unboxed native int on a
-      64-bit host.
-
-      The reader answers the error {!get} answers for the field of the bitfield
-      where the buffer cuts the word, and raises [Invalid_argument] on a
-      negative offset, which is misuse. *)
-
-  val extract : bitfield -> Optint.t -> int
-  (** [extract bf word] extracts the field from a pre-loaded word. Pure
-      shift+mask, no memory access. *)
-
   (** Records of at most 7 bytes read as one word.
 
       A check of a record of a fixed size that fits an [int] with a bit to spare

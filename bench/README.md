@@ -52,8 +52,8 @@ make bench-demo           # requires EverParse (everparse-3d.exe in PATH)
 
 Throughput on realistic workloads. The C loop calls the EverParse validator for
 field extraction, then runs application logic. The OCaml loop does the same
-work with `Codec.Word.check` and `Codec.Word.read` (CLCW: `Codec.load_word`
-and `Codec.extract`), and writes with `Codec.writer`.
+work with `Codec.Word.check` and `Codec.Word.read`, and writes with
+`Codec.writer`.
 
 | Target | Scenario | Protocols |
 |---|---|---|
@@ -83,7 +83,7 @@ relay does to produce it:
 
 | Row | Implementation | API |
 |---|---|---|
-| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.Word.check`, `ok` and `get` per header, then `Codec.Word.read` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
+| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.Word.check`, `ok` and `get` per header, then `Codec.Word.read` per field, for CLCW too. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
 | `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field; for CLCW `view_lockout_word` once, then `<field>_of_word` per field. Writing: `write_at`, or `write_int_at` where a field's value is computed, per header |
 | `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |

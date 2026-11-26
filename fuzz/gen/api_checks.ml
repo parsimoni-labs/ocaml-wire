@@ -147,17 +147,16 @@ let check_api_getters (codec : api_access Wire.Codec.t) bf_a bf_hi bf_lo
     (string_of_slice
        (Wire.Codec.View.read (Wire.Codec.View.field V.codec bf_payload) b r))
 
-let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
-  let bit_hi = Wire.Codec.bitfield codec bf_hi in
-  let bit_lo = Wire.Codec.bitfield codec bf_lo in
-  let load = Wire.Codec.load_word bit_hi |> Wire.Staged.unstage in
-  let word =
-    match load buf base with
-    | Ok w -> w
-    | Error e -> Alcobar.failf "Codec.load_word: %a" Wire.Error.pp e
-  in
-  check_int "Codec.extract hi" hi (Wire.Codec.extract bit_hi word);
-  check_int "Codec.extract lo" lo (Wire.Codec.extract bit_lo word)
+let check_api_bitfields (codec : api_access Wire.Codec.t) bf_hi bf_lo buf base
+    hi lo =
+  let module V = (val Wire.Codec.View.codec codec) in
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let k = Wire.Codec.View.check V.codec b (Wire.Buf.length b) base in
+  if not (Wire.Codec.View.ok k) then Alcobar.failf "Codec.View.check refused";
+  let r = Wire.Codec.View.get k in
+  let read f = Wire.Codec.View.read (Wire.Codec.View.field V.codec f) b r in
+  check_int "Codec.View.read hi" hi (read bf_hi);
+  check_int "Codec.View.read lo" lo (read bf_lo)
 
 (* [byte_slice] is the mutable zero-copy span: both staged access and record
    decode must retain an alias to the caller's buffer, in both directions. *)
