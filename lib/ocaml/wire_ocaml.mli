@@ -49,10 +49,12 @@
     the module's record type [t]; [encode r buf off]; [size r], the bytes
     [encode] writes; [pp]; and the folds it declares ({!fold}). A codec of
     constant size also has [write buf off ~f1 ... ~fn], which writes the record
-    of these field values, [Get.<field> buf off], which reads one field with one
-    bounds-checked load at a constant offset, and, for a bitfield,
-    [Get.<field>_word] and [<field>_of_word], so fields packed in one word share
-    one load. Bad input never makes a decoder raise.
+    of these field values, each of the type its accessor returns, and raises
+    [Invalid_argument] for a bitfield wider than its field or a string of
+    another length than its byte array; [Get.<field> buf off], which reads one
+    field with one bounds-checked load at a constant offset, and, for a
+    bitfield, [Get.<field>_word] and [<field>_of_word], so fields packed in one
+    word share one load. Bad input never makes a decoder raise.
 
     With [~buffer:`Bigstring] the module reads and writes a bigarray of bytes
     instead, with the same functions and the same errors, and no walk:
@@ -63,9 +65,9 @@
 
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
-    checks on [is_valid], [write_int], [write] and the reads, and
-    [decode_with k ~fail], which takes continuations for flambda2 to inline, so
-    a [k] that uses a few fields reads only those, under one frame check. *)
+    checks on the checks, [write] and the reads, and [decode_with k ~fail],
+    which takes continuations for flambda2 to inline, so a [k] that uses a few
+    fields reads only those, under one frame check. *)
 
 type buffer = [ `Bytes | `Bigstring ]
 (** The buffer a generated module reads and writes: [bytes], or a bigarray of
@@ -166,9 +168,9 @@ val v :
     field out of each lane. A write builds an [X4.part] from each field's bits,
     [X4.<field>_bits] (its low bits) or [X4.<field>_of] (checked), joined with
     [X4.( ++ )]; since any such bits are a valid record, [X4.store] and
-    [X4.fill] check only that the records fit, and raise what [write_int_at]
-    would for the first that does not. The module then needs the runtime's
-    [Vec], which exists on OxCaml for arm64 (NEON) and amd64 (SSE) only.
+    [X4.fill] check only that the records fit, and raise what [write] would for
+    the first that does not. The module then needs the runtime's [Vec], which
+    exists on OxCaml for arm64 (NEON) and amd64 (SSE) only.
 
     The walk covers integers up to 32 bits, bitfields, byte arrays and slices of
     any size, nested codecs, optional fields and fields in a sized region, exact

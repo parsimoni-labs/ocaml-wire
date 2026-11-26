@@ -174,10 +174,8 @@ let test_checked () =
       UInt8.v (List.nth [ 1; 6; 17; 9 ] (Random.State.int rand 4)) )
   in
   writes Schemas.checked
-    ~write:(fun (a, b, c, d, e) ->
-      let a = G_checked.Value.version a and b = G_checked.Value.ihl b in
-      fun buf off ->
-        G_checked.write buf off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e)
+    ~write:(fun (a, b, c, d, e) buf off ->
+      G_checked.write buf off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e)
     (decoded ~fix:fix_checked Schemas.checked 200
     @ List.init 300 (fun _ -> wild ()))
 
@@ -192,9 +190,8 @@ let test_mixed () =
     (a, b, c, d, e, f, Random.State.int rand 40, Random.State.int rand 3000)
   in
   writes Schemas.mixed
-    ~write:(fun (a, b, c, d, e, f, g, h) ->
-      let g = G_mixed.Value.g g and h = G_mixed.Value.h h in
-      fun buf off -> G_mixed.write buf off ~a ~b ~c ~d ~e ~f ~g ~h)
+    ~write:(fun (a, b, c, d, e, f, g, h) buf off ->
+      G_mixed.write buf off ~a ~b ~c ~d ~e ~f ~g ~h)
     (decoded Schemas.mixed 200 @ List.init 200 (fun _ -> wild ()))
 
 let test_small () =
@@ -211,19 +208,17 @@ let test_eth () =
     ~validate:G_eth.validate;
   let str n = String.init n (fun _ -> byte ()) in
   writes Schemas.eth
-    ~write:(fun (a, b, c) ->
-      let a = G_eth.Value.dst a and b = G_eth.Value.src b in
-      fun buf off -> G_eth.write buf off ~dst:a ~src:b ~type_:c)
+    ~write:(fun (a, b, c) buf off -> G_eth.write buf off ~dst:a ~src:b ~type_:c)
     (decoded Schemas.eth 100
     @ List.init 100 (fun _ ->
         ( str (4 + Random.State.int rand 4),
           str (5 + Random.State.int rand 3),
           UInt16.v (Random.State.int rand 0x10000) )))
 
-(* [write_int] takes plain values: on any, it stores what converting each to
-   its field's type, in field order, then encoding would store, or raises what
-   that raises. *)
-let test_write_int () =
+(* [write] takes the values a record holds: on any, after converting each
+   integer to its field's type in field order, it stores what encoding would
+   store, or raises what that raises. *)
+let test_write_values () =
   let wild k = Random.State.int rand (k + 40) - 20 in
   let size = Codec.min_size Schemas.checked in
   for _ = 1 to 2000 do
@@ -246,8 +241,10 @@ let test_write_int () =
     Alcotest.(check string)
       "checked" (run typed)
       (run (fun buf off ->
-           G_checked.write_int buf off ~version:a ~ihl:b ~length:c ~ttl:d
-             ~proto:e))
+           let c = UInt16.v c in
+           let d = UInt8.v d in
+           let e = UInt8.v e in
+           G_checked.write buf off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e))
   done;
   let size = Codec.min_size Schemas.mixed in
   for _ = 1 to 2000 do
@@ -275,7 +272,14 @@ let test_write_int () =
     in
     Alcotest.(check string)
       "mixed" (run typed)
-      (run (fun buf off -> G_mixed.write_int buf off ~a ~b ~c ~d ~e ~f ~g ~h))
+      (run (fun buf off ->
+           let a = UInt16.v a in
+           let b = SInt16.v b in
+           let c = SInt8.v c in
+           let d = SInt16.v d in
+           let e = UInt32.of_int32 e in
+           let f = SInt32.of_int32 f in
+           G_mixed.write buf off ~a ~b ~c ~d ~e ~f ~g ~h))
   done
 
 let test_wide () =
@@ -287,11 +291,8 @@ let test_wide () =
     (w 1, w 8, w 23, w 3, w 29, w 31)
   in
   writes Schemas.wide
-    ~write:(fun (a, b, c, d, e, f) ->
-      let module V = G_wide.Value in
-      let a = V.a a and b = V.b b and c = V.c c in
-      let d = V.d d and e = V.e e and f = V.f f in
-      fun buf off -> G_wide.write buf off ~a ~b ~c ~d ~e ~f)
+    ~write:(fun (a, b, c, d, e, f) buf off ->
+      G_wide.write buf off ~a ~b ~c ~d ~e ~f)
     (decoded Schemas.wide 200 @ List.init 300 (fun _ -> wild ()))
 
 (* The interpreted twin names the shape of the codec its module comes from,
@@ -365,11 +366,9 @@ let test_packed () =
     ~decode:(encoded G_packed.min_size G_packed.encode G_packed.decode)
     ~validate:G_packed.validate;
   writes packed
-    ~write:(fun r ->
-      let e = G_packed.Value.e r.e in
-      fun buf off ->
-        G_packed.write buf off ~a:r.a ~b:r.b ~c:r.c ~d:r.d ~e ~f:r.f ~g:r.g
-          ~h:r.h ~i:r.i ~j:r.j ~k:r.k ~l:r.l)
+    ~write:(fun r buf off ->
+      G_packed.write buf off ~a:r.a ~b:r.b ~c:r.c ~d:r.d ~e:r.e ~f:r.f ~g:r.g
+        ~h:r.h ~i:r.i ~j:r.j ~k:r.k ~l:r.l)
     (decoded packed 300);
   let wild k = Random.State.int rand (k + 40) - 20 in
   let size = Codec.min_size packed in
@@ -404,7 +403,18 @@ let test_packed () =
     Alcotest.(check string)
       "packed" (run typed)
       (run (fun buf off ->
-           G_packed.write_int buf off ~a ~b ~c ~d ~e ~f ~g ~h ~i ~j ~k ~l))
+           let a = SInt8.v a in
+           let b = UInt8.v b in
+           let c = SInt16.v c in
+           let d = UInt16.v d in
+           let f = SInt32.of_int32 f in
+           let g = SInt8.v g in
+           let h = UInt8.v h in
+           let i = SInt16.v i in
+           let j = UInt16.v j in
+           let k = SInt8.v k in
+           let l = UInt8.v l in
+           G_packed.write buf off ~a ~b ~c ~d ~e ~f ~g ~h ~i ~j ~k ~l))
   done
 
 (* Values that make each check of [refined] pass or fail, often several at
@@ -426,9 +436,8 @@ let test_refined () =
       UInt8.v (List.nth [ 5; 10; 20; 40 ] (Random.State.int rand 4)) )
   in
   writes Schemas.refined
-    ~write:(fun (a, b, c, d) ->
-      let a = G_refined.Value.hi a and b = G_refined.Value.lo b in
-      fun buf off -> G_refined.write buf off ~hi:a ~lo:b ~kind:c ~code:d)
+    ~write:(fun (a, b, c, d) buf off ->
+      G_refined.write buf off ~hi:a ~lo:b ~kind:c ~code:d)
     (decoded ~fix:fix_refined Schemas.refined 200
     @ List.init 300 (fun _ -> wild ()))
 
@@ -448,9 +457,8 @@ let test_overflow () =
     ~validate:G_overflow.validate;
   let u32 = UInt32.of_int32 in
   writes Schemas.overflow
-    ~write:(fun (a, hi, lo, b, c) ->
-      let hi = G_overflow.Value.hi hi and lo = G_overflow.Value.lo lo in
-      fun buf off -> G_overflow.write buf off ~a ~hi ~lo ~b ~c)
+    ~write:(fun (a, hi, lo, b, c) buf off ->
+      G_overflow.write buf off ~a ~hi ~lo ~b ~c)
     (decoded ~fix Schemas.overflow 200
     @ [
         (u32 9l, 0, 0, u32 1l, u32 1l);
@@ -645,10 +653,8 @@ let test_mapped () =
     ~decode:(encoded G_mapped.min_size G_mapped.encode G_mapped.decode)
     ~validate:G_mapped.validate;
   writes Schemas.mapped
-    ~write:(fun (a, b, c, d, e) ->
-      let e = G_mapped.Value.rest e in
-      fun buf off ->
-        G_mapped.write buf off ~len:a ~addr:b ~proto:c ~flag:d ~rest:e)
+    ~write:(fun (a, b, c, d, e) buf off ->
+      G_mapped.write buf off ~len:a ~addr:b ~proto:c ~flag:d ~rest:e)
     (decoded Schemas.mapped 300);
   getter Schemas.mapped Schemas.mapped_len ~get:G_mapped.Get.len
     ~show:string_of_int;
@@ -692,14 +698,8 @@ let test_getters () =
       string_of_int (UInt32.to_int v));
   getter Schemas.mixed Schemas.mixed_f ~get:G_mixed.Get.f ~show:(fun v ->
       string_of_int (SInt32.to_int v));
-  getter Schemas.mixed Schemas.mixed_h
-    ~get:(fun b o ->
-      Result.map (fun v -> (v : G_mixed.Value.h :> int)) (G_mixed.Get.h b o))
-    ~show:string_of_int;
-  getter Schemas.eth Schemas.eth_src
-    ~get:(fun b o ->
-      Result.map (fun v -> (v : G_eth.Value.src :> string)) (G_eth.Get.src b o))
-    ~show:Fun.id
+  getter Schemas.mixed Schemas.mixed_h ~get:G_mixed.Get.h ~show:string_of_int;
+  getter Schemas.eth Schemas.eth_src ~get:G_eth.Get.src ~show:Fun.id
 
 (* [is_valid buf off] holds exactly when [Codec.validate] accepts the
    record at [off]. In the buffer named [b] of length [len],
@@ -935,14 +935,15 @@ let test_bigstring () =
     let on_bytes =
       outcome (fun () ->
           let buf = Bytes.make len '\xaa' in
-          G_checked.write_int buf off ~version:a ~ihl:b ~length:c ~ttl:d
-            ~proto:e;
+          let c = UInt16.v c and d = UInt8.v d and e = UInt8.v e in
+          G_checked.write buf off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e;
           Bytes.to_string buf)
     in
     let on_big =
       outcome (fun () ->
           let buf = bigstring (Bytes.make len '\xaa') in
-          G_checked_big.write_int buf off ~version:a ~ihl:b ~length:c ~ttl:d
+          let c = UInt16.v c and d = UInt8.v d and e = UInt8.v e in
+          G_checked_big.write buf off ~version:a ~ihl:b ~length:c ~ttl:d
             ~proto:e;
           Diff_ocaml.string_of_big buf)
     in
@@ -992,8 +993,6 @@ let test_oxcaml () =
       "let[@inline][@zero_alloc] is_valid";
       "let[@inline always] check (_b : 'b Wire_runtime.Buf.t @ local)";
       "view_src_int ((b : 'b Wire_runtime.Buf.t) @ local) (v : 'b view)";
-      "write_at ((b : 'b Wire_runtime.Buf.t) @ local)";
-      "[@zero_alloc] write_int";
       "[@zero_alloc assume error] fail";
       "let[@inline] decode_with (make @ local) ~(fail @ local) (buf @ local) \
        off";
@@ -1053,20 +1052,6 @@ let test_simd () =
   | _ -> Alcotest.fail "~simd on the OCaml target is refused"
   | exception Invalid_argument m ->
       Alcotest.(check bool) m true (contains m "OxCaml")
-
-(* [Value.<f>_low x] is the carrier of [x]'s low bits, as [Value.<f>] of the
-   masked value is, for any [x]. *)
-let test_low () =
-  for _ = 1 to 1000 do
-    let x = Random.State.bits rand - (1 lsl 29) in
-    let check name width low checked =
-      Alcotest.(check int) name (checked (x land ((1 lsl width) - 1))) (low x)
-    in
-    let open G_lanes.Value in
-    check "a" 4 (fun x -> (a_low x :> int)) (fun x -> (a x :> int));
-    check "d" 3 (fun x -> (d_low x :> int)) (fun x -> (d x :> int));
-    check "f" 6 (fun x -> (f_low x :> int)) (fun x -> (f x :> int))
-  done
 
 (* A frame of [len] bytes holding [n], then [rest]. *)
 let frame n rest =
@@ -1918,7 +1903,7 @@ let suite =
       Alcotest.test_case "byte arrays" `Quick test_eth;
       Alcotest.test_case "32-bit bitfields" `Quick test_wide;
       Alcotest.test_case "maps" `Quick test_mapped;
-      Alcotest.test_case "write from plain values" `Quick test_write_int;
+      Alcotest.test_case "write from the values" `Quick test_write_values;
       Alcotest.test_case "stale code is refused" `Quick test_stale;
       Alcotest.test_case "the digest sees sign, cases and layout" `Quick
         test_digest;
@@ -1933,7 +1918,6 @@ let suite =
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "interfaces" `Quick test_interfaces;
       Alcotest.test_case "NEON lanes" `Quick test_simd;
-      Alcotest.test_case "carriers from low bits" `Quick test_low;
       Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "view at an offset" `Quick test_view;
       Alcotest.test_case "bigstring buffers" `Quick test_bigstring;

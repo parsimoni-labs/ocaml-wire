@@ -84,7 +84,7 @@ relay does to produce it:
 | Row | Implementation | API |
 |---|---|---|
 | `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.Word.check`, `ok` and `get` per header, then `Codec.Word.read` per field, for CLCW too. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
-| `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field. Writing: `write_at`, or `write_int_at` where a field's value is computed, per header |
+| `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field. Writing: `write`, which takes the fields' values and tests each bitfield's range, per header |
 | `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
 | `ccsds_primary_header` 0.15 (routing) | hand-written | `PrimaryHeader::from_slice`, then `control.apid()` and `length.length_field()`. Writing: the setters of its three words, then their bytes |
@@ -216,11 +216,8 @@ Rust ones, and are gone: the gateway loops took the packet size from
 `Gateway_workload.pkt_size`, which `Codec.min_size` computes when the
 program starts, where the Rust rows use the constant `space_packet::SIZE +
 64`, so OxCaml added it as a variable and built the data length's bytes
-again per packet (`asr`, `rev16`, `uxth`); and `routing_write` kept each
-route's sequence count as an `int`, so `write_at`'s carrier checked its
-range per packet (`lsr #14`, `orr`, `cmp`, `b.eq`), where it now keeps the
-count in its carrier and wraps it with `seqcount_low`, as the Rust rows
-wrap it with `& 0x3FFF`. The rest is the compiler and the runtime, with the
+again per packet (`asr`, `rev16`, `uxth`). The rest is the compiler and
+the runtime, with the
 open OxCaml issue of each compiler item where one exists:
 
 | Workload | Instructions per item beyond the crate's loop, and the issue |
@@ -228,7 +225,7 @@ open OxCaml issue of each compiler item where one exists:
 | `routing` | route table address reloaded (`adrp`, `add`, `ldr`) and `len - size` recomputed, 4: oxcaml/oxcaml#8175; the 11-bit APID's index into the 2048-entry table checked, 3: oxcaml/oxcaml#2436; the offset untagged and retagged around each load, 2 to 3: oxcaml/oxcaml#8171; the check's answer moved through a join (`mov`, `mov`) before its test, 2: oxcaml/oxcaml#8182; an extra `b` on the back edge, 1: oxcaml/oxcaml#8177; the poll (`ldr`, `cmp`, `b.ls`), 3, and the `dmb ishld` before the count's store, 1: the runtime |
 | `routing_write` | the routing items above; the write's `off < 0` tested again after the read's check of the same offset, 2: oxcaml/oxcaml#8182; the 32-bit store's swap as `rev x` then `asr #32`, 1, and `uxth` after `rev16`, 1: oxcaml/oxcaml#8184; the data length tagged then untagged for its store, 2: oxcaml/oxcaml#8173 |
 | `gateway` | per packet, the FNV prime and basis rebuilt by `mov`/`movk`, 8: oxcaml/oxcaml#8183 and oxcaml/oxcaml#8175; the `ok` flag of the `while` taken through `cset` and `cbnz` twice, 4, and the `or #1` of `hash_int` on a tagged `int`, 2: no issue yet; the poll, 3: the runtime |
-| `gateway_write` | per packet, the store addresses computed from the tagged offset, 2: oxcaml/oxcaml#8171; the 32-bit store's swap, 1: oxcaml/oxcaml#8184; APID and count masked and untagged from the tagged packet number, 4: tagging; `off + 70` and the frame end recomputed, 1: oxcaml/oxcaml#8175; the poll, 3: the runtime. Per frame, the range test of the four computed header fields `write_int_at` takes, 8: oxcaml/oxcaml#2436 |
+| `gateway_write` | per packet, the store addresses computed from the tagged offset, 2: oxcaml/oxcaml#8171; the 32-bit store's swap, 1: oxcaml/oxcaml#8184; APID and count masked and untagged from the tagged packet number, 4: tagging; `off + 70` and the frame end recomputed, 1: oxcaml/oxcaml#8175; the poll, 3: the runtime. Per frame, the range test of the four computed header fields `write` makes, 8: oxcaml/oxcaml#2436 |
 | `clcw` | each of three flags as `lsr`, `orr`, `and`, `cmp`, `b.ne` where `gaia-ccsds-c2a` has one `tst` and one `tbnz` for all three, 12: oxcaml/oxcaml#8172; the word zero-extended again after `rev w`, 1: oxcaml/oxcaml#8184; the word tagged, 2; the bounds of each word checked, which `chunks_exact` proves, 5: oxcaml/oxcaml#2436; the offset tagged, 3: oxcaml/oxcaml#8171; the poll, 3: the runtime |
 | `clcw_write` | LLVM vectorises the crate's loop, OxCaml vectorises none (the NEON lanes row is that loop written by hand); one word at a time, the range test of the four computed fields, 7: oxcaml/oxcaml#2436; each field untagged before its shift, 4: tagging; the 32-bit store's swap, 1: oxcaml/oxcaml#8184 |
 
@@ -263,11 +260,10 @@ On writing, the crates never branch on a field's value:
 `spacepackets`' `u11::new` and `u14::new` assert, which LLVM proves cannot
 fire, so no range branch is left in their loops. The generated OCaml checks
 a value against its field's width wherever the compiler cannot prove it
-fits: on `gateway_write`, every field of the frame header `write_int_at`
-takes; on `clcw_write`, the four fields that vary per word. On
-`routing_write` no range is tested: LLVM proves the `[u16; 4]` counts stay
-below 2^14 and drops `ccsds_primary_header`'s mask, and the OxCaml loop keeps
-them in `Value.seqcount`, whose type proves it. Per packet of
+fits: on `gateway_write`, every field of the frame header `write` takes; on
+`clcw_write`, the four fields that vary per word; on `routing_write`, the
+APID and the sequence count, where LLVM proves the `[u16; 4]` counts stay
+below 2^14 and drops `ccsds_primary_header`'s mask. Per packet of
 `gateway_write`, `spacepackets` stores the data length from a register set
 before the loop and addresses both stores from one base, where OxCaml stores
 the constant data length with `orr` and `strh`, computes the second store's

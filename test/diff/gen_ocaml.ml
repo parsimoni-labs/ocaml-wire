@@ -15,20 +15,10 @@ let target =
 type field = {
   name : string;
   ident : string;
-  carrier : string option;  (** The type [M.Value.<field>] coerces to. *)
-  plain : string;  (** The show of the carrier's value. *)
+  plain : string;  (** The show of its value. *)
   acc : string;  (** Its accessor in the module's views. *)
   views : Diff_ocaml.view list;
 }
-
-(* A bitfield or a byte array comes back in its carrier, [M.Value.<field>],
-   the [int] or [string] it holds. *)
-let rec carrier : type a. a T.typ -> string option = function
-  | T.Bits _ -> Some "int"
-  | T.Byte_array _ -> Some "string"
-  | T.Where { inner; _ } -> carrier inner
-  | T.Enum { base; _ } -> carrier base
-  | _ -> None
 
 (* The accessor of the field [ident] in the views of [c]: its name, or that
    name escaped where the module defines it. *)
@@ -64,20 +54,11 @@ let fields c =
       {
         name;
         ident;
-        carrier = carrier f.field_typ;
         plain;
         acc = acc ident;
         views = Diff_ocaml.views f.field_typ;
       })
     (Gen.to_struct c).fields
-
-(* The show of a value of [f] that [m] reads, its carrier coerced to what it
-   holds. *)
-let show ~m f =
-  match f.carrier with
-  | None -> f.plain
-  | Some t ->
-      Fmt.str "(fun v -> %s (v : %s.Value.%s :> %s))" f.plain m f.ident t
 
 let view = function
   | Diff_ocaml.Get -> "Diff_ocaml.Get"
@@ -91,8 +72,8 @@ let pp_gets ~m ~buf ppf f =
       let read =
         match v with
         | Diff_ocaml.Get ->
-            Fmt.str "%s (Diff_ocaml.ok (%s.Get.%s (%s) o))" (show ~m f) m
-              f.ident buf
+            Fmt.str "%s (Diff_ocaml.ok (%s.Get.%s (%s) o))" f.plain m f.ident
+              buf
         | Get_int ->
             Fmt.str "string_of_int (Diff_ocaml.ok (%s.Get.%s_int (%s) o))" m
               f.ident buf
@@ -124,7 +105,7 @@ let pp_read ?(prefix = "read") ?b ~m ppf (f, v) =
   let args = match b with None -> "v" | Some b -> b ^ " v" in
   match v with
   | Diff_ocaml.Get ->
-      Fmt.pf ppf "%s (%s.%s_%s %s)" (show ~m f) m prefix f.ident args
+      Fmt.pf ppf "%s (%s.%s_%s %s)" f.plain m prefix f.ident args
   | _ -> Fmt.pf ppf "string_of_int (%s.%s_%s_int %s)" m prefix f.ident args
 
 (* The glue over [m], whose buffer [buf] makes from

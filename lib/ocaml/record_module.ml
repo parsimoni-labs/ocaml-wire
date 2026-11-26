@@ -82,14 +82,6 @@ let int_view ~src f =
 
 let map_var f = "map_" ^ f.id
 
-(* A bitfield or a byte array with no map holds its value in a carrier of its
-   own, [Value.<field>], whose constructor checks the width or the length once:
-   a write then needs no check of its own. *)
-let has_carrier f =
-  match (f.map, f.store) with
-  | None, (Bits _ | Bytes _) -> true
-  | Some _, _ | None, Int _ -> false
-
 (* The value handed to the constructor: through the field's map when it has
    one, the failure placed at the field. *)
 let typed_value ~src f =
@@ -115,7 +107,7 @@ let typed_value ~src f =
           Fmt.str "(%s.%s.of_int32 %s_raw)" rt
             (if signed then "SInt32" else "UInt32")
             f.id
-      | Bits _ | Bytes _ -> Fmt.str "(cast Value.%s_eq %s)" f.label f.id)
+      | Bits _ | Bytes _ -> f.id)
 
 (* The attributes the OxCaml target adds: an allocation check on a hot path,
    and on a cold one the promise that it only raises. *)
@@ -298,68 +290,8 @@ let type_of f =
   | Int { width = 16; signed = true; _ } -> t "SInt16"
   | Int { signed = false; _ } -> t "UInt32"
   | Int { signed = true; _ } -> t "SInt32"
-  | (Bits _ | Bytes _) when has_carrier f -> "Value." ^ f.label
   | Bits _ -> "int"
   | Bytes _ -> "string"
-
-(* The type a handle reads: the codec's, [int] or [string] where the module
-   holds the field in a carrier of its own. *)
-let schema_type f =
-  match f.store with
-  | (Bits _ | Bytes _) when has_carrier f -> (
-      match f.store with Bytes _ -> "string" | _ -> "int")
-  | _ -> type_of f
-
-(* [Value.<field> x] is [x] in the field's carrier, after the check a write
-   would make: its width for a bitfield, its length for a byte array. A
-   carrier's [<field>_eq] proves it is that [int] or [string], for the
-   module's own reads, whose values are in range by construction. *)
-let pp_values ppf fields =
-  match List.filter has_carrier fields with
-  | [] -> ()
-  | fields ->
-      let plain f =
-        match f.store with Bytes _ -> "string" | Bits _ | Int _ -> "int"
-      in
-      Fmt.pf ppf "module Value : sig@\n";
-      List.iter
-        (fun f ->
-          Fmt.pf ppf
-            "  type %s = private %s@\n\
-            \  val %s : %s -> %s@\n\
-            \  val %s_eq : (%s, %s) Type.eq@\n"
-            f.label (plain f) f.label (plain f) f.label f.label f.label
-            (plain f);
-          match f.store with
-          | Bits _ -> Fmt.pf ppf "  val %s_low : int -> %s@\n" f.label f.label
-          | Int _ | Bytes _ -> ())
-        fields;
-      Fmt.pf ppf "end = struct@\n";
-      List.iter
-        (fun f ->
-          Fmt.pf ppf "  type %s = %s@\n@\n  let[@inline] %s x =@\n" f.label
-            (plain f) f.label;
-          (match f.store with
-          | Bits { width; _ } ->
-              Fmt.pf ppf
-                "    if x lsr %d <> 0 then %s.unsigned_too_wide ~bits:%d x \
-                 else x@\n"
-                width errors width
-          | Bytes n ->
-              Fmt.pf ppf
-                "    if String.length x <> %d then@\n\
-                \      %s.byte_length ~expected:%d ~actual:(String.length x)@\n\
-                \    else x@\n"
-                n errors n
-          | Int _ -> Fmt.pf ppf "    x@\n");
-          (match f.store with
-          | Bits { width; _ } ->
-              Fmt.pf ppf "@\n  let[@inline] %s_low x = x land %s@\n" f.label
-                (mask width)
-          | Int _ | Bytes _ -> ());
-          Fmt.pf ppf "@\n  let %s_eq = Type.Equal@\n@\n" f.label)
-        fields;
-      Fmt.pf ppf "end@\n@\n"
 
 let pp_vars ppf fields = pp_list ppf (List.map (fun f -> f.id) fields)
 
@@ -664,10 +596,8 @@ let stores ?(ox = false) ~src ppf fields =
     fields
 
 (* The checks and stores of a write, on the int values of [fields]; a field
-   [in_range] says holds a value in range skips its range check. With [len],
-   the frame is checked against that variable, a length the caller read once,
-   rather than against the buffer's. *)
-let pp_stores ?len ?ox ~src ppf ~plan ~in_range fields =
+   [in_range] says holds a value in range skips its range check. *)
+let pp_stores ?ox ~src ppf ~plan ~in_range fields =
   let bad =
     List.filter_map
       (fun f -> if in_range f then None else out_of_range f)
@@ -690,43 +620,11 @@ let pp_stores ?len ?ox ~src ppf ~plan ~in_range fields =
       Fmt.pf ppf "  if %s then first_error buf off %a@\n  else"
         (String.concat " || " guard)
         pp_vars fields);
-  (match len with
-  | None -> Fmt.pf ppf "  if %a@\n  else begin@\n" (pp_frame ~src) "too_short"
-  | Some len ->
-      Fmt.pf ppf
-        "  if off < 0 || off > %s - min_size then too_short buf off@\n\
-        \  else begin@\n"
-        len);
+  Fmt.pf ppf "  if %a@\n  else begin@\n" (pp_frame ~src) "too_short";
   stores ?ox ~src ppf fields;
   if has_checks plan then Fmt.pf ppf "    validate_written buf off@\n"
   else Fmt.pf ppf "    ()@\n";
   Fmt.pf ppf "  end@\n@\n"
-
-(* A 32-bit field comes in as an [int32] on either target, and is stored
-   unboxed where the loads are. *)
-let unbox_int32s ~src ppf fields =
-  if src.unboxed then
-    List.iter
-      (fun f ->
-        match f.store with
-        | Int { width = 32; _ } ->
-            Fmt.pf ppf "  let %s = Int32_u.of_int32 %s in@\n" f.id f.id
-        | _ -> ())
-      fields
-
-let pp_write_int ?(src = bytes_src) ppf ~target ~plan =
-  let fields = all_fields plan in
-  if
-    List.exists
-      (fun f -> Option.is_some (out_of_range f) || Option.is_some f.enum)
-      fields
-  then pp_first_error ~src ppf ~target fields;
-  Fmt.pf ppf "let[@@inline]%s write_int %s off %a =@\n" (zero_alloc target)
-    src.buf pp_labelled fields;
-  unbox_int32s ~src ppf fields;
-  pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan
-    ~in_range:(fun _ -> false)
-    fields
 
 (* The int a field's typed value stores. *)
 let plain_value ~src f =
@@ -745,20 +643,27 @@ let plain_value ~src f =
             (if signed then "SInt32" else "UInt32")
             f.id
       | Int _ -> Fmt.str "(%s : %s :> int)" f.id (type_of f)
-      | Bits _ -> Fmt.str "(%s : %s :> int)" f.id (type_of f)
-      | Bytes _ -> Fmt.str "(%s : %s :> string)" f.id (type_of f))
+      | Bits _ | Bytes _ -> f.id)
 
-(* [write] takes the codec's typed values. An integer field's type holds it in
-   range, as a bitfield's or a byte array's carrier does, so none is checked
-   again. A map's functions are the caller's code, so its value is checked, and
-   a write through one makes no promise about allocation. *)
-let typed_in_range f =
+(* [write] takes the values a record holds. An integer field's carrier holds
+   it in range, so it is not checked again; a bitfield's [int] and a byte
+   array's [string] are, all at once, which costs less than a check for each.
+   A map's functions are the caller's code, so its value is checked, and a
+   write through one makes no promise about allocation. *)
+let in_range f =
   match (f.map, f.store) with
-  | None, (Int _ | Bits _ | Bytes _) -> true
-  | Some _, _ -> false
+  | None, Int _ -> true
+  | None, (Bits _ | Bytes _) | Some _, _ -> false
 
 let pp_write ?(src = bytes_src) ppf ~target ~plan =
   let fields = all_fields plan in
+  if
+    List.exists
+      (fun f ->
+        ((not (in_range f)) && Option.is_some (out_of_range f))
+        || Option.is_some f.enum)
+      fields
+  then pp_first_error ~src ppf ~target fields;
   let target =
     if List.exists (fun f -> Option.is_some f.map) fields then `OCaml
     else target
@@ -768,46 +673,7 @@ let pp_write ?(src = bytes_src) ppf ~target ~plan =
   List.iter
     (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value ~src f))
     fields;
-  pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan ~in_range:typed_in_range
-    fields
-
-(* [write_at b len off] is [write], and [write_int_at b len off] [write_int],
-   into the buffer named ['b], whose length the caller read once: the frame is
-   one comparison against [len], so a loop that writes many records measures
-   no buffer. [write_at]'s carriers are in range already; [write_int_at] tests
-   the ranges of all its values at once, which costs less than building a
-   carrier for each value a loop computes. *)
-let pp_write_at ?(src = bytes_src) ~ints ppf ~target ~plan =
-  let fields = all_fields plan in
-  let target =
-    if (not ints) && List.exists (fun f -> Option.is_some f.map) fields then
-      `OCaml
-    else target
-  in
-  let b =
-    match target with
-    | `OxCaml -> Fmt.str "((b : 'b %s.t) @@ local)" src.brand
-    | `OCaml -> Fmt.str "(b : 'b %s.t)" src.brand
-  in
-  Fmt.pf ppf
-    "let[@@inline]%s %s %s (len : 'b %s.length) off %a =@\n\
-    \  let buf = (b : _ %s.t :> %s) and len = (len : _ %s.length :> int) in@\n"
-    (zero_alloc target)
-    (if ints then "write_int_at" else "write_at")
-    b src.brand pp_labelled fields src.brand src.typ src.brand;
-  if ints then begin
-    unbox_int32s ~src ppf fields;
-    pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
-      ~in_range:(fun _ -> false)
-      fields
-  end
-  else begin
-    List.iter
-      (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value ~src f))
-      fields;
-    pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
-      ~in_range:typed_in_range fields
-  end
+  pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan ~in_range fields
 
 (* A module whose code holds a value only an [int] of 63 bits holds refuses to
    load on a target whose ints have 32 bits or fewer. *)
@@ -1377,6 +1243,13 @@ let lanes plan ~size =
    parts. Every field is unsigned with no check and the fields cover the
    record, so any part is four valid records, and [store] tests only that they
    fit. *)
+(* A lane's value as [write] takes it: an 8-bit integer through its carrier's
+   checked constructor, which raises for a value out of range. *)
+let lane_value (f, _) =
+  match f.store with
+  | Int _ -> Fmt.str "~%s:(Wire_runtime.UInt8.v %s)" f.label f.id
+  | Bits _ | Bytes _ -> Fmt.str "~%s:%s" f.label f.id
+
 let pp_x4_sig ~src ppf fields =
   let v = "Wire_runtime.Vec.t" in
   Fmt.pf ppf
@@ -1411,9 +1284,16 @@ let pp_x4_sig ~src ppf fields =
     \  module V = Wire_runtime.Vec@\n\
      @\n\
     \  type part = V.t@\n\
+     @\n\
+    \  let[@inline] write_one ((b : 'b %s.t) @@ local) off %s =@\n\
+    \    write (b : _ %s.t :> bytes) off %s@\n\
      @\n"
     src.brand src.brand src.brand src.brand src.brand src.brand
     (String.concat " -> " (List.map (fun _ -> v) fields))
+    src.brand
+    (String.concat " " (List.map (fun (f, _) -> f.id) fields))
+    src.brand
+    (String.concat " " (List.map lane_value fields))
 
 let pp_x4_reads ~src ppf fields =
   Fmt.pf ppf
@@ -1473,8 +1353,8 @@ let pp_x4_parts ppf fields =
     fields
 
 (* [store] writes four records with one store once they fit; if they do not,
-   it writes them one at a time with [write_int_at], which writes the ones that
-   fit and raises for the first that does not, as one record at a time does.
+   it writes them one at a time with [write], which writes the ones that fit
+   and raises for the first that does not, as one record at a time does.
    [fill] checks the span of [count] registers once and stores two per turn,
    or falls back to [store] for each. *)
 let pp_x4_store ~src ppf fields =
@@ -1486,10 +1366,10 @@ let pp_x4_store ~src ppf fields =
       fields
   in
   Fmt.pf ppf
-    "  let[@inline never] one_by_one ((b : 'b %s.t) @@ local) len off p =@\n\
+    "  let[@inline never] one_by_one ((b : 'b %s.t) @@ local) _ off p =@\n\
     \    for k = 0 to 3 do@\n\
     \      let w = V.get p k in@\n\
-    \      write_int_at b len (off + (4 * k)) %s@\n\
+    \      write_one b (off + (4 * k)) %s@\n\
     \    done@\n\
      @\n\
     \  let[@inline] store ((b : 'b %s.t) @@ local) (len : 'b %s.length) off p =@\n\
@@ -1515,13 +1395,13 @@ let pp_x4_store ~src ppf fields =
     \    end@\n\
      @\n"
     src.brand
-    (labelled (List.map fst fields) of_word)
+    (String.concat " " of_word)
     src.brand src.brand src.brand src.typ src.brand src.brand src.brand
     src.brand src.typ src.brand
 
 (* [X4.write_int_at] takes plain lanes: one range test over the fields of each
    width, then [store]; lanes out of range are written one record at a time,
-   which raises what [write_int_at] raises. *)
+   which raises what [write] raises. *)
 let pp_x4_write ~src ppf fields =
   let ids = List.map (fun (f, _) -> f.id) fields in
   let widths =
@@ -1546,10 +1426,9 @@ let pp_x4_write ~src ppf fields =
       fields
   in
   Fmt.pf ppf
-    "  let[@inline never] lanes_one_by_one ((b : 'b %s.t) @@ local) len off %s \
-     =@\n\
+    "  let[@inline never] lanes_one_by_one ((b : 'b %s.t) @@ local) _ off %s =@\n\
     \    for k = 0 to 3 do@\n\
-    \      write_int_at b len (off + (4 * k)) %s@\n\
+    \      write_one b (off + (4 * k)) %s@\n\
     \    done@\n\
      @\n\
     \  let[@inline] write_int_at ((b : 'b %s.t) @@ local) len off %s =@\n\
@@ -1559,7 +1438,7 @@ let pp_x4_write ~src ppf fields =
      end@\n\
      @\n"
     src.brand (String.concat " " ids)
-    (labelled (List.map fst fields) (List.map (Fmt.str "(V.get %s k)") ids))
+    (String.concat " " (List.map (Fmt.str "(V.get %s k)") ids))
     src.brand (String.concat " " ids)
     (String.concat "\n      |> V.logor " over)
     (String.concat " " ids)
@@ -1593,10 +1472,7 @@ let pp_codec ~src ~bytes ppf ~target ~plan ~size =
   pp_decode ~src ppf ~plan ~size ~head:(Fmt.str "let decode %s off" src.buf)
     ~fail:"error buf off" ~call:(fun args -> Fmt.str "Ok (v %a)" pp_list args);
   if target = `OxCaml && bytes then pp_oxcaml ~src ppf ~plan ~size;
-  pp_write_int ~src ppf ~target ~plan;
   pp_write ~src ppf ~target ~plan;
-  pp_write_at ~src ~ints:true ppf ~target ~plan;
-  pp_write_at ~src ~ints:false ppf ~target ~plan;
   pp_getters ~src ppf ~target (all_fields plan)
 
 let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
@@ -1604,7 +1480,6 @@ let pp_body ?(simd = false) ?accessor ?(buffer = `Bytes) ~maps ppf ~target ~plan
   let views = Option.is_some accessor in
   let fields = all_fields plan in
   Fmt.pf ppf "let min_size = %d@\n@\n" size;
-  pp_values ppf fields;
   pp_record ~maps ppf fields;
   pp_printer ppf fields;
   let src = src_of ~target buffer in
@@ -1647,10 +1522,7 @@ let own_names =
     "decode_with";
     "first_error";
     "error";
-    "write_int";
     "write";
-    "write_at";
-    "write_int_at";
     "enum_failed";
     "field_eof";
     "Get";
@@ -1660,7 +1532,6 @@ let own_names =
     "t";
     "Valid";
     "View";
-    "Value";
     "Field";
     "Global";
     "mask32";

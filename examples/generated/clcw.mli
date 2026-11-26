@@ -27,189 +27,41 @@
 val min_size : int
 (** [min_size] is the size of a record in bytes, [4]. *)
 
-(** {1:values Field values} *)
-
-(** Field values held in range: a bitfield's [int] in its width and a byte
-    array's [string] at its length, each checked once, where it is made. *)
-module Value : sig
-  type controlwordtype = private int
-  (** The type for the values of a field of 1 bit. *)
-
-  val controlwordtype : int -> controlwordtype
-  (** [controlwordtype n] is [n] as a {!type-controlwordtype}. Raises
-      [Invalid_argument] if [n] does not fit in 1 bit. *)
-
-  val controlwordtype_low : int -> controlwordtype
-  (** [controlwordtype_low n] is the low bit of [n] as a
-      {!type-controlwordtype}. *)
-
-  type clcwversion = private int
-  (** The type for the values of a field of 2 bits. *)
-
-  val clcwversion : int -> clcwversion
-  (** [clcwversion n] is [n] as a {!type-clcwversion}. Raises [Invalid_argument]
-      if [n] does not fit in 2 bits. *)
-
-  val clcwversion_low : int -> clcwversion
-  (** [clcwversion_low n] is the 2 low bits of [n] as a {!type-clcwversion}. *)
-
-  type statusfield = private int
-  (** The type for the values of a field of 3 bits. *)
-
-  val statusfield : int -> statusfield
-  (** [statusfield n] is [n] as a {!type-statusfield}. Raises [Invalid_argument]
-      if [n] does not fit in 3 bits. *)
-
-  val statusfield_low : int -> statusfield
-  (** [statusfield_low n] is the 3 low bits of [n] as a {!type-statusfield}. *)
-
-  type copineffect = private int
-  (** The type for the values of a field of 2 bits. *)
-
-  val copineffect : int -> copineffect
-  (** [copineffect n] is [n] as a {!type-copineffect}. Raises [Invalid_argument]
-      if [n] does not fit in 2 bits. *)
-
-  val copineffect_low : int -> copineffect
-  (** [copineffect_low n] is the 2 low bits of [n] as a {!type-copineffect}. *)
-
-  type vcid = private int
-  (** The type for the values of a field of 6 bits. *)
-
-  val vcid : int -> vcid
-  (** [vcid n] is [n] as a {!type-vcid}. Raises [Invalid_argument] if [n] does
-      not fit in 6 bits. *)
-
-  val vcid_low : int -> vcid
-  (** [vcid_low n] is the 6 low bits of [n] as a {!type-vcid}. *)
-
-  type spare = private int
-  (** The type for the values of a field of 2 bits. *)
-
-  val spare : int -> spare
-  (** [spare n] is [n] as a {!type-spare}. Raises [Invalid_argument] if [n] does
-      not fit in 2 bits. *)
-
-  val spare_low : int -> spare
-  (** [spare_low n] is the 2 low bits of [n] as a {!type-spare}. *)
-
-  type norf = private int
-  (** The type for the values of a field of 1 bit. *)
-
-  val norf : int -> norf
-  (** [norf n] is [n] as a {!type-norf}. Raises [Invalid_argument] if [n] does
-      not fit in 1 bit. *)
-
-  val norf_low : int -> norf
-  (** [norf_low n] is the low bit of [n] as a {!type-norf}. *)
-
-  type nobitlock = private int
-  (** The type for the values of a field of 1 bit. *)
-
-  val nobitlock : int -> nobitlock
-  (** [nobitlock n] is [n] as a {!type-nobitlock}. Raises [Invalid_argument] if
-      [n] does not fit in 1 bit. *)
-
-  val nobitlock_low : int -> nobitlock
-  (** [nobitlock_low n] is the low bit of [n] as a {!type-nobitlock}. *)
-
-  type lockout = private int
-  (** The type for the values of a field of 1 bit. *)
-
-  val lockout : int -> lockout
-  (** [lockout n] is [n] as a {!type-lockout}. Raises [Invalid_argument] if [n]
-      does not fit in 1 bit. *)
-
-  val lockout_low : int -> lockout
-  (** [lockout_low n] is the low bit of [n] as a {!type-lockout}. *)
-
-  type wait = private int
-  (** The type for the values of a field of 1 bit. *)
-
-  val wait : int -> wait
-  (** [wait n] is [n] as a {!type-wait}. Raises [Invalid_argument] if [n] does
-      not fit in 1 bit. *)
-
-  val wait_low : int -> wait
-  (** [wait_low n] is the low bit of [n] as a {!type-wait}. *)
-
-  type retransmit = private int
-  (** The type for the values of a field of 1 bit. *)
-
-  val retransmit : int -> retransmit
-  (** [retransmit n] is [n] as a {!type-retransmit}. Raises [Invalid_argument]
-      if [n] does not fit in 1 bit. *)
-
-  val retransmit_low : int -> retransmit
-  (** [retransmit_low n] is the low bit of [n] as a {!type-retransmit}. *)
-
-  type farmbcounter = private int
-  (** The type for the values of a field of 2 bits. *)
-
-  val farmbcounter : int -> farmbcounter
-  (** [farmbcounter n] is [n] as a {!type-farmbcounter}. Raises
-      [Invalid_argument] if [n] does not fit in 2 bits. *)
-
-  val farmbcounter_low : int -> farmbcounter
-  (** [farmbcounter_low n] is the 2 low bits of [n] as a {!type-farmbcounter}.
-  *)
-
-  type spare2 = private int
-  (** The type for the values of a field of 1 bit. *)
-
-  val spare2 : int -> spare2
-  (** [spare2 n] is [n] as a {!type-spare2}. Raises [Invalid_argument] if [n]
-      does not fit in 1 bit. *)
-
-  val spare2_low : int -> spare2
-  (** [spare2_low n] is the low bit of [n] as a {!type-spare2}. *)
-
-  type reportvalue = private int
-  (** The type for the values of a field of 8 bits. *)
-
-  val reportvalue : int -> reportvalue
-  (** [reportvalue n] is [n] as a {!type-reportvalue}. Raises [Invalid_argument]
-      if [n] does not fit in 8 bits. *)
-
-  val reportvalue_low : int -> reportvalue
-  (** [reportvalue_low n] is the 8 low bits of [n] as a {!type-reportvalue}. *)
-end
-
 (** {1:records Records} *)
 
 type t = {
-  controlwordtype : Value.controlwordtype;
-  clcwversion : Value.clcwversion;
-  statusfield : Value.statusfield;
-  copineffect : Value.copineffect;
-  vcid : Value.vcid;
-  spare : Value.spare;
-  norf : Value.norf;
-  nobitlock : Value.nobitlock;
-  lockout : Value.lockout;
-  wait : Value.wait;
-  retransmit : Value.retransmit;
-  farmbcounter : Value.farmbcounter;
-  spare2 : Value.spare2;
-  reportvalue : Value.reportvalue;
+  controlwordtype : int;
+  clcwversion : int;
+  statusfield : int;
+  copineffect : int;
+  vcid : int;
+  spare : int;
+  norf : int;
+  nobitlock : int;
+  lockout : int;
+  wait : int;
+  retransmit : int;
+  farmbcounter : int;
+  spare2 : int;
+  reportvalue : int;
 }
 (** The type for CLCW records. *)
 
 val v :
-  Value.controlwordtype ->
-  Value.clcwversion ->
-  Value.statusfield ->
-  Value.copineffect ->
-  Value.vcid ->
-  Value.spare ->
-  Value.norf ->
-  Value.nobitlock ->
-  Value.lockout ->
-  Value.wait ->
-  Value.retransmit ->
-  Value.farmbcounter ->
-  Value.spare2 ->
-  Value.reportvalue ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
+  int ->
   t
 (** [v controlwordtype clcwversion statusfield copineffect vcid spare norf
      nobitlock lockout wait retransmit farmbcounter spare2 reportvalue] is the
@@ -245,98 +97,25 @@ val encode : t -> bytes -> int -> unit
 val write :
   bytes ->
   int ->
-  controlwordtype:Value.controlwordtype ->
-  clcwversion:Value.clcwversion ->
-  statusfield:Value.statusfield ->
-  copineffect:Value.copineffect ->
-  vcid:Value.vcid ->
-  spare:Value.spare ->
-  norf:Value.norf ->
-  nobitlock:Value.nobitlock ->
-  lockout:Value.lockout ->
-  wait:Value.wait ->
-  retransmit:Value.retransmit ->
-  farmbcounter:Value.farmbcounter ->
-  spare2:Value.spare2 ->
-  reportvalue:Value.reportvalue ->
+  controlwordtype:int ->
+  clcwversion:int ->
+  statusfield:int ->
+  copineffect:int ->
+  vcid:int ->
+  spare:int ->
+  norf:int ->
+  nobitlock:int ->
+  lockout:int ->
+  wait:int ->
+  retransmit:int ->
+  farmbcounter:int ->
+  spare2:int ->
+  reportvalue:int ->
   unit
 (** [write buf off ~controlwordtype ~clcwversion ~statusfield ~copineffect ~vcid
      ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit ~farmbcounter ~spare2
      ~reportvalue] writes the record of these fields at [off] in [buf]. Raises
-    [Invalid_argument] if it does not fit. *)
-
-val write_int :
-  bytes ->
-  int ->
-  controlwordtype:int ->
-  clcwversion:int ->
-  statusfield:int ->
-  copineffect:int ->
-  vcid:int ->
-  spare:int ->
-  norf:int ->
-  nobitlock:int ->
-  lockout:int ->
-  wait:int ->
-  retransmit:int ->
-  farmbcounter:int ->
-  spare2:int ->
-  reportvalue:int ->
-  unit
-(** [write_int buf off ~controlwordtype ~clcwversion ~statusfield ~copineffect
-     ~vcid ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit ~farmbcounter
-     ~spare2 ~reportvalue] is like {!write} but takes plain values: an [int] for
-    an integer of up to 16 bits or a bitfield, an [int32] for a 32-bit integer
-    and a [string] for a byte array. It also raises [Invalid_argument] if a
-    value does not fit its field. *)
-
-val write_at :
-  'b Wire_runtime.Buf.t ->
-  'b Wire_runtime.Buf.length ->
-  int ->
-  controlwordtype:Value.controlwordtype ->
-  clcwversion:Value.clcwversion ->
-  statusfield:Value.statusfield ->
-  copineffect:Value.copineffect ->
-  vcid:Value.vcid ->
-  spare:Value.spare ->
-  norf:Value.norf ->
-  nobitlock:Value.nobitlock ->
-  lockout:Value.lockout ->
-  wait:Value.wait ->
-  retransmit:Value.retransmit ->
-  farmbcounter:Value.farmbcounter ->
-  spare2:Value.spare2 ->
-  reportvalue:Value.reportvalue ->
-  unit
-(** [write_at b len off ~controlwordtype ~clcwversion ~statusfield ~copineffect
-     ~vcid ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit ~farmbcounter
-     ~spare2 ~reportvalue] is like {!write} but writes into the buffer [b] of
-    length [len]. *)
-
-val write_int_at :
-  'b Wire_runtime.Buf.t ->
-  'b Wire_runtime.Buf.length ->
-  int ->
-  controlwordtype:int ->
-  clcwversion:int ->
-  statusfield:int ->
-  copineffect:int ->
-  vcid:int ->
-  spare:int ->
-  norf:int ->
-  nobitlock:int ->
-  lockout:int ->
-  wait:int ->
-  retransmit:int ->
-  farmbcounter:int ->
-  spare2:int ->
-  reportvalue:int ->
-  unit
-(** [write_int_at b len off ~controlwordtype ~clcwversion ~statusfield
-     ~copineffect ~vcid ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit
-     ~farmbcounter ~spare2 ~reportvalue] is like {!write_int} but writes into
-    the buffer [b] of length [len]. *)
+    [Invalid_argument] if it does not fit, if a value does not fit its field. *)
 
 (** {1:reads Reading fields} *)
 
@@ -345,66 +124,59 @@ val write_int_at :
     field's offset and under its name, and raises [Invalid_argument] on a
     negative [off]. It checks none of the record's constraints. *)
 module Get : sig
-  val controlwordtype :
-    bytes -> int -> (Value.controlwordtype, Wire_runtime.Error.t) result
+  val controlwordtype : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [controlwordtype buf off] is bit 31 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val clcwversion :
-    bytes -> int -> (Value.clcwversion, Wire_runtime.Error.t) result
+  val clcwversion : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [clcwversion buf off] is bits 29 to 30 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val statusfield :
-    bytes -> int -> (Value.statusfield, Wire_runtime.Error.t) result
+  val statusfield : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [statusfield buf off] is bits 26 to 28 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val copineffect :
-    bytes -> int -> (Value.copineffect, Wire_runtime.Error.t) result
+  val copineffect : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [copineffect buf off] is bits 24 to 25 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val vcid : bytes -> int -> (Value.vcid, Wire_runtime.Error.t) result
+  val vcid : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [vcid buf off] is bits 18 to 23 of the big-endian 32-bit word at offset 0
       of the record at [off]. *)
 
-  val spare : bytes -> int -> (Value.spare, Wire_runtime.Error.t) result
+  val spare : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [spare buf off] is bits 16 to 17 of the big-endian 32-bit word at offset 0
       of the record at [off]. *)
 
-  val norf : bytes -> int -> (Value.norf, Wire_runtime.Error.t) result
+  val norf : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [norf buf off] is bit 15 of the big-endian 32-bit word at offset 0 of the
       record at [off]. *)
 
-  val nobitlock : bytes -> int -> (Value.nobitlock, Wire_runtime.Error.t) result
+  val nobitlock : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [nobitlock buf off] is bit 14 of the big-endian 32-bit word at offset 0 of
       the record at [off]. *)
 
-  val lockout : bytes -> int -> (Value.lockout, Wire_runtime.Error.t) result
+  val lockout : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [lockout buf off] is bit 13 of the big-endian 32-bit word at offset 0 of
       the record at [off]. *)
 
-  val wait : bytes -> int -> (Value.wait, Wire_runtime.Error.t) result
+  val wait : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [wait buf off] is bit 12 of the big-endian 32-bit word at offset 0 of the
       record at [off]. *)
 
-  val retransmit :
-    bytes -> int -> (Value.retransmit, Wire_runtime.Error.t) result
+  val retransmit : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [retransmit buf off] is bit 11 of the big-endian 32-bit word at offset 0
       of the record at [off]. *)
 
-  val farmbcounter :
-    bytes -> int -> (Value.farmbcounter, Wire_runtime.Error.t) result
+  val farmbcounter : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [farmbcounter buf off] is bits 9 to 10 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 
-  val spare2 : bytes -> int -> (Value.spare2, Wire_runtime.Error.t) result
+  val spare2 : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [spare2 buf off] is bit 8 of the big-endian 32-bit word at offset 0 of the
       record at [off]. *)
 
-  val reportvalue :
-    bytes -> int -> (Value.reportvalue, Wire_runtime.Error.t) result
+  val reportvalue : bytes -> int -> (int, Wire_runtime.Error.t) result
   (** [reportvalue buf off] is bits 0 to 7 of the big-endian 32-bit word at
       offset 0 of the record at [off]. *)
 

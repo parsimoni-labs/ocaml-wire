@@ -1,7 +1,7 @@
 (* [X4] against one record at a time: on random buffers and offsets, a read of
    four records holds in each lane what [Get.<field>] reads of that record, or
    fails exactly when 16 bytes do not fit; a write of four records leaves the
-   same bytes, and raises the same error, as four [write_int_at]. *)
+   same bytes, and raises the same error, as four [write]. *)
 
 module G = G_lanes
 module V = Wire_runtime.Vec
@@ -79,7 +79,6 @@ let test_write () =
     in
     let a = Bytes.make len '\000' and s = Bytes.make len '\000' in
     let (Buf.Any ba) = Buf.v a in
-    let (Buf.Any bs) = Buf.v s in
     let got =
       outcome (fun () ->
           G.X4.write_int_at ba (Buf.length ba) off (vec 0) (vec 1) (vec 2)
@@ -89,8 +88,9 @@ let test_write () =
       outcome (fun () ->
           for k = 0 to 3 do
             let f i = fields.(i).(k) in
-            G.write_int_at bs (Buf.length bs) (off + (4 * k)) ~a:(f 0) ~b:(f 1)
-              ~c:(f 2) ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
+            let c = Wire_runtime.UInt8.v (f 2) in
+            G.write s (off + (4 * k)) ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4)
+              ~f:(f 5) ~g:(f 6)
           done)
     in
     let name = Fmt.str "len %d off %d" len off in
@@ -99,9 +99,9 @@ let test_write () =
   done
 
 (* A part from any lanes is four valid records: [store] of the fields' low
-   bits writes what [write_int_at] writes of the masked values, and raises
+   bits writes what [write] writes of the masked values, and raises
    the same error where the four do not fit. [<field>_of] answers the same
-   part when the lanes fit, and raises what [write_int_at] raises otherwise. *)
+   part when the lanes fit, and raises what [write] raises otherwise. *)
 let test_parts () =
   let parts =
     G.X4.[| a_bits; b_bits; c_bits; d_bits; e_bits; f_bits; g_bits |]
@@ -116,14 +116,14 @@ let test_parts () =
     in
     let a = Bytes.make len '\000' and s = Bytes.make len '\000' in
     let (Buf.Any ba) = Buf.v a in
-    let (Buf.Any bs) = Buf.v s in
     let got = outcome (fun () -> G.X4.store ba (Buf.length ba) off part) in
     let want =
       outcome (fun () ->
           for k = 0 to 3 do
             let f i = lanes.(i).(k) land ((1 lsl widths.(i)) - 1) in
-            G.write_int_at bs (Buf.length bs) (off + (4 * k)) ~a:(f 0) ~b:(f 1)
-              ~c:(f 2) ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
+            let c = Wire_runtime.UInt8.v (f 2) in
+            G.write s (off + (4 * k)) ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4)
+              ~f:(f 5) ~g:(f 6)
           done)
     in
     let name = Fmt.str "len %d off %d" len off in
@@ -180,7 +180,7 @@ let suite =
   ( "simd",
     [
       Alcotest.test_case "X4 reads what get reads" `Quick test_read;
-      Alcotest.test_case "X4 writes what write_int_at writes" `Quick test_write;
+      Alcotest.test_case "X4 writes what write writes" `Quick test_write;
       Alcotest.test_case "X4 parts are four valid records" `Quick test_parts;
       Alcotest.test_case "X4 fill checks the span once" `Quick test_fill;
     ] )

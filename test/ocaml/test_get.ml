@@ -63,18 +63,10 @@ let test_words () =
     let fields =
       G_wide.
         [
-          ( (fun b o -> Result.map (fun v -> (v : Value.a :> int)) (Get.a b o)),
-            Get.a_word,
-            a_of_word );
-          ( (fun b o -> Result.map (fun v -> (v : Value.c :> int)) (Get.c b o)),
-            Get.c_word,
-            c_of_word );
-          ( (fun b o -> Result.map (fun v -> (v : Value.e :> int)) (Get.e b o)),
-            Get.e_word,
-            e_of_word );
-          ( (fun b o -> Result.map (fun v -> (v : Value.f :> int)) (Get.f b o)),
-            Get.f_word,
-            f_of_word );
+          (Get.a, Get.a_word, a_of_word);
+          (Get.c, Get.c_word, c_of_word);
+          (Get.e, Get.e_word, e_of_word);
+          (Get.f, Get.f_word, f_of_word);
         ]
     in
     let show = function

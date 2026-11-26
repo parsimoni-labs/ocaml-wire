@@ -47,17 +47,10 @@ val has_checks : plan -> bool
 (** [has_checks plan] is [true] iff a field of [plan] or its where clause has a
     check. *)
 
-val has_carrier : field -> bool
-(** [has_carrier f] is [true] iff [f] holds its value in a carrier of its own,
-    [Value.<field>]. *)
-
 val type_of : field -> string
-(** [type_of f] is the OCaml type of [f]'s typed value, for a field with no map.
+(** [type_of f] is the OCaml type of [f]'s value, for a field with no map: its
+    carrier for an integer, [int] for a bitfield and [string] for a byte array.
 *)
-
-val schema_type : field -> string
-(** [schema_type f] is the OCaml type a handle of [f] reads, the codec's own:
-    [int] or [string] where {!type_of} is the field's carrier. *)
 
 val lanes : plan -> size:int -> (field * (int * int)) list option
 (** [lanes plan ~size] is each field with its shift and width in a SIMD lane, or

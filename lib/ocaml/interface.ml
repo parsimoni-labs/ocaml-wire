@@ -195,13 +195,6 @@ let labelled_args fields =
 let typed ~maps f =
   match f.map with Some path -> List.assoc path maps | None -> type_of f
 
-(* The type of a field's plain value, as [write_int] takes it. *)
-let plain f =
-  match f.store with
-  | Int { width = 32; _ } -> "int32"
-  | Int _ | Bits _ -> "int"
-  | Bytes _ -> "string"
-
 (* The implementation's allocation checks, as [Record_module] writes them:
    a read of an integer or a bitfield with no map, and a write that calls no
    map. *)
@@ -247,52 +240,6 @@ let checked_what f =
   | Some _ ->
       Fmt.str "%s, or the error of a value the map refuses" (read_what f)
   | None -> read_what f
-
-let pp_values ppf r =
-  match List.filter has_carrier r.fields with
-  | [] -> ()
-  | fields ->
-      pp_section ppf "values" "Field values";
-      pp_doc ppf
-        "Field values held in range: a bitfield's [int] in its width and a \
-         byte array's [string] at its length, each checked once, where it is \
-         made.";
-      Fmt.pf ppf "module Value : sig@\n";
-      List.iter
-        (fun f ->
-          let l = f.label in
-          match f.store with
-          | Bits { width; _ } ->
-              Fmt.pf ppf "type %s = private int@\n" l;
-              pp_doc ppf
-                (Fmt.str "The type for the values of a field of %s."
-                   (bits_text width));
-              Fmt.pf ppf "@\n";
-              pp_val r.target ppf l
-                (arrows [ "int"; l ])
-                (Fmt.str
-                   "[%s n] is [n] as a {!type-%s}. Raises [Invalid_argument] \
-                    if [n] does not fit in %s."
-                   l l (bits_text width));
-              pp_val r.target ppf (l ^ "_low")
-                (arrows [ "int"; l ])
-                (Fmt.str "[%s_low n] is the %s of [n] as a {!type-%s}." l
-                   (if width = 1 then "low bit" else Fmt.str "%d low bits" width)
-                   l)
-          | Bytes n ->
-              Fmt.pf ppf "type %s = private string@\n" l;
-              pp_doc ppf
-                (Fmt.str "The type for the values of a field of %d bytes." n);
-              Fmt.pf ppf "@\n";
-              pp_val r.target ppf l
-                (arrows [ "string"; l ])
-                (Fmt.str
-                   "[%s s] is [s] as a {!type-%s}. Raises [Invalid_argument] \
-                    if [s] is not %d bytes long."
-                   l l n)
-          | Int _ -> ())
-        fields;
-      Fmt.pf ppf "end@\n@\n"
 
 let pp_record_type ppf r =
   pp_section ppf "records" "Records";
@@ -347,7 +294,17 @@ let pp_writes ppf r b =
   let a = labelled_args r.fields in
   let label f t = f.label ^ ":" ^ t in
   let typed = List.map (fun f -> label f (typed ~maps:r.maps f)) r.fields in
-  let plain = List.map (fun f -> label f (plain f)) r.fields in
+  let ranged =
+    if
+      List.exists
+        (fun f ->
+          match (f.map, f.store) with
+          | None, Int _ -> Option.is_some f.enum
+          | _ -> true)
+        r.fields
+    then ", if a value does not fit its field"
+    else ""
+  in
   let rejected =
     if has_checks r.plan then ", or if the record breaks a constraint" else ""
   in
@@ -359,28 +316,8 @@ let pp_writes ppf r b =
     (arrows ([ buf b; "int" ] @ typed @ [ "unit" ]))
     (Fmt.str
        "[write buf off%s] writes the record of these fields at [off] in [buf]. \
-        Raises [Invalid_argument] if it does not fit%s."
-       a rejected);
-  pp_val ~zero_alloc:true target ppf "write_int"
-    (arrows ([ buf b; "int" ] @ plain @ [ "unit" ]))
-    (Fmt.str
-       "[write_int buf off%s] is like {!write} but takes plain values: an \
-        [int] for an integer of up to 16 bits or a bitfield, an [int32] for a \
-        32-bit integer and a [string] for a byte array. It also raises \
-        [Invalid_argument] if a value does not fit its field."
-       a);
-  pp_val ~zero_alloc:checked ~portable:checked target ppf "write_at"
-    (arrows ([ named b; length b; "int" ] @ typed @ [ "unit" ]))
-    (Fmt.str
-       "[write_at b len off%s] is like {!write} but writes into the buffer [b] \
-        of length [len]."
-       a);
-  pp_val ~zero_alloc:true target ppf "write_int_at"
-    (arrows ([ named b; length b; "int" ] @ plain @ [ "unit" ]))
-    (Fmt.str
-       "[write_int_at b len off%s] is like {!write_int} but writes into the \
-        buffer [b] of length [len]."
-       a)
+        Raises [Invalid_argument] if it does not fit%s%s."
+       a ranged rejected)
 
 let pp_get ppf r b =
   let target = r.target in
@@ -686,7 +623,6 @@ let pp_preamble ppf r =
 let pp_record ?(views = false) ?(buffer = `Bytes) ppf r =
   pp_val r.target ppf "min_size" "int"
     (Fmt.str "[min_size] is the size of a record in bytes, [%d]." r.size);
-  pp_values ppf r;
   pp_record_type ppf r;
   pp_val r.target ppf "size" "t -> int"
     (Fmt.str "[size r] is {!min_size}: every record takes %d bytes." r.size);
