@@ -10,10 +10,19 @@
  (modules gen)
  (libraries wire wire.ocaml space net demo))
 
-(executable
- (name main)
- (modules main check linear spec symex smt z3)
+(executables
+ (names main test_symex)
+ (modules main test_symex check linear spec symex smt z3)
  (libraries compiler-libs.common fmt unix))
+
+; The primitives the walk models, each proved equal to the definition it
+; models: it needs z3 alone.
+
+(rule
+ (alias runtest)
+ (enabled_if %{bin-available:z3})
+ (action
+  (run ./test_symex.exe %{bin:z3})))
 
 (rule
  (targets
