@@ -408,16 +408,16 @@ let view_tcp base acc b len o ~payload =
   if not (G_tcp.ok c) then base
   else
     let t = G_tcp.get c in
-    let w = G_tcp.view_data_offset_word b t in
-    let off = G_tcp.data_offset_of_word w in
+    let off = G_tcp.data_offset b t in
     if off * 4 > payload then base
     else
       tcp_fields acc
         ~sp:(UInt16.to_int (G_tcp.src_port b t))
         ~dp:(UInt16.to_int (G_tcp.dst_port b t))
-        ~seq:(G_tcp.view_seq_int b t) ~ack:(G_tcp.view_ack_int b t)
+        ~seq:(UInt32.to_int (G_tcp.seq b t))
+        ~ack:(UInt32.to_int (G_tcp.ack b t))
         ~win:(UInt16.to_int (G_tcp.window b t))
-        ~flags:(G_tcp.flags_of_word w) ~off
+        ~flags:(G_tcp.flags b t) ~off
 
 let view_udp base acc b len o ~payload =
   let c = G_udp.check b len o in
@@ -444,16 +444,13 @@ let view_ipv4 base acc b len o ~avail =
       let proto = UInt8.to_int (G_ipv4.protocol b ip) in
       let acc =
         ip_fields acc
-          ~src:(G_ipv4.view_src_addr_int b ip)
-          ~dst:(G_ipv4.view_dst_addr_int b ip)
+          ~src:(UInt32.to_int (G_ipv4.src_addr b ip))
+          ~dst:(UInt32.to_int (G_ipv4.dst_addr b ip))
           ~ttl:(UInt8.to_int (G_ipv4.ttl b ip))
           ~proto ~len:tlen
       in
-      let w = G_ipv4.view_flags_word b ip in
-      if
-        G_ipv4.flags_of_word w land 1 <> 0
-        || G_ipv4.fragment_offset_of_word w <> 0
-      then acc
+      if G_ipv4.flags b ip land 1 <> 0 || G_ipv4.fragment_offset b ip <> 0 then
+        acc
       else
         let payload = tlen - hlen in
         match proto with

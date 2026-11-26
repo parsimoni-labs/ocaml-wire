@@ -159,12 +159,12 @@ let clcw buf =
   while !i < words do
     let c = C.check b len (!i * C.min_size) in
     if C.ok c then begin
-      let w = C.view_lockout_word b (C.get c) in
-      let report = C.reportvalue_of_word w in
+      let v = C.get c in
+      let report = C.reportvalue b v in
       if
-        C.lockout_of_word w <> 0
-        || C.wait_of_word w <> 0
-        || C.retransmit_of_word w <> 0
+        C.lockout b v <> 0
+        || C.wait b v <> 0
+        || C.retransmit b v <> 0
         || report <> !expected land 0xFF
       then incr anomalies;
       expected := (report + 1) land 0xFF;

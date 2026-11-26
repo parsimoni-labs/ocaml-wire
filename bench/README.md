@@ -84,7 +84,7 @@ relay does to produce it:
 | Row | Implementation | API |
 |---|---|---|
 | `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.Word.check`, `ok` and `get` per header, then `Codec.Word.read` per field, for CLCW too. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
-| `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field; for CLCW `view_lockout_word` once, then `<field>_of_word` per field. Writing: `write_at`, or `write_int_at` where a field's value is computed, per header |
+| `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field. Writing: `write_at`, or `write_int_at` where a field's value is computed, per header |
 | `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
 | `ccsds_primary_header` 0.15 (routing) | hand-written | `PrimaryHeader::from_slice`, then `control.apid()` and `length.length_field()`. Writing: the setters of its three words, then their bytes |
@@ -235,8 +235,8 @@ open OxCaml issue of each compiler item where one exists:
 A flag tested as `w land mask <> 0` instead of `(w lsr k) land 1 <> 0`
 takes one instruction fewer on OxCaml, `mov`, `and`, `cmp`, `b.ne`, as the
 tagged mask is not an arm64 logical immediate, and is no `tst` or `tbnz`
-until oxcaml/oxcaml#8172 is fixed: the `clcw` loop goes from 43 to 40. The generated
-`<field>_of_word` returns the field's `int`, so that form would need a
+until oxcaml/oxcaml#8172 is fixed: the `clcw` loop goes from 43 to 40. A
+generated accessor returns the field's `int`, so that form would need a
 boolean reader of a 1-bit field, which no codec here declares (`Wire.bit`
 goes through a named map).
 

@@ -74,8 +74,7 @@ let view_ports b len ~cap o proto =
     if not (G_tcp.ok c) then -1
     else
       let t = G_tcp.get c in
-      let off = G_tcp.data_offset_of_word (G_tcp.view_data_offset_word b t) in
-      if o + (off * 4) > cap then -1
+      if o + (G_tcp.data_offset b t * 4) > cap then -1
       else
         (UInt16.to_int (G_tcp.src_port b t) lsl 16)
         lor UInt16.to_int (G_tcp.dst_port b t)
@@ -99,18 +98,15 @@ let view_ipv4 b len ~cap o =
       and total = UInt16.to_int (G_ipv4.total_length b ip) in
       if total >= hlen && o + hlen <= cap then
         let proto = UInt8.to_int (G_ipv4.protocol b ip) in
-        let w = G_ipv4.view_flags_word b ip in
         let ports =
-          if
-            G_ipv4.flags_of_word w land 1 <> 0
-            || G_ipv4.fragment_offset_of_word w <> 0
+          if G_ipv4.flags b ip land 1 <> 0 || G_ipv4.fragment_offset b ip <> 0
           then 0
           else view_ports b len ~cap (o + hlen) proto
         in
         if ports >= 0 then
           Flow_table.add4
-            ~src:(G_ipv4.view_src_addr_int b ip)
-            ~dst:(G_ipv4.view_dst_addr_int b ip)
+            ~src:(UInt32.to_int (G_ipv4.src_addr b ip))
+            ~dst:(UInt32.to_int (G_ipv4.dst_addr b ip))
             ~proto ~ports ~bytes:total
 
 let view_ipv6 b len ~cap o =
@@ -122,14 +118,14 @@ let view_ipv6 b len ~cap o =
       let ports = view_ports b len ~cap (o + 40) proto in
       if ports >= 0 then
         Flow_table.add6
-          ~s0:(G_ipv6.view_src0_int b ip)
-          ~s1:(G_ipv6.view_src1_int b ip)
-          ~s2:(G_ipv6.view_src2_int b ip)
-          ~s3:(G_ipv6.view_src3_int b ip)
-          ~d0:(G_ipv6.view_dst0_int b ip)
-          ~d1:(G_ipv6.view_dst1_int b ip)
-          ~d2:(G_ipv6.view_dst2_int b ip)
-          ~d3:(G_ipv6.view_dst3_int b ip)
+          ~s0:(UInt32.to_int (G_ipv6.src0 b ip))
+          ~s1:(UInt32.to_int (G_ipv6.src1 b ip))
+          ~s2:(UInt32.to_int (G_ipv6.src2 b ip))
+          ~s3:(UInt32.to_int (G_ipv6.src3 b ip))
+          ~d0:(UInt32.to_int (G_ipv6.dst0 b ip))
+          ~d1:(UInt32.to_int (G_ipv6.dst1 b ip))
+          ~d2:(UInt32.to_int (G_ipv6.dst2 b ip))
+          ~d3:(UInt32.to_int (G_ipv6.dst3 b ip))
           ~proto ~ports
           ~bytes:(40 + UInt16.to_int (G_ipv6.payload_length b ip))
 
