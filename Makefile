@@ -2,7 +2,7 @@
        fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
        bench-clcw bench-rust bench-flow bench-flow-swap bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
-       cppcheck prove clean
+       cppcheck prove verify clean
 
 build:
 	dune build
@@ -86,6 +86,15 @@ fuzz-nightly:
 # WIRE_FSTAR_CACHE holds the checked modules (proofs/fstar-gen/README.md).
 prove:
 	BUILD_EVERPARSE=1 dune build -j 2 @proofs/fstar-gen/prove
+
+# The generated scanners and record modules executed symbolically, their
+# reads proved in bounds and their answers equal to 3d.exe's specification
+# by Z3, the planted mutants refused and every check of the scanners
+# classified (needs EverParse and z3; verify/dune says what each rule
+# proves). One rule at a time, as each runs four Z3 processes.
+verify:
+	BUILD_EVERPARSE=1 dune build -j 1 @verify/runtest @verify/classify \
+	  @verify/bounds-ox
 
 3d:
 	dune exec examples/validate_3d.exe
