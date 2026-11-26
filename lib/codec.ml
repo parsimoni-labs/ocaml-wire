@@ -698,10 +698,12 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
   match List.assoc_opt f.name c.field_actions with
   | None -> (
       match
-        ( build_immediate_staged_reader f.typ access,
+        ( build_immediate_get ~name f.typ access,
+          build_immediate_staged_reader f.typ access,
           immediate_extent f.typ access )
       with
-      | Some read, Some (off, width) ->
+      | Some get, _, _ -> Staged.stage get
+      | None, Some read, Some (off, width) ->
           Staged.stage (fun buf base ->
               let len = Bytes.length buf in
               if base < 0 then Errors.negative_offset base

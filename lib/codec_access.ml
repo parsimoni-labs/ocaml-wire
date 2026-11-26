@@ -265,3 +265,58 @@ let immediate_extent : type a. a typ -> field_access -> (int * int) option =
   | Bitfield { base; byte_off; _ } -> Some (byte_off, bf_base_byte_size base)
   | Fixed off -> Option.map (fun w -> (off, w)) (field_wire_size typ)
   | Dynamic _ | Variable _ | Variable_dynamic _ -> None
+
+(* A closed enum's answer for the value [value] it does not list. *)
+let[@inline never] invalid_enum name ~at cases value =
+  Error
+    {
+      at;
+      field = [ name ];
+      kind = Invalid_enum { value; valid = Types.enum_values cases };
+    }
+
+let rec build_immediate_get : type a.
+    name:string -> a typ -> field_access -> a get option =
+ fun ~name typ access ->
+  match (typ, access) with
+  | Bits _, Bitfield { base; byte_off; shift; width } ->
+      build_bf_get ~name base byte_off shift width
+  | Where { inner; _ }, _ -> build_immediate_get ~name inner access
+  | Enum { base; closed = false; _ }, _ -> build_immediate_get ~name base access
+  | Enum { base; cases; closed = true; _ }, _ when Types.int_view_is_total base
+    -> (
+      match build_immediate_get ~name base access with
+      | None -> None
+      | Some get ->
+          let off = immediate_access_off access in
+          let to_int = Types.int_of_exn base in
+          Some
+            (fun buf at ->
+              match get buf at with
+              | Ok v as r ->
+                  let i = to_int v in
+                  if Types.enum_case_member cases i then r
+                  else invalid_enum name ~at:(at + off) cases i
+              | Error _ as e -> e))
+  | Map { inner; decode; index_bound; _ }, _ -> (
+      match
+        ( build_immediate_staged_reader inner access,
+          immediate_extent inner access )
+      with
+      | Some read, Some (off, width) ->
+          (* The decoder is the caller's, so its parse errors are caught. *)
+          let decode = Types.map_decode ~index_bound decode in
+          let stop = off + width in
+          Some
+            (fun buf at ->
+              if at < 0 || at > Bytes.length buf - stop then
+                short_field name ~base:at ~at:(at + off) ~width buf
+              else
+                match decode ~at:(at + off) (read buf at) with
+                | d -> Ok d
+                | exception Types.Parse_error e ->
+                    Error { e with field = name :: e.field })
+      | _ -> None)
+  | Enum _, _ -> None
+  | _, Fixed off -> Codec_leaf.build_immediate_get ~name typ off
+  | _ -> None

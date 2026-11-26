@@ -131,6 +131,27 @@ val build_immediate_reader : 'a Types.typ -> int -> (bytes -> int -> 'a) option
 (** [build_immediate_reader t off] is a reader that needs no evaluation context,
     or [None] when the layout of [t] may consult one. *)
 
+type 'a get = bytes -> int -> ('a, Types.parse_error) result
+(** The reader {!Codec.get} stages: the value of a field of the record at an
+    offset, or its error. *)
+
+val short_field :
+  string ->
+  base:int ->
+  at:int ->
+  width:int ->
+  bytes ->
+  ('a, Types.parse_error) result
+(** [short_field name ~base ~at ~width buf] is the error of the field [name]
+    whose [width] bytes at [at] do not lie in [buf], for the record at [base].
+    Raises [Invalid_argument] for a negative [base]. *)
+
+val build_immediate_get : name:string -> 'a Types.typ -> int -> 'a get option
+(** [build_immediate_get ~name t off] is the reader of the scalar field [name]
+    of type [t] at [off] in its record: one closure that checks the field's
+    bytes lie in the buffer, loads them and answers [Ok v]. It is [None] for any
+    other type. *)
+
 val build_immediate_encoder : 'a Types.typ -> (bytes -> int -> 'a -> int) option
 (** [build_immediate_encoder t] is the writer twin of {!build_immediate_reader}.
 *)

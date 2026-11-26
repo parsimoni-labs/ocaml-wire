@@ -26,6 +26,18 @@ val build_bf_accessor_reader :
 (** [build_bf_accessor_reader] is {!build_bf_reader} with the base word's span
     checked first. *)
 
+val build_bf_get :
+  name:string ->
+  Types.bitfield_base ->
+  int ->
+  int ->
+  int ->
+  int Codec_leaf.get option
+(** [build_bf_get ~name base byte_off shift width] is
+    {!Codec_leaf.build_immediate_get} for the bitfield [name]: one closure that
+    checks its base word lies in the buffer and answers the field's bits. [None]
+    where [int] does not hold the base word. *)
+
 val build_bf_writer :
   Types.bitfield_base -> int -> int -> int -> bytes -> int -> int -> unit
 (** [build_bf_writer base byte_off shift width buf off v] ors the range-checked

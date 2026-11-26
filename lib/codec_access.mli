@@ -33,6 +33,17 @@ val build_immediate_staged_reader :
     evaluation context, with no bounds check of its own, or [None] where the
     layout may consult one. *)
 
+val build_immediate_get :
+  name:string ->
+  'a Types.typ ->
+  Codec_repr.field_access ->
+  'a Codec_leaf.get option
+(** [build_immediate_get ~name t access] is the reader {!Codec.get} stages for
+    the field [name] of type [t] at a constant place: one closure that checks
+    the field's bytes lie in the buffer, loads them and answers [Ok v], or the
+    error of a closed enum's value it does not list. [None] for a field whose
+    read can fail otherwise, such as a map's, or whose place is not constant. *)
+
 val build_immediate_staged_writer :
   'a Types.typ -> Codec_repr.field_access -> (bytes -> int -> 'a -> unit) option
 (** [build_immediate_staged_writer t access] is the writer twin of
