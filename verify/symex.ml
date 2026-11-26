@@ -395,10 +395,7 @@ let continuation name answer =
   let run _ctx path _loc _args k = k path (Answer answer) in
   { pname = name; arity = None; run }
 
-let accept = continuation "valid" true
-let reject = continuation "invalid" false
-
-(* The step scanners call their consumer by name, as [Step]. *)
+(* A fold calls its visitor by name, as [Step]. *)
 let step_continuations =
   [ continuation "Step.valid" true; continuation "Step.invalid" false ]
 
@@ -854,7 +851,7 @@ let is_rejection e =
   | Pexp_construct ({ txt = Lident "false"; _ }, None) -> true
   | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
       match Longident.flatten txt with
-      | [ ("invalid" | "invalid_arg" | "fail") ] | [ "Step"; "invalid" ] -> true
+      | [ ("invalid_arg" | "fail") ] | [ "Step"; "invalid" ] -> true
       | _ -> false)
   | _ -> false
 
@@ -1538,8 +1535,6 @@ let entry_env inputs =
         | Buffer_input x -> SMap.add x Buffer m)
       SMap.empty inputs
   in
-  let locals = SMap.add "valid" (Prim (accept, [])) locals in
-  let locals = SMap.add "invalid" (Prim (reject, [])) locals in
   { locals; scope = [] }
 
 (* [formula ctx env src] is the boolean expression [src] as one term: the

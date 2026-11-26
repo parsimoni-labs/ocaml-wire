@@ -3,8 +3,9 @@
    main.exe [OPTION]... SPECS FILE:KIND:PARSER:BOUND...
 
    For each entry of the generated module FILE (KIND says which: record, or
-   scanner/N and scanner-ox/N for the scanner on OCaml and on OxCaml, N the
-   shortest stride fold_frames walks without frame checks), proves with Z3
+   step/N and step-ox/N for the fold [fold_step] on OCaml and on OxCaml, N
+   the shortest stride fold_step_frames walks without frame checks), proves
+   with Z3
    that every unchecked read is inside the buffer and inside the window the
    entry is given, that every shift amount is in range, that no input
    raises, and, when the entry answers accept or reject, that on each path
@@ -130,7 +131,7 @@ let frame_pre_ox min_stride =
    whose arguments hold what those expressions read, and each call of the
    loop is checked to pass that. *)
 let loaded_ahead ctx ~record ~frames =
-  let standard = [ "buf"; "base"; "stop"; "current"; "invalid"; "valid" ] in
+  let standard = [ "buf"; "base"; "stop"; "current" ] in
   let ahead =
     List.filter_map
       (fun (p : Parsetree.function_param) ->
@@ -196,35 +197,21 @@ let valid_arguments =
   "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && len <= \
    Bytes.length buf - off"
 
-(* A scanner: its one-frame entry, the body of its frame loop for a stride
-   the loop walks without frame checks, from what the loop establishes
-   (with the fields the loop loads ahead of the body), and the
-   frame loop itself with valid and with any arguments, its calls to the
-   body checked against that. [step] names the step scanner's entries,
-   which answer through [Step.valid] and [Step.invalid]. *)
-(* A field the frame loop loads ahead is an int64 on the step scanner and
-   an int64_u on OxCaml: an input of 64 bits, any of which the load can
-   give. *)
-let field_input ~step ~ox x = if step || ox then I64_input x else Int_input x
-
-let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
+(* The fold [fold_step], which answers through [Step.valid] and
+   [Step.invalid]: its one-frame entry, the body of its frame loop for a
+   stride the loop walks without frame checks, from what the loop
+   establishes (with the fields the loop loads ahead of the body, each an
+   input of 64 bits, any of which the load can give), and the frame loop
+   itself with valid and with any arguments, its calls to the body checked
+   against that. *)
+let scanner ~ox ~spec ~bound ~min_stride ctx =
   let at x = if ox then Fmt.str "~%s:(Int64.of_int %s)" x x else "~" ^ x in
-  let fold, fold_expr, record, record_args, frames, frames_expr =
-    if step then
-      ( "fold_step",
-        "fold_step buf off len ~init:0",
-        "step_frames_record",
-        "~current",
-        "fold_step_frames",
-        "fold_step_frames buf off len ~stride ~init:0" )
-    else
-      ( "fold",
-        "fold buf off len ~invalid ~valid",
-        "frames_record",
-        "~current ~invalid ~valid",
-        "fold_frames",
-        "fold_frames buf off len ~stride ~init:0 ~invalid ~valid" )
-  in
+  let fold = "fold_step"
+  and fold_expr = "fold_step buf off len ~init:0"
+  and record = "step_frames_record"
+  and record_args = "~current"
+  and frames = "fold_step_frames"
+  and frames_expr = "fold_step_frames buf off len ~stride ~init:0" in
   let ahead = loaded_ahead ctx ~record ~frames in
   let contract, record_pre = frame_contract ~ox ~min_stride ahead in
   let record_args =
@@ -249,7 +236,7 @@ let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
       entry ~pre:record_pre ~spec ~bound
         ~inputs:
           ([ buf; Int_input "base"; Int_input "stop"; Int_input "current" ]
-          @ List.map (fun (x, _) -> field_input ~step ~ox x) ahead)
+          @ List.map (fun (x, _) -> I64_input x) ahead)
         ~window:("base", "stop") record
         (Fmt.str "%s ~buf %s %s %s" record (at "base") (at "stop") record_args);
     ]
@@ -391,42 +378,13 @@ let classify_target ~z3 o t =
     (fun e -> if selected o e && answers e then classify e else [])
     (t.entries (Symex.v ~file:t.file src))
 
-module Astring_free = struct
-  let find sub s =
-    let n = String.length sub in
-    let rec go i =
-      if i + n > String.length s then None
-      else if String.equal (String.sub s i n) sub then Some i
-      else go (i + 1)
-    in
-    go 0
-end
-
 (* The entry's expression on the reference module: its first function
-   [Ref.]-qualified, and a step entry read as the plain one. *)
-let reference_expr (e : Check.entry) =
-  let replace ~sub ~by s =
-    match Astring_free.find sub s with
-    | None -> s
-    | Some i ->
-        String.sub s 0 i ^ by
-        ^ String.sub s
-            (i + String.length sub)
-            (String.length s - i - String.length sub)
-  in
-  let plain =
-    match e.name with
-    | "fold_step" -> "fold buf off len ~invalid ~valid"
-    | "step_frames_record" ->
-        replace ~sub:"step_frames_record" ~by:"frames_record" e.expr
-        ^ " ~invalid ~valid"
-    | _ -> e.expr
-  in
-  "Ref." ^ plain
+   [Ref.]-qualified. *)
+let reference_expr (e : Check.entry) = "Ref." ^ e.expr
 
 let target_of_arg arg =
-  (* FILE:KIND:SPEC:BOUND, KIND being record, or scanner/MIN_STRIDE or
-     scanner-ox/MIN_STRIDE for the OxCaml target. *)
+  (* FILE:KIND:SPEC:BOUND, KIND being record, or step/MIN_STRIDE or
+     step-ox/MIN_STRIDE for the OxCaml target. *)
   match String.split_on_char ':' arg with
   | [ file; "record"; spec; bound ] ->
       let three_d = List.hd (String.split_on_char '.' spec) ^ ".3d" in
@@ -434,13 +392,12 @@ let target_of_arg arg =
       { file; three_d; entries = record ~spec ~bound }
   | [ file; kind; spec; bound ] -> (
       match String.split_on_char '/' kind with
-      | [ (("scanner" | "scanner-ox" | "step" | "step-ox") as k); stride ] ->
+      | [ (("step" | "step-ox") as k); stride ] ->
           let ox = String.ends_with ~suffix:"-ox" k in
           let min_stride = int_of_string stride in
           let three_d = List.hd (String.split_on_char '.' spec) ^ ".3d" in
           let bound = int_of_string bound in
-          let step = String.starts_with ~prefix:"step" k in
-          let entries = scanner ~step ~ox ~spec ~bound ~min_stride in
+          let entries = scanner ~ox ~spec ~bound ~min_stride in
           { file; three_d; entries }
       | _ -> Fmt.invalid_arg "bad target %S" arg)
   | _ -> Fmt.invalid_arg "bad target %S" arg
@@ -463,7 +420,7 @@ let usage () =
     "usage: main.exe [--keep] [--only ENTRY] [--jobs N] [--timeout SECONDS] \
      [--bounds-only] [--any-size] [--classify-checks [--check LINE:COL] \
      [--expect CLASS[,CLASS]...]] [--expect-refuted PROPERTY] SPECS \
-     FILE:(record|scanner/N|scanner-ox/N):SPEC:BOUND...";
+     FILE:(record|step/N|step-ox/N):SPEC:BOUND...";
   exit 2
 
 (* With [--expect-refuted P], the run succeeds when a property whose name
