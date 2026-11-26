@@ -709,6 +709,128 @@ let test_e2e_gc_stress () =
       ()
   end
 
+(* -- The stub's error is the codec's --
+
+   A stub and [Codec.validate] read the same bytes with the same codec, so
+   they accept the same records and refuse the others with one error: its
+   kind, its field path and its offset. The codecs of [Stub_codecs] cover the
+   refusals the validator makes; the bytes are random, drawn from values near
+   the codecs' bounds, at offsets inside and past the buffer. The program that
+   compares them links the stubs and [stub_codecs.ml]; it prints a count per
+   codec and the first witness of each disagreement, and fails on any. *)
+
+type diff_codec =
+  | D : {
+      name : string;
+      module_ : string;
+      codec : _ Wire.Codec.t;
+    }
+      -> diff_codec
+
+let diff_codecs =
+  [
+    D { name = "header"; module_ = "Header"; codec = Stub_codecs.Header.codec };
+    D { name = "limits"; module_ = "Limits"; codec = Stub_codecs.Limits.codec };
+    D { name = "bits"; module_ = "Bits"; codec = Stub_codecs.Bits.codec };
+    D { name = "pair"; module_ = "Pair"; codec = Stub_codecs.Pair.codec };
+    D { name = "kind"; module_ = "Kind"; codec = Stub_codecs.Kind.codec };
+    D { name = "sized"; module_ = "Sized"; codec = Stub_codecs.Sized.codec };
+    D { name = "padded"; module_ = "Padded"; codec = Stub_codecs.Padded.codec };
+  ]
+
+(* The stub of [codec], as [bytes -> int -> (unit, Wire.Error.t) result]. *)
+let diff_stub ppf (D { codec; _ }) =
+  let lower = String.lowercase_ascii (Wire.Codec.name codec) in
+  Fmt.pf ppf "(fun b off -> Result.map ignore (Stubs.%s_parse b off))" lower
+
+let diff_main =
+  {|let bytes_near =
+  [| 0; 1; 2; 3; 4; 5; 7; 0x45; 0x54; 99; 100; 101; 199; 200; 201; 255 |]
+
+let random_bytes () =
+  let n = Random.int 12 in
+  Bytes.init n (fun _ ->
+      if Random.int 4 = 0 then Char.chr (Random.int 256)
+      else Char.chr bytes_near.(Random.int (Array.length bytes_near)))
+
+let hex b =
+  String.concat "" (List.map (fun c -> Printf.sprintf "%02x" (Char.code c))
+    (List.of_seq (Bytes.to_seq b)))
+
+let verdict = function
+  | Ok () -> "accept"
+  | Error e -> Fmt.str "%a" Wire.Error.pp e
+
+let compare name codec stub =
+  let runs = ref 0 and refused = ref 0 and verdicts = ref 0 and errors = ref 0 in
+  let witness = Hashtbl.create 2 in
+  for _ = 1 to 4000 do
+    let b = random_bytes () in
+    let len = Bytes.length b in
+    let off = match Random.int 8 with 0 -> len | 1 -> len + 1 | 2 -> 1 | _ -> 0 in
+    let ocaml = Wire.Codec.validate codec b off in
+    let stub = stub b off in
+    incr runs;
+    if Result.is_error ocaml then incr refused;
+    let disagree what count =
+      incr count;
+      if not (Hashtbl.mem witness what) then
+        Hashtbl.add witness what
+          (Fmt.str "  %s: bytes %s off %d: codec %s, stub %s" what (hex b) off
+             (verdict ocaml) (verdict stub))
+    in
+    match ocaml, stub with
+    | Ok (), Ok () -> ()
+    | Error e, Error e' ->
+        if not (Wire.Error.equal e e') then disagree "error" errors
+    | _ -> disagree "verdict" verdicts
+  done;
+  Printf.printf "%s: %d runs, %d refused, %d verdicts differ, %d errors differ\n"
+    name !runs !refused !verdicts !errors;
+  Hashtbl.iter (fun _ w -> print_endline w) witness;
+  !verdicts + !errors
+
+let () =
+  Random.init 42;
+  let bad = List.fold_left ( + ) 0 [
+|}
+
+let test_e2e_differential () =
+  if not has_3d then ()
+  else begin
+    let dir = Filename.temp_dir "wire_e2e_diff" "" in
+    let schemas =
+      List.map
+        (fun (D { codec; _ }) -> Wire.Everparse.project ~mode:`Ffi codec)
+        diff_codecs
+    in
+    Wire_3d.generate_3d ~outdir:dir schemas;
+    Wire_3d.run_everparse ~outdir:dir schemas;
+    Wire_stubs.generate ~schema_dir:dir ~outdir:dir
+      (List.map (fun (D { codec; _ }) -> Wire_stubs.C codec) diff_codecs);
+    write_file
+      (Filename.concat dir "stub_codecs.ml")
+      (In_channel.with_open_bin "stub_codecs.ml" In_channel.input_all);
+    let main =
+      Fmt.str "%s%a  ] in@\n  if bad > 0 then exit 1@\n" diff_main
+        Fmt.(
+          list ~sep:nop (fun ppf (D { name; module_; _ } as d) ->
+              pf ppf "    compare %S Stub_codecs.%s.codec@\n      %a;@\n" name
+                module_ diff_stub d))
+        diff_codecs
+    in
+    write_file (Filename.concat dir "main.ml") main;
+    let cmd =
+      Fmt.str
+        "cd %s && ocamlfind ocamlopt -package wire,wire.stubs -linkpkg -ccopt \
+         '-I %s' $(ls *.c | grep -v Wrapper) stub_codecs.ml stubs.ml main.ml \
+         -o test_diff 2>&1"
+        dir dir
+    in
+    run cmd;
+    run (Filename.concat dir "test_diff")
+  end
+
 (* -- Output pattern invariants --
 
    Structural tests over the post-[ffi_decls] module. Every assertion
@@ -1179,6 +1301,8 @@ let suite =
         test_e2e_nested_wide;
       Alcotest.test_case "e2e: GC stress under the debug runtime" `Slow
         test_e2e_gc_stress;
+      Alcotest.test_case "e2e: a stub answers the codec's error" `Slow
+        test_e2e_differential;
       (* output pattern invariants *)
       Alcotest.test_case "action forms: scalars" `Quick
         test_action_forms_scalars;

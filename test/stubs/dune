@@ -3,5 +3,6 @@
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
  (deps
+  stub_codecs.ml
   (package wire))
  (libraries wire wire.3d wire.stubs net alcotest re unix fmt))
