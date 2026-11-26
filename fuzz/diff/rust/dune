@@ -67,8 +67,8 @@
   (language c)
   (names rust_ffi)))
 
-; The seed, repeat and budget knobs of fuzz/dune, with a budget of one second
-; per codec by default.
+; The timeout, seed, repeat and budget knobs of fuzz/dune, with a budget of
+; one second per codec by default.
 
 (rule
  (alias runtest)
@@ -79,6 +79,8 @@
  (action
   (run
    %{exe:fuzz.exe}
+   --timeout
+   %{read:../../alcobar-timeout}
    -s
    %{env:WIRE_FUZZ_SEED=42}
    -r
