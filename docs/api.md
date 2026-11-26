@@ -323,21 +323,24 @@ module Codec : sig
   val writer : 'r t -> 'r -> ('f, 'r) args -> bytes -> int -> 'f
                                                      (** Writes a template with [args] set. *)
 
-  (** {1 Word reads (until Q11)} *)
+  module Word : sig                                  (** Records of at most 7 bytes ([Q11](#q11)). *)
+    type 'r codec := 'r t
+    type ('a, 'r) codec_field := ('a, 'r) field
 
-  type bitfield                                      (** A slice of a loaded word. *)
-  val bitfield : 'r t -> (int, 'r) field -> bitfield (** [bitfield c f] is [f]'s slice. *)
-  val load_word : bitfield -> bytes -> int -> (Optint.t, Error.t) result
-                                                     (** The word [f] is a slice of. *)
-  val extract : bitfield -> Optint.t -> int          (** [f]'s bits of a word. *)
-  type 'r word = private int                         (** A record of [c] in an [int]. *)
-  type 'r word_reader                                (** A reader of records as words. *)
-  val word_reader : 'r t -> 'r word_reader           (** Raises on a record over 7 bytes. *)
-  val read_word : 'r word_reader -> bytes -> int -> ('r word, Error.t) result
-                                                     (** The record at [off]: the read-word fix. *)
-  type ('a, 'r) part                                 (** A field of a word. *)
-  val word_part : 'r t -> ('a, 'r) field -> ('a, 'r) part   (** [f] in the words. *)
-  val of_word : ('a, 'r) part -> 'r word -> 'a       (** [p]'s value in [w]. *)
+    type 'r t = private int                          (** A record's bytes, big-endian. *)
+    type 'r reader                                   (** A reader of records of ['r]. *)
+    val reader : 'r codec -> 'r reader               (** Raises on a record over 7 bytes. *)
+    type 'r check = private int                      (** Its word, or negative if refused. *)
+    val check : 'r reader -> bytes -> int -> 'r check
+                                                     (** Never raises, allocates nothing. *)
+    val ok : 'r check -> bool                        (** [ok k] iff [k] passed. *)
+    val get : 'r check -> 'r t                       (** Raises [Invalid_argument] unless [ok]. *)
+    val error : 'r reader -> bytes -> int -> Error.t (** Out of line: [Codec.get]'s error. *)
+    type ('a, 'r) field                              (** A field of the words of ['r]. *)
+    val field : 'r codec -> ('a, 'r) codec_field -> ('a, 'r) field
+                                                     (** Raises unless a word field of [c]. *)
+    val read : ('a, 'r) field -> 'r t -> 'a          (** Two shifts and a mask. *)
+  end
 
   module View : sig
     type 'r record_codec := 'r t
@@ -774,7 +777,8 @@ rests on its own grep, given with it.
 | `Wire.Codec` | `encoder` 2 | `Codec.encode c`, applied once |
 | `Wire.Codec` | `field_ref` 2 | `Field.ref` of the source field |
 | `Wire.Codec` | `field_readers` 3, `validator` (type) 0, `validator_of_struct` 6, `validate_struct` 4, `struct_size_of` 1, `struct_min_size` 2, `wire_size_info_of_validator` 1 | the internal library (§ Internal) |
-| `Wire.Codec` | `bitfield` (type) 5, `bitfield` 5, `load_word` 8, `extract` 7, `word` (type) 1, `word_reader` (type) 2, `word_reader` 2, `read_word` 8, `part` (type) 0, `word_part` 1, `of_word` 8 | Q11: `Codec.View` and the generated accessors (open) |
+| `Wire.Codec` | `bitfield` (type) 5, `bitfield` 5, `load_word` 8, `extract` 7 | `Codec.Word` ([Q11](#q11), word-reads) |
+| `Wire.Codec` | `word` (type) 1, `word_reader` (type) 2, `word_reader` 2, `read_word` 8, `part` (type) 0, `word_part` 1, `of_word` 8 | `Codec.Word.t`, `reader`, `check`, `field` and `read` ([Q11](#q11), word-reads) |
 | `Wire` | `codec` (type) 17 | `Codec.t` |
 | `Wire` | `pp_value` 1 | `Codec.pp_value` |
 | `Wire.Everparse` | `struct_` (type) 2, `decl` (type) 0, `decl_case` (type) 0, `module_` (type) 2, `validate_output_name` 2, `uses_wire_ctx` 3, `entrypoint_struct` 4, `extern_fn_names` 2, `field_action_form` (type) 0, `equal_field_action_form` 2, `field_action_forms` 3, `Raw` (module) 47 | the internal library (§ Internal) |
@@ -965,19 +969,32 @@ docs/execution.md, "The consumer's `valid` takes its integer outputs as
 on a view: `set_<field>` (execution.md, Generated code). Bigarray users: none
 outside the tests (grep above), so `?buffer`, `Buf.Bigstring`,
 `Unchecked.Bigstring` and `Vec.load_bigstring`/`store_bigstring` go. DSL
-renames: none ("DSL unchanged"); the clash of the two `bitfield` types ends
-only if Q11 deletes `Codec.bitfield`.
+renames: none ("DSL unchanged"); the clash of the two `bitfield` types ended
+when Q11 deleted the word reads' `bitfield` type.
 
 **Thomas's open point, how the generator learns the visitor.** Answered by the
 orchestrator and in the code: `main --visitor n=%{dep:flow_step.ml}`.
 
-<a id="q11"></a>**Q11. Word reads.** The first review deletes
-`bitfield`/`load_word`/`extract`; CLAUDE.md's Benchmarking principles name
-`Codec.read_word`, `Codec.of_word`, `Codec.load_word` and `Codec.extract` as
-the OCaml tier's loop, because `Codec.View` reads a field of a frame shorter
-than 8 bytes out of line (wire.mli, `word_reader`). Open until the `Wire.Codec`
-rows of the three workloads are counted with `<app>_workload.ml` reading
-through `Codec.View`:
+<a id="q11"></a>**Q11. Word reads.** Answered by the word-reads lane: the word
+reads stay, as one module `Codec.Word` in the `check`/`ok`/`get` shape of
+`Codec.View` and the generated modules, and `bitfield`/`load_word`/`extract`
+go. `Codec.View` reads a field of a frame shorter than 8 bytes out of line
+(wire.mli, `Codec.Word`), where a word is read once and each field taken from
+it inline, so the short fixed headers of the three workloads (the 6-byte space
+packet and frame headers, the 4-byte CLCW) keep a word read. Its signature is
+in [`Codec` and `Codec.View`](#wire-codec-and-codecview). A check is the
+record's word, which a record of at most 7 bytes leaves non-negative on every
+target, or -1 for a negative offset or a buffer that cuts the record: it never
+raises and allocates nothing (test_codec_word.ml, "a read allocates nothing"),
+where the result `read_word` answered was a block of 2 words per header on
+every compiler. `word_reader`, `word_part` and `of_word`
+are `Word.reader`, `Word.field` and `Word.read`; `bitfield`, `load_word` and
+`extract`, a second way to read a short record's word that answered an
+`Optint.t` in a result, are removed, and the CLCW workload reads its word
+through `Codec.Word`. CLAUDE.md's Benchmarking principles name
+`Codec.Word.check`, `ok`, `get` and `Codec.Word.read`. Still open: whether
+`Codec.View` reads these headers within noise of `Codec.Word`, which would
+delete `Codec.Word` too; the lane did not record that count, which is:
 
 ```
 make bench-apps-count
@@ -986,10 +1003,8 @@ sh bench/count.sh 100000 "routing run Wire.Codec" \
   100000 RUNS Wire.Codec
 ```
 
-(and `gateway`, `clcw`, `run` and `write`, as the Makefile's `bench_count_rows`
-lists them). Within noise: the word reads go and CLAUDE.md changes with them.
-Beyond it: they stay, with `read_word` answering a result (the read-word
-lane).
+with `<app>_workload.ml` reading through `Codec.View` (and `gateway`, `clcw`,
+`run` and `write`, as the Makefile's `bench_count_rows` lists them).
 
 <a id="q12"></a>**Q12. `UInt32.to_int` on narrow ints.** uInt32.mli: "on a
 narrower one a value with bit 31 set does not fit and is truncated", which the
@@ -1055,22 +1070,11 @@ The lane's `wire_rust.mli` (uncommitted in its worktree) has `v`, `fold`,
    internal in the end state. A Rust visitor's parameters are positional, so
    it needs no generated names.
 
-### wire-read-word (`read_word` answers an error)
-
-1. Land it: a buffer that cuts the record is input (Untrusted input), whatever
-   Q11 decides. Make the result's cost part of the commit: `read_word`
-   answering `('r word, Error.t) result` must not allocate per header in the
-   routing and gateway loops; count `routing run Wire.Codec` and
-   `gateway run Wire.Codec` before and after with the Q11 command.
-2. Fix `read_word`'s doc, which still says it raises "as get does".
-3. If Q11 then deletes the word reads, delete `read_word` with them and update
-   CLAUDE.md's Benchmarking principles.
-
 ### No lane yet
 
 1. `Staged`: delete `Wire.Staged` and `Wire_runtime.Staged`; `Codec.get`,
-   `set`, `writer` and `load_word` return their function, `decoder` and
-   `encoder` go (partial application of `decode` and `encode`).
+   `set` and `writer` return their function, `decoder` and `encoder` go
+   (partial application of `decode` and `encode`).
 2. `Codec`: rename the sizes (`wire_size_opt`, `wire_size`, `min_wire_size`,
    `wire_size_at`, `size_of_value` to `size`, `min_size`, `size_at`,
    `encoded_size`); make `name` public; move `Wire.pp_value` to
@@ -1092,8 +1096,8 @@ The lane's `wire_rust.mli` (uncommitted in its worktree) has `v`, `fold`,
 6. `Buf.local`: hidden in the agreed design, but OxCaml names a buffer held
    `local` with it (`test/ocaml-ox`); `Buf.v` must take a local buffer first.
 7. `Wire_stubs`: take `Wire_3d.packed` in place of `packed_codec`.
-8. Documents: CLAUDE.md (Benchmarking principles name the word reads and
-   `Codec.writer`; the pipeline names `Wire_stubs.generate ... [ C codec ]`),
+8. Documents: CLAUDE.md (Benchmarking principles name `Codec.writer`; the
+   pipeline names `Wire_stubs.generate ... [ C codec ]`),
    docs/projection.md (`Wire_3d.generate_dune_standalone`), and the README,
    which has no section on the generated module.
 
