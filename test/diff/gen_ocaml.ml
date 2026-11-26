@@ -123,20 +123,20 @@ let pp_case ppf (label, c, (src, intf)) =
 
 (* {1 Scanners}
 
-   Each scanner is handed to [Diff_ocaml] as its [fold] and [fold_frames],
-   and as its [fold_step] and [fold_step_frames]. A structured case gets the scanner
-   of every output, one of every other output, one of none, and on OxCaml one
-   for the default target too; a sampled shape the first two. *)
+   Each scanner is handed to [Diff_ocaml] as its fold [fold], whose visitor
+   [Step] conses each frame's outputs onto its accumulator, with
+   [fold_frames] and [fold_index]. A structured case gets the scanner of every
+   output, one of every other output, one of none, and on OxCaml one for the
+   default target too; a sampled shape the first two. *)
 
-let snapshot ppf ?(boxed = false) ~var fields =
+let snapshot ppf ~var fields =
   Fmt.pf ppf "[";
   List.iter
     (fun (n, is_bool) ->
       let v = var n in
       Fmt.pf ppf "(%S, %s);" n
         (if is_bool then "(if " ^ v ^ " then 1 else 0)"
-         else if boxed then "(Int64.to_int " ^ v ^ ")"
-         else v))
+         else "(Int64.to_int " ^ v ^ ")"))
     fields;
   Fmt.pf ppf "]"
 
@@ -145,35 +145,15 @@ let labels fields =
   else
     String.concat " " (List.map (fun (n, _) -> "~" ^ n ^ ":field_" ^ n) fields)
 
-(* [fold], handing each output to a snapshot. *)
-let pp_fold ppf ~m fields =
+(* [fold] on one frame, the snapshot of its outputs. *)
+let pp_fold ~m ppf () =
   Fmt.pf ppf
-    "(fun b o n -> %s.fold b o n ~invalid:(fun () -> None) ~valid:(fun %s -> \
-     Some %a))"
-    m (labels fields)
-    (fun ppf () -> snapshot ppf ~var:(fun n -> "field_" ^ n) fields)
-    ()
-
-let pp_backend ppf ~m fields =
-  let args = labels fields in
-  let values ppf () = snapshot ppf ~var:(fun n -> "field_" ^ n) fields in
-  let batch ppf () =
-    Fmt.pf ppf
-      "Some (fun b o n stride -> try Some (List.rev (%s.fold_frames b o n \
-       ~stride ~init:[] ~invalid:(fun acc -> None :: acc) ~valid:(fun acc %s \
-       -> Some %a :: acc))) with Invalid_argument _ -> None)"
-      m args values ()
-  in
-  Fmt.pf ppf
-    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = %a; scan_batch = \
-     %a; scan_index = None };@\n"
+    "(fun b o n -> match %s.fold b o n ~init:[] with [ v ] -> v | _ -> \
+     failwith \"fold\")"
     m
-    Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields (pp_fold ~m) fields batch ()
 
-(* The module [fold_step] and [fold_step_frames] call by name: it conses each
-   frame's snapshot onto the accumulator. It takes the integer outputs as
-   [int64]. *)
+(* The visitor [fold] calls by name: it conses each frame's snapshot onto the
+   accumulator. It takes the integer outputs as [int64]. *)
 let pp_step ppf fields =
   Fmt.pf ppf
     "struct@\n\
@@ -182,22 +162,20 @@ let pp_step ppf fields =
      let valid acc %s = Some %a :: acc@\n\
      end"
     (labels fields)
-    (fun ppf () -> snapshot ppf ~boxed:true ~var:(fun n -> "field_" ^ n) fields)
+    (fun ppf () -> snapshot ppf ~var:(fun n -> "field_" ^ n) fields)
     ()
 
-(* [fold_step], [fold_step_frames] and [fold_step_index], as the [fold],
-   [fold_frames] and fold over an index of one more backend. *)
-let pp_step_backend ppf ~m fields =
+(* [fold], [fold_frames] and [fold_index], as the fold of one frame, of the
+   frames of a stride and of the frames of an index of one backend. *)
+let pp_backend ppf ~m fields =
   Fmt.pf ppf
-    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> \
-     match %s.fold_step b o n ~init:[] with [ v ] -> v | _ -> failwith \
-     \"fold_step\"); scan_batch = Some (fun b o n stride -> try Some (List.rev \
-     (%s.fold_step_frames b o n ~stride ~init:[])) with Invalid_argument _ -> \
-     None); scan_index = Some (fun b offs lens -> List.rev (%s.fold_step_index \
-     b ~offs ~lens ~init:[])) };@\n"
-    (m ^ " step")
+    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = %a; scan_batch = \
+     Some (fun b o n stride -> try Some (List.rev (%s.fold_frames b o n \
+     ~stride ~init:[])) with Invalid_argument _ -> None); scan_index = Some \
+     (fun b offs lens -> List.rev (%s.fold_index b ~offs ~lens ~init:[])) };@\n"
+    m
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields m m m
+    fields (pp_fold ~m) () m m
 
 (* The outputs of [view], each [fill]. *)
 let rec view_zeros ~fill (view : Wire_ocaml.view) =
@@ -268,7 +246,7 @@ let pp_view_backend ppf ~m ~codec c =
      %s.get c in Some %s) else None));@\n"
     wrap (m ^ " views") codec
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields (pp_fold ~m) fields frame check m
+    fields (pp_fold ~m) () frame check m
     (if
        List.for_all
          (function Wire_ocaml.Bytes _ -> true | _ -> false)
@@ -293,11 +271,7 @@ let has_record src =
 (* The backend of the values of the module [m], when its codec's record holds
    more than named scalars at constant offsets. *)
 let pp_values_backend ppf ~m ~codec c =
-  if
-    not
-      (has_record
-         Wire_ocaml.(to_ml (v ~target:`OCaml ~folds:[ fold "fold" ] c)))
-  then begin
+  if not (has_record Wire_ocaml.(to_ml (v ~target:`OCaml c))) then begin
     let fields = Wire_ocaml.outputs c in
     let wrap, codec = codec in
     Fmt.pf ppf
@@ -307,18 +281,17 @@ let pp_values_backend ppf ~m ~codec c =
        0; Ok (Bytes.to_string out)); validate = %s.validate });@\n"
       wrap (m ^ " values") codec
       Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-      fields (pp_fold ~m) fields m m m m
+      fields (pp_fold ~m) () m m m m
   end
 
 (* The backends over [c]: each module [(name, target, selected)], generated
    inside the function under its interface, after the [Step] it calls, and
    the views of the one with every output. *)
 let pp_scanners ppf ~codec c modules =
-  (* Its folds: [fold], and [fold_step], which calls [Step] by name. *)
+  (* Its fold [fold], which calls [Step] by name. *)
   let scanner target o =
-    Wire_ocaml.(
-      v ~target ~folds:[ fold ?outputs:o "fold"; fold ?outputs:o "fold_step" ] c)
-  and visitors = [ ("fold_step", "step.ml") ] in
+    Wire_ocaml.(v ~target ~folds:[ fold ?outputs:o "fold" ] c)
+  and visitors = [ ("fold", "step.ml") ] in
   let fields = Wire_ocaml.outputs c in
   let selected_fields = function
     | None -> fields
@@ -364,7 +337,6 @@ let pp_scanners ppf ~codec c modules =
          [@\n"
         pp_step fields intf src;
       pp_backend ppf ~m:"M" fields;
-      pp_step_backend ppf ~m:"M" fields;
       pp_view_backend ppf ~m:"M" ~codec:("(", "codec") c;
       Fmt.pf ppf "]@\nin@\n")
     twin;
@@ -373,7 +345,6 @@ let pp_scanners ppf ~codec c modules =
     (fun (m, _, selected) ->
       let fields = selected_fields selected in
       pp_backend ppf ~m fields;
-      pp_step_backend ppf ~m fields;
       if selected = None then begin
         pp_view_backend ppf ~m ~codec c;
         pp_values_backend ppf ~m ~codec c
