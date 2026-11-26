@@ -746,7 +746,40 @@ let pp_record ppf c =
    field, and a value its field cannot hold as out of range, as the codec's
    encoder refuses them. *)
 
-type enc = { ec : ctx; eb : Buffer.t; efresh : string -> string }
+(* The failure of the check [k] of [f] at [at], as the codec answers it. *)
+let fail_check c ~at ~field (f : P.field) (k : P.check) =
+  let kind =
+    match k.kind with
+    | Constraint ->
+        Fmt.str
+          "Kind::ConstraintFailed { which: Predicate::Field, value: Some(%s) }"
+          f.id
+    | Enum valid ->
+        Fmt.str "Kind::InvalidEnum { value: %s, valid: &[%s] }" f.id
+          (String.concat ", " (List.map int_lit valid))
+    | Tag -> Fmt.str "Kind::InvalidTag(%s)" f.id
+  in
+  Fmt.str "if !(%s) { return Err(fail(%s, %s, %s)); }"
+    (Walk.expr c.scope k.cond) at field kind
+
+(* Whether the root is a record of constant size whose fields' values decide
+   its checks alone: fields at constant offsets, where clauses, no record a
+   field holds and no check on bytes. Its encoder then checks the values
+   before it writes them, as the bytes would be checked once written. *)
+let flat_record (c : ctx) =
+  c.r.module_name = None && Option.is_some c.all.size && c.r.subs = []
+  && List.for_all
+       (function
+         | P.Prefix (fields, _) ->
+             List.for_all
+               (fun (f : P.field) ->
+                 match f.store with Bytes _ -> f.checks = [] | _ -> true)
+               fields
+         | P.Test _ -> true
+         | P.Span _ | P.Gate _ | P.Region _ -> false)
+       (P.nodes c.r.plan)
+
+type enc = { ec : ctx; eb : Buffer.t; efresh : string -> string; flat : bool }
 
 let rec plain : type a. store -> string -> a T.typ -> string =
  fun store e typ ->
@@ -820,6 +853,17 @@ let pp_prefix e env ~p ~path fields n =
           | _ -> pr e.eb "zeros(buf, %s + %d, %d);" p f.offset k))
     fields;
   List.iter (fun (k, bits) -> pp_word e ~p k (List.rev bits)) (List.rev !words);
+  if e.flat then
+    List.iter
+      (fun (f : P.field) ->
+        List.iter
+          (fun k ->
+            pr e.eb "%s"
+              (fail_check e.ec
+                 ~at:(Fmt.str "%s + %d" p f.offset)
+                 ~field:(path_push path f.name) f k))
+          f.checks)
+      fields;
   pr e.eb "}";
   Fmt.str "(%s + %d)" p n
 
@@ -927,7 +971,7 @@ and pp_gate e env ~p ~path cond presence body =
 
 let pp_encode ppf c =
   let b = Buffer.create 1024 in
-  let e = { ec = c; eb = b; efresh = counter () } in
+  let e = { ec = c; eb = b; efresh = counter (); flat = flat_record c } in
   pp_bindings e;
   let env =
     List.map (fun (l, n, _) -> (l, "r." ^ ident n)) (named c.r.struct_)
@@ -957,21 +1001,6 @@ let pp_encode ppf c =
    [check_pass] makes the checks of the fields at constant offsets whose bytes
    lie in the buffer first, as the codec does: of every field for the record
    it decodes, of the bitfields only for a record it enters. *)
-
-let fail_check c ~at ~field (f : P.field) (k : P.check) =
-  let kind =
-    match k.kind with
-    | Constraint ->
-        Fmt.str
-          "Kind::ConstraintFailed { which: Predicate::Field, value: Some(%s) }"
-          f.id
-    | Enum valid ->
-        Fmt.str "Kind::InvalidEnum { value: %s, valid: &[%s] }" f.id
-          (String.concat ", " (List.map int_lit valid))
-    | Tag -> Fmt.str "Kind::InvalidTag(%s)" f.id
-  in
-  Fmt.str "if !(%s) { return Err(fail(%s, %s, %s)); }"
-    (Walk.expr c.scope k.cond) at field kind
 
 let read_all known ids =
   let fields =
@@ -1305,6 +1334,41 @@ fn first_error(buf: &[u8], length: usize, off: usize) -> Error {
 
 |}
 
+(* The body of [encode] past the size of [r], in [n]. A flat record
+   ({!flat_record}) of [size] bytes is written into the array of its bytes,
+   whose stores need no bound of their own, its values checked before;
+   any other is written into [buf] and its bytes checked again. *)
+let written c ~size ~own_check =
+  match size with
+  | Some k when flat_record c ->
+      Fmt.str
+        "    let got = buf.len().saturating_sub(off);\n\
+        \    let Some(b) = buf.get_mut(off..).and_then(|s| \
+         s.first_chunk_mut::<%d>()) else {\n\
+        \        return Err(fail(off as i64, Path::ROOT, Kind::UnexpectedEof { \
+         expected: n, got }));\n\
+        \    };\n\
+        \    match encode_at(r, b, 0, true, Path::ROOT) {\n\
+        \        Ok(_) => Ok(()),\n\
+        \        Err(e) => Err(Error { at: e.at + off, ..e }),\n\
+        \    }\n"
+        k
+  | _ ->
+      Fmt.str
+        "    let got = buf.len().saturating_sub(off);\n\
+        \    if off > buf.len() || n > got {\n\
+        \        return Err(fail(off as i64, Path::ROOT, Kind::UnexpectedEof { \
+         expected: n, got }));\n\
+        \    }\n\
+        \    encode_at(r, buf, off as i64, true, Path::ROOT)?;\n\
+        \    let buf: &[u8] = buf;\n\
+        \    if %s.ok() {\n\
+        \        Ok(())\n\
+        \    } else {\n\
+        \        Err(first_error(buf, off + n, off))\n\
+        \    }\n"
+        own_check
+
 let pp_root ppf ~size c =
   let rt = if borrows c.all c.r then "Record<'_>" else "Record" in
   let check, window = root_check ~size in
@@ -1339,20 +1403,9 @@ let pp_root ppf ~size c =
      #[inline]\n\
      pub fn encode(r: &%s, buf: &mut [u8], off: usize) -> Result<(), Error> {\n\
     \    let n = size(r)?;\n\
-    \    let got = buf.len().saturating_sub(off);\n\
-    \    if off > buf.len() || n > got {\n\
-    \        return Err(fail(off as i64, Path::ROOT, Kind::UnexpectedEof { \
-     expected: n, got }));\n\
-    \    }\n\
-    \    encode_at(r, buf, off as i64, true, Path::ROOT)?;\n\
-    \    let buf: &[u8] = buf;\n\
-    \    if %s.ok() {\n\
-    \        Ok(())\n\
-    \    } else {\n\
-    \        Err(first_error(buf, off + n, off))\n\
-    \    }\n\
-     }\n\n"
-    check first_error window rt window rt own_check
+     %s}\n\n"
+    check first_error window rt window rt
+    (written c ~size ~own_check)
 
 let pp_check_frame ppf plan =
   let code, _ = body ~depth:1 plan [] ~frame:"frame" ~finish:[ "Some(())" ] in
