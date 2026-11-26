@@ -12,10 +12,14 @@ open Walk
    record's values, its error, and the folds it declares. The records and
    their plans are [Wire_ocaml.Plan.records], the ones the OCaml views are
    written from; the check and the folds walk [Wire_ocaml.Plan.v], as the
-   OCaml folds do. Positions and sizes are [i64]s, as the plan computes them,
-   so no arithmetic on them wraps; a load goes through [get], which answers
-   [None] past the buffer, and a store through [put], which writes nothing
-   there, so no input makes the module panic. *)
+   OCaml folds do. Positions and sizes are [i64]s, as the plan computes them:
+   a codec keeps each size below 2^32, so their sums from an offset inside a
+   buffer cannot wrap. One becomes a [usize] only through a checked
+   conversion, so none is cut where a [usize] is narrower, and an offset
+   past the end of the address space saturates, as the codec's do. A load
+   goes through [get], which answers [None] past the buffer, and a store
+   through [put], which writes nothing there, so no input makes the module
+   panic. *)
 
 type fold = {
   name : string;
@@ -275,15 +279,22 @@ impl core::fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
+// A position or a count as a `usize`: 0 below 0, and the largest `usize`,
+// past the end of any buffer, above it.
+#[inline(always)]
+fn pos(x: i64) -> usize {
+    if x <= 0 { 0 } else { usize::try_from(x).unwrap_or(usize::MAX) }
+}
+
 #[inline(always)]
 fn fail(at: i64, field: Path, kind: Kind) -> Error {
-    Error { at: at as usize, field, kind }
+    Error { at: pos(at), field, kind }
 }
 
 #[inline(always)]
 fn eof_if(c: bool, at: i64, expected: i64, got: i64, field: Path) -> Result<(), Error> {
     if c {
-        Err(fail(at, field, Kind::UnexpectedEof { expected: expected.max(0) as usize, got: got.max(0) as usize }))
+        Err(fail(at, field, Kind::UnexpectedEof { expected: pos(expected), got: pos(got) }))
     } else {
         Ok(())
     }
@@ -303,10 +314,7 @@ fn refused(at: i64, field: Path, which: Predicate) -> Error {
 // The `N` bytes at `at` of `b`, or `None` past its end.
 #[inline(always)]
 fn get<const N: usize>(b: &[u8], at: i64) -> Option<&[u8; N]> {
-    if at < 0 {
-        return None;
-    }
-    b.get(at as usize..)?.first_chunk::<N>()
+    b.get(usize::try_from(at).ok()?..)?.first_chunk::<N>()
 }
 
 // The `N` bytes at `at` of `b`, zeros past its end: for a read the bounds
@@ -322,17 +330,14 @@ fn rd<const N: usize>(b: &[u8], at: i64) -> [u8; N] {
 // The `n` bytes at `at` of `b`, or `None` past its end.
 #[inline(always)]
 fn span(b: &[u8], at: i64, n: i64) -> Option<&[u8]> {
-    if at < 0 || n < 0 {
-        return None;
-    }
-    b.get(at as usize..)?.get(..n as usize)
+    b.get(usize::try_from(at).ok()?..)?.get(..usize::try_from(n).ok()?)
 }
 
 // Writes `v` at `at` of `b`, nothing past its end.
 #[inline(always)]
 fn put(b: &mut [u8], at: i64, v: &[u8]) {
-    if at >= 0 {
-        if let Some(d) = b.get_mut(at as usize..).and_then(|d| d.get_mut(..v.len())) {
+    if let Ok(at) = usize::try_from(at) {
+        if let Some(d) = b.get_mut(at..).and_then(|d| d.get_mut(..v.len())) {
             d.copy_from_slice(v);
         }
     }
@@ -341,8 +346,8 @@ fn put(b: &mut [u8], at: i64, v: &[u8]) {
 // Writes `n` zeros at `at` of `b`, nothing past its end.
 #[inline(always)]
 fn zeros(b: &mut [u8], at: i64, n: i64) {
-    if at >= 0 && n > 0 {
-        if let Some(d) = b.get_mut(at as usize..).and_then(|d| d.get_mut(..n as usize)) {
+    if let (Ok(at), Ok(n)) = (usize::try_from(at), usize::try_from(n)) {
+        if let Some(d) = b.get_mut(at..).and_then(|d| d.get_mut(..n)) {
             d.fill(0);
         }
     }
@@ -629,24 +634,24 @@ let pp_setter ppf (_, (f : P.field)) =
      /// end of `buf`.\n\
      #[inline]\n\
      pub fn set_%s(buf: &mut [u8], at: usize, x: %s) -> Result<(), Error> {\n\
-    \    let k = (at as i64).wrapping_add(%d);\n\
-    \    let got = (buf.len() as i64).wrapping_sub(k);\n\
+    \    let k = at.saturating_add(%d);\n\
+    \    let got = buf.len().saturating_sub(k);\n\
     \    let field = Path::ROOT.push(%s);\n"
     name name ty f.offset (rust_string f.name);
   (match f.store with
   | Bits { width; _ } when width < type_bits width ->
       Fmt.pf ppf
-        "    if x >> %d != 0 { return Err(fail(k, field, Kind::ValueOutOfRange \
-         { value: x as i64 })); }\n"
+        "    if x >> %d != 0 { return Err(Error { at: k, field, kind: \
+         Kind::ValueOutOfRange { value: x as i64 } }); }\n"
         width
   | _ -> ());
   Fmt.pf ppf
-    "    let Some(s) = at.checked_add(%d).and_then(|k| \
-     buf.get_mut(k..)).and_then(|s| s.first_chunk_mut::<%d>()) else {\n\
-    \        return Err(fail(k, field, Kind::UnexpectedEof { expected: %d, \
-     got: got.max(0) as usize }));\n\
+    "    let Some(s) = buf.get_mut(k..).and_then(|s| \
+     s.first_chunk_mut::<%d>()) else {\n\
+    \        return Err(Error { at: k, field, kind: Kind::UnexpectedEof { \
+     expected: %d, got } });\n\
     \    };\n"
-    f.offset n n;
+    n n;
   (match f.store with
   | Bits { base; shift; width } ->
       let wt = base_type base in
@@ -993,7 +998,9 @@ let pp_encode ppf c =
      /// with.\n\
      #[inline]\n\
      pub fn size(r: &%s) -> Result<usize, Error> {\n\
-    \    encode_at(r, &mut [], 0, false, Path::ROOT).map(|n| n as usize)\n\
+    \    let n = encode_at(r, &mut [], 0, false, Path::ROOT)?;\n\
+    \    usize::try_from(n).map_err(|_| fail(0, Path::ROOT, \
+     Kind::ValueOutOfRange { value: n }))\n\
      }\n\n"
     rt (Buffer.contents b) q rt
 
@@ -1262,10 +1269,9 @@ let pp_view ppf c =
      /// The record at `p` in `buf`, its fixed bytes in `buf`, with no check.\n\
      #[inline(always)]\n\
      pub(crate) fn at(buf: &[u8], p: i64) -> Check<'_> {\n\
-    \    if p < 0 {\n\
+    \    let Ok(at) = usize::try_from(p) else {\n\
     \        return Check(None);\n\
-    \    }\n\
-    \    let at = p as usize;\n\
+    \    };\n\
     \    match buf.get(at..).and_then(|s| s.first_chunk::<FIXED>()) {\n\
     \        Some(head) => Check(Some(View { buf, at, head })),\n\
     \        None => Check(None),\n\
@@ -1329,11 +1335,11 @@ let first_error =
 #[inline(never)]
 fn first_error(buf: &[u8], length: usize, off: usize) -> Error {
     if off > length {
-        return fail(off as i64, Path::ROOT, Kind::UnexpectedEof { expected: MIN_SIZE, got: 0 });
+        return Error { at: off, field: Path::ROOT, kind: Kind::UnexpectedEof { expected: MIN_SIZE, got: 0 } };
     }
     match error_at(buf, length as i64, off as i64, Path::ROOT) {
         Err(e) => e,
-        Ok(_) => fail(off as i64, Path::ROOT, Kind::ConstraintFailed { which: Predicate::Where, value: None }),
+        Ok(_) => Error { at: off, field: Path::ROOT, kind: Kind::ConstraintFailed { which: Predicate::Where, value: None } },
     }
 }
 
@@ -1348,8 +1354,8 @@ fn first_error(buf: &[u8], length: usize, off: usize) -> Error {
    [off]. *)
 let written c ~size ~own_check =
   let eof =
-    "        return Err(fail(off as i64, Path::ROOT, Kind::UnexpectedEof { \
-     expected: n, got }));\n"
+    "        return Err(Error { at: off, field: Path::ROOT, kind: \
+     Kind::UnexpectedEof { expected: n, got } });\n"
   in
   let into_buf =
     Fmt.str
@@ -1389,8 +1395,8 @@ let written c ~size ~own_check =
         \        Ok(n) => n,\n\
         \        Err(e) => return Err(match e.at.checked_add(off) {\n\
         \            Some(at) => Error { at, ..e },\n\
-        \            None => fail(off as i64, Path::ROOT, Kind::UnexpectedEof \
-         { expected: MIN_SIZE, got: 0 }),\n\
+        \            None => Error { at: off, field: Path::ROOT, kind: \
+         Kind::UnexpectedEof { expected: MIN_SIZE, got: 0 } },\n\
         \        }),\n\
         \    };\n\
         \    let got = buf.len().saturating_sub(off);\n\
@@ -1561,6 +1567,7 @@ let record_values ~folds root (r : P.record) =
        "eof_if";
        "refused";
        "sat";
+       "pos";
        "lsl";
        "lsr";
      ]
@@ -1633,8 +1640,8 @@ let check_names ~codec ~(all : P.records) ~folds =
 (* {1 The module} *)
 
 let uses_up =
-  "use super::{fail, eof_if, refused, get, rd, span, put, zeros, sat, lsl, \
-   lsr, Error, Kind, Path, Predicate};"
+  "use super::{fail, eof_if, refused, get, rd, span, put, zeros, sat, pos, \
+   lsl, lsr, Error, Kind, Path, Predicate};"
 
 (* Whether a walk of [plan], the check's or a fold's, binds a slot. *)
 let has_slots plan folds =
