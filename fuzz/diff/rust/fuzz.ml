@@ -14,10 +14,12 @@
     sampled shape the OCaml scanner accepts on random inputs. A record of
     constant size of {!Diff_ocaml.codecs} is also compared at offsets from 0 to
     past the end of the buffer: validate and decode, every accessor, encode into
-    buffers around the record and the setters. The library is compiled with
-    overflow checks, so arithmetic that would wrap aborts the run. A codec the
-    generator refuses must be one it documents it cannot specialise, or one
-    whose field names would spell a Rust name twice. *)
+    buffers around the record and the setters; and records of [Schemas.checked]
+    that break its constraints or its [where] clause are encoded by both, errors
+    compared exactly. The library is compiled with overflow checks, so
+    arithmetic that would wrap aborts the run. A codec the generator refuses
+    must be one it documents it cannot specialise, or one whose field names
+    would spell a Rust name twice. *)
 
 let backends (type r) (c : r Wire.Codec.t) m =
   Diff_rust.folds m @ [ Diff_rust.views c m; Diff_rust.values c m ]
@@ -151,6 +153,25 @@ let cases =
       | _ -> None)
     Diff_ocaml.codecs
 
+(* Records of [Schemas.checked] whose values each field holds, so that only
+   its constraints and its [where] clause refuse them: the clause, that
+   [Length] holds [IHL] words of 4 bytes, fails for about half. *)
+let checked =
+  let m = List.assoc "checked" Rust_index.schemas in
+  let protos = [| 1; 6; 17 |] in
+  ( "encode checked",
+    fun buf ->
+      let byte i =
+        if i < Bytes.length buf then Char.code (Bytes.get buf i) else 0
+      in
+      Schemas.checked_make
+        (byte 0 land 0xf)
+        (byte 1 land 0xf)
+        (Wire.UInt16.v (byte 2 land 0x3f))
+        (Wire.UInt8.v (byte 4))
+        (Wire.UInt8.v protos.(byte 5 mod 3))
+      |> Diff_rust.raw "checked" Schemas.checked m )
+
 let with_codec l =
   List.map
     (fun (label, msg) ->
@@ -199,4 +220,5 @@ let () =
         ("scan " ^ r.label, Diff_ocaml.check_scan reference ops))
       schemas
   in
-  Diff_driver.run Rust_index.name (cases @ scans @ schemas @ sampled)
+  Diff_driver.run Rust_index.name
+    ((checked :: cases) @ scans @ schemas @ sampled)

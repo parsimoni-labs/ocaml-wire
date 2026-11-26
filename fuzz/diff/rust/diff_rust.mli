@@ -32,4 +32,13 @@ val check : string -> Fuzz_gen.packed -> case -> bytes -> unit
     accessor read what {!Wire.Codec.validate} and {!Wire.Codec.get} read, encode
     writes the same bytes into buffers around the record or both refuse, the
     setters rebuild a flat record, and at the last offsets a [usize] holds every
-    decoder finds the buffer too short. Fails with {!Alcobar.failf}. *)
+    decoder finds the buffer too short. Errors compare exactly, offset included.
+    Fails with {!Alcobar.failf}. *)
+
+val raw : string -> 'r Wire.Codec.t -> case -> 'r -> unit
+(** [raw label c m v] compares [m], generated from [c] of constant size, with
+    [c] on encoding [v], which may break [c]'s constraints or its [where]
+    clause: into buffers around the record, at offsets from 0, both write the
+    same bytes or refuse with the same error, offset included. [m] reads [v],
+    with no check, from the bytes [c] writes before it refuses them. Fails with
+    {!Alcobar.failf}. *)

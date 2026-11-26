@@ -10,7 +10,8 @@
    The codecs are those of [Diff_ocaml.scan_codecs], which hold the flat
    records of [Diff_ocaml.codecs], the structured cases of
    [Diff_codecs.scan_cases], and schemas of test/ocaml whose arithmetic
-   overflows the native int or whose decision tree shares a subtree. *)
+   overflows the native int, whose decision tree shares a subtree, or whose
+   [where] clause a record can break. *)
 
 module P = Wire_ocaml.Plan
 
@@ -383,6 +384,11 @@ let pp_case ppf c =
     \                },@\n\
     \                Err(e) => 200 + err(e, res, txt),@\n\
     \            },@\n\
+    \            8 => match m::at(buf, 0).get().and_then(m::of_view) {@\n\
+    \                Some(r) => match m::encode(&r, out, off) { Ok(()) => 0, \
+     Err(e) => err(e, res, txt) },@\n\
+    \                None => -4,@\n\
+    \            },@\n\
     \            4 => {@\n\
     \                if neg { return 0; }@\n\
     \                let c = %s;@\n\
@@ -510,6 +516,7 @@ let () =
       schema "overflow" Schemas.overflow;
       schema "shared" Schemas.shared;
       schema "skipped" Schemas.skipped;
+      schema "checked" Schemas.checked;
     ]
   and sampled =
     List.filter_map

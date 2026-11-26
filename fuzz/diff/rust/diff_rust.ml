@@ -17,6 +17,7 @@ let op_view = 4
 let op_fold = 5
 let op_frames = 6
 let op_index = 7
+let op_raw = 8
 
 external call : bytes -> bytes -> bytes -> bytes -> bytes -> int
   = "wire_rs_call_stub"
@@ -232,35 +233,72 @@ let reads_at label c m refs buf off =
     Fmt.(option ~none:(any "nothing") (list (pair string string)))
     expected got
 
+(* The text after [prefix] in [s], up to its last character. *)
+let inside prefix s =
+  let n = String.length prefix and len = String.length s in
+  let rec go i =
+    if i + n > len then None
+    else if String.sub s i n = prefix then
+      Some (String.sub s (i + n) (len - i - n - 1))
+    else go (i + 1)
+  in
+  go 0
+
+(* What [Wire.Codec.encode c v] does into [len] bytes at [off]: the bytes it
+   writes, or its refusal as the error the Rust module names it. A buffer too
+   short is the end of input at [off]; a record its own checks refuse, the
+   error they name. *)
+let codec_encode c v ~len ~off =
+  let out = Bytes.make len '\xaa' in
+  match Wire.Codec.encode c v out off with
+  | () -> Ok (Bytes.to_string out)
+  | exception Invalid_argument msg -> (
+      match inside "constraints (" msg with
+      | Some e -> Error e
+      | None -> (
+          match
+            Option.bind (inside "buffer too short (" msg) (fun s ->
+                Scanf.sscanf_opt s "need %d, got %d" (fun n g -> (n, g)))
+          with
+          | Some (expected, got) ->
+              err_error
+                {
+                  at = off;
+                  field = [];
+                  kind = Unexpected_eof { expected; got = max 0 got };
+                }
+          | None -> Error msg))
+
+(* [encode] of the module [m] into [len] bytes at [off], of the record [op]
+   reads in [src]. *)
+let rust_encode m ~op src ~len ~off =
+  let out = Bytes.make len '\xaa' in
+  match run m ~op ~off ~out src with
+  | 0, _ -> Ok (Bytes.to_string out)
+  | 1, res -> err_error (error res)
+  | n, _ -> err_outcome n
+
+(* [v] encoded by the codec and by [m], which reads it with [op] in [src],
+   into buffers around the record: the same bytes, or the same error,
+   offset included. *)
+let encodes label c m ~op src v placements =
+  List.iter
+    (fun (len, off) ->
+      let len = max 0 len in
+      same label
+        (Fmt.str "encode into %d bytes at offset %d" len off)
+        Fmt.(result ~ok:Dump.string ~error:string)
+        (codec_encode c v ~len ~off)
+        (rust_encode m ~op src ~len ~off))
+    placements
+
 let encodes_at label c m buf off =
   match Wire.Codec.decode c buf off with
   | Error _ | (exception Invalid_argument _) -> ()
   | Ok v ->
       let size = Wire.Codec.min_size c in
       let canonical = Bytes.of_string (Wire.Codec.to_string c v) in
-      List.iter
-        (fun (len, off) ->
-          let len = max 0 len in
-          let expected =
-            let out = Bytes.make len '\xaa' in
-            match Wire.Codec.encode c v out off with
-            | () -> Ok (Bytes.to_string out)
-            | exception Invalid_argument _ -> Error "refused"
-          in
-          let out = Bytes.make len '\xaa' in
-          let got =
-            match run m ~op:op_encode ~off ~out canonical with
-            | 0, _ -> Ok (Bytes.to_string out)
-            | 1, res -> (
-                match error res with
-                | { kind = Unexpected_eof _; _ } -> Error "refused"
-                | e -> err_error e)
-            | n, _ -> err_outcome n
-          in
-          same label
-            (Fmt.str "encode into %d bytes at offset %d" len off)
-            Fmt.(result ~ok:Dump.string ~error:string)
-            expected got)
+      encodes label c m ~op:op_encode canonical v
         [ (size, 0); (Bytes.length buf, off); (size + 2, 1); (size - 1, 0) ];
       if m.flat then begin
         let out = Bytes.make size '\000' in
@@ -275,6 +313,15 @@ let encodes_at label c m buf off =
           (Ok (Bytes.to_string canonical))
           got
       end
+
+let raw label c m v =
+  let size = Wire.Codec.min_size c in
+  (* The codec writes a record before its own checks refuse it, so the
+     bytes hold it for the module to read with no check. *)
+  let src = Bytes.make size '\000' in
+  (try Wire.Codec.encode c v src 0 with Invalid_argument _ -> ());
+  encodes label c m ~op:op_raw src v
+    [ (size + 3, 3); (size + 2, 1); (size, 0); (size + 1, 2); (size - 1, 0) ]
 
 (* An offset the address space ends before: [-k] reaches Rust as
    [usize::MAX - k + 1]. Every decoder must find the buffer too short, and
