@@ -6,18 +6,12 @@
 (rule
  (targets
   Tiny.3d
-  Tiny.Scan.fst
   Tiny.Flat.fsti
   Tiny.Flat.fst
-  Tiny.Proof.fsti
-  Tiny.Proof.fst
   Tiny.Visitor.fsti
   Tiny.Step.fst
   Tiny.StepProof.fsti
   Tiny.StepProof.fst
-  Tiny.OxScan.fst
-  Tiny.OxProof.fsti
-  Tiny.OxProof.fst
   Tiny.OxStep.fst
   Tiny.OxStepProof.fsti
   Tiny.OxStepProof.fst
@@ -34,18 +28,12 @@
   Tiny.OxIndexProof.fsti
   Tiny.OxIndexProof.fst
   Ethernet.3d
-  Ethernet.Scan.fst
   Ethernet.Flat.fsti
   Ethernet.Flat.fst
-  Ethernet.Proof.fsti
-  Ethernet.Proof.fst
   Ethernet.Visitor.fsti
   Ethernet.Step.fst
   Ethernet.StepProof.fsti
   Ethernet.StepProof.fst
-  Ethernet.OxScan.fst
-  Ethernet.OxProof.fsti
-  Ethernet.OxProof.fst
   Ethernet.OxStep.fst
   Ethernet.OxStepProof.fsti
   Ethernet.OxStepProof.fst
@@ -62,18 +50,12 @@
   Ethernet.OxIndexProof.fsti
   Ethernet.OxIndexProof.fst
   IPv4.3d
-  IPv4.Scan.fst
   IPv4.Flat.fsti
   IPv4.Flat.fst
-  IPv4.Proof.fsti
-  IPv4.Proof.fst
   IPv4.Visitor.fsti
   IPv4.Step.fst
   IPv4.StepProof.fsti
   IPv4.StepProof.fst
-  IPv4.OxScan.fst
-  IPv4.OxProof.fsti
-  IPv4.OxProof.fst
   IPv4.OxStep.fst
   IPv4.OxStepProof.fsti
   IPv4.OxStepProof.fst
@@ -90,18 +72,12 @@
   IPv4.OxIndexProof.fsti
   IPv4.OxIndexProof.fst
   Clcw.3d
-  Clcw.Scan.fst
   Clcw.Flat.fsti
   Clcw.Flat.fst
-  Clcw.Proof.fsti
-  Clcw.Proof.fst
   Clcw.Visitor.fsti
   Clcw.Step.fst
   Clcw.StepProof.fsti
   Clcw.StepProof.fst
-  Clcw.OxScan.fst
-  Clcw.OxProof.fsti
-  Clcw.OxProof.fst
   Clcw.OxStep.fst
   Clcw.OxStepProof.fsti
   Clcw.OxStepProof.fst
@@ -118,18 +94,12 @@
   Clcw.OxIndexProof.fsti
   Clcw.OxIndexProof.fst
   Span.3d
-  Span.Scan.fst
   Span.Flat.fsti
   Span.Flat.fst
-  Span.Proof.fsti
-  Span.Proof.fst
   Span.Visitor.fsti
   Span.Step.fst
   Span.StepProof.fsti
   Span.StepProof.fst
-  Span.OxScan.fst
-  Span.OxProof.fsti
-  Span.OxProof.fst
   Span.OxStep.fst
   Span.OxStepProof.fsti
   Span.OxStepProof.fst
@@ -146,18 +116,12 @@
   Span.OxIndexProof.fsti
   Span.OxIndexProof.fst
   Gate.3d
-  Gate.Scan.fst
   Gate.Flat.fsti
   Gate.Flat.fst
-  Gate.Proof.fsti
-  Gate.Proof.fst
   Gate.Visitor.fsti
   Gate.Step.fst
   Gate.StepProof.fsti
   Gate.StepProof.fst
-  Gate.OxScan.fst
-  Gate.OxProof.fsti
-  Gate.OxProof.fst
   Gate.OxStep.fst
   Gate.OxStepProof.fsti
   Gate.OxStepProof.fst
@@ -174,18 +138,12 @@
   Gate.OxIndexProof.fsti
   Gate.OxIndexProof.fst
   Dispatch.3d
-  Dispatch.Scan.fst
   Dispatch.Flat.fsti
   Dispatch.Flat.fst
-  Dispatch.Proof.fsti
-  Dispatch.Proof.fst
   Dispatch.Visitor.fsti
   Dispatch.Step.fst
   Dispatch.StepProof.fsti
   Dispatch.StepProof.fst
-  Dispatch.OxScan.fst
-  Dispatch.OxProof.fsti
-  Dispatch.OxProof.fst
   Dispatch.OxStep.fst
   Dispatch.OxStepProof.fsti
   Dispatch.OxStepProof.fst
@@ -202,18 +160,12 @@
   Dispatch.OxIndexProof.fsti
   Dispatch.OxIndexProof.fst
   Region.3d
-  Region.Scan.fst
   Region.Flat.fsti
   Region.Flat.fst
-  Region.Proof.fsti
-  Region.Proof.fst
   Region.Visitor.fsti
   Region.Step.fst
   Region.StepProof.fsti
   Region.StepProof.fst
-  Region.OxScan.fst
-  Region.OxProof.fsti
-  Region.OxProof.fst
   Region.OxStep.fst
   Region.OxStepProof.fsti
   Region.OxStepProof.fst
@@ -230,18 +182,12 @@
   Region.OxIndexProof.fsti
   Region.OxIndexProof.fst
   IPv4Mutant.3d
-  IPv4Mutant.Scan.fst
   IPv4Mutant.Flat.fsti
   IPv4Mutant.Flat.fst
-  IPv4Mutant.Proof.fsti
-  IPv4Mutant.Proof.fst
   IPv4Mutant.Visitor.fsti
   IPv4Mutant.Step.fst
   IPv4Mutant.StepProof.fsti
   IPv4Mutant.StepProof.fst
-  IPv4Mutant.OxScan.fst
-  IPv4Mutant.OxProof.fsti
-  IPv4Mutant.OxProof.fst
   IPv4Mutant.OxStep.fst
   IPv4Mutant.OxStepProof.fsti
   IPv4Mutant.OxStepProof.fst
@@ -258,18 +204,12 @@
   IPv4Mutant.OxIndexProof.fsti
   IPv4Mutant.OxIndexProof.fst
   ClcwStepMutant.3d
-  ClcwStepMutant.Scan.fst
   ClcwStepMutant.Flat.fsti
   ClcwStepMutant.Flat.fst
-  ClcwStepMutant.Proof.fsti
-  ClcwStepMutant.Proof.fst
   ClcwStepMutant.Visitor.fsti
   ClcwStepMutant.Step.fst
   ClcwStepMutant.StepProof.fsti
   ClcwStepMutant.StepProof.fst
-  ClcwStepMutant.OxScan.fst
-  ClcwStepMutant.OxProof.fsti
-  ClcwStepMutant.OxProof.fst
   ClcwStepMutant.OxStep.fst
   ClcwStepMutant.OxStepProof.fsti
   ClcwStepMutant.OxStepProof.fst
@@ -286,18 +226,12 @@
   ClcwStepMutant.OxIndexProof.fsti
   ClcwStepMutant.OxIndexProof.fst
   TinyOxMutant.3d
-  TinyOxMutant.Scan.fst
   TinyOxMutant.Flat.fsti
   TinyOxMutant.Flat.fst
-  TinyOxMutant.Proof.fsti
-  TinyOxMutant.Proof.fst
   TinyOxMutant.Visitor.fsti
   TinyOxMutant.Step.fst
   TinyOxMutant.StepProof.fsti
   TinyOxMutant.StepProof.fst
-  TinyOxMutant.OxScan.fst
-  TinyOxMutant.OxProof.fsti
-  TinyOxMutant.OxProof.fst
   TinyOxMutant.OxStep.fst
   TinyOxMutant.OxStepProof.fsti
   TinyOxMutant.OxStepProof.fst
@@ -314,18 +248,12 @@
   TinyOxMutant.OxIndexProof.fsti
   TinyOxMutant.OxIndexProof.fst
   RegionIndexMutant.3d
-  RegionIndexMutant.Scan.fst
   RegionIndexMutant.Flat.fsti
   RegionIndexMutant.Flat.fst
-  RegionIndexMutant.Proof.fsti
-  RegionIndexMutant.Proof.fst
   RegionIndexMutant.Visitor.fsti
   RegionIndexMutant.Step.fst
   RegionIndexMutant.StepProof.fsti
   RegionIndexMutant.StepProof.fst
-  RegionIndexMutant.OxScan.fst
-  RegionIndexMutant.OxProof.fsti
-  RegionIndexMutant.OxProof.fst
   RegionIndexMutant.OxStep.fst
   RegionIndexMutant.OxStepProof.fsti
   RegionIndexMutant.OxStepProof.fst
@@ -550,7 +478,8 @@
  (action
   (run sh prove.sh codec Region)))
 
-;; ihl read with three bits instead of four: the proof must fail.
+;; The step walk of IPv4 with ihl read with three bits instead of four: the
+;; step proof must fail.
 
 (rule
  (targets used.IPv4Mutant)
@@ -567,7 +496,13 @@
   (glob_files IPv4Mutant.*)
   (env_var WIRE_PROVE_TIMEOUT))
  (action
-  (run sh prove.sh refused IPv4Mutant "s/(P.land bw1 0xf)/(P.land bw1 0x7)/")))
+  (run
+   sh
+   prove.sh
+   refused
+   IPv4Mutant
+   "s/(P.int64_logand bw1 15)/(P.int64_logand bw1 7)/"
+   Step)))
 
 ;; The step walk of the CLCW with vcid shifted out of its word one bit too
 ;; few: the step proof must fail.
@@ -623,8 +558,8 @@
    OxIndex
    walk)))
 
-;; The OxCaml fold of Tiny with [a] read from the low byte of the 16-bit
-;; load one byte on, the byte after [a]: the OxCaml proof must fail.
+;; The OxCaml step walk of Tiny with [a] read from the low byte of the 16-bit
+;; load one byte on, the byte after [a]: the OxCaml step proof must fail.
 
 (rule
  (targets used.TinyOxMutant)
@@ -647,7 +582,7 @@
    refused
    TinyOxMutant
    "s/(P.u16le_at buf base)) 255)/(P.u16le_at buf (P.int64_add base 1))) 255)/"
-   OxScan)))
+   OxStep)))
 
 ;; Once every run has listed the cache entries it used, the rest of
 ;; WIRE_FSTAR_CACHE goes: other F* versions, the 3d.exe output of a .3d that

@@ -5,11 +5,11 @@
 #   prove.sh lib FILE...          check the fixed library, in order
 #   prove.sh codec NAME           3d.exe on NAME.3d, then every module of
 #                                 NAME (MODULES below) must verify
-#   prove.sh refused NAME SED [WALK [walk]]
-#                                 SED applied to NAME.WALK.fst (Scan, Step,
-#                                 Frames, Index, or each with Ox): the walk and
-#                                 Flat verify, its proof must not; with walk,
-#                                 the walk itself must not
+#   prove.sh refused NAME SED WALK [walk]
+#                                 SED applied to NAME.WALK.fst (Step, Frames,
+#                                 Index, or each with Ox): the walk and Flat
+#                                 verify, its proof must not; with walk, the
+#                                 walk itself must not
 #   prove.sh prune USED...        remove from the cache all but the entries
 #                                 the USED files list
 #
@@ -91,10 +91,10 @@ schema() {
   echo "$out"
 }
 
-# The modules of a codec, in the order F* checks them: the fold and its
-# proof, then the step functions and theirs.
-MODULES="Scan.fst Flat.fsti Flat.fst Proof.fsti Proof.fst Visitor.fsti
-  Step.fst StepProof.fsti StepProof.fst OxScan.fst OxProof.fsti OxProof.fst
+# The modules of a codec, in the order F* checks them: the reading, then
+# the step functions and their proofs, then the walks of a frame and theirs.
+MODULES="Flat.fsti Flat.fst Visitor.fsti
+  Step.fst StepProof.fsti StepProof.fst
   OxStep.fst OxStepProof.fsti OxStepProof.fst
   Frames.fst FramesProof.fsti FramesProof.fst Index.fst IndexProof.fsti IndexProof.fst
   OxFrames.fst OxFramesProof.fsti OxFramesProof.fst
@@ -128,7 +128,7 @@ codec)
   USED=$HERE/used.$2
   : >"$USED"
   out=$(schema "$2")
-  dir=$(work "$2" "" Scan)
+  dir=$(work "$2" "" Step)
   # An interface is checked on its own, so that its checked file is kept.
   for m in $MODULES; do
     verify "$dir/$2.$m" "$dir" "$out"
@@ -139,10 +139,8 @@ refused)
   USED=$HERE/used.$2
   : >"$USED"
   out=$(schema "$2")
-  walk=${4:-Scan}
+  walk=$4
   case $walk in
-  Scan) needed="Scan.fst Flat.fsti Flat.fst Proof.fsti" proof=Proof ;;
-  OxScan) needed="OxScan.fst Flat.fsti Flat.fst OxProof.fsti" proof=OxProof ;;
   Step | OxStep | Frames | OxFrames | Index | OxIndex)
     proof=${walk}Proof
     needed="Visitor.fsti $walk.fst Flat.fsti Flat.fst $proof.fsti"

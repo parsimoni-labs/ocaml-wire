@@ -1052,7 +1052,8 @@ let pp_frame_walk ?trace ~frame ~index s m =
         m body;
       frame := Some { name = cut; params; need })
 
-let rendered ?(fold = "fold") ?fields c ~num write =
+(* The F* fold is named [fold_step], as the tree test reads it. *)
+let rendered ?fields c ~num write =
   let plan = scan_plan c in
   no_slots plan;
   let selected = selected plan fields in
@@ -1062,7 +1063,7 @@ let rendered ?(fold = "fold") ?fields c ~num write =
     let s =
       {
         plan;
-        fold;
+        fold = "fold_step";
         selected;
         m = scan_mode ~note plan ~num selected;
         ppf;
@@ -1098,21 +1099,15 @@ let rendered ?(fold = "fold") ?fields c ~num write =
     frame;
   }
 
-let fstar ?fields c =
-  rendered ?fields c ~num:Fstar (fun ~trace ~frame:_ s -> pp_fold ~trace s)
-
 let fstar_step ?fields ~step c =
-  rendered ~fold:"fold_step" ?fields c ~num:Fstar64 (fun ~trace ~frame:_ s ->
+  rendered ?fields c ~num:Fstar64 (fun ~trace ~frame:_ s ->
       pp_step_within ~trace s step)
 
-let fstar_ox ?fields c =
-  rendered ?fields c ~num:Fstar_u (fun ~trace ~frame:_ s -> pp_fold ~trace s)
-
 let fstar_ox_step ?fields ~step c =
-  rendered ~fold:"fold_step" ?fields c ~num:Fstar_u (fun ~trace ~frame:_ s ->
+  rendered ?fields c ~num:Fstar_u (fun ~trace ~frame:_ s ->
       pp_step_within ~trace s step)
 
 let fstar_frame ?fields ~ox ~index ~step c =
-  rendered ~fold:"fold_step" ?fields c
+  rendered ?fields c
     ~num:(if ox then Fstar_u else Fstar64)
     (fun ~trace ~frame s -> pp_frame_walk ~trace ~frame ~index s step)

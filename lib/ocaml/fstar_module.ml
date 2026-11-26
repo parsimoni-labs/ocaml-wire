@@ -5,12 +5,12 @@ open Emitter
 
 (* {1 The F* modules of a codec}
 
-   [<M>.Scan] is the scanner's [fold] as the emitter writes it in F*.
    [<M>.Flat] reads the record field by field, as the 3D projection of the
    codec lays it out, and proves that reading equal to the parser 3d.exe
    writes for the projection, [<M>.parser____<S>]: it depends on the schema
-   alone. [<M>.Proof] proves [fold] equal to that parser on the bytes of its
-   window, through the reading. *)
+   alone. The walks of a fold with a visitor, as the emitter writes them in
+   F*, are proved equal to that parser on the bytes of their window, through
+   the reading. *)
 
 (* {2 The record as 3D lays it out} *)
 
@@ -590,31 +590,12 @@ type walk = { ox : bool }
 
 let stock = { ox = false }
 let oxcaml = { ox = true }
-let scan_name w = if w.ox then "OxScan" else "Scan"
-let proof_name w = if w.ox then "OxProof" else "Proof"
 let step_name w = if w.ox then "OxStep" else "Step"
 let step_proof_name w = if w.ox then "OxStepProof" else "StepProof"
 let scanner_name w = if w.ox then "OxCaml scanner" else "scanner"
 
-(* The rules a proof poses, and the tactic that poses them: those of the
-   [int64] masks too where the walk holds values as [int64] or [int64_u]. *)
-let tables w = if w.ox then "tables64" else "tables"
-let unfold w = if w.ox then "unfold_step" else "unfold_scan"
-
 (* The type of a position of the walk: an [int64_u] on OxCaml. *)
 let position w = if w.ox then "P.int64" else "P.int"
-
-let scan_module ?(walk = stock) ~codec ~m (scan : Scan_module.fstar) =
-  Fmt.str "%a%s"
-    (fun ppf () ->
-      header ppf ~codec
-        ~m:(m ^ "." ^ scan_name walk)
-        (Fmt.str "the fold of its %s, written as F*" (scanner_name walk));
-      Fmt.pf ppf "module P = WireGen.OCaml@\n@\n";
-      if Record_module.uses scan.body "mask32" then
-        Fmt.pf ppf "let mask32 = P.to_int 0xFFFFFFFF@\n@\n";
-      Fmt.pf ppf "type valid_t (r:Type) = %s@\n@\n" (valid_type scan))
-    () scan.body
 
 (* The steps that write out the type of the value 3d.exe's parser builds,
    but for the types of [EverParse3d.Prelude]. *)
@@ -730,28 +711,6 @@ let flat_implementation ~codec ~m ~tag ~scan items =
         m)
     ()
 
-let theorem =
-  "(* The scanner's fold rejects a bad window, and on a good one answers what\n\
-  \   3d.exe's parser answers on the window's bytes. *)\n\
-   val fold_is_3d (#r:Type) (buf:P.buf) (off len:P.int) (invalid:unit -> r) \
-   (valid:valid_t r)\n\
-  \  : Lemma (fold buf off len invalid valid ==\n\
-  \           (if off < 0 || len < 0 || off + len > P.length buf then invalid ()\n\
-  \            else Flat.answer invalid valid (Flat.spec (Seq.slice buf off \
-   (off + len)))))\n"
-
-let proof_interface ?(walk = stock) ~codec ~m () =
-  Fmt.str "%a%s"
-    (fun ppf () ->
-      header ppf ~codec
-        ~m:(m ^ "." ^ proof_name walk)
-        (Fmt.str "that the fold of its %s is the parser 3d.exe writes"
-           (scanner_name walk));
-      Fmt.pf ppf
-        "open %s.%s@\nmodule P = WireGen.OCaml@\nmodule Flat = %s.Flat@\n@\n" m
-        (scan_name walk) m)
-    () theorem
-
 (* The identifiers of [text] that are not qualified by a module. *)
 let identifiers text =
   let n = String.length text in
@@ -841,7 +800,7 @@ let loads text =
 
 (* A fact Z3 proves on its own: for every position it reads at, each load
    inside the buffer, [fact] holds. It fires where [about] occurs. *)
-let pp_fact ?(tables = "tables") ?(position = "P.int") ppf i ~about fact =
+let pp_fact ~position ppf i ~about fact =
   let text = about ^ " " ^ fact in
   let roots =
     List.sort_uniq compare (List.filter is_position (identifiers text))
@@ -857,11 +816,11 @@ let pp_fact ?(tables = "tables") ?(position = "P.int") ppf i ~about fact =
     (String.concat " " (List.map (fun x -> Fmt.str "(%s:%s)" x position) roots))
     (if requires = [] then "True" else String.concat " /\\ " requires);
   Fmt.pf ppf "    (ensures (%s))@\n    [SMTPat (%s)]@\n" fact about;
-  Fmt.pf ppf "  = WireGen.Tables.%s ()@\n@\n" tables
+  Fmt.pf ppf "  = WireGen.Tables.tables64 ()@\n@\n"
 
 (* The facts the walk notes: the bytes each binding that reads them holds,
    as the emitter states it, and the facts its tests rely on. *)
-let pp_facts ?tables ?position ppf (scan : Scan_module.fstar) =
+let pp_facts ~position ppf (scan : Scan_module.fstar) =
   let facts =
     List.filter_map
       (function
@@ -878,59 +837,15 @@ let pp_facts ?tables ?position ppf (scan : Scan_module.fstar) =
     \   constants). *)@\n\
      #push-options \"--z3rlimit 50 --fuel 0 --ifuel 0 --z3smtopt '(set-option \
      :smt.arith.nl false)'\"@\n";
-  List.iteri
-    (fun i (about, fact) -> pp_fact ?tables ?position ppf i ~about fact)
-    facts;
+  List.iteri (fun i (about, fact) -> pp_fact ~position ppf i ~about fact) facts;
   Fmt.pf ppf "#pop-options@\n@\n"
-
-(* [fold] is [flat] on the window's bytes, then [fold_is_3d]. *)
-let pp_theorem ppf ~walk ~m =
-  Fmt.pf ppf
-    "#push-options \"--z3rlimit 200 --fuel 1 --ifuel 1\"@\n\
-     let fold_is_flat (#r:Type) (buf:P.buf) (off len:P.int)@\n\
-    \    (invalid:unit -> r) (valid:valid_t r)@\n\
-    \  : Lemma (fold buf off len invalid valid ==@\n\
-    \           (if off < 0 || len < 0 || off + len > P.length buf then \
-     invalid ()@\n\
-    \            else Flat.flat invalid valid (Seq.slice buf off (off + len))))@\n\
-    \  = assert (fold buf off len invalid valid ==@\n\
-    \           (if off < 0 || len < 0 || off + len > P.length buf then \
-     invalid ()@\n\
-    \            else Flat.flat invalid valid (Seq.slice buf off (off + len))))@\n\
-    \      by (WireGen.Tac.%s [`%%%s.%s.fold; `%%%s.Flat.flat])@\n\
-     #pop-options@\n\
-     @\n\
-     let fold_is_3d #r buf off len invalid valid =@\n\
-    \  fold_is_flat buf off len invalid valid;@\n\
-    \  if off < 0 || len < 0 || off + len > P.length buf then ()@\n\
-    \  else Flat.flat_is_3d invalid valid (Seq.slice buf off (off + len))@\n"
-    (unfold walk) m (scan_name walk) m
-
-let proof_implementation ?(walk = stock) ~codec ~m scan =
-  Fmt.str "%a"
-    (fun ppf () ->
-      header ppf ~codec
-        ~m:(m ^ "." ^ proof_name walk)
-        (Fmt.str "that the fold of its %s is the parser 3d.exe writes"
-           (scanner_name walk));
-      Fmt.pf ppf
-        "open WireGen.Lib@\n\
-         open WireGen.Defs@\n\
-         open %s.%s@\n\
-         module P = WireGen.OCaml@\n\
-         module Flat = %s.Flat@\n\
-         @\n"
-        m (scan_name walk) m;
-      pp_facts ~tables:(tables walk) ~position:(position walk) ppf scan;
-      pp_theorem ppf ~walk ~m)
-    ()
 
 (* {2 The step functions}
 
    [<M>.Visitor] is the module the step functions call by name, [<M>.Step]
    their walk as the emitter writes it, values held as [int64], and
-   [<M>.StepProof] proves it equal to 3d.exe's parser as [<M>.Proof] does
-   [fold], through the same reading. *)
+   [<M>.StepProof] proves it equal to 3d.exe's parser, through the
+   reading. *)
 
 (* The name the step functions call their module by. *)
 let step = "S"
@@ -1090,18 +1005,14 @@ let step_proof_implementation ?(walk = stock) ~codec ~m scan =
          module Flat = %s.Flat@\n\
          @\n"
         m (step_name walk) m m;
-      pp_facts ~tables:"tables64" ~position:(position walk) ppf scan;
+      pp_facts ~position:(position walk) ppf scan;
       pp_step_theorem ppf ~walk ~m)
     ()
 
 (* The modules of a walk: its code, and its proofs. *)
-let walk_modules ~walk ~codec ~scan ~stepped =
+let walk_modules ~walk ~codec ~stepped =
   let file name ext = Fmt.str "%s.%s.%s" codec name ext in
   [
-    (file (scan_name walk) "fst", scan_module ~walk ~codec ~m:codec scan);
-    (file (proof_name walk) "fsti", proof_interface ~walk ~codec ~m:codec ());
-    ( file (proof_name walk) "fst",
-      proof_implementation ~walk ~codec ~m:codec scan );
     (file (step_name walk) "fst", step_module ~walk ~codec ~m:codec stepped);
     ( file (step_proof_name walk) "fsti",
       step_proof_interface ~walk ~codec ~m:codec stepped );
@@ -1223,7 +1134,7 @@ let frame_proof_implementation ~walk ~index ~need ~codec ~m scan =
          module Flat = %s.Flat@\n\
          @\n"
         m (frame_name ~index walk) m m;
-      pp_facts ~tables:"tables64" ~position:(position walk) ppf scan;
+      pp_facts ~position:(position walk) ppf scan;
       let call, stop = frame_call scan in
       Fmt.pf ppf
         "#push-options \"--z3rlimit 200 --fuel 1 --ifuel 1\"@\n\
@@ -1262,9 +1173,7 @@ let frame_modules ~walk ~index ~codec scan =
   ]
 
 let modules ?fields ~codec c =
-  let scan = Scan_module.fstar ?fields c in
   let stepped = Scan_module.fstar_step ?fields ~step c in
-  let ox_scan = Scan_module.fstar_ox ?fields c in
   let ox_stepped = Scan_module.fstar_ox_step ?fields ~step c in
   let st = Gen.to_struct c in
   if st.params <> [] || Option.is_some st.where then
@@ -1274,12 +1183,14 @@ let modules ?fields ~codec c =
   let items = layout None st.fields in
   let tag = "Wire" ^ st.name in
   [
-    (codec ^ ".Flat.fsti", flat_interface ~codec ~m:codec ~tag ~scan items);
-    (codec ^ ".Flat.fst", flat_implementation ~codec ~m:codec ~tag ~scan items);
+    ( codec ^ ".Flat.fsti",
+      flat_interface ~codec ~m:codec ~tag ~scan:stepped items );
+    ( codec ^ ".Flat.fst",
+      flat_implementation ~codec ~m:codec ~tag ~scan:stepped items );
     (codec ^ ".Visitor.fsti", visitor_interface ~codec ~m:codec stepped);
   ]
-  @ walk_modules ~walk:stock ~codec ~scan ~stepped
-  @ walk_modules ~walk:oxcaml ~codec ~scan:ox_scan ~stepped:ox_stepped
+  @ walk_modules ~walk:stock ~codec ~stepped
+  @ walk_modules ~walk:oxcaml ~codec ~stepped:ox_stepped
   @ List.concat_map
       (fun walk ->
         List.concat_map

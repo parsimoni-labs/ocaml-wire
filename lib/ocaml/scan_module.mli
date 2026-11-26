@@ -81,30 +81,23 @@ type fstar = {
   handed_out : output list;
   frame : frame option;
 }
-(** The F* rendering of a scanner's [fold]: its text, what its walk states of
-    each binding, the outputs it hands out and, for the walk of a frame, the
-    function it is. *)
-
-val fstar : ?fields:string list -> 'a Wire.Codec.t -> fstar
-(** [fstar ?fields c] is the F* rendering of [fold] in the scanner of [c]: the
-    walk of the OCaml one, with in place each function the OCaml one cuts out.
-    Raises {!Planner.Unsupported} on a codec whose walk needs a slot. *)
+(** The F* rendering of a fold: its text, what its walk states of each binding,
+    the outputs it hands out and, for the walk of a frame, the function it is.
+*)
 
 val fstar_step : ?fields:string list -> step:string -> 'a Wire.Codec.t -> fstar
-(** [fstar_step ?fields ~step c] is {!fstar} for [fold_step] and
+(** [fstar_step ?fields ~step c] is the F* rendering of [fold_step] and
     [fold_step_within], the fold of [c] named [fold_step] whose visitor is the
     module [step], with values in [int64]: they call [step]'s [invalid] and
-    [valid] by name. *)
-
-val fstar_ox : ?fields:string list -> 'a Wire.Codec.t -> fstar
-(** [fstar_ox ?fields c] is {!fstar} for the [fold] of the OxCaml scanner of
-    [c], whose values and positions are [int64_u], written as their 64-bit
-    patterns. *)
+    [valid] by name. It is the walk of the OCaml one, with in place each
+    function the OCaml one cuts out. Raises {!Planner.Unsupported} on a codec
+    whose walk needs a slot. *)
 
 val fstar_ox_step :
   ?fields:string list -> step:string -> 'a Wire.Codec.t -> fstar
 (** [fstar_ox_step ?fields ~step c] is {!fstar_step} for the OxCaml scanner of
-    [c]. *)
+    [c], whose values and positions are [int64_u], written as their 64-bit
+    patterns. *)
 
 val fstar_frame :
   ?fields:string list ->

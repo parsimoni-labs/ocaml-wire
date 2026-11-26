@@ -126,7 +126,7 @@ let () =
           WireGen.OCaml\n";
          "   at the literal operands the emitter prints (a shift by 56, a mask\n";
          "   0xff), so Z3 matches them on the code as written. A proof poses\n";
-         "   [tables ()]. *)\n\n";
+         "   [tables64 ()]. *)\n\n";
          "open WireGen.Lib\nmodule P = WireGen.OCaml\n\n";
          "let pow2_table () : Lemma (\n    ";
          pw;

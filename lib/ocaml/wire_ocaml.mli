@@ -281,31 +281,27 @@ val fstar :
   codec:string ->
   'r Wire.Codec.t ->
   (string * string) list
-(** [fstar ?fields ~codec c] is the F* proof that the [fold] of
-    [to_ml (v ~folds:[ fold ?outputs:fields "fold" ] c)] answers what the parser
-    EverParse writes for the 3D projection of [c] answers on the same bytes:
-    each F* file of the proof, by name. [<codec>.Scan.fst] is that [fold], from
-    the walk that writes the OCaml, its operations and loads written as calls
-    into the primitives [WireGen.OCaml]; [<codec>.Flat.fst] reads the record
-    field by field and proves that reading equal to the parser;
-    [<codec>.Proof.fst] proves [fold_is_3d]: on a window inside the buffer,
-    [fold buf off len ~invalid ~valid] is [valid] applied to the outputs of the
-    value the parser reads from the window's bytes, or [invalid ()] where it
-    reads none. [<codec>.Step.fst] is [fold_step] and [fold_step_within] of the
-    same module with a fold [fold "fold_step"] whose visitor is [s.ml]
-    ({!to_ml}), values held as [int64], calling the module [<codec>.Visitor],
-    which [<codec>.Visitor.fsti] declares and leaves abstract;
-    [<codec>.StepProof.fst] proves [fold_step_is_3d], the same statement for
-    [fold_step buf off len init], with [S.invalid init] and [S.valid init] given
-    each output as its [int64]. [<codec>.OxScan], [<codec>.OxProof],
-    [<codec>.OxStep] and [<codec>.OxStepProof] are the same of that module for
-    [~target:`OxCaml], each [int64_u] written as its 64-bit pattern.
-    [<codec>.Frames] and [<codec>.Index] (and [<codec>.OxFrames],
-    [<codec>.OxIndex]) are the walks of a frame of the loops of
-    [fold_step_frames] and [fold_step_index], each a function whose parameters
-    are typed with what the loop ensures of them, and their [Proof] modules
-    prove [frame_is_3d]: such a walk answers what the parser answers on the
-    frame's bytes.
+(** [fstar ?fields ~codec c] is the F* proof that the fold [fold_step] of
+    [to_ml ~visitors:[ ("fold_step", "s.ml") ] (v ~folds:[ fold ?outputs:fields
+     "fold_step" ] c)] answers what the parser EverParse writes for the 3D
+    projection of [c] answers on the same bytes: each F* file of the proof, by
+    name. [<codec>.Step.fst] is [fold_step] and [fold_step_within], from the
+    walk that writes the OCaml, values held as [int64], its operations and loads
+    written as calls into the primitives [WireGen.OCaml], calling the module
+    [<codec>.Visitor], which [<codec>.Visitor.fsti] declares and leaves
+    abstract; [<codec>.Flat.fst] reads the record field by field and proves that
+    reading equal to the parser; [<codec>.StepProof.fst] proves
+    [fold_step_is_3d]: on a window inside the buffer,
+    [fold_step buf off len init] is [S.valid init] applied to the outputs of the
+    value the parser reads from the window's bytes, each as its [int64], or
+    [S.invalid init] where it reads none. [<codec>.OxStep] and
+    [<codec>.OxStepProof] are the same of that module for [~target:`OxCaml],
+    each [int64_u] written as its 64-bit pattern. [<codec>.Frames] and
+    [<codec>.Index] (and [<codec>.OxFrames], [<codec>.OxIndex]) are the walks of
+    a frame of the loops of [fold_step_frames] and [fold_step_index], each a
+    function whose parameters are typed with what the loop ensures of them, and
+    their [Proof] modules prove [frame_is_3d]: such a walk answers what the
+    parser answers on the frame's bytes.
 
     The proof is checked with the F* and Z3 that ship with EverParse, against
     the F* module [codec] that 3d.exe writes from the [.3d] of

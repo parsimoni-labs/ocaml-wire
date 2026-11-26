@@ -48,34 +48,6 @@ let unfold_flat (ns:list string) : T.Tac unit =
   T.norm [delta_only interp; delta_namespace ns; zeta_full; iota; primops];
   T.smt ()
 
-(* The scanner's tests, each split into its two branches down to the
-   answers, the test rewritten to its value in each: Z3 proves each answer
-   equal to the reading on the path that leads to it, so that a query holds
-   one path, not the whole walk. *)
-let rec split_tests () : T.Tac unit =
-  match T.cur_formula () with
-  | T.Comp (T.Eq _) l _ -> (
-      match T.inspect l with
-      | T.Tv_Match c _ _ ->
-          T.cases_bool c;
-          T.iseq [ branch; branch ]
-      | _ -> T.smt ())
-  | _ -> T.smt ()
-
-and branch () : T.Tac unit =
-  T.or_else
-    (fun () -> let h = T.implies_intro () in T.grewrite_eq h)
-    T.idtac;
-  T.norm [iota];
-  split_tests ()
-
-(* For a Proof lemma: the rendering against the Flat reading, with the
-   rules of WireGen.OCaml at the emitter's literals. *)
-let unfold_scan (names:list string) : T.Tac unit =
-  ignore (T.pose_lemma (`WireGen.Tables.tables ()));
-  T.norm [delta_only names; zeta; iota; primops];
-  split_tests ()
-
 (* A query of one path of a walk whose values are [int64]: no fuel, since
    the walk and the reading are unfolded already, and linear arithmetic,
    since its values are bytes and bits at constant offsets. *)
@@ -115,8 +87,9 @@ let rec congruence () : T.Tac unit =
       else smt_path ()
   | _ -> smt_path ()
 
-(* [split_tests] on both sides: the walk's tests and the reading's, so that
-   a query holds one path through both. Where the two answer alike, each
+(* The walk's tests and the reading's, each split into its two branches down
+   to the answers, the test rewritten to its value in each, so that a query
+   holds one path through both, not the whole walk. Where the two answer alike, each
    output is a query of its own; where they do not, Z3 refutes the path. No
    query holds all the outputs of a record at once, which Z3 proves only by
    the luck of its search when the record has many (IPv4's thirteen). The
@@ -139,9 +112,10 @@ and path (names:list string) () : T.Tac unit =
   T.norm [delta_only names; zeta; iota; primops];
   split_paths names
 
-(* The same for a walk whose values are [int64] or [int64_u] (the step
-   walk, the OxCaml scanner, the walks of a frame): with the rules of its
-   masks too, and each path split through the reading. *)
+(* For a proof of a walk, whose values are [int64] or [int64_u] (the step
+   walk, on OCaml or OxCaml, the walks of a frame), against the Flat reading:
+   with the rules of WireGen.OCaml at the emitter's literals and of its
+   masks, and each path split through the reading. *)
 let unfold_step (names:list string) : T.Tac unit =
   ignore (T.pose_lemma (`WireGen.Tables.tables64 ()));
   T.norm [delta_only names; zeta; iota; primops];
