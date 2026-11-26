@@ -15,6 +15,12 @@
   `Codec.validate_struct` and the readers of `Codec.field_readers`: match on
   it where the call raised (#492, #PR, @samoht)
 
+- The reader `Wire.Codec.get` stages answers `('a, Wire.Error.t) result`: a
+  field the buffer cuts, a closed enum outside its cases, a lookup past its
+  table or an action that aborts is the error `decode` gives the field, not
+  an exception. Match on `read buf off` where it gave the value; a negative
+  offset still raises `Invalid_argument` (#PR, @samoht)
+
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
   call a sub-codec's constructor on a record it then rejects, so a
   constructor should only build a value: count or log after `decode` returns
@@ -118,8 +124,10 @@
   same names (`check`, `ok`, `get`). The buffer and the codec are named by
   types, so a view is read only in the buffer it was checked in and only by
   the fields of its codec. Reading the Ethernet, IPv4 and TCP headers of a
-  packet this way takes about 530 instructions and allocates nothing (#435,
-  #496, #525, @samoht)
+  packet this way takes about 530 instructions and allocates nothing.
+  `View.field` reads a field with no check; `View.checked_field` reads any
+  other as `Codec.get` does and answers its error, so no read raises on bytes
+  written after the check (#435, #496, #525, #PR, @samoht)
 
 - `Wire.Codec.View.enter`: reach a sub-record of a checked view, such as the
   IPv4 packet of an Ethernet frame, without checking it again. Make the
@@ -173,7 +181,10 @@
 
 - A generated module checks a record once (`check`, `ok`, `get`), then reads
   a field with its accessor or writes one with `set_<field>`, with no bounds
-  check and no allocation (#442, #492, #493, #562, @samoht)
+  check and no allocation. An accessor never raises: a field that bytes
+  written after the check move out of the buffer reads as absent, and
+  `Get.<field>` answers a result as `Wire.Codec.get` does (#442, #492, #493,
+  #562, #PR, @samoht)
 
 - A generated module of constant size checks its record at an offset,
   `check b length off`, as `Wire.Codec.View.check` does; any other shape
