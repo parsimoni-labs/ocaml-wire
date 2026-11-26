@@ -1,37 +1,35 @@
-(** The Rust backend of the differential fuzzer: a module {!Wire_rust} generates
-    from a codec, compiled into a static library and compared with the codec on
-    the same inputs.
+(** The Rust backend of the differential fuzzer: the module {!Wire_rust}
+    generates from a codec, compiled into a static library and compared with the
+    codec on the same inputs, errors exactly. *)
 
-    Rust code reports a refusal as a value, not as the codec's exception, so
-    both sides are compared on what they decide: the bytes read or written, or
-    which kind of error, at which field and offset. *)
+type case = {
+  id : int;  (** Its number in the library. *)
+  full : string list;  (** The outputs of its fold [full], in order. *)
+  selected : string list;  (** The outputs of its fold [selected]. *)
+  checks : bool;  (** It has the fold [checks], of no output. *)
+  fixed : bool;  (** Its codec has a constant size. *)
+  flat : bool;  (** Its setters write every byte of the record. *)
+}
+(** A generated module. *)
 
-(** How a field's value comes back from Rust: an integer, a bitfield (which also
-    has its word getter), or a byte array of that length. *)
-type kind = Int | Bits | Bytes of int
+val folds : case -> Diff_ocaml.scan_ops list
+(** [folds m] is each fold of [m] as a scanner, through its one frame, its
+    frames of a stride and its index. *)
 
-type field = { name : string; kind : kind }
-(** A field of a generated module. *)
+val views : 'r Wire.Codec.t -> case -> Diff_ocaml.scan_ops
+(** [views c m] is [m]'s check and accessors, read as {!Diff_ocaml.view_scan}
+    reads the OCaml module's, against the codec [c] and the outputs of [m]'s
+    fold {!field-full}. *)
 
-type case = { id : int; size : int; fields : field array }
-(** A generated module: its number in the library, the record's size and its
-    fields in order. *)
-
-type scan = { scan_id : int; variant : string; outputs : string list }
-(** A scanner {!Wire_rust.scanner} generates: its number in the library, which
-    outputs it selects (["full"], ["selected"] or ["validate"], as the OCaml
-    backend's) and their names in order. *)
-
-val scan_ops : scan -> Diff_ocaml.scan_ops
-(** [scan_ops s] runs [s]'s [decode] on a frame for {!Diff_ocaml.check_scan},
-    which compares its acceptance and outputs with the codec. A negative offset
-    or length is refused, as the OCaml scanner refuses it. *)
+val values : 'r Wire.Codec.t -> case -> Diff_ocaml.scan_ops
+(** [values c m] is [m]'s [decode], [encode], [size] and [validate], compared as
+    {!Diff_ocaml.values_scan} compares the OCaml module's, errors exactly. *)
 
 val check : string -> Fuzz_gen.packed -> case -> bytes -> unit
-(** [check label p case buf] compares [case], generated from [p]'s codec, with
-    the codec on [buf], at the offsets of {!Diff_ocaml.check} that are not
-    negative (a Rust offset is a [usize]) and at [max_int]: decode and validate,
-    every getter and bitfield word, encode into buffers around the record, the
-    setters rebuilding the record, and [Valid::at] with its reads. At the last
-    offsets a [usize] holds, every read must find the buffer too short. Fails
-    with {!Alcobar.failf}. *)
+(** [check label p m buf] compares [m], generated from [p]'s codec of constant
+    size, with the codec on [buf] at offsets from 0 to past its end: validate
+    and decode give the same error or the same record, the check and each
+    accessor read what {!Wire.Codec.validate} and {!Wire.Codec.get} read, encode
+    writes the same bytes into buffers around the record or both refuse, the
+    setters rebuild a flat record, and at the last offsets a [usize] holds every
+    decoder finds the buffer too short. Fails with {!Alcobar.failf}. *)
