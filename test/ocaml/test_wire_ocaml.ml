@@ -1402,9 +1402,8 @@ let test_shared_words () =
    them, the payload's bound checked once before the dispatch on the protocol
    and hoisted in each case, the frame loop's shape, in the step functions the
    words the Ethernet and IPv4 headers share, and the TCP header's base.
-   Collecting them writes the
-   scanner it describes, which examples/generated/stack.ml pins, and leaves the
-   next one written unchanged. *)
+   Collecting them writes the scanner it describes and leaves the next one
+   written unchanged. *)
 let test_decisions () =
   let open Wire_ocaml.Plan in
   let c = Packet_stack.codec in

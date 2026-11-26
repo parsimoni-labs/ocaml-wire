@@ -46,97 +46,25 @@
 
 (** {1:scans Scans} *)
 
-val fold :
-  bytes ->
-  int ->
-  int ->
-  invalid:(unit -> 'a) ->
-  valid:
-    (ether_type:int ->
-    ipv4_present:bool ->
-    ipv4_version:int ->
-    ipv4_ihl:int ->
-    ipv4_dscp:int ->
-    ipv4_ecn:int ->
-    ipv4_total_length:int ->
-    ipv4_identification:int ->
-    ipv4_flags:int ->
-    ipv4_fragment_offset:int ->
-    ipv4_ttl:int ->
-    ipv4_protocol:int ->
-    ipv4_checksum:int ->
-    ipv4_src:int ->
-    ipv4_dst:int ->
-    ipv4_tcp_present:bool ->
-    ipv4_tcp_src_port:int ->
-    ipv4_tcp_dst_port:int ->
-    ipv4_tcp_seq:int ->
-    ipv4_tcp_ack:int ->
-    ipv4_tcp_data_offset:int ->
-    ipv4_tcp_reserved:int ->
-    ipv4_tcp_flags:int ->
-    ipv4_tcp_window:int ->
-    ipv4_tcp_checksum:int ->
-    ipv4_tcp_urgent:int ->
-    ipv4_udp_present:bool ->
-    ipv4_udp_src_port:int ->
-    ipv4_udp_dst_port:int ->
-    ipv4_udp_length:int ->
-    ipv4_udp_checksum:int ->
-    ipv4_opaque_present:bool ->
-    'a) ->
-  'a
-(** [fold buf off len ~invalid ~valid] is [valid] applied to the outputs of the
-    record at [off] in the [len] bytes there, or [invalid ()] if the record or
-    the bounds are bad. *)
+val count_tcp : bytes -> int -> int -> init:Count_tcp.t -> Count_tcp.t
+(** [count_tcp buf off len ~init] is [Count_tcp.valid init] applied to the
+    outputs of the record at [off] in the [len] bytes there, each integer output
+    an [int64], or [Count_tcp.invalid init] if the record or the bounds are bad,
+    with no closure built. It hands out [ipv4_tcp_present]. *)
 
-val fold_frames :
-  bytes ->
-  int ->
-  int ->
-  stride:int ->
-  init:'a ->
-  invalid:('a -> 'a) ->
-  valid:
-    ('a ->
-    ether_type:int ->
-    ipv4_present:bool ->
-    ipv4_version:int ->
-    ipv4_ihl:int ->
-    ipv4_dscp:int ->
-    ipv4_ecn:int ->
-    ipv4_total_length:int ->
-    ipv4_identification:int ->
-    ipv4_flags:int ->
-    ipv4_fragment_offset:int ->
-    ipv4_ttl:int ->
-    ipv4_protocol:int ->
-    ipv4_checksum:int ->
-    ipv4_src:int ->
-    ipv4_dst:int ->
-    ipv4_tcp_present:bool ->
-    ipv4_tcp_src_port:int ->
-    ipv4_tcp_dst_port:int ->
-    ipv4_tcp_seq:int ->
-    ipv4_tcp_ack:int ->
-    ipv4_tcp_data_offset:int ->
-    ipv4_tcp_reserved:int ->
-    ipv4_tcp_flags:int ->
-    ipv4_tcp_window:int ->
-    ipv4_tcp_checksum:int ->
-    ipv4_tcp_urgent:int ->
-    ipv4_udp_present:bool ->
-    ipv4_udp_src_port:int ->
-    ipv4_udp_dst_port:int ->
-    ipv4_udp_length:int ->
-    ipv4_udp_checksum:int ->
-    ipv4_opaque_present:bool ->
-    'a) ->
-  'a
-(** [fold_frames buf off len ~stride ~init ~invalid ~valid] folds [valid] with
-    the outputs of each record, or [invalid], over the [len / stride] frames of
-    [stride] bytes at [off], each checked on its own, from [init]. Raises
-    [Invalid_argument] if [stride] is not positive or the bounds are bad. *)
+val count_tcp_index :
+  bytes -> offs:int array -> lens:int array -> init:Count_tcp.t -> Count_tcp.t
+(** [count_tcp_index buf ~offs ~lens ~init] folds {!val-count_tcp} over the
+    frames of [lens.(i)] bytes at [offs.(i)], in order, from [init]: a frame
+    whose bounds are bad gives [Count_tcp.invalid]. The length of [buf] is read
+    once. Raises [Invalid_argument] if [offs] and [lens] differ in length. *)
+
+val count_tcp_frames :
+  bytes -> int -> int -> stride:int -> init:Count_tcp.t -> Count_tcp.t
+(** [count_tcp_frames buf off len ~stride ~init] folds {!val-count_tcp} over the
+    [len / stride] frames of [stride] bytes at [off], each checked on its own,
+    from [init]. Raises [Invalid_argument] if [stride] is not positive or the
+    bounds are bad. *)
 
 (** {1:views Views} *)
 
