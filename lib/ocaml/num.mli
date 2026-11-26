@@ -7,6 +7,9 @@
     [int64_u] as its 64-bit pattern. *)
 type t = Tagged | Boxed | Unboxed | Fstar | Fstar64 | Fstar_u
 
+val pp : Format.formatter -> t -> unit
+(** [pp ppf t] prints the name of [t]. *)
+
 val rep : t -> t
 (** [rep num] is how [num] holds values: {!constructor-Tagged} for
     {!constructor-Fstar}, {!constructor-Boxed} for {!constructor-Fstar64},

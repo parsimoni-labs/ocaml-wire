@@ -12,6 +12,16 @@ open Planner
    F* primitives. *)
 type t = Tagged | Boxed | Unboxed | Fstar | Fstar64 | Fstar_u
 
+let pp ppf t =
+  Fmt.string ppf
+    (match t with
+    | Tagged -> "Tagged"
+    | Boxed -> "Boxed"
+    | Unboxed -> "Unboxed"
+    | Fstar -> "Fstar"
+    | Fstar64 -> "Fstar64"
+    | Fstar_u -> "Fstar_u")
+
 (* How [num] holds values, whether written as OCaml or as F*. *)
 let rep = function
   | Fstar -> Tagged
