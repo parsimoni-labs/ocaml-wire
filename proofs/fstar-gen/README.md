@@ -162,7 +162,10 @@ masks of its unsigned words), `WireGen.Tables` (the
 rules of `WireGen.OCaml` at the literals the emitter prints, which
 `scripts/fstar-gen/tables.exe` writes) and `WireGen.Tac` (the tactics
 that unfold a 3D denotation and the scanner, and split the scanner's
-proof at each of its tests, so that Z3 checks one path at a time). It uses
+proof at each of its tests, so that Z3 checks one path at a time; for a
+walk on `int64` or `int64_u`, at the reading's tests too, each output of a
+path that accepts a query of its own, with no fuel and linear arithmetic
+only). It uses
 `Plan.Word` from `../fstar`, and `Plan.Values`, whose `int64` operations
 `WireGen.Defs` proves those of `WireGen.OCaml` (`int64_add_is_plan` and
 the others), so what is assumed of `Int64` is stated once; a value of the
@@ -382,9 +385,15 @@ of the step walk alone: its one large query is that sensitive to the rules
 in scope, here those of the OxCaml loads, which `WireGen.OCaml` carries
 because the OxCaml scanner needs them where it is checked (a size read
 through a byte of a 16-bit load is bounded by them). IPv4's `OxProof`
-(98 s) is as sensitive: with these rules in `WireGen.Defs` instead, or
-with a lemma for each field the OxCaml walk binds where it first reads it,
-it ran out a 50-minute `WIRE_PROVE_TIMEOUT`.
+was as sensitive while the path that accepts was one query of all
+thirteen outputs: 98 s here, 209 s with `--query_stats`, past 900 s in
+CI. `WireGen.Tac.unfold_step` now splits that path through the reading's
+tests and its equation into one query per output, with no fuel and
+linear arithmetic only, as are the facts of every proof module. With
+every `--z3seed` from 0 to 5 its queries take 23 to 27 s of Z3 in all,
+none over 3 s or over 2 units of rlimit; the facts that took up to 32 s
+take under 1 s. IPv4's `Flat` is not split: its one query uses 359 of
+its 400 units of rlimit, and took 1110 s on a Mac loaded to 540.
 
 The walks of a frame add four proofs per codec, `FramesProof`,
 `IndexProof` and their OxCaml twins, of 9 to 19 s of CPU each (IPv4 50 to

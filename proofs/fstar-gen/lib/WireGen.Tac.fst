@@ -76,9 +76,73 @@ let unfold_scan (names:list string) : T.Tac unit =
   T.norm [delta_only names; zeta; iota; primops];
   split_tests ()
 
-(* The same for the step walk, whose values are [int64]: with the rules of
-   its masks too. *)
+(* A query of one path of a walk whose values are [int64]: no fuel, since
+   the walk and the reading are unfolded already, and linear arithmetic,
+   since its values are bytes and bits at constant offsets. *)
+let smt_path () : T.Tac unit =
+  T.set_options "--fuel 0 --ifuel 0 --z3smtopt '(set-option :smt.arith.nl false)'";
+  T.smt ()
+
+(* [f x == g y] from [f == g] and [x == y]. *)
+let congr (#a:Type0) (#b:Type) (f g:a -> b) (x y:a)
+    (_:squash (f == g)) (_:squash (x == y))
+  : Lemma (f x == g y)
+  = ()
+
+(* Whether [l] and [r] apply one function to as many arguments, at least
+   one. *)
+let same_head (l r:T.term) : T.Tac bool =
+  let hl, al = T.collect_app l in
+  let hr, ar = T.collect_app r in
+  Cons? al && length al = length ar && T.term_eq hl hr
+
+(* An equation of two terms, by Z3 unless they are the same. *)
+let same_or_smt () : T.Tac unit =
+  match T.cur_formula () with
+  | T.Comp (T.Eq _) l r -> if T.term_eq l r then T.trefl () else smt_path ()
+  | _ -> smt_path ()
+
+(* An equation of two applications of one function, one query per pair of
+   arguments that differ; a goal of another shape goes to Z3 whole. *)
+let rec congruence () : T.Tac unit =
+  match T.cur_formula () with
+  | T.Comp (T.Eq _) l r ->
+      if T.term_eq l r then T.trefl ()
+      else if same_head l r then begin
+        T.apply_lemma (`congr);
+        T.iseq [ congruence; same_or_smt ]
+      end
+      else smt_path ()
+  | _ -> smt_path ()
+
+(* [split_tests] on both sides: the walk's tests and the reading's, so that
+   a query holds one path through both. Where the two answer alike, each
+   output is a query of its own; where they do not, Z3 refutes the path. No
+   query holds all the outputs of a record at once, which Z3 proves only by
+   the luck of its search when the record has many (IPv4's thirteen). The
+   reading is unfolded again on each branch: the normaliser leaves it folded
+   under the test of the window's bounds. *)
+let rec split_paths (names:list string) : T.Tac unit =
+  match T.cur_formula () with
+  | T.Comp (T.Eq _) l r -> (
+      match (T.inspect l, T.inspect r) with
+      | T.Tv_Match c _ _, _ | _, T.Tv_Match c _ _ ->
+          T.cases_bool c;
+          T.iseq [ path names; path names ]
+      | _ -> congruence ())
+  | _ -> smt_path ()
+
+and path (names:list string) () : T.Tac unit =
+  T.or_else
+    (fun () -> let h = T.implies_intro () in T.grewrite_eq h)
+    T.idtac;
+  T.norm [delta_only names; zeta; iota; primops];
+  split_paths names
+
+(* The same for a walk whose values are [int64] or [int64_u] (the step
+   walk, the OxCaml scanner, the walks of a frame): with the rules of its
+   masks too, and each path split through the reading. *)
 let unfold_step (names:list string) : T.Tac unit =
   ignore (T.pose_lemma (`WireGen.Tables.tables64 ()));
   T.norm [delta_only names; zeta; iota; primops];
-  split_tests ()
+  split_paths names

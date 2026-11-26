@@ -873,8 +873,11 @@ let pp_facts ?tables ?position ppf (scan : Scan_module.fstar) =
   in
   Fmt.pf ppf
     "(* What each binding of the walk holds, in bytes of the buffer, as the@\n\
-    \   emitter states it: Z3 proves each on its own. *)@\n\
-     #push-options \"--z3rlimit 50 --fuel 1 --ifuel 1\"@\n";
+    \   emitter states it: Z3 proves each on its own, from the rules alone@\n\
+    \   (no fuel) and in linear arithmetic (its offsets and masks are@\n\
+    \   constants). *)@\n\
+     #push-options \"--z3rlimit 50 --fuel 0 --ifuel 0 --z3smtopt '(set-option \
+     :smt.arith.nl false)'\"@\n";
   List.iteri
     (fun i (about, fact) -> pp_fact ?tables ?position ppf i ~about fact)
     facts;
