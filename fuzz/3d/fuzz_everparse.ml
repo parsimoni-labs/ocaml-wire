@@ -374,8 +374,7 @@ let record_spans codec env b =
   | Ok _ -> (
       match Wire.Codec.validate ?env codec b 0 with
       | Error _ -> false
-      | Ok () ->
-          Int.equal (Wire.Codec.wire_size_at ?env codec b 0) (Bytes.length b))
+      | Ok () -> Wire.Codec.wire_size_at ?env codec b 0 = Ok (Bytes.length b))
 
 (* Shapes whose accepting side the seeder cannot construct, so
    [generate_corpus] refuses rather than emit a corpus that says the same thing

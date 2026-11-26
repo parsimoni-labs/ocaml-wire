@@ -71,7 +71,7 @@ let test_dep_bslice_roundtrip () =
   (* Verify wire_size_at reads the buffer correctly *)
   Alcotest.(check int)
     "wire_size_at" 6
-    (Codec.wire_size_at dep_slice_codec buf 0);
+    (decode_ok (Codec.wire_size_at dep_slice_codec buf 0));
   let decoded = decode_ok (Codec.decode dep_slice_codec buf 0) in
   Alcotest.(check int) "roundtrip length" 4 (UInt16.to_int decoded.length);
   Alcotest.(check int) "roundtrip payload len" 4 (Bs.length decoded.payload);
@@ -260,31 +260,33 @@ let test_dep_compute_wire_size () =
   Bytes.set_uint16_be buf 0 4;
   Alcotest.(check int)
     "dep_slice compute" 6
-    (Codec.wire_size_at dep_slice_codec buf 0);
+    (decode_ok (Codec.wire_size_at dep_slice_codec buf 0));
   (* dep_slice: length=0 -> total = 2 + 0 = 2 *)
   Bytes.set_uint16_be buf 0 0;
   Alcotest.(check int)
     "dep_slice compute 0" 2
-    (Codec.wire_size_at dep_slice_codec buf 0);
+    (decode_ok (Codec.wire_size_at dep_slice_codec buf 0));
   (* trailer: length=3 -> total = 2 + 3 + 2 = 7 *)
   let buf2 = Bytes.create 7 in
   Bytes.set_uint16_be buf2 0 3;
   Alcotest.(check int)
     "trailer compute" 7
-    (Codec.wire_size_at trailer_codec buf2 0);
+    (decode_ok (Codec.wire_size_at trailer_codec buf2 0));
   (* fixed codec: compute returns fixed size without reading buffer *)
   Alcotest.(check int)
     "fixed compute"
     (Codec.wire_size simple_record_codec)
-    (Codec.wire_size_at simple_record_codec (Bytes.create 7) 0)
+    (decode_ok (Codec.wire_size_at simple_record_codec (Bytes.create 7) 0))
 
 (* [wire_size_at] reads a record's sizes from the buffer, so bytes that hold
    no size are input: it answers the end-of-input error of the bytes it reads
    a size from, and raises [Invalid_argument] only on a negative offset. *)
 let test_dep_wire_size_at_bad_bytes () =
-  let answers name codec buf off ~expected : unit =
-    ignore (Codec.wire_size_at codec buf off);
-    Alcotest.failf "%s: answered a size, expected %a" name Error.pp expected
+  let error = Alcotest.testable Error.pp Error.equal in
+  let answers name codec buf off ~expected =
+    Alcotest.(check (result int error))
+      name (Error expected)
+      (Codec.wire_size_at codec buf off)
   in
   answers "a length the buffer cuts" dep_slice_codec (Bytes.of_string "\x00") 0
     ~expected:
@@ -376,9 +378,13 @@ let test_dep_ref_size_eval () =
   in
   let buf = Bytes.create 11 in
   Bytes.set_uint8 buf 0 10;
-  Alcotest.(check int) "compute size" 11 (Codec.wire_size_at codec buf 0);
+  Alcotest.(check int)
+    "compute size" 11
+    (decode_ok (Codec.wire_size_at codec buf 0));
   Bytes.set_uint8 buf 0 0;
-  Alcotest.(check int) "compute size 0" 1 (Codec.wire_size_at codec buf 0)
+  Alcotest.(check int)
+    "compute size 0" 1
+    (decode_ok (Codec.wire_size_at codec buf 0))
 
 let signed_magnitude_seek_codec =
   let f_seek =

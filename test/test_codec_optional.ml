@@ -318,7 +318,7 @@ let check_dyn_opt_roundtrip label expected_len expected_bytes original =
     (label ^ " bytes") expected_bytes (Bytes.to_string buf);
   Alcotest.(check int)
     (label ^ " wire_size_at") expected_len
-    (Codec.wire_size_at dyn_opt_codec buf 0);
+    (decode_ok (Codec.wire_size_at dyn_opt_codec buf 0));
   let decoded = decode_ok (Codec.decode dyn_opt_codec buf 0) in
   Alcotest.(check int)
     (label ^ " flags")
@@ -366,7 +366,7 @@ let test_encode_totality () =
     Codec.encode dyn_opt_codec original buf 0;
     Alcotest.(check int)
       (label ^ " wire_size_at") len
-      (Codec.wire_size_at dyn_opt_codec buf 0);
+      (decode_ok (Codec.wire_size_at dyn_opt_codec buf 0));
     if len > 0 then
       match Codec.encode dyn_opt_codec original (Bytes.create (len - 1)) 0 with
       | () -> Alcotest.failf "%s: short buffer accepted" label

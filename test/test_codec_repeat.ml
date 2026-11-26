@@ -179,7 +179,7 @@ let test_repeat_size_of_value () =
   Codec.encode repeat_int_codec v buf 0;
   Alcotest.(check int)
     "wire_size_at" 7
-    (Codec.wire_size_at repeat_int_codec buf 0);
+    (decode_ok (Codec.wire_size_at repeat_int_codec buf 0));
   let r = decode_ok (Codec.decode repeat_int_codec buf 0) in
   Alcotest.(check (list int))
     "roundtrip"

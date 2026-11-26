@@ -258,13 +258,19 @@ let require_env ~op t = function
    measures as empty and the answer comes back quietly short. That is not a
    smaller record, it is a different verdict about the same bytes, so a codec
    with input params refuses here exactly as it does on [decode] rather than
-   answering. *)
+   answering. Bytes that hold no size are input, answered with their error; a
+   negative offset is misuse. *)
 let wire_size_at ?env:e (t : _ t) buf off =
   require_env ~op:"wire_size_at" t e;
-  match (compiled t).wire_size with
-  | Fixed n -> n
-  | Variable { compute; _ } ->
-      compute (runtime ?env:e ()) (Input_end.of_bytes buf) buf off - off
+  if off < 0 then Errors.negative_offset off
+  else
+    match (compiled t).wire_size with
+    | Fixed n -> Ok n
+    | Variable { compute; _ } -> (
+        match compute (runtime ?env:e ()) (Input_end.of_bytes buf) buf off with
+        | stop -> Ok (stop - off)
+        | exception exn when Types.is_parse_error exn ->
+            Error (Types.parse_error_of exn))
 
 (* A parametric field size resolves through [env], as it does for {!encode}.
    Without one the size stays symbolic and a field measured by it refuses

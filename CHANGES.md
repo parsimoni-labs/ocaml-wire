@@ -21,6 +21,11 @@
   an exception. Match on `read buf off` where it gave the value; a negative
   offset still raises `Invalid_argument` (#566, @samoht)
 
+- `Wire.Codec.wire_size_at` answers `(int, Wire.Error.t) result`: a length
+  field the buffer cuts is an end-of-input error, not an exception. Match on
+  the result where the call gave the size; a negative offset raises
+  `Invalid_argument` (#XXX, @samoht)
+
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
   call a sub-codec's constructor on a record it then rejects, so a
   constructor should only build a value: count or log after `decode` returns

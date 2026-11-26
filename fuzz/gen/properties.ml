@@ -139,10 +139,13 @@ let check_positive_size_metadata label g bs env =
     Alcobar.failf "%s min_wire_size = %d but canonical encoding is %d" label
       min_sz len;
   (match Wire.Codec.wire_size_at ?env g.codec bs 0 with
-  | actual ->
+  | Ok actual ->
       if actual <> len then
         Alcobar.failf "%s wire_size_at = %d but canonical encoding is %d" label
           actual len
+  | Error e ->
+      Alcobar.failf "%s wire_size_at refused a positive: %a" label Wire.Error.pp
+        e
   | exception Invalid_argument m ->
       Alcobar.failf "%s wire_size_at raised on a positive: %s" label m);
   match Wire.Codec.wire_size_opt g.codec with
@@ -160,8 +163,11 @@ let check_env_required label g bs =
   | [] -> ()
   | _ :: _ -> (
       (match Wire.Codec.wire_size_at g.codec bs 0 with
-      | n ->
+      | Ok n ->
           Alcobar.failf "%s wire_size_at answered %d with no env bound" label n
+      | Error e ->
+          Alcobar.failf "%s wire_size_at answered %a with no env bound" label
+            Wire.Error.pp e
       | exception Invalid_argument _ -> ());
       (match Wire.Codec.decode g.codec bs 0 with
       | _ -> Alcobar.failf "%s decode answered with no env bound" label
@@ -747,9 +753,9 @@ let noise_gen =
 
 let size_at g bs off =
   match Wire.Codec.wire_size_at g.codec bs off with
-  | n -> Some n
+  | Ok n -> Some n
+  | Error _ -> None
   | exception Invalid_argument _ -> None
-  | exception exn when Wire.Private.Types.is_parse_error exn -> None
 
 let pad_before pad bs =
   let k = Bytes.length pad in

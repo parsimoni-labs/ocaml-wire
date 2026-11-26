@@ -354,7 +354,9 @@ let test_four_var_codecs_embedded () =
   let len = Codec.size_of_value quad_codec v in
   let buf = Bytes.create len in
   Codec.encode quad_codec v buf 0;
-  Alcotest.(check int) "wire_size_at" len (Codec.wire_size_at quad_codec buf 0);
+  Alcotest.(check int)
+    "wire_size_at" len
+    (decode_ok (Codec.wire_size_at quad_codec buf 0));
   let a, b, c, d = decode_ok (Codec.decode quad_codec buf 0) in
   Alcotest.(check string) "a" "alpha" (Slice.to_string a.data);
   Alcotest.(check string) "b" "bravo" (Slice.to_string b.data);
@@ -381,7 +383,9 @@ let test_slice_then_array () =
   let len = Codec.size_of_value mixed_codec v in
   let buf = Bytes.create len in
   Codec.encode mixed_codec v buf 0;
-  Alcotest.(check int) "wire_size_at" len (Codec.wire_size_at mixed_codec buf 0);
+  Alcotest.(check int)
+    "wire_size_at" len
+    (decode_ok (Codec.wire_size_at mixed_codec buf 0));
   let slice, array = decode_ok (Codec.decode mixed_codec buf 0) in
   Alcotest.(check string) "slice" "slice" (Slice.to_string slice);
   Alcotest.(check string) "array" "array-data" array
@@ -404,7 +408,9 @@ let test_codec_then_array () =
   let len = Codec.size_of_value mixed_codec v in
   let buf = Bytes.create len in
   Codec.encode mixed_codec v buf 0;
-  Alcotest.(check int) "wire_size_at" len (Codec.wire_size_at mixed_codec buf 0);
+  Alcotest.(check int)
+    "wire_size_at" len
+    (decode_ok (Codec.wire_size_at mixed_codec buf 0));
   let msg, array = decode_ok (Codec.decode mixed_codec buf 0) in
   Alcotest.(check string) "msg" "message" (Slice.to_string msg.data);
   Alcotest.(check string) "array" "tail" array

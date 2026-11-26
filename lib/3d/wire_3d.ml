@@ -1152,9 +1152,10 @@ let codec_verdict ?env c buf =
   | Ok _ -> (
       match Wire.Codec.validate ?env c buf 0 with
       | Error e -> `Reject e
-      | Ok () ->
-          let n = Wire.Codec.wire_size_at ?env c buf 0 in
-          if n = Bytes.length buf then `Accept else `Resize n)
+      | Ok () -> (
+          match Wire.Codec.wire_size_at ?env c buf 0 with
+          | Error e -> `Reject e
+          | Ok n -> if n = Bytes.length buf then `Accept else `Resize n))
 
 let codec_accepts ?env c buf =
   match codec_verdict ?env c buf with `Accept -> true | _ -> false

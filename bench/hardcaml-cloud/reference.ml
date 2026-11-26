@@ -50,9 +50,12 @@ let metadata (Diff_codecs.Scan case) names maximum length bytes =
     if not scope then None
     else
       Option.bind bytes (fun b ->
-          match Wire.Codec.decode case.codec b 0 with
-          | Ok v -> Some (case.project v, Wire.Codec.wire_size_at case.codec b 0)
-          | Error _ -> None)
+          match
+            ( Wire.Codec.decode case.codec b 0,
+              Wire.Codec.wire_size_at case.codec b 0 )
+          with
+          | Ok v, Ok n -> Some (case.project v, n)
+          | Error _, _ | _, Error _ -> None)
   in
   (* A zero-byte final beat is legal; the codec decides whether an empty
      frame is valid. Nonfinal zero masks are tested by the stream lanes. *)

@@ -1735,7 +1735,7 @@ let arith_codecs =
     in
     let ok =
       match Codec.validate c buf 0 with
-      | Ok () -> Codec.wire_size_at c buf 0 = Bytes.length buf
+      | Ok () -> Codec.wire_size_at c buf 0 = Ok (Bytes.length buf)
       | Error _ -> false
       | exception Invalid_argument _ -> false
     in

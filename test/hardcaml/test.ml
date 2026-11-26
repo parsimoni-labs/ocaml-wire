@@ -33,10 +33,12 @@ let packet_tests () =
         in
         let check frame (result : Io.result) =
           let expected =
-            match Wire.Codec.decode c.codec frame 0 with
-            | Error _ -> None
-            | Ok value ->
-                Some (Wire.Codec.wire_size_at c.codec frame 0, c.project value)
+            match
+              ( Wire.Codec.decode c.codec frame 0,
+                Wire.Codec.wire_size_at c.codec frame 0 )
+            with
+            | Error _, _ | _, Error _ -> None
+            | Ok value, Ok n -> Some (n, c.project value)
           in
           Option.iter
             (fun (o : Diff_codecs.c_oracle) ->

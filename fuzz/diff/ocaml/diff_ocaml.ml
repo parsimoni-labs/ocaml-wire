@@ -514,7 +514,9 @@ let codec_value codec frame =
          codec's record is measured where it encoded it. *)
       let out = Bytes.make (Bytes.length frame) '\000' in
       Wire.Codec.encode codec x out 0;
-      Ok (Bytes.sub_string out 0 (Wire.Codec.wire_size_at codec out 0))
+      Result.map
+        (fun n -> Bytes.sub_string out 0 n)
+        (Wire.Codec.wire_size_at codec out 0)
 
 let same_result ok a b = Result.equal ~ok ~error:Wire.Error.equal a b
 
@@ -529,9 +531,8 @@ let check_decoded ~name codec frame got =
       | Error _ ->
           Alcobar.failf "%s: the module refuses %S" name (Bytes.to_string frame)
       | Ok s ->
-          let n = Wire.Codec.wire_size_at codec frame 0 in
           if
-            String.length s <> n
+            Wire.Codec.wire_size_at codec frame 0 <> Ok (String.length s)
             || Result.is_error (Wire.Codec.decode codec (Bytes.of_string s) 0)
           then
             Alcobar.failf "%s: on %S the module writes back %S" name
@@ -666,7 +667,10 @@ let scan_oracle (Reference r as ref_) oracle bounded value buf off len =
     (fun (o : Diff_codecs.c_oracle) ->
       let consumed =
         match (bounded, value) with
-        | Some b, Some _ -> Wire.Codec.wire_size_at r.codec b 0
+        | Some b, Some _ -> (
+            match Wire.Codec.wire_size_at r.codec b 0 with
+            | Ok n -> n
+            | Error _ -> -1)
         | _ -> -1
       in
       let end_, members = o.scan buf off len in
