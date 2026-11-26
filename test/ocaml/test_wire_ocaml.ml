@@ -26,22 +26,20 @@ let outcome f =
   | exception Invalid_argument m -> "invalid " ^ m
 
 (* The module of [c] and its interface, for the OCaml target unless [target]
-   says otherwise; [scanner] declares its folds, [fold] of [fields] and with
-   [step] [fold_step], whose visitor is [Step]. *)
+   says otherwise; [scanner] declares the fold [fold] of [fields], whose
+   visitor is [Step], and [decided] gives the decisions that module takes. *)
 let ml ?(target = `OCaml) ?simd ?maps c =
   Wire_ocaml.(to_ml (v ~target ?simd ?maps c))
 
 let mli ?(target = `OCaml) c = Wire_ocaml.(to_mli (v ~target c))
-let step_visitors = [ ("fold_step", "step.ml") ]
+let visitors = [ ("fold", "step.ml") ]
+let folds ?fields () = Wire_ocaml.[ fold ?outputs:fields "fold" ]
 
-let step_folds ?fields () =
-  Wire_ocaml.[ fold ?outputs:fields "fold"; fold ?outputs:fields "fold_step" ]
+let scanner ?(target = `OCaml) ?fields c =
+  Wire_ocaml.(to_ml ~visitors (v ~target ~folds:(folds ?fields ()) c))
 
-let scanner ?(target = `OCaml) ?fields ?(step = false) c =
-  if step then
-    Wire_ocaml.(
-      to_ml ~visitors:step_visitors (v ~target ~folds:(step_folds ?fields ()) c))
-  else Wire_ocaml.(to_ml (v ~target ~folds:[ fold ?outputs:fields "fold" ] c))
+let decided ?target ?fields c =
+  Wire_ocaml.Plan.decisions ?target ~folds:(folds ?fields ()) ~visitors c
 
 let rand = Random.State.make [| 7 |]
 let byte () = Char.chr (Random.State.int rand 256)
@@ -968,27 +966,22 @@ let scan_ops name fields decode =
     scan_index = None;
   }
 
+(* The answer of a fold whose visitor conses each record's outputs onto its
+   accumulator, on one record. *)
+let one = function
+  | [ answer ] -> answer
+  | answers -> Alcotest.failf "%d answers for one record" (List.length answers)
+
 (* The scanner accepts what the codec accepts when a condition, size or check
    computes near the top of its type. *)
 let test_scan_overflow () =
   let sized =
     scan_ops "S_sized" [ "n"; "body_present"; "tail" ] (fun b o n ->
-        S_sized.fold b o n
-          ~invalid:(fun () -> None)
-          ~valid:(fun ~n ~body_present ~tail ->
-            Some
-              [
-                ("n", n);
-                ("body_present", if body_present then 1 else 0);
-                ("tail", tail);
-              ]))
+        one (S_sized.fold b o n ~init:[]))
   in
   let overflow =
     scan_ops "S_overflow" [ "a"; "hi"; "lo"; "b"; "c" ] (fun b o n ->
-        S_overflow.fold b o n
-          ~invalid:(fun () -> None)
-          ~valid:(fun ~a ~hi ~lo ~b ~c ->
-            Some [ ("a", a); ("hi", hi); ("lo", lo); ("b", b); ("c", c) ]))
+        one (S_overflow.fold b o n ~init:[]))
   in
   List.iter
     (fun n ->
@@ -1023,19 +1016,7 @@ let skipped_reference =
 let test_scan_skipped () =
   let skipped =
     scan_ops "S_skipped" [ "n"; "x"; "a_present"; "a"; "b_present"; "b" ]
-      (fun b o n ->
-        S_skipped.fold b o n
-          ~invalid:(fun () -> None)
-          ~valid:(fun ~n ~x ~a_present ~a ~b_present ~b ->
-            Some
-              [
-                ("n", n);
-                ("x", x);
-                ("a_present", if a_present then 1 else 0);
-                ("a", a);
-                ("b_present", if b_present then 1 else 0);
-                ("b", b);
-              ]))
+      (fun b o n -> one (S_skipped.fold b o n ~init:[]))
   in
   List.iter
     (fun n ->
@@ -1078,17 +1059,10 @@ let test_huge_prefix () =
   ignore (ml array : string);
   let huge =
     scan_ops "S_huge" [ "flag"; "tail" ] (fun b o n ->
-        S_huge.fold b o n
-          ~invalid:(fun () -> None)
-          ~valid:(fun ~flag ~tail -> Some [ ("flag", flag); ("tail", tail) ]))
-  and step =
-    scan_ops "S_huge step" [] (fun b o n ->
-        if Int.compare (S_huge.fold_step b o n ~init:0) 0 >= 0 then Some []
-        else None)
+        one (S_huge.fold b o n ~init:[]))
   in
   List.iter
-    (fun s ->
-      Diff_ocaml.check_scan huge_reference [ huge; step ] (Bytes.of_string s))
+    (fun s -> Diff_ocaml.check_scan huge_reference [ huge ] (Bytes.of_string s))
     [ ""; "\001"; "\001\002"; String.make 64 '\001' ]
 
 (* A codec whose constant offsets overflow the native int holds more than any
@@ -1108,7 +1082,10 @@ let test_scan_deep () =
    the number of optional fields, in a run or nested, whatever it hands out.
    The test codecs nest a record per field and their output names lengthen:
    lines and words, not bytes, measure the code, a word being a run of
-   letters, digits and underscores, which a long line cannot hide. *)
+   letters, digits and underscores, which a long line cannot hide. The fold
+   writes three walks, of a record, of a frame of [fold_frames] and of a frame
+   of [fold_index], each cut into functions at places that move by a few lines
+   as it grows. *)
 let lines s = List.length (String.split_on_char '\n' s)
 
 let words s =
@@ -1125,10 +1102,9 @@ let words s =
   !n
 
 (* [n] optional fields nested inside each other that hand out every output.
-   Each target writes the walks of [fold] and [fold_frames], whose frame
-   loop copies the walk of a frame into each frame it unrolls; the OxCaml
-   budget is the one its unboxed folds needed, which no longer exist, and is
-   not tightened. Past the first four levels,
+   Each target writes the walks of [fold], [fold_frames] and [fold_index],
+   whose loops walk a frame through functions cut out of it. Past the first
+   four levels,
    whose outputs are immutable, a level costs a walk about 21 lines: its
    three slots, the bound checks and reads of its two prefixes, its
    presence, its join and the jumps to it, or the short code after it copied
@@ -1180,10 +1156,11 @@ let test_size () =
             lines scan
           in
           let s8 = size 8 and s16 = size 16 and s32 = size 32 in
-          if s32 - s16 > (2 * (s16 - s8)) + 2 then
+          if s32 - s16 > (2 * (s16 - s8)) + 6 then
             Alcotest.failf
-              "%s: 8, 16 and 32 optional fields: %d, %d and %d lines" name s8
-              s16 s32;
+              "%s, %s: 8, 16 and 32 optional fields: %d, %d and %d lines" name
+              (if target = `OCaml then "OCaml" else "OxCaml")
+              s8 s16 s32;
           if s32 > 160 * 32 then
             Alcotest.failf "%s: 32 optional fields: %d lines" name s32)
         [ `OCaml; `OxCaml ])
@@ -1223,17 +1200,17 @@ let test_nested_no_alloc () =
         else if i < 2 * stride then '\001'
         else Char.chr (Random.State.int rand 2))
   in
-  let one off = S_nested.fold_step buf off stride ~init:0 in
+  let one off = S_nested.fold buf off stride ~init:0 in
   Alcotest.(check int) "no optional field" 0 (one 0);
   Alcotest.(check int) "every optional field" 35 (one stride);
   let each () =
     let acc = ref 0 in
     for i = 0 to frames - 1 do
-      acc := S_nested.fold_step buf (i * stride) stride ~init:!acc
+      acc := S_nested.fold buf (i * stride) stride ~init:!acc
     done;
     !acc
   in
-  let batch () = S_nested.fold_step_frames buf 0 len ~stride ~init:0 in
+  let batch () = S_nested.fold_frames buf 0 len ~stride ~init:0 in
   let measured what f =
     let before = Gc.minor_words () in
     let v = Sys.opaque_identity (f ()) in
@@ -1243,18 +1220,16 @@ let test_nested_no_alloc () =
     v
   in
   Alcotest.(check int)
-    "fold_step and fold_step_frames"
-    (measured "fold_step" each)
-    (measured "fold_step_frames" batch);
+    "fold and fold_frames" (measured "fold" each)
+    (measured "fold_frames" batch);
   let offs = Array.init frames (fun i -> i * stride)
   and lens = Array.make frames stride in
-  let index () = S_nested.fold_step_index buf ~offs ~lens ~init:0 in
+  let index () = S_nested.fold_index buf ~offs ~lens ~init:0 in
   Alcotest.(check int)
-    "fold_step and fold_step_index"
-    (measured "fold_step" each)
-    (measured "fold_step_index" index);
-  match S_nested.fold_step_index buf ~offs ~lens:[| stride |] ~init:0 with
-  | _ -> Alcotest.fail "fold_step_index: offs and lens of different lengths"
+    "fold and fold_index" (measured "fold" each)
+    (measured "fold_index" index);
+  match S_nested.fold_index buf ~offs ~lens:[| stride |] ~init:0 with
+  | _ -> Alcotest.fail "fold_index: offs and lens of different lengths"
   | exception Invalid_argument _ -> ()
 
 let refused what generate =
@@ -1271,7 +1246,9 @@ let test_scanner_refusals () =
   refused "two outputs of one name" (fun () -> scanner (pair "a_b" "a_B"));
   refused "an unknown output" (fun () -> scanner ~fields:[ "c" ] (pair "a" "b"));
   Alcotest.(check string)
-    "a structured codec through ml" (scanner Schemas.sized) (ml Schemas.sized);
+    "a structured codec through ml"
+    Wire_ocaml.(to_ml (v ~target:`OCaml ~folds:[ fold "fold" ] Schemas.sized))
+    (ml Schemas.sized);
   Alcotest.(check (list (pair string bool)))
     "outputs"
     [ ("n", false); ("body_present", true); ("tail", false) ]
@@ -1316,8 +1293,8 @@ let test_scanner_outputs () =
   let src = scanner outer in
   Alcotest.(check bool)
     "valid takes the outputs by name" true
-    (contains src "valid ~tag:" && contains src "~x_present:"
-   && contains src "~y_b:");
+    (contains src "Step.valid init ~tag:"
+    && contains src "~x_present:" && contains src "~y_b:");
   let padded =
     Everparse.Raw.(struct_ "Padded" [ anon_field uint8; field "z" uint8 ])
   in
@@ -1370,7 +1347,7 @@ let stack_frame edit =
    They give the codec's answers on records each check rejects and on frames
    cut around the bounds that word straddles. *)
 let test_shared_words () =
-  let src = scanner ~step:true Packet_stack.codec in
+  let src = scanner Packet_stack.codec in
   Alcotest.(check bool)
     "the Ethernet type from the word at 12" true
     (contains src "(Int64.shift_right_logical w12 48)");
@@ -1432,12 +1409,12 @@ let test_decisions () =
   let open Wire_ocaml.Plan in
   let c = Packet_stack.codec in
   let src = scanner c in
-  let ocaml = decisions c in
+  let ocaml = decided c in
   Alcotest.(check string) "the scanner is unchanged" src (scanner c);
   let has ds what p = Alcotest.(check bool) what true (List.exists p ds) in
   let start = { var = None; at = 0 } in
-  has ocaml "fold holds ints" (function
-    | Walk { name = "fold"; values = `Int; known = 0 } -> true
+  has ocaml "fold holds int64s" (function
+    | Walk { name = "fold"; values = `Int64; known = 0 } -> true
     | _ -> false);
   has ocaml "Ethernet tested" (function
     | Prefix_bound { at; window = "stop"; bytes = 14; tested = true } ->
@@ -1471,7 +1448,7 @@ let test_decisions () =
         } ->
         true
     | _ -> false);
-  has (decisions ~target:`OxCaml c)
+  has (decided ~target:`OxCaml c)
     "four frames an iteration on OxCaml, their dispatch fields read ahead"
     (function
     | Frame_loop
@@ -1484,33 +1461,25 @@ let test_decisions () =
         } ->
         true
     | _ -> false);
-  has
-    (decisions ~folds:(step_folds ()) ~visitors:step_visitors c)
-    "the IPv4 header reads the word the Ethernet type is in"
+  has (decided c) "the IPv4 header reads the word the Ethernet type is in"
     (function
-      | Shared_words { at = 14; window = "stop"; held = [ 12 ]; _ } -> true
-      | _ -> false);
+    | Shared_words { at = 14; window = "stop"; held = [ 12 ]; _ } -> true
+    | _ -> false);
   has ocaml "the IPv4 header cut into a function of its own" (function
     | Cut { name = "fold_ipv4"; window = "stop"; known = 0 } -> true
     | _ -> false);
   let index ahead = function
     | Frame_loop
-        {
-          name = "fold_step_index";
-          need = 34;
-          frames = 2;
-          short = None;
-          ahead = a;
-        } ->
+        { name = "fold_index"; need = 34; frames = 2; short = None; ahead = a }
+      ->
         a = ahead
     | _ -> false
   in
-  has
-    (decisions ~folds:(step_folds ()) ~visitors:step_visitors c)
+  has (decided c)
     "the index loop, pipelined, the next frame's dispatch bytes read ahead"
     (index [ ("f14_ipv4_protocol", 23, 1) ]);
   has
-    (decisions ~target:`OxCaml ~folds:(step_folds ()) ~visitors:step_visitors c)
+    (decided ~target:`OxCaml c)
     "the index loop on OxCaml, the Ethernet type read ahead too"
     (index [ ("f3_ether_type", 12, 2); ("f14_ipv4_protocol", 23, 1) ]);
   (* The TCP header starts at [ihl * 4 - 20] bytes from 34: its base is the
@@ -1522,40 +1491,52 @@ let test_decisions () =
     "the TCP header's base on OxCaml" true
     (contains (scanner ~target:`OxCaml c) "(L.i64be_at buf (U.add b14 #14L))");
   (* A codec the scanner refuses has no decisions either. *)
-  match decisions (Schemas.deep 32 (Sys.max_string_length - 1)) with
+  match decided (Schemas.deep 32 (Sys.max_string_length - 1)) with
   | _ -> Alcotest.fail "decisions of a refused codec"
   | exception Invalid_argument _ -> ()
 
-(* The entry of a scan tests [len < 0] only when the walk does not start with
+(* The entry of a fold tests [len < 0] only when the walk does not start with
    the bound check of a prefix, which rejects a negative [len]. Neither it
-   nor a frame loop tests [off > Bytes.length buf]: with [len] not negative,
-   [len > Bytes.length buf - off] rejects an [off] past the buffer. *)
+   nor a frame loop tests [off] past the buffer: with [len] not negative,
+   [len > length - off] rejects it. On OxCaml the entry tests the bounds as
+   the sign of one [logor]. *)
 let test_entry_bounds () =
-  let full = "if off < 0 || len < 0 || len > Bytes.length buf - off then" in
-  let past = "off > Bytes.length buf ||" in
-  let short = "if off < 0 || len > Bytes.length buf - off then" in
-  let stack = scanner Packet_stack.codec in
-  let ox = scanner ~target:`OxCaml Packet_stack.codec in
-  List.iter
-    (fun (what, src) ->
-      Alcotest.(check bool)
-        (what ^ ": the short entry")
-        true (contains src short);
-      Alcotest.(check bool) (what ^ ": no full entry") false (contains src full);
-      Alcotest.(check bool)
-        (what ^ ": no test of off past the buffer")
-        false (contains src past))
-    [ ("OCaml", stack); ("OxCaml", ox) ];
+  let entries ~len =
+    [
+      ( `OCaml,
+        if len then "if off < 0 || len < 0 || len > length - off then"
+        else "if off < 0 || len > length - off then" );
+      ( `OxCaml,
+        if len then
+          "(U.logor (U.logor base stop) (U.sub (U.sub length base) stop))"
+        else "(U.logor base (U.sub (U.sub length base) stop))" );
+    ]
+  in
+  let pasts = [ "off > length ||"; "off > Bytes.length buf ||" ] in
+  let bounds what c ~len =
+    List.iter
+      (fun (target, entry) ->
+        let src = scanner ~target c in
+        let what = what ^ if target = `OCaml then "" else " on OxCaml" in
+        Alcotest.(check bool) (what ^ ": the entry") true (contains src entry);
+        let other = List.assoc target (entries ~len:(not len)) in
+        Alcotest.(check bool)
+          (what ^ ": not the other entry")
+          false (contains src other);
+        List.iter
+          (fun past ->
+            Alcotest.(check bool)
+              (what ^ ": no test of off past the buffer")
+              false (contains src past))
+          pasts)
+      (entries ~len)
+  in
+  bounds "a walk that starts with a prefix" Packet_stack.codec ~len:false;
   let region =
     Codec.v "Region" Fun.id
       Codec.[ Field.v "a" (nested ~size:(int 4) uint32be) $ Fun.id ]
   in
-  Alcotest.(check bool)
-    "a walk that starts with a region tests len < 0" true
-    (contains (scanner region) full);
-  Alcotest.(check bool)
-    "a walk that starts with a region tests no off past the buffer" false
-    (contains (scanner region) past)
+  bounds "a walk that starts with a region" region ~len:true
 
 (* A region's window holds the bytes the range of its size proves: in a region
    of constant size, the record it holds checks no bound and its exact end is
@@ -1585,10 +1566,10 @@ let test_constant_region () =
   in
   Alcotest.(check bool)
     "the record in a constant region is known" true
-    (List.exists (leaf_bound false) (decisions constant));
+    (List.exists (leaf_bound false) (decided constant));
   Alcotest.(check bool)
     "the record in a sized region is tested" true
-    (List.exists (leaf_bound true) (decisions sized));
+    (List.exists (leaf_bound true) (decided sized));
   Alcotest.(check bool)
     "a constant region's end is not tested" false
     (contains (scanner constant) "<> n1)");
@@ -1620,12 +1601,12 @@ let test_region_left_to_next () =
     "left to the next check when its contents are not read" true
     (List.exists
        (region (function Next -> true | _ -> false))
-       (decisions ~folds:Wire_ocaml.[ fold ~outputs:[ "tail" ] "fold" ] c));
+       (decided ~fields:[ "tail" ] c));
   Alcotest.(check bool)
     "checked when its contents are read" true
     (List.exists
        (region (function Checked _ -> true | _ -> false))
-       (decisions c))
+       (decided c))
 
 (* The structured cases' corpora, and the EverParse C validator when built. *)
 let test_scanners () =

@@ -3,45 +3,67 @@
    [WIRE_SIMD=1] in the environment, which the OxCaml rule sets on arm64 or
    amd64, g_lanes has the SIMD lanes of its records.
 
-   With [--step FILE], the visitor FILE of a scanner's fold [fold_step]: for
-   huge_step.ml the visitor of s_huge, for nested_step.ml that of s_nested. It
-   adds up the outputs, which it takes as [int64]. *)
+   With [--step FILE], the visitor FILE of the fold [fold] of a module under
+   test. The visitor of s_nested adds up the outputs; each other one conses
+   the outputs of a record, by name, onto the accumulator, or [None] for a
+   record that fails. Both take the integer outputs as [int64]. *)
 
 let write file s =
   let oc = open_out file in
   output_string oc s;
   close_out oc
 
+let labels c = List.map (fun (name, _) -> "~" ^ name) (Wire_ocaml.outputs c)
+
 let summed c =
-  let fields = Wire_ocaml.outputs c in
-  let args = List.map (fun (name, _) -> "~" ^ name) fields
-  and terms =
+  let terms =
     List.map
       (fun (name, is_bool) ->
         if is_bool then "Bool.to_int " ^ name else "Int64.to_int " ^ name)
-      fields
+      (Wire_ocaml.outputs c)
   in
   "type t = int\n\nlet invalid (acc : t) = acc - 1\nlet[@inline] valid acc "
-  ^ String.concat " " args ^ " =\nacc + " ^ String.concat " + " terms ^ "\n"
+  ^ String.concat " " (labels c)
+  ^ " =\nacc + " ^ String.concat " + " terms ^ "\n"
+
+let snapshot c =
+  let pairs =
+    List.map
+      (fun (name, is_bool) ->
+        Fmt.str "(%S, %s %s)" name
+          (if is_bool then "Bool.to_int" else "Int64.to_int")
+          name)
+      (Wire_ocaml.outputs c)
+  in
+  "type t = (string * int) list option list\n\n\
+   let invalid acc = None :: acc\n\
+   let valid acc "
+  ^ String.concat " " (labels c)
+  ^ " =\n  Some [" ^ String.concat "; " pairs ^ "] :: acc\n"
 
 let huge = Schemas.huge
 let nested = Schemas.nested 12
 
+let visitors =
+  [
+    ("checked_step.ml", fun () -> snapshot Schemas.checked);
+    ("sized_step.ml", fun () -> snapshot Schemas.sized);
+    ("overflow_step.ml", fun () -> snapshot Schemas.overflow);
+    ("skipped_step.ml", fun () -> snapshot Schemas.skipped);
+    ("huge_step.ml", fun () -> snapshot huge);
+    ("nested_step.ml", fun () -> summed nested);
+  ]
+
 let () =
   match Sys.argv with
   | [| _; "--step"; file |] -> (
-      match Filename.basename file with
-      | "huge_step.ml" -> write file (summed huge)
-      | "nested_step.ml" -> write file (summed nested)
-      | f -> failwith ("gen: no visitor " ^ f))
+      match List.assoc_opt (Filename.basename file) visitors with
+      | Some text -> write file (text ())
+      | None -> failwith ("gen: no visitor " ^ file))
   | _ ->
       let simd = Sys.getenv_opt "WIRE_SIMD" = Some "1" in
-      let scanner name ?(step = false) c =
-        let folds =
-          Wire_ocaml.(
-            fold "fold" :: (if step then [ fold "fold_step" ] else []))
-        in
-        Wire_ocaml.v ~name ~folds c
+      let scanner name c =
+        Wire_ocaml.v ~name ~folds:[ Wire_ocaml.fold "fold" ] c
       in
       Wire_ocaml.(
         main
@@ -49,7 +71,7 @@ let () =
             v ~name:"g_ipv4" Schemas.ipv4;
             v ~name:"g_ipv4_record" Schemas.ipv4;
             v ~name:"g_mixed_record" Schemas.mixed;
-            v ~name:"g_checked" Schemas.checked;
+            v ~name:"g_checked" ~folds:[ fold "fold" ] Schemas.checked;
             v ~name:"g_mixed" Schemas.mixed;
             v ~name:"g_small" Schemas.small;
             v ~name:"g_eth" Schemas.eth;
@@ -62,9 +84,9 @@ let () =
             scanner "s_sized" Schemas.sized;
             scanner "s_overflow" Schemas.overflow;
             scanner "s_skipped" Schemas.skipped;
-            scanner "s_huge" ~step:true huge;
-            scanner "s_nested" ~step:true nested;
-            scanner "s_capture" Packet_stack.capture;
+            scanner "s_huge" huge;
+            scanner "s_nested" nested;
+            v ~name:"s_capture" Packet_stack.capture;
             v ~name:"g_mapped" Schemas.mapped
               ~maps:
                 [

@@ -6,7 +6,7 @@
 (executable
  (name gen)
  (modules gen)
- (libraries schemas net wire.ocaml))
+ (libraries schemas net wire.ocaml fmt))
 
 ; One rule per module under test, as Wire_ocaml.main reads its command line;
 ; each fixed record of named scalars but under a map comes with its twin.
@@ -35,9 +35,14 @@
   (run ./gen.exe %{targets})))
 
 (rule
+ (targets checked_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
+
+(rule
  (targets g_checked.ml g_checked.mli g_checked_codec.ml g_checked_codec.mli)
  (action
-  (run ./gen.exe %{targets})))
+  (run ./gen.exe %{targets} --visitor fold=%{dep:checked_step.ml})))
 
 (rule
  (targets g_mixed.ml g_mixed.mli g_mixed_codec.ml g_mixed_codec.mli)
@@ -94,26 +99,39 @@
   (run ./gen.exe %{targets})))
 
 (rule
+ (targets sized_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
+
+(rule
  (targets s_sized.ml s_sized.mli)
  (action
-  (run ./gen.exe %{targets})))
+  (run ./gen.exe %{targets} --visitor fold=%{dep:sized_step.ml})))
+
+(rule
+ (targets overflow_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
 
 (rule
  (targets s_overflow.ml s_overflow.mli)
  (action
-  (run ./gen.exe %{targets})))
+  (run ./gen.exe %{targets} --visitor fold=%{dep:overflow_step.ml})))
+
+(rule
+ (targets skipped_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
 
 (rule
  (targets s_skipped.ml s_skipped.mli)
  (action
-  (run ./gen.exe %{targets})))
+  (run ./gen.exe %{targets} --visitor fold=%{dep:skipped_step.ml})))
 
 (rule
  (targets s_capture.ml s_capture.mli)
  (action
   (run ./gen.exe %{targets})))
-
-; The visitors of the folds [fold_step] of s_huge and s_nested.
 
 (rule
  (targets huge_step.ml)
@@ -123,7 +141,7 @@
 (rule
  (targets s_huge.ml s_huge.mli)
  (action
-  (run ./gen.exe %{targets} --visitor fold_step=%{dep:huge_step.ml})))
+  (run ./gen.exe %{targets} --visitor fold=%{dep:huge_step.ml})))
 
 (rule
  (targets nested_step.ml)
@@ -133,7 +151,7 @@
 (rule
  (targets s_nested.ml s_nested.mli)
  (action
-  (run ./gen.exe %{targets} --visitor fold_step=%{dep:nested_step.ml})))
+  (run ./gen.exe %{targets} --visitor fold=%{dep:nested_step.ml})))
 
 ; Whether a 64-bit load of wire.runtime returns a boxed int64 to the code
 ; generated for OCaml: in the dev profile, which compiles wire.runtime with
@@ -221,6 +239,10 @@
   s_skipped
   s_huge
   s_nested
+  checked_step
+  sized_step
+  overflow_step
+  skipped_step
   huge_step
   nested_step
   s_capture

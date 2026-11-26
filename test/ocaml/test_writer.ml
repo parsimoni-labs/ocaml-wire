@@ -41,10 +41,9 @@ let test_fixed () =
     let len = Bytes.length buf - off in
     let valid = Result.is_ok (Codec.validate Schemas.checked buf off) in
     let folded =
-      G_checked.fold buf off len
-        ~invalid:(fun () -> None)
-        ~valid:(fun ~version ~ihl ~length ~ttl ~proto ->
-          Some [ version; ihl; length; ttl; proto ])
+      match G_checked.fold buf off len ~init:[] with
+      | [ outputs ] -> Option.map (List.map snd) outputs
+      | _ -> Alcotest.fail "fold: one answer for one record"
     in
     match Buf.v buf with
     | Buf.Any b ->
@@ -215,7 +214,7 @@ let test_escaped () =
    defines nothing twice. *)
 let test_record_clash () =
   let src = ml (pair "cast" "b") in
-  Alcotest.(check bool) "folds" true (contains src "fold ");
+  Alcotest.(check bool) "views" true (contains src "let[@inline always] check ");
   Alcotest.(check bool) "no getters" false (contains src "module Get")
 
 (* The fields of the record [v] in [b], read with no check of its

@@ -8,9 +8,8 @@ let write file s =
   output_string oc s;
   close_out oc
 
-(* The scanner of [Schemas.stacked] with its step functions, after [Step],
-   the consumer they call. [Step] adds up the outputs, which it takes as
-   [int64]. *)
+(* The scanner of [Schemas.stacked] with its fold [fold], after [Step], the
+   visitor it calls. [Step] adds up the outputs, which it takes as [int64]. *)
 let stacked target =
   let fields = Wire_ocaml.outputs Schemas.stacked in
   let args = List.map (fun (name, _) -> "~" ^ name) fields
@@ -19,10 +18,8 @@ let stacked target =
       (fun (name, is_bool) ->
         if is_bool then "Bool.to_int " ^ name else "Int64.to_int " ^ name)
       fields
-  and m =
-    Wire_ocaml.(
-      v ~target ~folds:[ fold "fold"; fold "fold_step" ] Schemas.stacked)
-  and visitors = [ ("fold_step", "step.ml") ] in
+  and m = Wire_ocaml.(v ~target ~folds:[ fold "fold" ] Schemas.stacked)
+  and visitors = [ ("fold", "step.ml") ] in
   write "s_stacked.ml"
     ("module Step = struct\n\
       type t = int\n\n\
