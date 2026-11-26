@@ -53,7 +53,9 @@ use() {
 
 # verify FILE DIR...: F* checks FILE with the modules of each DIR in scope,
 # from the directory of FILE: F* reads the modules of its working directory
-# first, and those of the build directory are not the ones under proof.
+# first, and those of the build directory are not the ones under proof. Its
+# messages are the human ones, which refused reads, wherever it runs: under
+# GITHUB_ACTIONS, F* writes GitHub annotations by default.
 verify() {
   file=$1
   shift
@@ -62,6 +64,7 @@ verify() {
   # shellcheck disable=SC2086
   (cd "$(dirname "$file")" && "$PROVE" run "$TIMEOUT" "$(basename "$file")" \
     "$FSTAR" --z3version "${Z3DIR##*z3-}" --smt "$Z3DIR/bin/z3" \
+    --message_format human \
     --already_cached 'Prims,LowStar,FStar,LowParse,C,PulseCore,Pulse,EverParse3d.*,Spec' \
     --include "$EP/lib/everparse/lowparse" --include "$EP/lib/krml" \
     --include "$EP/lib/everparse/3d" \

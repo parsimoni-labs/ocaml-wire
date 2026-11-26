@@ -36,6 +36,9 @@ MODULES = $(MODEL) Plan.Word.fst Plan.Bytes.fst Plan.Frames.fst Spec.Ipv4.fst Pl
 # verifies.
 DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
 
+# The defect and mutant rules read F*'s errors, so they ask for its human
+# messages: under GITHUB_ACTIONS, F* writes GitHub annotations by default.
+HUMAN = --message_format human
 
 # defects/<name>.sed rewrites the module its "# mutates:" line names, and
 # the module its "# fails:" line names then fails to verify.
@@ -64,7 +67,7 @@ $(DEFECTS:%=defect-%): defect-%:
 	@mkdir -p $(CACHE)
 	@out=$$(cd defects && $(FSTAR) $(FLAGS) $(CACHED) --include .. Defect.$*.Fixed.fst 2>&1) || \
 	  { echo "$$out"; echo "FAIL $*: the fixed replay does not verify"; exit 1; }
-	@out=$$(cd defects && $(FSTAR) $(FLAGS) $(CACHED) --include .. Defect.$*.Buggy.fst 2>&1); \
+	@out=$$(cd defects && $(FSTAR) $(FLAGS) $(HUMAN) $(CACHED) --include .. Defect.$*.Buggy.fst 2>&1); \
 	  if [ $$? -eq 0 ]; then echo "FAIL $*: the buggy replay verifies"; exit 1; fi; \
 	  n=$$(echo "$$out" | sed -n 's/^\* Error [0-9]* at \([^(]*([0-9]*\),.*/\1/p' | sort -u | wc -l); \
 	  [ $$n -eq 1 ] || \
@@ -76,7 +79,7 @@ $(MUTANTS:%=mutant-%): mutant-%:
 	  f=$$(sed -n 's/^# mutates: //p' $$s); c=$$(sed -n 's/^# fails: //p' $$s); \
 	  rm -rf $$d; mkdir -p $$d; cp $(MODULES) $$d/; sed -f $$s $$f > $$d/$$f; \
 	  if cmp -s $$f $$d/$$f; then echo "FAIL $*: the mutation does not apply"; exit 1; fi; \
-	  out=$$(cd $$d && $(FSTAR) $(FLAGS) $$c 2>&1); \
+	  out=$$(cd $$d && $(FSTAR) $(FLAGS) $(HUMAN) $$c 2>&1); \
 	  if [ $$? -eq 0 ]; then echo "FAIL $*: the mutant verifies"; exit 1; fi; \
 	  t=$$(sed -n 's/^# witness: //p' $$s); \
 	  if [ -n "$$t" ]; then cp defects/$$t $$d/; \
