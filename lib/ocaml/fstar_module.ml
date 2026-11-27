@@ -1181,7 +1181,7 @@ let modules ?fields ~codec c =
   if not (Names.is_identifier st.name) then
     fail_unsupported "the F* reading of the struct %S" st.name;
   let items = layout None st.fields in
-  let tag = "Wire" ^ st.name in
+  let tag = Types.struct_tag_name st.name in
   [
     ( codec ^ ".Flat.fsti",
       flat_interface ~codec ~m:codec ~tag ~scan:stepped items );
