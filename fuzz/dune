@@ -1,6 +1,6 @@
 (executable
  (name fuzz)
- (libraries wire alcobar fuzz_gen))
+ (libraries wire rfc5280 alcobar fuzz_gen))
 
 ; Alcobar bounds each test iteration with SIGALRM, which Windows does not have
 ; ([Sys.signal] raises there), so every runner under fuzz/ passes the timeout
