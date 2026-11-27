@@ -11,17 +11,25 @@ val executable : string -> bool
 (** [executable path] is [true] when [path] is a file the process may execute.
 *)
 
+val locate :
+  names:string list ->
+  win32:bool ->
+  getenv:(string -> string option) ->
+  executable:(string -> bool) ->
+  string option
+(** [locate ~names ~win32 ~getenv ~executable] is the first of [names] that
+    [executable] accepts, the earlier first in each directory: in a directory of
+    [PATH], split on [';'] when [win32] and on [':'] otherwise, then in
+    [.local/everparse/bin] under [HOME] and under [USERPROFILE]. A variable
+    [getenv] does not know is skipped. *)
+
 val locate_3d_exe :
   win32:bool ->
   getenv:(string -> string option) ->
   executable:(string -> bool) ->
   string option
-(** [locate_3d_exe ~win32 ~getenv ~executable] is the first of EverParse's 3D
-    compilers that [executable] accepts, [everparse-3d.exe] (its name since
-    v2026.10) before [3d.exe] in each directory: in a directory of [PATH], split
-    on [';'] when [win32] and on [':'] otherwise, then in [.local/everparse/bin]
-    under [HOME] and under [USERPROFILE]. A variable [getenv] does not know is
-    skipped. *)
+(** [locate_3d_exe] is {!locate} of EverParse's 3D compilers, [everparse-3d.exe]
+    (its name since v2026.10) before [3d.exe]. *)
 
 val names_3d_exe : string list
 (** [names_3d_exe] is the names {!locate_3d_exe} looks for, the newest first. *)

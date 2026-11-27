@@ -154,6 +154,9 @@ let write_3d ~outdir schemas =
 let locate_3d_exe () =
   locate_3d_exe ~win32:Sys.win32 ~getenv:Sys.getenv_opt ~executable
 
+let tool name =
+  locate ~names:[ name ] ~win32:Sys.win32 ~getenv:Sys.getenv_opt ~executable
+
 let everparse_version exe =
   let ic = Unix.open_process_args_in exe [| exe; "--version" |] in
   let output = In_channel.input_all ic in

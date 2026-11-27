@@ -360,6 +360,12 @@ val locate_3d_exe : unit -> string option
     [~/.local/everparse/bin/]: the one the library runs, or [None] when
     EverParse is not installed. *)
 
+val tool : string -> string option
+(** [tool name] is the path of the EverParse executable [name], found as
+    {!locate_3d_exe} finds the 3D compiler: in PATH, then in
+    [~/.local/everparse/bin/]. [None] when it is in neither. [Wire_asn1] finds
+    [everparse-asn1.exe] with it. *)
+
 val ensure_dir : string -> unit
 (** [ensure_dir path] creates the directory [path] if it does not exist. *)
 

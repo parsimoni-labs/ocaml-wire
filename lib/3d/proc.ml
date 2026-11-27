@@ -38,13 +38,13 @@ let not_found_3d_exe =
   "EverParse's everparse-3d.exe (or 3d.exe) not found in PATH or \
    ~/.local/everparse/bin/"
 
-let locate_3d_exe ~win32 ~getenv ~executable =
+let locate ~names ~win32 ~getenv ~executable =
   let found dir =
     List.find_map
       (fun name ->
         let candidate = Filename.concat dir name in
         if executable candidate then Some candidate else None)
-      names_3d_exe
+      names
   in
   let on_path dir =
     found
@@ -65,6 +65,8 @@ let locate_3d_exe ~win32 ~getenv ~executable =
   with
   | Some _ as exe -> exe
   | None -> List.find_map in_home [ "HOME"; "USERPROFILE" ]
+
+let locate_3d_exe = locate ~names:names_3d_exe
 
 type process_output = Inherit | Dev_null | File of string
 
