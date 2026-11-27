@@ -8,11 +8,8 @@ type t =
   | T : { name : string; folds : fold list; codec : 'r Wire.Codec.t } -> t
 
 (* What [Wire_ocaml] refuses, refused with its message. *)
-let ocaml_refuses folds c =
-  let folds =
-    List.map (fun (f : fold) -> Wire_ocaml.fold ?outputs:f.outputs f.name) folds
-  in
-  match Wire_ocaml.v ~target:`OCaml ~folds c with
+let ocaml_refuses c =
+  match Wire_ocaml.v ~target:`OCaml c with
   | m -> Wire_ocaml.name m
   | exception Invalid_argument msg ->
       let prefix = "Wire_ocaml:" in
@@ -52,7 +49,7 @@ let source ?(visitors = []) (T t) =
   Rust_module.rs ~codec:(Wire.Private.Gen.to_struct t.codec).name ~folds t.codec
 
 let v ?name ?(folds = [ fold "fold" ]) codec =
-  let default = ocaml_refuses folds codec in
+  let default = ocaml_refuses codec in
   let name = Option.value ~default name in
   let t = T { name; folds; codec } in
   (* Refused when declared, not when printed. *)

@@ -79,10 +79,6 @@ let fstar ?fields ~codec c =
 
 (* {1 The generator} *)
 
-type fold = Writer.fold
-
-let fold ?outputs name = { Writer.name; outputs }
-
 (* The compiler the generator runs on, which is the one that builds what it
    writes. *)
 let building : target =
@@ -93,7 +89,7 @@ type t =
       name : string;
       target : target;
       simd : bool;
-      folds : fold list;
+      folds : Writer.fold list;
       maps : map list option;
       codec : 'r Wire.Codec.t;
     }
@@ -122,11 +118,11 @@ let writer (T t) =
 let visitor_modules (T t) visitors =
   List.iter
     (fun (n, _) ->
-      if not (List.exists (fun (f : fold) -> f.name = n) t.folds) then
+      if not (List.exists (fun (f : Writer.fold) -> f.name = n) t.folds) then
         Fmt.invalid_arg "Wire_ocaml: %s declares no fold %S" t.name n)
     visitors;
   List.map
-    (fun (f : fold) ->
+    (fun (f : Writer.fold) ->
       match List.assoc_opt f.name visitors with
       | Some file -> (f.name, visitor_module file)
       | None ->
@@ -135,7 +131,11 @@ let visitor_modules (T t) visitors =
             f.name)
     t.folds
 
-let v ?name ?(target = building) ?(simd = false) ?(folds = []) ?maps codec =
+(* A fold over fields named by their paths raises [Failure "unimplemented"]. *)
+let unimplemented () = failwith "unimplemented"
+
+let declared ?name ?(target = building) ?(simd = false) ?(folds = []) ?maps
+    codec =
   let name =
     match name with
     | Some n -> n
@@ -148,24 +148,21 @@ let v ?name ?(target = building) ?(simd = false) ?(folds = []) ?maps codec =
   ignore (writer t : Writer.t);
   t
 
+let v ?name ?target ?simd ?fold ?maps codec =
+  match fold with
+  | Some _ -> unimplemented ()
+  | None -> declared ?name ?target ?simd ?maps codec
+
 let name (T t) = t.name
-
-let to_ml ?(twin = false) ?(visitors = []) t =
-  let visitors = visitor_modules t visitors and w = writer t in
-  if twin then Writer.twin_ml ~visitors w else Writer.ml ~visitors w
-
-let to_mli ?(twin = false) ?(visitors = []) t =
-  let visitors = visitor_modules t visitors and w = writer t in
-  if twin then Writer.twin_mli ~visitors w else Writer.mli ~visitors w
+let to_ml t = Writer.ml ~visitors:(visitor_modules t []) (writer t)
+let to_mli t = Writer.mli ~visitors:(visitor_modules t []) (writer t)
 
 (* {2 The generator's command line} *)
 
 let usage =
-  "usage: gen.exe [--visitor FOLD=FILE]... FILE...\n\
+  "usage: gen.exe FILE...\n\
    Writes each FILE, <name>.ml or <name>.mli, the module or the interface of \
-   the module <name>, and <name>_codec.ml or <name>_codec.mli, its interpreted \
-   twin; FOLD of each written module calls the visitor of the source file FILE \
-   by name."
+   the module <name>."
 
 let fail fmt =
   Fmt.kstr
@@ -174,32 +171,13 @@ let fail fmt =
       exit 2)
     fmt
 
-(* The visitors and the files a command line names. *)
-let rec parse visitors files = function
-  | [] -> (List.rev visitors, List.rev files)
-  | "--visitor" :: v :: rest -> (
-      match String.index_opt v '=' with
-      | Some i ->
-          let fold = String.sub v 0 i
-          and file = String.sub v (i + 1) (String.length v - i - 1) in
-          parse ((fold, file) :: visitors) files rest
-      | None -> fail "--visitor %s: expected FOLD=FILE" v)
-  | "--visitor" :: [] -> fail "--visitor needs FOLD=FILE"
-  | file :: rest -> parse visitors (file :: files) rest
-
 (* The module a file is written from and which of its texts it holds:
    [stack.mli] is the interface of [stack]. *)
 let target_of file =
   let base = Filename.basename file in
-  let twin = "_codec" in
-  let unit stem =
-    if String.ends_with ~suffix:twin stem then
-      (String.sub stem 0 (String.length stem - String.length twin), true)
-    else (stem, false)
-  in
   match String.split_on_char '.' base with
-  | stem :: "ml" :: _ -> (unit stem, `Ml)
-  | stem :: "mli" :: _ -> (unit stem, `Mli)
+  | stem :: "ml" :: _ -> (stem, `Ml)
+  | stem :: "mli" :: _ -> (stem, `Mli)
   | _ -> fail "%s: not a .ml or .mli file" file
 
 let write file text =
@@ -208,51 +186,69 @@ let write file text =
   close_out oc
 
 let main ts =
-  let visitors, files = parse [] [] (List.tl (Array.to_list Sys.argv)) in
+  let files = List.tl (Array.to_list Sys.argv) in
   if files = [] then fail "no file to write";
-  let written =
+  let texts =
     List.map
       (fun file ->
-        let (stem, twin), kind = target_of file in
+        let stem, kind = target_of file in
         match List.find_opt (fun t -> name t = stem) ts with
         | None ->
             fail "%s: no module %s among %s" file stem
               (String.concat ", " (List.map name ts))
-        | Some t -> (file, (kind, twin), t))
+        | Some t -> (
+            match kind with `Ml -> (file, to_ml t) | `Mli -> (file, to_mli t)))
       files
-  in
-  List.iter
-    (fun (fold, file) ->
-      if
-        not
-          (List.exists
-             (fun (_, _, T t) ->
-               List.exists (fun (f : fold) -> f.name = fold) t.folds)
-             written)
-      then
-        fail "--visitor %s=%s: no module written declares a fold %s" fold file
-          fold)
-    visitors;
-  (* Every text is written once all are: a fold no visitor names refuses
-     the command line before any file is written. *)
-  let texts =
-    List.map
-      (fun (file, kind, (T t as m)) ->
-        let visitors =
-          List.filter
-            (fun (fold, _) ->
-              List.exists (fun (f : fold) -> f.name = fold) t.folds)
-            visitors
-        in
-        match kind with
-        | `Ml, twin -> (file, to_ml ~twin ~visitors m)
-        | `Mli, twin -> (file, to_mli ~twin ~visitors m))
-      written
   in
   List.iter (fun (file, text) -> write file text) texts
 
-(* The module of a codec, as [Plan] reads it. *)
-let declared = v
+(* {1 The generated module} *)
+
+module type RECORD = sig
+  type t
+  type 'b check = private int
+  type 'b view = private int
+
+  val is_ok : 'b check -> bool
+  val get : 'b check -> 'b view
+  val size : t -> int
+  val pp : Format.formatter -> t -> unit
+end
+
+module type S = sig
+  include RECORD
+
+  val min_size : int
+  val validate : bytes -> off:int -> (unit, Wire.Error.t) result
+  val decode : bytes -> off:int -> (t, Wire.Error.t) result
+  val encode : t -> bytes -> off:int -> unit
+end
+
+module type FIXED = sig
+  include S
+
+  val check : 'b Wire.Buf.t -> off:int -> 'b check
+end
+
+module type VARIABLE = sig
+  include S
+
+  val check : 'b Wire.Buf.t -> off:int -> len:int -> 'b check
+end
+
+module type FOLD = sig
+  type 'acc visitor
+
+  val fold :
+    ?stride:int ->
+    ?offs:int array ->
+    ?lens:int array ->
+    ?invalid:('acc -> 'acc) ->
+    bytes ->
+    init:'acc ->
+    f:'acc visitor ->
+    ('acc, Wire.Error.t * 'acc) result
+end
 
 (* {1 The plan, for other backends} *)
 
@@ -371,11 +367,13 @@ module Plan = struct
 
   let pp_decision = Decision.pp
 
-  let decisions ?(target = `OCaml) ?(folds = []) ?(visitors = []) c =
+  let decisions ?(target = `OCaml) ?fold c =
     let acc = ref [] in
     let decide d = acc := d :: !acc in
-    let t = declared ~target ~folds c in
-    ignore (Writer.ml ~decide ~visitors:(visitor_modules t visitors) (writer t));
+    let t =
+      match fold with Some _ -> unimplemented () | None -> declared ~target c
+    in
+    ignore (Writer.ml ~decide ~visitors:(visitor_modules t []) (writer t));
     List.rev !acc
 
   let select t names =
