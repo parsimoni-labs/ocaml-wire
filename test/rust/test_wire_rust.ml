@@ -29,8 +29,8 @@ let test_ident () =
       ("union", "union");
     ]
 
-let refused what ?folds c names =
-  match Wire_rust.v ?folds c with
+let refused what ?fold c names =
+  match Wire_rust.v ?fold c with
   | _ -> Alcotest.failf "%s: generated" what
   | exception Invalid_argument m ->
       List.iter
@@ -48,9 +48,10 @@ let test_refused () =
   refused "a 64-bit scalar"
     (Codec.v "Wide" Fun.id Codec.[ Field.v "w" uint64be $ Fun.id ])
     [ "Wire_rust: cannot specialise"; "UINT64" ];
-  refused "an unknown output"
-    ~folds:[ Wire_rust.fold ~outputs:[ "nope" ] "fold" ]
-    Packet_stack.codec [ "nope" ];
+  refused "an unknown field" ~fold:[ "nope" ] Packet_stack.codec [ "nope" ];
+  refused "a field of bytes" ~fold:[ "dst" ] Packet_stack.codec [ "dst" ];
+  refused "a field holding a record" ~fold:[ "ipv4" ] Packet_stack.codec
+    [ "ipv4" ];
   refused "a name that is not UTF-8"
     (Codec.v "C" Fun.id Codec.[ Field.v "\xff" uint8 $ Fun.id ])
     [ "UTF-8" ]
@@ -69,9 +70,6 @@ let test_clash () =
   has "type and type_"
     (rs (pair "type" uint8 "type_" uint8))
     "pub type_: u8,\n    pub type__: u8,";
-  refused "two folds of one name"
-    ~folds:Wire_rust.[ fold "f"; fold "f" ]
-    Schemas.checked [ "\"f\"" ];
   (* A field may be called [buf], [off] or [b], the parameters of the
      module's functions. *)
   let c =
@@ -86,22 +84,19 @@ let test_clash () =
   in
   has "buf, off, b" (rs c) "pub buf: u8,\n    pub off: u8,\n    pub b: u8,"
 
-(* The visitor a rule names is checked to implement the fold's trait, by its
-   path or by its file. *)
-let test_visitor () =
-  let folds = [ Wire_rust.fold "count" ] in
-  has "a path"
-    (rs ~folds ~visitors:[ ("count", "crate::Count") ] Schemas.checked)
-    "implements::<crate::Count>();";
-  has "a file"
-    (rs ~folds ~visitors:[ ("count", "flow_step.rs") ] Schemas.checked)
-    "implements::<crate::flow_step::FlowStep>();";
-  match
-    Wire_rust.(
-      to_rs ~visitors:[ ("nope", "crate::X") ] (v ~folds Schemas.checked))
-  with
-  | _ -> Alcotest.fail "a visitor of no fold"
-  | exception Invalid_argument m -> has "a visitor of no fold" m "nope"
+(* The fold hands [f] the fields its paths name, in order, each in its Rust
+   type: an [Option] where the field is optional, and one more under a layer,
+   whether the layer is optional or not. *)
+let test_fold_fields () =
+  has "paths"
+    (rs
+       ~fold:[ "ipv4.tcp.dst_port"; "ether_type"; "ipv4.protocol" ]
+       Packet_stack.codec)
+    "F: FnMut(A, Option<u16>, u16, Option<u8>) -> A,";
+  has "an optional field"
+    (rs ~fold:[ "a"; "x" ] Schemas.skipped)
+    "F: FnMut(A, Option<u8>, u8) -> A,";
+  has "no field" (rs ~fold:[] Schemas.checked) "F: FnMut(A) -> A,"
 
 let suite =
   ( "wire_rust",
@@ -109,5 +104,5 @@ let suite =
       Alcotest.test_case "identifiers" `Quick test_ident;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "clashing names are refused" `Quick test_clash;
-      Alcotest.test_case "visitors" `Quick test_visitor;
+      Alcotest.test_case "the fields of the fold" `Quick test_fold_fields;
     ] )

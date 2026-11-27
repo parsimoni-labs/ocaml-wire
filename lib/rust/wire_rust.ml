@@ -1,15 +1,16 @@
 (* {1 The module of a codec} *)
 
-type fold = Rust_module.fold
-
-let fold ?outputs name = { Rust_module.name; outputs; visitor = None }
-
 type t =
-  | T : { name : string; folds : fold list; codec : 'r Wire.Codec.t } -> t
+  | T : {
+      name : string;
+      fold : string list option;
+      codec : 'r Wire.Codec.t;
+    }
+      -> t
 
 (* What [Wire_ocaml] refuses, refused with its message. *)
-let ocaml_refuses c =
-  match Wire_ocaml.v ~target:`OCaml c with
+let ocaml_refuses ?fold c =
+  match Wire_ocaml.v ~target:`OCaml ?fold c with
   | m -> Wire_ocaml.name m
   | exception Invalid_argument msg ->
       let prefix = "Wire_ocaml:" in
@@ -20,52 +21,25 @@ let ocaml_refuses c =
               (String.length msg - String.length prefix))
       else invalid_arg msg
 
-(* The visitor a rule names: a Rust path, or a file [x_y.rs], whose type
-   [XY] the crate declares as the module [x_y]. *)
-let visitor_path v =
-  if Filename.check_suffix v ".rs" then
-    let stem = Filename.remove_extension (Filename.basename v) in
-    let camel =
-      String.concat ""
-        (List.map String.capitalize_ascii (String.split_on_char '_' stem))
-    in
-    Fmt.str "crate::%s::%s" stem camel
-  else v
+let source (T t) =
+  Rust_module.rs ~codec:(Wire.Private.Gen.to_struct t.codec).name ?fold:t.fold
+    t.codec
 
-let source ?(visitors = []) (T t) =
-  let folds =
-    List.map
-      (fun (f : fold) ->
-        match List.assoc_opt f.name visitors with
-        | None -> f
-        | Some v -> { f with visitor = Some (visitor_path v) })
-      t.folds
-  in
-  List.iter
-    (fun (n, _) ->
-      if not (List.exists (fun (f : fold) -> f.name = n) t.folds) then
-        Fmt.invalid_arg "Wire_rust: %s declares no fold %S" t.name n)
-    visitors;
-  Rust_module.rs ~codec:(Wire.Private.Gen.to_struct t.codec).name ~folds t.codec
-
-let v ?name ?(folds = [ fold "fold" ]) codec =
-  let default = ocaml_refuses codec in
+let v ?name ?fold codec =
+  let default = ocaml_refuses ?fold codec in
   let name = Option.value ~default name in
-  let t = T { name; folds; codec } in
+  let t = T { name; fold; codec } in
   (* Refused when declared, not when printed. *)
   ignore (source t : string);
   t
 
 let name (T t) = t.name
-let to_rs ?visitors t = source ?visitors t
+let to_rs t = source t
 
 (* {2 The generator's command line} *)
 
 let usage =
-  "usage: gen.exe [--visitor FOLD=TYPE]... FILE...\n\
-   Writes each FILE, <name>.rs, the module <name>; FOLD of each written module \
-   is visited by TYPE, a Rust path or a file x_y.rs of the crate, whose type \
-   is XY."
+  "usage: gen.exe FILE...\nWrites each FILE, <name>.rs, the module <name>."
 
 let fail fmt =
   Fmt.kstr
@@ -74,29 +48,14 @@ let fail fmt =
       exit 2)
     fmt
 
-let rec parse visitors files = function
-  | [] -> (List.rev visitors, List.rev files)
-  | "--visitor" :: v :: rest -> (
-      match String.index_opt v '=' with
-      | Some i ->
-          let fold = String.sub v 0 i
-          and typ = String.sub v (i + 1) (String.length v - i - 1) in
-          parse ((fold, typ) :: visitors) files rest
-      | None -> fail "--visitor %s: expected FOLD=TYPE" v)
-  | "--visitor" :: [] -> fail "--visitor needs FOLD=TYPE"
-  | file :: rest -> parse visitors (file :: files) rest
-
 let write file text =
   let oc = open_out_bin file in
   output_string oc text;
   close_out oc
 
 let main ts =
-  let visitors, files = parse [] [] (List.tl (Array.to_list Sys.argv)) in
+  let files = List.tl (Array.to_list Sys.argv) in
   if files = [] then fail "no file to write";
-  let declares (T t) fold =
-    List.exists (fun (f : fold) -> f.name = fold) t.folds
-  in
   let written =
     List.map
       (fun file ->
@@ -112,14 +71,4 @@ let main ts =
         | Some t -> (file, t))
       files
   in
-  List.iter
-    (fun (fold, typ) ->
-      if not (List.exists (fun (_, t) -> declares t fold) written) then
-        fail "--visitor %s=%s: no module written declares a fold %s" fold typ
-          fold)
-    visitors;
-  List.iter
-    (fun (file, t) ->
-      let visitors = List.filter (fun (fold, _) -> declares t fold) visitors in
-      write file (to_rs ~visitors t))
-    written
+  List.iter (fun (file, t) -> write file (to_rs t)) written

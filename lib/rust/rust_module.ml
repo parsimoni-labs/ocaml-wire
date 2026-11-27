@@ -9,10 +9,10 @@ open Walk
    The module of a codec has the members of the OCaml module [Wire_ocaml]
    writes, spelled in Rust: a check, its view and an accessor per named field
    of every record the codec reaches, a module per record a field holds, the
-   record's values, its error, and the folds it declares. The records and
+   record's values, its error, and its fold when it declares one. The records and
    their plans are [Wire_ocaml.Plan.records], the ones the OCaml views are
-   written from; the check and the folds walk [Wire_ocaml.Plan.v], as the
-   OCaml folds do. Positions and sizes are [i64]s, as the plan computes them:
+   written from; the check and the fold walk [Wire_ocaml.Plan.v], as the
+   OCaml fold does. Positions and sizes are [i64]s, as the plan computes them:
    a codec keeps each size below 2^32, so their sums from an offset inside a
    buffer cannot wrap. One becomes a [usize] only through a checked
    conversion, so none is cut where a [usize] is narrower, and an offset
@@ -20,12 +20,6 @@ open Walk
    goes through [get], which answers [None] past the buffer, and a store
    through [put], which writes nothing there, so no input makes the module
    panic. *)
-
-type fold = {
-  name : string;
-  outputs : string list option;
-  visitor : string option;
-}
 
 let refuse ~codec reason =
   Fmt.invalid_arg "Wire_rust: cannot specialise %s: %s" codec reason
@@ -682,8 +676,8 @@ let rec value : type a. ctx -> string -> a T.typ -> string =
       | Some (P.Sub { sub = s; _ } as m) ->
           let md = sub_ref c s.codec_id in
           Fmt.str
-            "(match v.%s().get() { Some(s) => Some(%s::of_view(s)?), None => \
-             None })"
+            "(match v.%s().0 { Some(s) => Some(%s::of_view(s)?), None => None \
+             })"
             (acc c.r m) md
       | _ -> (
           match present c.r l with
@@ -698,7 +692,7 @@ let rec value : type a. ctx -> string -> a T.typ -> string =
   | T.Codec { codec_id; _ } -> (
       match sub c.r l with
       | Some m ->
-          Fmt.str "%s::of_view(v.%s().get()?)?" (sub_ref c codec_id) (acc c.r m)
+          Fmt.str "%s::of_view(v.%s().0?)?" (sub_ref c codec_id) (acc c.r m)
       | None -> missing ())
   | T.Byte_slice { size } | T.Byte_array { size } -> (
       let array = match typ with T.Byte_array _ -> true | _ -> false in
@@ -1257,14 +1251,27 @@ let pp_view ppf c =
      impl<'a> Check<'a> {\n\
     \    /// Whether the check passed.\n\
     \    #[inline(always)]\n\
-    \    pub fn ok(&self) -> bool {\n\
+    \    pub fn is_ok(&self) -> bool {\n\
     \        self.0.is_some()\n\
     \    }\n\n\
-    \    /// The record of the check, `None` where it failed.\n\
+    \    /// The view of the record the check passed.\n\
+    \    ///\n\
+    \    /// # Panics\n\
+    \    ///\n\
+    \    /// If the check failed: a refused record is input, test\n\
+    \    /// [`Check::is_ok`] first.\n\
     \    #[inline(always)]\n\
-    \    pub fn get(self) -> Option<View<'a>> {\n\
-    \        self.0\n\
+    \    pub fn get(self) -> View<'a> {\n\
+    \        match self.0 {\n\
+    \            Some(v) => v,\n\
+    \            None => failed(),\n\
+    \        }\n\
     \    }\n\
+     }\n\n\
+     #[cold]\n\
+     #[inline(never)]\n\
+     fn failed() -> ! {\n\
+    \    panic!(\"Check::get: the check failed\")\n\
      }\n\n\
      /// The record at `p` in `buf`, its fixed bytes in `buf`, with no check.\n\
      #[inline(always)]\n\
@@ -1303,7 +1310,7 @@ let root_check ~size =
   | Some _ ->
       ( "/// The check of the record at `off` in `buf`, its bytes from there:\n\
          /// the checks the codec makes, in its order. It never panics: bad\n\
-         /// bounds or a bad record give a check [`Check::ok`] refuses.\n\
+         /// bounds or a bad record give a check [`Check::is_ok`] refuses.\n\
          #[inline]\n\
          pub fn check(buf: &[u8], off: usize) -> Check<'_> {\n\
         \    match buf.get(off..) {\n\
@@ -1318,7 +1325,7 @@ let root_check ~size =
          `buf`: the\n\
          /// checks the codec makes, in its order. It never panics: bad bounds \
          or a\n\
-         /// bad record give a check [`Check::ok`] refuses.\n\
+         /// bad record give a check [`Check::is_ok`] refuses.\n\
          #[inline]\n\
          pub fn check(buf: &[u8], off: usize, len: usize) -> Check<'_> {\n\
         \    match off.checked_add(len).and_then(|end| buf.get(off..end)) {\n\
@@ -1363,7 +1370,7 @@ let written c ~size ~own_check =
        %s    }\n\
       \    encode_at(r, buf, off as i64, true, Path::ROOT)?;\n\
       \    let buf: &[u8] = buf;\n\
-      \    if %s.ok() {\n\
+      \    if %s.is_ok() {\n\
       \        Ok(())\n\
       \    } else {\n\
       \        Err(first_error(buf, off + n, off))\n\
@@ -1415,7 +1422,7 @@ let pp_root ppf ~size c =
      /// its error.\n\
      #[inline]\n\
      pub fn validate(buf: &[u8], off: usize) -> Result<(), Error> {\n\
-    \    if %s.ok() {\n\
+    \    if %s.is_ok() {\n\
     \        Ok(())\n\
     \    } else {\n\
     \        Err(first_error(buf, buf.len(), off))\n\
@@ -1425,7 +1432,7 @@ let pp_root ppf ~size c =
      /// codec's error.\n\
      #[inline]\n\
      pub fn decode(buf: &[u8], off: usize) -> Result<%s, Error> {\n\
-    \    match %s.get().and_then(of_view) {\n\
+    \    match %s.0.and_then(of_view) {\n\
     \        Some(r) => Ok(r),\n\
     \        None => Err(first_error(buf, buf.len(), off)),\n\
     \    }\n\
@@ -1446,107 +1453,306 @@ let pp_check_frame ppf plan =
     "#[inline(always)]\nfn check_frame(frame: &[u8]) -> Option<()> {\n%s}\n\n"
     code
 
-(* The trait [f::Visitor] of the fold [f] over [outputs], and the check that
-   the type the rule names implements it. *)
-let pp_visitor ppf (f : fold) outputs =
-  let n = f.name in
-  Fmt.pf ppf
-    "/// The visitor of [`%s`](super::%s).\n\
-     pub mod %s {\n\
-    \    /// What the fold [`%s`](super::%s) hands each frame to.\n\
-    \    pub trait Visitor {\n\
-    \        /// A frame whose record passed its checks, with its outputs.\n\
-    \        fn valid(&mut self%a);\n\
-    \        /// A frame whose record or bounds are bad.\n\
-    \        fn invalid(&mut self);\n\
-    \    }\n\
-     }\n\n"
-    n n n n n
-    Fmt.(
-      list ~sep:nop (fun ppf (o : P.output) ->
-          pf ppf ", %s: %s" (ident o.name) (output_type o)))
-    outputs;
-  match f.visitor with
-  | Some path ->
-      Fmt.pf ppf
-        "// The visitor the rule names for the fold [`%s`].\n\
-         fn %s_visitor() {\n\
-        \    fn implements<V: %s::Visitor>() {}\n\
-        \    implements::<%s>();\n\
-         }\n\n"
-        n n n path
-  | None -> ()
+(* {2 The fold}
 
-(* The fold [n] over the frames of a stride and over an index. *)
-let pp_fold_loops ppf n =
-  Fmt.pf ppf
-    "/// Folds [`%s`] over the `len / stride` frames of `stride` bytes at `off`,\n\
-     /// each checked on its own; `false`, and no frame folded, if `stride` is 0\n\
-     /// or the bounds are bad.\n\
-     #[inline]\n\
-     pub fn %s_frames<V: %s::Visitor>(v: &mut V, buf: &[u8], off: usize, len: \
-     usize, stride: usize) -> bool {\n\
-    \    let Some(frames) = off.checked_add(len).and_then(|end| \
-     buf.get(off..end)) else { return false };\n\
-    \    if stride == 0 {\n\
-    \        return false;\n\
-    \    }\n\
-    \    for frame in frames.chunks_exact(stride) {\n\
-    \        if %s_frame(v, frame).is_none() {\n\
-    \            v.invalid();\n\
-    \        }\n\
-    \    }\n\
-    \    true\n\
-     }\n\n\
-     /// Folds [`%s`] over the frames of `lens[i]` bytes at `offs[i]` of \
-     `buf`, in\n\
-     /// order: a frame whose bounds are bad calls `v.invalid`. `false`, and no\n\
-     /// frame folded, if `offs` and `lens` differ in length.\n\
-     #[inline]\n\
-     pub fn %s_index<V: %s::Visitor>(v: &mut V, buf: &[u8], offs: &[usize], \
-     lens: &[usize]) -> bool {\n\
-    \    if offs.len() != lens.len() {\n\
-    \        return false;\n\
-    \    }\n\
-    \    for (&off, &len) in offs.iter().zip(lens) {\n\
-    \        %s(v, buf, off, len);\n\
-    \    }\n\
-    \    true\n\
-     }\n\n"
-    n n n n n n n n
+   A path names a field by the accessor names from the codec down, as
+   [Wire_ocaml] reads it. The fold hands [f] its value, an option where the
+   field is optional, and one option more through a layer, [None] where the
+   innermost optional layer of the path is absent. *)
 
-let pp_fold ppf plan (f : fold) =
-  let outputs = P.select plan f.outputs in
-  let n = f.name in
-  let args = String.concat ", " (List.map output_value outputs) in
+type arg = {
+  value : P.output;
+  own : P.output option;
+  layered : bool;
+  layer : P.output option;
+}
+
+(* Each output of [nodes] with the presences of the optional fields around
+   it, outermost first. *)
+let rec placed around = function
+  | [] -> []
+  | P.Gate (_, p, _, body) :: rest ->
+      placed (around @ [ p ]) body @ placed around rest
+  | P.Region (_, _, body) :: rest -> placed around body @ placed around rest
+  | P.Prefix (fields, _) :: rest ->
+      List.filter_map
+        (fun (f : P.field) ->
+          Option.map (fun (o : P.output) -> (o.name, (o, around))) f.output)
+        fields
+      @ placed around rest
+  | (P.Span _ | P.Test _) :: rest -> placed around rest
+
+(* A step of a path names a member by its accessor, which [Wire_ocaml] may
+   have suffixed with ['_'] for a name of its own module. *)
+let unescaped n =
+  let k = ref (String.length n) in
+  while !k > 0 && n.[!k - 1] = '_' do
+    decr k
+  done;
+  String.sub n 0 !k
+
+let fold_arg ~codec plan (all : P.records) path =
+  let refuse fmt = Fmt.kstr (refuse ~codec) fmt in
+  let global prefix n = if prefix = "" then n else prefix ^ "_" ^ n in
+  let member (r : P.record) step =
+    match List.find_opt (fun m -> member_name m = step) r.members with
+    | Some m -> Some m
+    | None ->
+        List.find_opt
+          (fun m -> unescaped (member_name m) = unescaped step)
+          r.members
+  in
+  let rec go prefix (r : P.record) layers = function
+    | [] -> refuse "the fold path %S names no field" path
+    | [ leaf ] -> (
+        match member r leaf with
+        | Some (P.Scalar { field = { output = Some o; _ }; _ }) ->
+            (global prefix o.name, layers)
+        | Some _ -> refuse "the fold path %S names a field no fold reads" path
+        | None -> refuse "the fold path %S names no field %S" path leaf)
+    | step :: rest -> (
+        match member r step with
+        | Some (P.Sub { sub = { path = Some p; _ } as sub; presence; _ }) ->
+            let layer =
+              Option.map (fun (o : P.output) -> global prefix o.name) presence
+            in
+            go
+              (global prefix (String.concat "_" p))
+              (record_of_id all sub.codec_id)
+              (Option.to_list layer @ layers)
+              rest
+        | Some _ ->
+            refuse "the fold path %S goes through %S, which holds no record"
+              path step
+        | None -> refuse "the fold path %S names no field %S" path step)
+  in
+  let steps = String.split_on_char '.' path in
+  let name, layers = go "" all.root [] steps in
+  let o, around =
+    match List.assoc_opt name (placed [] (P.nodes plan)) with
+    | Some x -> x
+    | None -> refuse "the fold path %S names a field no fold reads" path
+  in
+  let is_layer (g : P.output) = List.mem g.name layers in
+  let own =
+    match List.rev around with
+    | g :: _ when not (is_layer g) -> Some g
+    | _ -> None
+  in
+  {
+    value = o;
+    own;
+    layered = List.length steps > 1;
+    layer = List.find_opt is_layer (List.rev around);
+  }
+
+let arg_type a =
+  let t = output_type a.value in
+  let t = if Option.is_some a.own then Fmt.str "Option<%s>" t else t in
+  if a.layered then Fmt.str "Option<%s>" t else t
+
+let arg_value a =
+  let opt p v =
+    match p with
+    | None -> Fmt.str "Some(%s)" v
+    | Some (p : P.output) -> Fmt.str "if %s { Some(%s) } else { None }" p.id v
+  in
+  let v = Fmt.str "(%s)" (output_value a.value) in
+  let v = if Option.is_some a.own then opt a.own v else v in
+  if a.layered then opt a.layer v else v
+
+(* The outputs the walk of the fold binds: each field's and the presences
+   that make it an option, in the plan's order. *)
+let fold_outputs plan args =
+  let used =
+    List.concat_map
+      (fun a -> (a.value :: Option.to_list a.own) @ Option.to_list a.layer)
+      args
+  in
+  List.filter
+    (fun (o : P.output) -> List.exists (fun (u : P.output) -> u.id = o.id) used)
+    (P.outputs plan)
+
+let tuple = function
+  | [] -> "()"
+  | [ x ] -> Fmt.str "(%s,)" x
+  | xs -> Fmt.str "(%s)" (String.concat ", " xs)
+
+(* [fold]: [fold_frame], the walk of one record that answers the fields its
+   [f] takes, and the loop over the records as [records] places them, with
+   [window_error] the error [validate] answers on a record's window alone.
+   A record of constant [size] back to back is one slot of that size each. *)
+let pp_fold ppf ~codec ~size plan all paths =
+  let args = List.map (fold_arg ~codec plan all) paths in
+  let outputs = fold_outputs plan args in
   let code, _ =
     body ~depth:1 plan outputs ~frame:"frame"
-      ~finish:[ Fmt.str "v.valid(%s);" args; "Some(())" ]
+      ~finish:[ Fmt.str "Some(%s)" (tuple (List.map arg_value args)) ]
   in
-  pp_visitor ppf f outputs;
+  let types = List.map arg_type args in
+  let xs = List.mapi (fun i _ -> Fmt.str "x%d" i) args in
+  let call = Fmt.str "f(%s)" (String.concat ", " ("acc" :: xs)) in
+  let bind = Fmt.str "let %s = t;" (tuple xs) in
+  let paths_doc =
+    match paths with
+    | [] -> "no field"
+    | ps -> String.concat ", " (List.map (Fmt.str "`%s`") ps)
+  in
+  let back =
+    match size with
+    | Some 0 ->
+        "            panic!(\"fold: records of no bytes back to back\");\n"
+    | Some n ->
+        Fmt.str
+          "            let mut off = 0usize;\n\
+          \            while off < buf.len() {\n\
+          \                match buf.get(off..off + %d).and_then(fold_frame) {\n\
+          \                    Some(t) => {\n\
+          \                        %s\n\
+          \                        acc = %s;\n\
+          \                    }\n\
+          \                    None => return Err((window_error(buf, off, \
+           buf.len() - off), acc)),\n\
+          \                }\n\
+          \                off += %d;\n\
+          \            }\n\
+          \            Ok(acc)\n"
+          n bind call n
+    | None ->
+        Fmt.str
+          "            let mut off = 0usize;\n\
+          \            while off < buf.len() {\n\
+          \                match fold_frame(&buf[off..]) {\n\
+          \                    Some(t) => {\n\
+          \                        %s\n\
+          \                        acc = %s;\n\
+          \                    }\n\
+          \                    None => return Err((window_error(buf, off, \
+           buf.len() - off), acc)),\n\
+          \                }\n\
+          \                match end_at(buf, off as i64).and_then(|e| \
+           usize::try_from(e).ok()) {\n\
+          \                    Some(next) if next > off => off = next,\n\
+          \                    _ => return Ok(acc),\n\
+          \                }\n\
+          \            }\n\
+          \            Ok(acc)\n"
+          bind call
+  in
+  let refused at len =
+    Fmt.str
+      "match invalid.as_mut() {\n\
+      \                        Some(g) => acc = g(acc),\n\
+      \                        None => return Err((window_error(buf, %s, %s), \
+       acc)),\n\
+      \                    }"
+      at len
+  in
   Fmt.pf ppf
     "#[inline(always)]\n\
-     fn %s_frame<V: %s::Visitor>(v: &mut V, frame: &[u8]) -> Option<()> {\n\
+     fn fold_frame(frame: &[u8]) -> Option<%s> {\n\
      %s}\n\n\
-     /// Hands the outputs of the record in the `len` bytes at `off` of `buf` to\n\
-     /// `v.valid`, or calls `v.invalid` if the record or the bounds are bad.\n\
+     /// The error [`validate`] answers on the `len` bytes at `off` of `buf`\n\
+     /// alone, at its offset in `buf`.\n\
+     #[cold]\n\
+     #[inline(never)]\n\
+     fn window_error(buf: &[u8], off: usize, len: usize) -> Error {\n\
+    \    let first = off.min(buf.len());\n\
+    \    let stop = first.saturating_add(len).min(buf.len());\n\
+    \    match validate(&buf[first..stop], 0) {\n\
+    \        Err(e) => Error { at: e.at.saturating_add(first), ..e },\n\
+    \        Ok(()) => Error { at: off, field: Path::ROOT, kind: \
+     Kind::ConstraintFailed { which: Predicate::Where, value: None } },\n\
+    \    }\n\
+     }\n\n\
+     /// Where the records of a [`fold`] lie in its buffer.\n\
+     #[derive(Clone, Copy, Debug)]\n\
+     pub enum Records<'r> {\n\
+    \    /// Back to back from offset 0, each where the one before ends, up to\n\
+    \    /// the end of the buffer.\n\
+    \    BackToBack,\n\
+    \    /// In slots of this many bytes, the `i`-th at `i * stride`, over the\n\
+    \    /// whole slots of the buffer.\n\
+    \    Slots(usize),\n\
+    \    /// In frames, the `i`-th the `lens[i]` bytes at `offs[i]`.\n\
+    \    Frames(&'r [usize], &'r [usize]),\n\
+     }\n\n\
+     /// Checks each record of `buf`, as [`check`] does, and folds `f` over\n\
+     /// those that pass, from `init`: `f(acc, x1, ..., xn)`, the fields %s of\n\
+     /// the record, read during its check, a field under a layer `None` where\n\
+     /// the layer is absent. A record in a slot or a frame is checked in its\n\
+     /// window alone.\n\
+     ///\n\
+     /// A refused record stops the fold with `Err((e, acc))`, `e` the error\n\
+     /// [`validate`] answers on its window and `acc` the fold of the records\n\
+     /// before it; in slots or frames, with `invalid`, `invalid(acc)` is the\n\
+     /// accumulator after a refused record and the fold goes on.\n\
+     ///\n\
+     /// # Panics\n\
+     ///\n\
+     /// If the stride of [`Records::Slots`] is 0, if the slices of\n\
+     /// [`Records::Frames`] differ in length, and if `invalid` is given with\n\
+     /// [`Records::BackToBack`].\n\
      #[inline]\n\
-     pub fn %s<V: %s::Visitor>(v: &mut V, buf: &[u8], off: usize, len: usize) {\n\
-    \    match off.checked_add(len).and_then(|end| buf.get(off..end)) {\n\
-    \        Some(frame) if %s_frame(v, frame).is_some() => {}\n\
-    \        _ => v.invalid(),\n\
+     pub fn fold<A, F>(\n\
+    \    buf: &[u8],\n\
+    \    records: Records<'_>,\n\
+    \    init: A,\n\
+    \    mut invalid: Option<&mut dyn FnMut(A) -> A>,\n\
+    \    mut f: F,\n\
+     ) -> Result<A, (Error, A)>\n\
+     where\n\
+    \    F: FnMut(%s) -> A,\n\
+     {\n\
+    \    let mut acc = init;\n\
+    \    match records {\n\
+    \        Records::BackToBack => {\n\
+    \            assert!(invalid.is_none(), \"fold: invalid with records back \
+     to back\");\n\
+     %s        }\n\
+    \        Records::Slots(stride) => {\n\
+    \            assert!(stride > 0, \"fold: a stride of 0\");\n\
+    \            for (i, frame) in buf.chunks_exact(stride).enumerate() {\n\
+    \                match fold_frame(frame) {\n\
+    \                    Some(t) => {\n\
+    \                        %s\n\
+    \                        acc = %s;\n\
+    \                    }\n\
+    \                    None => %s\n\
+    \                }\n\
+    \            }\n\
+    \            Ok(acc)\n\
+    \        }\n\
+    \        Records::Frames(offs, lens) => {\n\
+    \            assert!(offs.len() == lens.len(), \"fold: offs and lens \
+     differ in length\");\n\
+    \            for (&off, &len) in offs.iter().zip(lens) {\n\
+    \                match off.checked_add(len).and_then(|end| \
+     buf.get(off..end)).and_then(fold_frame) {\n\
+    \                    Some(t) => {\n\
+    \                        %s\n\
+    \                        acc = %s;\n\
+    \                    }\n\
+    \                    None => %s\n\
+    \                }\n\
+    \            }\n\
+    \            Ok(acc)\n\
+    \        }\n\
     \    }\n\
      }\n\n"
-    n n code n n n;
-  pp_fold_loops ppf n
+    (tuple types) code paths_doc
+    (String.concat ", " ("A" :: types))
+    back bind call
+    (refused "i * stride" "stride")
+    bind call (refused "off" "len")
 
 (* {2 Names} *)
 
-type source = Own | Field of string | Fold of string
+type source = Own | Field of string
 
 (* The names a record's module defines for itself: its functions, its
-   setters and, for the root, its folds'. *)
-let record_values ~folds root (r : P.record) =
+   setters and, for the root, its fold's. *)
+let record_values ~fold root (r : P.record) =
   let own l = List.map (fun n -> (Own, n)) l in
   own
     ([
@@ -1574,27 +1780,15 @@ let record_values ~folds root (r : P.record) =
     @
     if root then
       [ "check"; "check_frame"; "first_error"; "validate"; "decode"; "encode" ]
-    else [])
+      @
+      if fold then [ "fold"; "fold_frame"; "window_error"; "failed" ]
+      else [ "failed" ]
+    else [ "failed" ])
   @ List.map
       (fun (_, (f : P.field)) -> (Field f.name, "set_" ^ ident f.name))
       (P.settable r)
-  @
-  if root then
-    List.concat_map
-      (fun (f : fold) ->
-        List.map
-          (fun n -> (Fold f.name, n))
-          [
-            f.name;
-            f.name ^ "_frame";
-            f.name ^ "_frames";
-            f.name ^ "_index";
-            f.name ^ "_visitor";
-          ])
-      folds
-  else []
 
-let check_names ~codec ~(all : P.records) ~folds =
+let check_names ~codec ~(all : P.records) ~fold =
   let clash l =
     match Wire.Private.Names.clash l with
     | Some (Own, Field f, n) | Some (Field f, Own, n) ->
@@ -1603,39 +1797,24 @@ let check_names ~codec ~(all : P.records) ~folds =
           n
     | Some (Field g, Field f, n) ->
         Fmt.kstr (refuse ~codec) "fields %S and %S both define %s" g f n
-    | Some ((Own | Field _), Fold f, n) | Some (Fold f, (Own | Field _), n) ->
-        Fmt.kstr (refuse ~codec)
-          "the fold %S defines %s, which the generated module defines for \
-           itself"
-          f n
-    | Some (Fold g, Fold f, n) ->
-        Fmt.kstr (refuse ~codec) "the folds %S and %S both define %s" g f n
     | Some (Own, Own, _) | None -> ()
   in
   let own l = List.map (fun n -> (Own, n)) l in
-  let rec twice = function
-    | [] -> ()
-    | (f : fold) :: rest ->
-        if List.exists (fun (g : fold) -> g.name = f.name) rest then
-          Fmt.kstr (refuse ~codec) "the folds %S and %S both define %s" f.name
-            f.name f.name;
-        twice rest
-  in
-  twice folds;
   let accessors (r : P.record) =
     List.map (fun m -> (Field (member_name m), acc r m)) r.members
   in
   List.iter
     (fun (r : P.record) ->
-      clash (record_values ~folds (r.module_name = None) r);
+      clash (record_values ~fold (r.module_name = None) r);
       clash (accessors r);
       clash (List.map (fun (_, n, _) -> (Field n, ident n)) (named r.struct_)))
     (all.root :: all.records);
-  (* Modules: each record's, each fold's visitor and the types. *)
+  (* Modules: each record's and the types. *)
   clash
-    (own [ "View"; "Check"; "Record"; "Error"; "Kind"; "Path"; "Predicate" ]
-    @ List.map (fun (r : P.record) -> (Own, module_of r)) all.records
-    @ List.map (fun (f : fold) -> (Fold f.name, f.name)) folds)
+    (own
+       ([ "View"; "Check"; "Record"; "Error"; "Kind"; "Path"; "Predicate" ]
+       @ if fold then [ "Records" ] else [])
+    @ List.map (fun (r : P.record) -> (Own, module_of r)) all.records)
 
 (* {1 The module} *)
 
@@ -1643,29 +1822,23 @@ let uses_up =
   "use super::{fail, eof_if, refused, get, rd, span, put, zeros, sat, pos, \
    lsl, lsr, Error, Kind, Path, Predicate};"
 
-(* Whether a walk of [plan], the check's or a fold's, binds a slot. *)
-let has_slots plan folds =
-  List.exists
-    (fun (f : fold) -> P.slots plan (P.select plan f.outputs) <> [])
-    folds
-  || P.slots plan [] <> []
+(* Whether a walk of [plan], the check's or the fold's of [outputs], binds a
+   slot. *)
+let has_slots plan outputs = P.slots plan outputs <> [] || P.slots plan [] <> []
 
-let source ~codec ~folds c =
-  let fold_names =
-    List.concat_map
-      (fun (f : fold) -> [ f.name; f.name ^ "_frames"; f.name ^ "_index" ])
-      folds
-  in
+let source ~codec ~fold c =
   let planned f =
     try f () with Invalid_argument why -> raise (Unsupported why)
   in
-  let all = planned (fun () -> P.records ~reserved:fold_names c) in
+  let all = planned (fun () -> P.records c) in
   let plan = planned (fun () -> P.v c) in
-  check_names ~codec ~all ~folds;
-  List.iter
-    (fun (f : fold) ->
-      ignore (planned (fun () -> P.select plan f.outputs) : P.output list))
-    folds;
+  check_names ~codec ~all ~fold:(Option.is_some fold);
+  let outputs =
+    match fold with
+    | None -> []
+    | Some paths ->
+        fold_outputs plan (List.map (fold_arg ~codec plan all) paths)
+  in
   let b = Buffer.create 65536 in
   let ppf = Format.formatter_of_buffer b in
   let ctx (r : P.record) ~up = { all; r; scope = P.Scope.v r.plan; up } in
@@ -1673,7 +1846,7 @@ let source ~codec ~folds c =
   pp_root ppf ~size:all.size root;
   pp_record_module ppf root;
   pp_check_frame ppf plan;
-  List.iter (pp_fold ppf plan) folds;
+  Option.iter (pp_fold ppf ~codec ~size:all.size plan all) fold;
   List.iter
     (fun (r : P.record) ->
       Fmt.pf ppf "/// The records of the codec `%s`.\npub mod %s {\n%s\n\n"
@@ -1683,7 +1856,7 @@ let source ~codec ~folds c =
     all.records;
   Format.pp_print_flush ppf ();
   let head =
-    header ~codec ~min:(min_size all.root) ~slots:(has_slots plan folds)
+    header ~codec ~min:(min_size all.root) ~slots:(has_slots plan outputs)
   in
   Fmt.str
     "%a\n\
@@ -1694,5 +1867,5 @@ let source ~codec ~folds c =
      %s"
     pp_lines head (depth_of all) error_prelude shift_prelude (Buffer.contents b)
 
-let rs ~codec ~folds c =
-  try source ~codec ~folds c with Unsupported why -> refuse ~codec why
+let rs ~codec ?fold c =
+  try source ~codec ~fold c with Unsupported why -> refuse ~codec why

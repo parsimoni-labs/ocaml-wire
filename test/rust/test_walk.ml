@@ -4,26 +4,22 @@
 open Wire
 open Rust_src
 
-(* The fold of the packet stack hands its outputs to the visitor, typed by
-   their width and sign, each prefix cut by [split_first_chunk]. *)
+(* The fold of the packet stack hands its fields to [f], typed by their width
+   and sign, each prefix cut by [split_first_chunk]. *)
 let test_fold () =
-  let src = rs Packet_stack.codec in
+  let src =
+    rs ~fold:[ "ether_type"; "ipv4.src"; "ipv4.tcp.flags" ] Packet_stack.codec
+  in
   let fold = has "fold" src in
-  fold "fn valid(&mut self, ether_type: u16, ipv4_present: bool";
-  fold "ipv4_src: u32";
-  fold "ipv4_tcp_flags: u16";
-  fold "fn invalid(&mut self);";
+  fold "fn fold_frame(frame: &[u8]) -> Option<(u16, Option<u32>, Option<u16>)>";
+  fold "F: FnMut(A, u16, Option<u32>, Option<u16>) -> A,";
   fold ".split_first_chunk::<14>() else { return None; };";
   fold ".split_first_chunk::<20>() else { return None; };";
-  (* Selecting no output keeps every check: the range of the IPv4 version and
+  (* A fold of no field keeps every check: the range of the IPv4 version and
      header length byte, the TCP data offset and the UDP length. *)
-  let v =
-    section
-      (rs ~folds:[ Wire_rust.fold ~outputs:[] "fold" ] Packet_stack.codec)
-      "fn fold_frame"
-  in
+  let v = section (rs ~fold:[] Packet_stack.codec) "fn fold_frame" in
   let validation = has "validation only" v in
-  validation "v.valid();";
+  validation "Some(())";
   validation " >= 69i64 && ";
   validation " <= 79i64) { return None; }";
   validation " >= 8i64)) { return None; }";
@@ -47,7 +43,7 @@ let gated t present =
    with the tail as [u64], where a negative one is larger than any length:
    it has no test of its own. *)
 let test_arithmetic () =
-  let src c = section (rs c) "fn fold_frame" in
+  let src c = section (folded c) "fn fold_frame" in
   has "u8 squared"
     (src (gated uint8 (fun x -> Expr.(x * x >= int 0))))
     "(f1_x * f1_x)";
@@ -87,12 +83,8 @@ let test_enum () =
   let e = enum "E" [ ("a", 1); ("b", 2) ] uint8 in
   let c = Codec.v "E" Fun.id Codec.[ Field.v "e" e $ Fun.id ] in
   let check = "if !(((f1_e == 1i64) || (f1_e == 2i64))) { return None; }" in
-  has "enum" (section (rs c) "fn fold_frame") check;
-  has "enum, no output"
-    (section
-       (rs ~folds:[ Wire_rust.fold ~outputs:[] "fold" ] c)
-       "fn fold_frame")
-    check
+  has "enum" (section (folded c) "fn fold_frame") check;
+  has "enum, no field" (section (rs ~fold:[] c) "fn fold_frame") check
 
 (* The walk after an optional field is written once and an output under
    more than [Plan.slot_depth] of them is bound once, so the module grows
@@ -126,7 +118,8 @@ let test_linear () =
   List.iter
     (fun (name, codec, outputs) ->
       let size n =
-        lines (rs ~folds:[ Wire_rust.fold ?outputs "fold" ] (codec n))
+        let c = codec n in
+        lines (rs ~fold:(Option.value outputs ~default:(paths c)) c)
       in
       let s8 = size 8 and s16 = size 16 and s32 = size 32 in
       if s32 - s16 > (2 * (s16 - s8)) + 2 then
@@ -140,7 +133,7 @@ let test_linear () =
     ];
   List.iter
     (fun n ->
-      let src = section (rs (Schemas.nested n)) "fn fold_frame" in
+      let src = section (folded (Schemas.nested n)) "fn fold_frame" in
       let max_lines, max_words = nested_budget n in
       if lines src > max_lines || words src > max_words then
         Alcotest.failf
@@ -153,7 +146,7 @@ let test_linear () =
    on a path. A subtree two paths reach is one closure, and the case it
    picks runs in one [match]; each case is written once. *)
 let test_decision () =
-  let src = section (rs Schemas.shared) "fn fold_frame" in
+  let src = section (folded Schemas.shared) "fn fold_frame" in
   let shared = has "shared" src in
   shared "|| -> Option<usize> { Some({";
   shared "()?";
