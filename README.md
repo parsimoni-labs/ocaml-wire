@@ -1,6 +1,6 @@
 # ocaml-wire
 
-Binary wire format DSL with EverParse 3D output.
+One description of a binary format for OCaml, Rust and verified C.
 
 ## Overview
 
@@ -12,9 +12,10 @@ are written by hand, though, and a `.3d` file gives you a validator, not a
 serialiser or a codec for the language the application is written in.
 
 Wire describes a binary format once, as an OCaml value, and derives from that
-single description both a zero-copy OCaml codec, for parsing and serialising,
-and the EverParse `.3d` schema that compiles to a verified C parser. Define
-the format, then:
+single description a zero-copy OCaml codec, for parsing and serialising,
+standalone OCaml, OxCaml and Rust modules that do the same work with every
+offset a constant, and the EverParse `.3d` schema that compiles to a verified
+C parser. Define the format, then:
 
 - **Name reusable fields** with `Field.v` and assemble records with `Codec`
 - **Read and write fields in-place** via `Codec.get` / `Codec.set` --
@@ -23,6 +24,8 @@ the format, then:
 - **Decode records** via `Codec.decode`, allocate validated encodings with
   `Codec.to_bytes` / `Codec.to_string`, or encode into an existing buffer with
   `Codec.encode`
+- **Generate a standalone OCaml or OxCaml module** via `Wire_ocaml`
+- **Generate dependency-free `no_std` Rust** via `Wire_rust`
 - **Export EverParse `.3d` schemas** via `Everparse.project` / `Everparse.write`
 - **Generate verified C artifacts** via `Wire_3d.run`
 - **Generate OCaml FFI stubs** via `Wire_stubs` when OCaml should call the C

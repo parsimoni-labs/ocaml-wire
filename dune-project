@@ -16,11 +16,15 @@
 
 (package
  (name wire)
- (synopsis "Binary wire format DSL with EverParse 3D output")
+ (synopsis "One description of a binary format for OCaml, Rust and verified C")
  (description
-  "OCaml DSL for describing binary wire formats with EverParse 3D output. \
-   Define your wire format once, then use it for OCaml parsing via bytesrw or \
-   emit .3d files for verified C parser generation via EverParse.")
+  "Wire describes a binary format once, as an OCaml value, and derives from \
+   that single description everything that reads and writes the bytes: an \
+   interpreted OCaml codec that decodes, encodes and reads fields in place \
+   without copying; standalone OCaml or OxCaml modules (wire.ocaml) and \
+   dependency-free no_std Rust (wire.rust) that do the same work with every \
+   offset a constant; and the EverParse 3D schema that compiles to a verified \
+   C validator (wire.3d), with OCaml FFI stubs to call it (wire.stubs).")
  (depends
   (ocaml (>= 5.3))
   (bytesrw (>= 0.4.0))
