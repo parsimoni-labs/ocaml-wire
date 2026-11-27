@@ -54,18 +54,40 @@ let codec = Asn1.codec spki
 
 ```
 SPKI DEFINITIONS EXPLICIT TAGS ::= BEGIN
+
 --#DEFINED-BY AlgorithmIdentifier.parameters {
---#  rsa : NULL, ec : OBJECT IDENTIFIER, ed25519 : ABSENT
+--#  oid-1-2-840-113549-1-1-1 : NULL,
+--#  oid-1-2-840-10045-2-1 : OBJECT IDENTIFIER,
+--#  oid-1-3-101-112 : ABSENT
 --#} FALLBACK NONE
-rsa OBJECT IDENTIFIER ::= { 1 2 840 113549 1 1 1 }
-ec OBJECT IDENTIFIER ::= { 1 2 840 10045 2 1 }
-ed25519 OBJECT IDENTIFIER ::= { 1 3 101 112 }
+
+oid-1-2-840-113549-1-1-1 OBJECT IDENTIFIER ::= { 1 2 840 113549 1 1 1 }
+oid-1-2-840-10045-2-1 OBJECT IDENTIFIER ::= { 1 2 840 10045 2 1 }
+oid-1-3-101-112 OBJECT IDENTIFIER ::= { 1 3 101 112 }
+
 AlgorithmIdentifier ::= SEQUENCE {
-  algorithm OBJECT IDENTIFIER, parameters ANY DEFINED BY algorithm OPTIONAL }
+  algorithm OBJECT IDENTIFIER,
+  parameters ANY DEFINED BY algorithm OPTIONAL
+}
+
 SubjectPublicKeyInfo ::= SEQUENCE {
-  algorithm AlgorithmIdentifier, subjectPublicKey BIT STRING }
+  algorithm AlgorithmIdentifier,
+  subjectPublicKey BIT STRING
+}
+
 END
 ```
+
+An `Asn1.Oid.t` carries no name, so an OBJECT IDENTIFIER value is named by
+its arcs, and everparse-asn1 names the case of each key after it
+(`Elab.ml:1210-1214`). Every other name is the description's, made an ASN.1
+name (letters and digits with single hyphens) and unique in its scope: a
+type of a reserved word or of a name already taken gets `-2`, `-3`, ... A
+type with no name of its own that the module must name (a root other than a
+SEQUENCE or SET, a `keep_bytes` off a component) takes its path, the name
+everparse-asn1 would give it (`T-c`, `T-c-elt`); a `keep_bytes` component
+keeps its bytes as `--#KEEP-BYTES T.c`. `test/asn1/test.ml` pins the module
+of this example and of a type using every construct of the table below.
 
 ocaml-x509 writes it with `sequence2` and a recursive `fix` over a `choice4`
 of parameters (`x509/algorithm.ml:439-456`, `x509/public_key.ml:91-100`);
@@ -236,19 +258,56 @@ The combinators raise `Invalid_argument`, each refusal unit-tested, on:
   (`spec/ASN1.Syntax.fst:10-12`);
 - `keep_bytes` on a CHOICE alternative, a DEFAULT component or a
   `defined_by` key or component (`README:234-240`);
-- a DER codec in a binary record outside `nested ~size`.
+- a DER codec in a binary record outside `nested ~size`;
+- a number of magnitude 2^61 or more in an INTEGER bound, an ENUMERATED value,
+  an INTEGER DEFAULT or key, which everparse-asn1's lexer does not read
+  (`everparse-asn1/Lexer.mll:63`);
+- a DEFAULT or a key with no `.asn` literal: a string with a control
+  character (`Lexer.mll:82`), a PrintableString, IA5String, NumericString,
+  VisibleString, TeletexString or time outside printable ASCII (README
+  "IMPORTS and values"), a BMPString or UniversalString that is not code
+  points, a BIT STRING whose unused bits are not zero;
+- a `defined_by` with no case and no fallback (`everparse-asn1/Elab.ml:1226`).
 
 REAL, extension markers and BER have no combinator at all.
 
 ## Building everparse-asn1
 
-Not built here. `make asn1-tool` at the EverParse root builds
-`bin/everparse-asn1.exe` (`README:31-34`, `Makefile:117-119`) with OCaml and
-dune from EverParse's opam switch (`src/ASN1/tool/Makefile:2`). Running it
-also needs F*, Z3 5.3.0 (`lib/everparse/z3-version.Makefile:1`), `cc`, and
-the verified ASN.1 and LowParse libraries under `$EVERPARSE_HOME`
-(`README:69-78`), which `make asn1` verifies, Pulse included
-(`Makefile:104-115`). `~/.local/everparse` has F* but neither.
+`make asn1-tool` at the EverParse root builds `bin/everparse-asn1.exe`
+(`README:31-34`, `Makefile:117-119`). The front end is plain OCaml with no
+library dependency (`src/ASN1/tool/ocaml/everparse-asn1/dune`), so a copy of
+`src/ASN1/tool` builds with dune in wire's own switch (OCaml 5.4.1), once
+`Z3Version.ml` is written as `src/ASN1/tool/Makefile:16-18` writes it:
+
+```
+$ cp -R $EVERPARSE/src/ASN1/tool $D/tool
+$ echo 'let z3_version = "5.3.0"' > $D/tool/ocaml/everparse-asn1/Z3Version.ml
+$ dune build --root $D/tool/ocaml
+Entering directory '$D/tool/ocaml'
+Leaving directory '$D/tool/ocaml'
+```
+
+`--fstar_only` stops after parsing, elaborating and writing the F* modules
+(`Main.ml:102-145`), which needs no F*. Verifying them needs F*, Z3 5.3.0
+(`lib/everparse/z3-version.Makefile:1`) and the verified ASN.1, LowParse and
+Pulse libraries under `$EVERPARSE_HOME` (`README:69-78`, `Makefile:104-115`),
+which `~/.local/everparse` does not have. `make asn1` hands every module
+`test/asn1/gen_asn.ml` writes to `everparse-asn1.exe --fstar_only --root ...`
+(`$EVERPARSE_ASN1`, else `PATH`, else `~/.local/everparse/bin`), and fails on
+the first one it refuses:
+
+```
+$ EVERPARSE_ASN1=$D/tool/ocaml/_build/default/everparse-asn1/Main.exe make asn1
+Clash: --root Clash
+Constructs: --root Constructs
+KeptRoot: --root KeptRoot
+Names: --root Names
+SPKI: --root SubjectPublicKeyInfo
+X509Lite: --root Cert
+Wrote out/Clash/Clash.fst and out/Clash/Clash.Impl.fst
+...
+Wrote out/X509Lite/X509Lite.fst and out/X509Lite/X509Lite.Impl.fst
+```
 
 ## Open questions
 
@@ -256,14 +315,58 @@ the verified ASN.1 and LowParse libraries under `$EVERPARSE_HOME`
   view. Settled by allocations per certificate on the x509 corpus walking
   extensions, against `L_iter_next`'s zero-copy element parse.
 - **Q2** Whether a 3D byte array's `:on-success` can call a `UINT8` extern on
-  `field_ptr`; if not, DER-in-binary uses post-validation glue too. Settled by
-  a ten-line `.3d` through 3d.exe.
+  `field_ptr`; if not, DER-in-binary uses post-validation glue too. Settled:
+  it can. The pointer is bound with `var` first, as `doc/GetFieldPtr.3d`
+  does, and the length passed is a `UINT32` (a `UINT32BE` field is refused,
+  "Argument type mismatch, expected UINT32 whereas len has type UINT32BE",
+  and so is its cast; a `UINT16BE` field cast with `(UINT32)` is accepted):
+
+  ```
+  extern UINT8 CheckDer(PUINT8 content, UINT32 length)
+
+  entrypoint
+  typedef struct _DerHold {
+    UINT32 len;
+    UINT8 der[:byte-size len]
+    {:on-success
+       var p = field_ptr;
+       var ok = CheckDer(p, len);
+       return (ok == 1);
+    };
+  } DerHold;
+  ```
+
+  `everparse-3d.exe --batch DerHold.3d` (v2026.10.27) answers "Verified
+  module: DerHold", "All verification conditions discharged successfully",
+  "EverParse succeeded!", and the extracted validator calls the extern on
+  the array's first byte:
+
+  ```
+  uint8_t *hd = SlBase + startPosSz;
+  uint8_t hd1 = CheckDer(hd, len);
+  BOOLEAN actionSuccessDer = hd1 == 1U;
+  ```
 - **Q3** Time carriers: strings here, Ptime in asn1-combinators
   (`asn.mli:304-307`). Settled by whether `wire` may depend on ptime under
   `make test-wasm`, and by what `spec/ASN1.Spec.Content.TIME.fst` accepts.
 - **Q4** The `--#DEFINED-BY` syntax of a typed or OPTIONAL `FALLBACK`:
-  `README:302` shows only `FALLBACK NONE`. Settled by the front end's parser
-  (`src/ASN1/tool/ocaml/everparse-asn1/`) or one run of the tool.
+  `README:302` shows only `FALLBACK NONE`. Settled by the parser,
+  `everparse-asn1/Parse.ml:695-701,736-739`: a fallback is a case body,
+
+  ```
+  --#DEFINED-BY Type.field [BY key] { value : body, ... } [FALLBACK (NONE | body)]
+     where body is ABSENT, CONTAINING T, or T [OPTIONAL]
+  ```
+
+  so a typed fallback is `FALLBACK T`, an OPTIONAL one `FALLBACK T OPTIONAL`.
+  With no `FALLBACK`, another key takes the declared component
+  (`FbDeclared`, `Elab.ml:1221-1224`). A body `T` replaces the dependent
+  component under its declared tags, OPTIONAL only if the body says so
+  (`Elab.ml:1197-1203`), so `Asn1.project` declares the component `ANY
+  DEFINED BY key` and gives every case its whole type, `FALLBACK NONE`
+  without a `fallback`. everparse-asn1 accepts the printed
+  `FALLBACK [1] EXPLICIT ANY OPTIONAL`, `FALLBACK ANY OPTIONAL` and
+  `FALLBACK OCTET STRING` (`make asn1`, modules Constructs and X509Lite).
 - **Q5** Whether `Wire_ocaml` and `Wire_rust` generate DER modules. Settled by
   the bench of the interpreted codec against the C through the stubs.
 - **Q6** Named-bit BIT STRINGs (`asn.mli:342`, X.509 KeyUsage): neither side

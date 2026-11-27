@@ -2379,7 +2379,8 @@ module Asn1 : sig
   (** [pp] prints a schema as its [.asn] text. *)
 
   val write : outdir:string -> schema list -> unit
-  (** [write ~outdir ss] writes the [.asn] file of each schema in [outdir]. *)
+  (** [write ~outdir ss] writes the [.asn] file of each schema in [outdir].
+      Raises [Invalid_argument] if two different schemas have one name. *)
 end
 
 (** {1 ASCII Bit Diagrams}
@@ -2672,6 +2673,15 @@ module Private : sig
 
     val all_paths : string list
     (** Every name {!paths} can return. *)
+  end
+
+  (** The projection of an ASN.1 type, before {!Asn1.codec} makes its codec. *)
+  module Asn1_type : sig
+    val project : string -> 'a Asn1.t -> Asn1.schema
+    (** [project m t] is {!Asn1.project} [m] of the codec of [t]. *)
+
+    val contained : 'a Asn1.t -> Everparse.t list
+    (** [contained t] is {!Asn1.contained} of the codec of [t]. *)
   end
 
   val param_name : param -> string

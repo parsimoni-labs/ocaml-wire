@@ -1,0 +1,29 @@
+(library
+ (name asn1_modules)
+ (modules asn1_modules)
+ (libraries wire))
+
+(test
+ (name test)
+ (modules test)
+ (libraries wire asn1_modules alcotest fmt re))
+
+(executable
+ (name gen_asn)
+ (modules gen_asn)
+ (libraries wire asn1_modules))
+
+; everparse-asn1 parses and elaborates every module gen_asn writes, and
+; generates its F* modules (--fstar_only: verifying them needs F*, Z3 and the
+; Pulse libraries, docs/asn1.md "Building everparse-asn1"). The tool is
+; $EVERPARSE_ASN1, else everparse-asn1.exe in PATH, else in
+; ~/.local/everparse/bin. Run with make asn1.
+
+(rule
+ (alias asn1)
+ (deps
+  gen_asn.exe
+  (env_var EVERPARSE_ASN1))
+ (action
+  (bash
+   "e=${EVERPARSE_ASN1:-$(command -v everparse-asn1.exe || echo ~/.local/everparse/bin/everparse-asn1.exe)}; [ -x \"$e\" ] || { echo \"everparse-asn1.exe not found: set EVERPARSE_ASN1\" >&2; exit 1; }; rm -rf asn out && mkdir asn && ./gen_asn.exe asn && for f in asn/*.asn; do m=$(basename \"$f\" .asn); echo \"$m: --root $(cat asn/$m.roots)\"; \"$e\" --fstar_only --odir \"out/$m\" --root \"$(cat asn/$m.roots)\" \"$f\" || exit 1; done")))

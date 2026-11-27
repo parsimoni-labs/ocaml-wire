@@ -1,5 +1,5 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
-       fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
+       fuzz-nightly fuzz-rust 3d asn1 bench bench-demo bench-routing bench-gateway \
        bench-clcw bench-rust bench-flow bench-flow-swap bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck prove verify clean
@@ -98,6 +98,11 @@ verify:
 
 3d:
 	dune exec examples/validate_3d.exe
+
+# everparse-asn1 parses and elaborates every module of test/asn1: the tool is
+# $(EVERPARSE_ASN1), else everparse-asn1.exe in PATH or ~/.local/everparse/bin.
+asn1:
+	dune build @test/asn1/asn1
 
 bench: bench-demo bench-routing bench-gateway bench-clcw
 
