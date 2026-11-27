@@ -155,6 +155,9 @@ let rec size_of_typ_value : type a.
   | Struct _ -> 0
   | Type_ref _ -> 0
   | Qualified_ref _ -> 0
+  | Der _ ->
+      invalid_arg
+        "Layout.size_of_typ_value: a DER component has no binary layout"
 
 (* Whether measuring a value of [typ] reads a size that is not a literal, so
    that [size_of_typ_value] may need the record's fields to resolve it: the
@@ -228,7 +231,7 @@ let rec c_type_of : type a. a typ -> string = function
   | Uint_var _ | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _
   | Array _ | Byte_array _ | Byte_array_where _ | Byte_slice _ | Single_elem _
   | Casetype _ | Struct _ | Type_ref _ | Qualified_ref _ | Apply _ | Codec _
-  | Repeat _ | Union _ ->
+  | Repeat _ | Union _ | Der _ ->
       "uint32_t"
 
 let ml_type_of : type a. a typ -> string = function

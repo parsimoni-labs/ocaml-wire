@@ -427,7 +427,7 @@ let rec iter_typ_refs : type a.
       iter_params_fields ~assign param codec_struct.fields codec_struct.where
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
   | Float32 _ | Float64 _ | Bits _ | Unit | All_bytes | All_zeros | Zeroterm
-  | Struct _ | Type_ref _ | Qualified_ref _ ->
+  | Struct _ | Type_ref _ | Qualified_ref _ | Der _ ->
       ()
 
 and iter_param_refs_typ : type a.

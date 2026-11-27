@@ -661,7 +661,7 @@ let rec elem_strategy : type a. a typ -> a elem_strategy = function
   | Unit | All_bytes | All_zeros | Zeroterm_at_most _ | Where _ | Array _
   | Byte_array _ | Byte_array_where _ | Byte_slice _ | Enum _ | Struct _
   | Type_ref _ | Qualified_ref _ | Map _ | Apply _ | Optional _ | Optional_or _
-  | Repeat _ | Union _ ->
+  | Repeat _ | Union _ | Der _ ->
       By_reading
 
 (* The element check the walk runs. Skipping a value-only reader keeps the span

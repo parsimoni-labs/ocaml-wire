@@ -212,6 +212,7 @@ and pp_typ : type a. a typ Fmt.t =
   | Optional_or { present = Bool false; _ } -> Fmt.string ppf "UINT8"
   | Optional _ | Optional_or _ | Repeat _ ->
       assert false (* unreachable: rejected by the wrapping combinator *)
+  | Der _ -> invalid_arg "Wire: an ASN.1 component has no 3D projection"
 
 and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
 

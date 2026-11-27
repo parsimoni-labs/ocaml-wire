@@ -66,7 +66,7 @@ let rec typ_returns_slice : type a. a typ -> bool = function
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
   | Float32 _ | Float64 _ | Uint_var _ | Bits _ | Unit | All_bytes | All_zeros
   | Zeroterm | Zeroterm_at_most _ | Byte_array _ | Byte_array_where _ | Struct _
-  | Type_ref _ | Qualified_ref _ ->
+  | Type_ref _ | Qualified_ref _ | Der _ ->
       false
 
 let struct_returns_slice s =
@@ -466,6 +466,7 @@ let rec parse_direct : type a.
   | Qualified_ref _ ->
       invalid_arg "Wire.qualified_ref: decoding needs a type registry"
   | Apply _ -> invalid_arg "Wire.apply: decoding needs a type registry"
+  | Der _ -> invalid_arg "Wire: an ASN.1 component is decoded by Asn1.codec"
 
 and parse_where : type a.
     copy_slices:bool -> a typ -> bool expr -> bytes -> int -> int -> a * int =
@@ -1008,6 +1009,7 @@ let rec encode_into : type a. a typ -> a -> encoder -> unit =
   | Qualified_ref _ ->
       invalid_arg "Wire.qualified_ref: encoding needs a type registry"
   | Apply _ -> invalid_arg "Wire.apply: encoding needs a type registry"
+  | Der _ -> invalid_arg "Wire: an ASN.1 component is encoded by Asn1.codec"
 
 and encode_casetype : type a k.
     k typ -> (a, k) case_branch list -> a -> encoder -> unit =

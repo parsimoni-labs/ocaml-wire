@@ -44,6 +44,15 @@ type ('f, 'r) fields =
 val ( $ ) : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
 (** [f $ proj] binds a field to a record projection. *)
 
+val field_name : ('a, 'r) field -> string
+(** [field_name f] is the name of the source field of [f]. *)
+
+val field_id : ('a, 'r) field -> int
+(** [field_id f] is the {!Field.id} of the source field of [f]. *)
+
+val field_typ : ('a, 'r) field -> 'a Types.typ
+(** [field_typ f] is the type of the source field of [f]. *)
+
 val v :
   string ->
   ?where:bool Types.expr ->

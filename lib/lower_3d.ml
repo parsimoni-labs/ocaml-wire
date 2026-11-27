@@ -276,7 +276,7 @@ let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Float32 _ | Float64 _ | Unit | All_bytes | All_zeros | Zeroterm
   | Zeroterm_at_most _ | Array _ | Byte_array _ | Byte_array_where _
   | Byte_slice _ | Casetype _ | Union _ | Struct _ | Type_ref _
-  | Qualified_ref _ | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
+  | Qualified_ref _ | Codec _ | Optional _ | Optional_or _ | Repeat _ | Der _ ->
       invalid_arg
         "Wire.casetype: this tag type carries no integer case index; use a \
          fixed-width integer, bitfield, or enum tag."
@@ -463,6 +463,7 @@ let rec wrap_shape : type a. a typ -> string * param list =
       in
       (Fmt.str "ap%s_%s" ttag (String.concat "_" atags), List.concat aformals)
   | Codec { codec_name; codec_struct; _ } -> (codec_name, codec_struct.params)
+  | Der _ -> invalid_arg "Wire: an ASN.1 component has no 3D projection"
 
 and expr_shape : type a. a expr -> string * param list =
  fun e ->

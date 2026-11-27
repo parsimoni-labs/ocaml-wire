@@ -18,6 +18,9 @@ type ('a, 'r) field = ('a, 'r) Codec_repr.field
 type 'r t = 'r Codec_repr.t
 
 let ( $ ) = ( $ )
+let field_name (f : _ field) = f.name
+let field_id (f : _ field) = f.id
+let field_typ (f : _ field) = f.typ
 let zeroterm_nul_pos = zeroterm_nul_pos
 let blit_string_exact = blit_string_exact
 let blit_slice_exact = blit_slice_exact
