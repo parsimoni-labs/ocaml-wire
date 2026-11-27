@@ -14,184 +14,129 @@ let target =
 
 type field = {
   name : string;
-  ident : string;
-  show : string;
-  views : Diff_ocaml.view list;
+  plain : string;  (** The show of its value. *)
+  acc : string;  (** Its accessor in the module's views. *)
 }
 
-(* A bitfield or a byte array comes back in its carrier, [M.Value.<field>],
-   the [int] or [string] it holds. *)
-let rec carrier : type a. a T.typ -> string option = function
-  | T.Bits _ -> Some "int"
-  | T.Byte_array _ -> Some "string"
-  | T.Where { inner; _ } -> carrier inner
-  | T.Enum { base; _ } -> carrier base
-  | _ -> None
+(* The accessors of the views of [c], one per field of its fixed record, in
+   the order of its fields. *)
+let accessors c =
+  List.map
+    (function
+      | Wire_ocaml.Int { name; _ }
+      | Bool { name; _ }
+      | Record { name; _ }
+      | Bytes { name; _ } ->
+          name)
+    (Wire_ocaml.views c).members
 
 let fields c =
-  List.map
-    (fun (T.Field f) ->
+  let accs = accessors c in
+  List.mapi
+    (fun i (T.Field f) ->
       let name = Option.get f.field_name in
-      let ident = Wire_ocaml.ident name in
-      let show =
-        match (Diff_ocaml.show_code f.field_typ, carrier f.field_typ) with
-        | Some s, None -> s
-        | Some s, Some plain ->
-            Fmt.str "(fun v -> %s (v : M.Value.%s :> %s))" s ident plain
-        | None, _ ->
+      let acc =
+        match List.nth_opt accs i with
+        | Some a -> a
+        | None -> Fmt.failwith "gen: field %s has no accessor" name
+      in
+      let plain =
+        match Diff_ocaml.show_code f.field_typ with
+        | Some s -> s
+        | None ->
             Fmt.failwith "gen: field %s has a type the backend cannot show" name
       in
-      { name; ident; show; views = Diff_ocaml.views f.field_typ })
+      { name; plain; acc })
     (Gen.to_struct c).fields
 
-let view = function
-  | Diff_ocaml.Get -> "Diff_ocaml.Get"
-  | Get_int -> "Diff_ocaml.Get_int"
-  | Of_word -> "Diff_ocaml.Of_word"
+(* A read of the view [v] of [bb] through the module's accessor of [f]. *)
+let pp_access ppf f = Fmt.pf ppf "%s (M.%s bb v)" f.plain f.acc
 
-(* Each getter of [f] in module [m], on the buffer [buf] makes from [b]. *)
-let pp_gets ~m ~buf ppf f =
-  List.iter
-    (fun v ->
-      let read =
-        match v with
-        | Diff_ocaml.Get -> Fmt.str "%s (%s.Get.%s (%s) o)" f.show m f.ident buf
-        | Get_int ->
-            Fmt.str "string_of_int (%s.Get.%s_int (%s) o)" m f.ident buf
-        | Of_word ->
-            Fmt.str "string_of_int (%s.%s_of_word (%s.Get.%s_word (%s) o))" m
-              f.ident m f.ident buf
-      in
-      Fmt.pf ppf "        (%S, %s, fun b o -> %s);@\n" f.name (view v) read)
-    f.views
-
-(* The reads after [Valid.v]: a [read_<f>] for every field, and a
-   [read_<f>_int] for a 32-bit one. *)
-let reads fields =
-  List.concat_map
-    (fun f ->
-      List.filter_map
-        (function
-          | Diff_ocaml.Get -> Some (f, Diff_ocaml.Get)
-          | Get_int -> Some (f, Get_int)
-          | Of_word -> None)
-        f.views)
-    fields
-
-(* A read of [v], a [Valid.t]; or with [b], of the view [v] of the buffer
-   named [b]. *)
-let pp_read ?(prefix = "read") ?b ~m ppf (f, v) =
-  let args = match b with None -> "v" | Some b -> b ^ " v" in
-  match v with
-  | Diff_ocaml.Get -> Fmt.pf ppf "%s (%s.%s_%s %s)" f.show m prefix f.ident args
-  | _ -> Fmt.pf ppf "string_of_int (%s.%s_%s_int %s)" m prefix f.ident args
-
-(* The glue over [m] ("M" or "M.Bigstring"), whose buffer [buf] makes from
-   the bytes [b] and [brand] names; [back] wraps a write so its bytes land in
-   [b]. *)
-let pp_ops ppf ~m ~buf ~brand ~back fields =
-  let reads = reads fields in
+(* The glue over [M]: its decoder, validator and encoder, and its views,
+   [check], [ok], [get] and an accessor per field. *)
+let pp_ops ppf fields =
   Fmt.pf ppf
     "{@\n\
     \      Diff_ocaml.decode =@\n\
     \        (fun b o ->@\n\
-    \          let out = Bytes.create M.size in@\n\
-    \          M.encode (%s.decode_exn (%s) o) out 0;@\n\
-    \          Bytes.to_string out);@\n\
-    \      validate = (fun b o -> %s.validate_exn (%s) o);@\n\
+    \          Result.map (fun r ->@\n\
+    \              let out = Bytes.create M.min_size in@\n\
+    \              M.encode r out 0;@\n\
+    \              Bytes.to_string out)@\n\
+    \            (M.decode b o));@\n\
+    \      validate = (fun b o -> M.validate b o);@\n\
     \      encode =@\n\
     \        (fun s b o ->@\n\
-    \          let r = M.decode_exn (Bytes.of_string s) 0 in@\n\
-    \          %a);@\n\
-    \      gets = [@\n\
-     %a      ];@\n\
+    \          let r = Result.get_ok (M.decode (Bytes.of_string s) 0) in@\n\
+    \          M.encode r b o);@\n\
     \      reads = [ %a ];@\n\
-    \      valid = (fun b -> let v = %s.Valid.v (%s) in [ %a ]);@\n\
-    \      is_valid = (fun b o -> %s.is_valid (%s) o);@\n\
+    \      valid =@\n\
+    \        (fun b ->@\n\
+    \          Result.map (fun () ->@\n\
+    \              match Wire_runtime.Buf.v b with@\n\
+    \              | Wire_runtime.Buf.Any bb ->@\n\
+    \                  let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
+     0) in@\n\
+    \                  [ %a ])@\n\
+    \            (M.validate b 0));@\n\
     \      view =@\n\
     \        (fun b o ->@\n\
-    \          match %s.v (%s) with@\n\
-    \          | %s.Any bb ->@\n\
-    \              let v = %s.View.at bb (%s.length bb) o in@\n\
-    \              [ %a ]);@\n\
+    \          Result.map (fun () ->@\n\
+    \              match Wire_runtime.Buf.v b with@\n\
+    \              | Wire_runtime.Buf.Any bb ->@\n\
+    \                  let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
+     o) in@\n\
+    \                  [ %a ])@\n\
+    \            (M.validate b o));@\n\
     \      checked =@\n\
     \        (fun b o ->@\n\
-    \          match %s.v (%s) with@\n\
-    \          | %s.Any bb ->@\n\
-    \              let c = %s.View.check bb (%s.length bb) o in@\n\
-    \              if %s.View.ok c then@\n\
-    \                let v = %s.View.get c in@\n\
+    \          match Wire_runtime.Buf.v b with@\n\
+    \          | Wire_runtime.Buf.Any bb ->@\n\
+    \              let c = M.check bb (Wire_runtime.Buf.length bb) o in@\n\
+    \              if M.ok c then@\n\
+    \                let v = M.get c in@\n\
     \                (true, [ %a ])@\n\
     \              else (false, []));@\n\
     \    }"
-    m buf m buf back (Fmt.str "%s.encode r" m)
-    Fmt.(list ~sep:nop (pp_gets ~m ~buf))
+    Fmt.(list ~sep:(any "; ") (fun ppf f -> pf ppf "%S" f.name))
     fields
-    Fmt.(
-      list ~sep:(any "; ") (fun ppf (f, v) -> pf ppf "(%S, %s)" f.name (view v)))
-    reads m buf
-    Fmt.(list ~sep:(any "; ") (pp_read ~m))
-    reads m buf brand buf brand m brand
-    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
-    reads brand buf brand m brand m m
-    Fmt.(list ~sep:(any "; ") (pp_read ~prefix:"view" ~b:"bb" ~m))
-    reads
+    Fmt.(list ~sep:(any "; ") pp_access)
+    fields
+    Fmt.(list ~sep:(any "; ") pp_access)
+    fields
+    Fmt.(list ~sep:(any "; ") pp_access)
+    fields
 
-(* The module generated from [c] under its interface, and its bridge, which
-   checks it against the codec. *)
+(* The module generated from [c] under its interface. *)
 let pp_case ppf (label, c, (src, intf)) =
-  let fields = fields c in
   Fmt.pf ppf
     "let %s : Fuzz_gen.packed -> Diff_ocaml.t = function@\n\
-    \  | Fuzz_gen.Pack g ->@\n\
-    \  let codec = Fuzz_gen.codec g in@\n\
+    \  | Fuzz_gen.Pack _ ->@\n\
     \  let module M : sig@\n\
      %s@\n\
     \  end = struct@\n\
      %s@\n\
     \  end in@\n\
-    \  let module B : sig@\n\
-     %s@\n\
-    \  end = struct@\n\
-     %s@\n\
-    \  end in@\n\
-    \  {@\n\
-    \    Diff_ocaml.bytes =@\n\
-    \      %a;@\n\
-    \    bigstring =@\n\
-    \      %a;@\n\
-    \  }@\n\
+    \  %a@\n\
      @\n"
-    label intf src
-    (Wire_ocaml.bridge_mli ~codec:"codec" ~core:"M" c)
-    (Wire_ocaml.bridge ~codec:"codec" ~core:"M" c)
-    (pp_ops ~m:"M" ~buf:"b" ~brand:"Wire_runtime.Buf" ~back:(fun ppf w ->
-         Fmt.pf ppf "%s b o" w))
-    fields
-    (pp_ops ~m:"M.Bigstring" ~buf:"Diff_ocaml.big b"
-       ~brand:"Wire_runtime.Buf.Bigstring" ~back:(fun ppf w ->
-         Fmt.pf ppf
-           "let bb = Diff_ocaml.big b in %s bb o; Diff_ocaml.blit_back bb b" w))
-    fields
+    label intf src pp_ops (fields c)
 
 (* {1 Scanners}
 
-   Each scanner is handed to [Diff_ocaml] as its [decode] and [fold_frames],
-   as its [fold_step] and [fold_frames_step], and on OxCaml also as the
-   unboxed forms of the first two. A structured case gets the scanner
-   of every output, one of every other output, one of none, and on OxCaml one
-   for the default target too; a sampled shape the first two. *)
+   Each scanner is handed to [Diff_ocaml] as its fold [fold], whose visitor
+   [Step] conses each frame's outputs onto its accumulator, with
+   [fold_frames] and [fold_index]. A structured case gets the scanner of every
+   output, one of every other output, one of none, and on OxCaml one for the
+   default target too; a sampled shape the first two. *)
 
-let snapshot ppf ?(boxed = false) ~unboxed ~var fields =
+let snapshot ppf ~var fields =
   Fmt.pf ppf "[";
   List.iter
     (fun (n, is_bool) ->
       let v = var n in
       Fmt.pf ppf "(%S, %s);" n
         (if is_bool then "(if " ^ v ^ " then 1 else 0)"
-         else if unboxed then "(Wire_runtime.Target.Int64_u.to_int " ^ v ^ ")"
-         else if boxed then "(Int64.to_int " ^ v ^ ")"
-         else v))
+         else "(Int64.to_int " ^ v ^ ")"))
     fields;
   Fmt.pf ppf "]"
 
@@ -200,45 +145,15 @@ let labels fields =
   else
     String.concat " " (List.map (fun (n, _) -> "~" ^ n ^ ":field_" ^ n) fields)
 
-let pp_backend ppf ~m ~unboxed fields =
-  let args = labels fields in
-  let values ppf () =
-    snapshot ppf ~unboxed ~var:(fun n -> "field_" ^ n) fields
-  in
-  let batch ppf () =
-    if unboxed then
-      Fmt.pf ppf
-        "Some (fun b o n stride -> let results = ref [] in try let _ = \
-         %s.fold_frames_unboxed b o n ~stride ~init:#0L ~invalid:(fun acc -> \
-         results := None :: !results; acc) ~valid:(fun acc %s -> results := \
-         Some %a :: !results; acc) in Some (List.rev !results) with \
-         Invalid_argument _ -> None)"
-        m args values ()
-    else
-      Fmt.pf ppf
-        "Some (fun b o n stride -> try Some (List.rev (%s.fold_frames b o n \
-         ~stride ~init:[] ~invalid:(fun acc -> None :: acc) ~valid:(fun acc %s \
-         -> Some %a :: acc))) with Invalid_argument _ -> None)"
-        m args values ()
-  in
+(* [fold] on one frame, the snapshot of its outputs. *)
+let pp_fold ~m ppf () =
   Fmt.pf ppf
-    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> let \
-     v = %s.%s b o n in if v.%sok then Some %a else None); scan_batch = %a; \
-     scan_index = None };@\n"
-    (m ^ if unboxed then " unboxed" else "")
-    Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields m
-    (if unboxed then "decode_unboxed" else "decode")
-    (if unboxed then "#" else "")
-    (fun ppf () ->
-      snapshot ppf ~unboxed
-        ~var:(fun n -> "v." ^ (if unboxed then "#" else "") ^ n)
-        fields)
-    () batch ()
+    "(fun b o n -> match %s.fold b o n ~init:[] with [ v ] -> v | _ -> \
+     failwith \"fold\")"
+    m
 
-(* The module [fold_step] and [fold_frames_step] call by name: it conses each
-   frame's snapshot onto the accumulator. It takes the integer outputs as
-   [int64]. *)
+(* The visitor [fold] calls by name: it conses each frame's snapshot onto the
+   accumulator. It takes the integer outputs as [int64]. *)
 let pp_step ppf fields =
   Fmt.pf ppf
     "struct@\n\
@@ -247,75 +162,231 @@ let pp_step ppf fields =
      let valid acc %s = Some %a :: acc@\n\
      end"
     (labels fields)
-    (fun ppf () ->
-      snapshot ppf ~boxed:true ~unboxed:false
-        ~var:(fun n -> "field_" ^ n)
-        fields)
+    (fun ppf () -> snapshot ppf ~var:(fun n -> "field_" ^ n) fields)
     ()
 
-(* [fold_step], [fold_frames_step] and [fold_index_step], as the [decode],
-   [fold_frames] and fold over an index of one more backend. *)
-let pp_step_backend ppf ~m fields =
+(* [fold], [fold_frames] and [fold_index], as the fold of one frame, of the
+   frames of a stride and of the frames of an index of one backend. *)
+let pp_backend ppf ~m fields =
   Fmt.pf ppf
-    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = (fun b o n -> \
-     match %s.fold_step b o n ~init:[] with [ v ] -> v | _ -> failwith \
-     \"fold_step\"); scan_batch = Some (fun b o n stride -> try Some (List.rev \
-     (%s.fold_frames_step b o n ~stride ~init:[])) with Invalid_argument _ -> \
-     None); scan_index = Some (fun b offs lens -> List.rev (%s.fold_index_step \
-     b ~offs ~lens ~init:[])) };@\n"
-    (m ^ " step")
+    "{ Diff_ocaml.scan_name = %S; scan_fields = [%a]; scan = %a; scan_batch = \
+     Some (fun b o n stride -> try Some (List.rev (%s.fold_frames b o n \
+     ~stride ~init:[])) with Invalid_argument _ -> None); scan_index = Some \
+     (fun b offs lens -> List.rev (%s.fold_index b ~offs ~lens ~init:[])) };@\n"
+    m
     Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
-    fields m m m
+    fields (pp_fold ~m) () m m
 
-(* The backends over [c]: each module [(name, target, selected)], generated
-   inside the function under its interface, after the [Step] it calls. *)
-let pp_scanners ppf ~label c modules =
-  let fields = Wire_ocaml.scanner_fields c in
+(* The outputs of [view], each [fill]. *)
+let rec view_zeros ~fill (view : Wire_ocaml.view) =
+  Fmt.str "List.concat [%s]"
+    (String.concat "; "
+       (List.map
+          (function
+            | Wire_ocaml.Int { output; _ } | Bool { output; _ } ->
+                Fmt.str "[ (%S, %s) ]" output fill
+            | Bytes _ -> "[]"
+            | Record { presence; view; _ } ->
+                (match presence with
+                  | Some p -> Fmt.str "[ (%S, %s) ]" p fill ^ " @ "
+                  | None -> "")
+                ^ view_zeros ~fill view)
+          view.members))
+
+(* The outputs the views of [view] hand out, in the module [path] of the
+   scanner [m], from the view [v] of [bb], whose length is [len]: a record
+   that is absent hands out 0 for each of its outputs, and a mandatory one
+   whose check fails [min_int], which no reference states. *)
+let rec view_outputs ~m ~path (view : Wire_ocaml.view) =
+  Fmt.str "(List.concat [%s])"
+    (String.concat "; " (List.map (view_member ~m ~path) view.members))
+
+and view_member ~m ~path = function
+  | Wire_ocaml.Int { name; output; carrier } ->
+      Fmt.str "[ (%S, %s (%s.%s bb v)) ]" output
+        (match carrier with Some m -> m ^ ".to_int" | None -> "Fun.id")
+        path name
+  | Bytes _ -> "[]"
+  | Bool { name; output } ->
+      Fmt.str "[ (%S, Bool.to_int (%s.%s bb v)) ]" output path name
+  | Record { name; presence; view } ->
+      let sub = m ^ "." ^ Option.get view.module_name in
+      let presence_is n =
+        match presence with
+        | Some p -> Fmt.str "[ (%S, %d) ]" p n ^ " @ "
+        | None -> ""
+      in
+      let fill = if Option.is_none presence then "min_int" else "0" in
+      Fmt.str
+        "(let k = %s.%s bb len v in if %s.ok k then (let v = %s.get k in %s%s) \
+         else %s%s)"
+        path name sub sub (presence_is 1)
+        (view_outputs ~m ~path:sub view)
+        (presence_is 0) (view_zeros ~fill view)
+
+(* The backend of the views of the scanner [m], which hands out every output,
+   checked against [m]'s [fold] and against the codec [codec]. *)
+let pp_view_backend ppf ~m ~codec c =
+  let fields = Wire_ocaml.outputs c in
+  let wrap, codec = codec in
+  (* A codec of constant size is checked at an offset, as Codec.View checks
+     it: on the frame's own bytes. *)
+  let frame, check =
+    match Wire.Codec.size c with
+    | None -> ("", Fmt.str "%s.check bb len ~off:o ~len:n" m)
+    | Some _ ->
+        ( "if o < 0 || n < 0 || n > Bytes.length b - o then None else let b = \
+           Bytes.sub b o n in ",
+          Fmt.str "%s.check bb len 0" m )
+  in
+  Fmt.pf ppf
+    "%s Diff_ocaml.view_scan ~name:%S ~codec:%s ~fields:[%a] ~full:%a (fun b o \
+     n -> %smatch Wire_runtime.Buf.v b with Wire_runtime.Buf.Any bb -> let len \
+     = Wire_runtime.Buf.length bb in let c = %s in if %s.ok c then (let %s = \
+     %s.get c in Some %s) else None));@\n"
+    wrap (m ^ " views") codec
+    Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
+    fields (pp_fold ~m) () frame check m
+    (if
+       List.for_all
+         (function Wire_ocaml.Bytes _ -> true | _ -> false)
+         (Wire_ocaml.views c).members
+     then "_"
+     else "v")
+    m
+    (view_outputs ~m ~path:m (Wire_ocaml.views c))
+
+(* Whether the module holds a fixed record's members, which the record
+   glue reads: its [encode] is its [write]. Without them its values go through
+   the walk. *)
+let has_record src =
+  let sub = " off = write buf off " in
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length src
+    && (String.equal (String.sub src i n) sub || go (i + 1))
+  in
+  go 0
+
+(* The backend of the values of the module [m], when its codec's record holds
+   more than named scalars at constant offsets. *)
+let pp_values_backend ppf ~m ~codec c =
+  if not (has_record Wire_ocaml.(to_ml (v ~target:`OCaml c))) then begin
+    let fields = Wire_ocaml.outputs c in
+    let wrap, codec = codec in
+    Fmt.pf ppf
+      "%s Diff_ocaml.values_scan ~name:%S ~codec:%s ~fields:[%a] ~full:%a { \
+       Diff_ocaml.decode = (fun b o -> match %s.decode b o with Error e -> \
+       Error e | Ok r -> let out = Bytes.create (%s.size r) in %s.encode r out \
+       0; Ok (Bytes.to_string out)); validate = %s.validate });@\n"
+      wrap (m ^ " values") codec
+      Fmt.(list ~sep:(any "; ") (fun ppf (n, _) -> pf ppf "%S" n))
+      fields (pp_fold ~m) () m m m m
+  end
+
+(* The scanner modules over [c], each a suffix of its value's name, whether
+   its backends read [c] and the expression of its backends: each module
+   [(name, target, selected)] generated inside the expression under its
+   interface, after the [Step] it calls, with the views and values of the one
+   with every output; then the interpreted twin of that one, when [c] has one.
+   [codec] spells [c] for the backends that read it. *)
+let scanners ~codec c modules =
+  (* Its fold [fold], which calls [Step] by name. *)
+  let scanner target o =
+    Wire_ocaml.(v ~target ~folds:[ fold ?outputs:o "fold" ] c)
+  and visitors = [ ("fold", "step.ml") ] in
+  let fields = Wire_ocaml.outputs c in
   let selected_fields = function
     | None -> fields
     | Some ns -> List.filter (fun (n, _) -> List.mem n ns) fields
   in
-  List.iter
-    (fun (m, t, selected) ->
-      Fmt.pf ppf
-        "let module Step = %a in@\n\
-         let module %s : sig@\n\
-         %s@\n\
-         end = struct@\n\
-         %s@\n\
-         end in@\n"
-        pp_step (selected_fields selected) m
-        (Wire_ocaml.scanner_mli ~target:t ?fields:selected ~step:"Step"
-           ~codec:label c)
-        (Wire_ocaml.scanner ~target:t ?fields:selected ~step:"Step" ~codec:label
-           c))
-    modules;
-  Fmt.pf ppf "[@\n";
-  List.iter
-    (fun (m, t, selected) ->
-      let fields = selected_fields selected in
-      pp_backend ppf ~m ~unboxed:false fields;
-      pp_step_backend ppf ~m fields;
-      if t = `OxCaml then pp_backend ppf ~m ~unboxed:true fields)
-    modules;
-  Fmt.pf ppf "]@\n"
+  let modules =
+    List.map
+      (fun (m, t, selected) ->
+        let fields = selected_fields selected in
+        let pp ppf () =
+          Fmt.pf ppf
+            "let module Step = %a in@\n\
+             let module %s : sig@\n\
+             %s@\n\
+             end = struct@\n\
+             %s@\n\
+             end in@\n\
+             [@\n"
+            pp_step fields m
+            (Wire_ocaml.to_mli ~visitors (scanner t selected))
+            (Wire_ocaml.to_ml ~visitors (scanner t selected));
+          pp_backend ppf ~m fields;
+          if selected = None then begin
+            pp_view_backend ppf ~m ~codec c;
+            pp_values_backend ppf ~m ~codec c
+          end;
+          Fmt.pf ppf "]@\n"
+        in
+        (String.lowercase_ascii m, selected = None, pp))
+      modules
+  in
+  (* The interpreted twin of the module of every output, under the same
+     visitor, whose backends are those of the generated module: swapping one
+     for the other gives the same answers. *)
+  let twin =
+    match
+      ( Wire_ocaml.to_mli ~twin:true ~visitors (scanner target None),
+        Wire_ocaml.to_ml ~twin:true ~visitors (scanner target None) )
+    with
+    | intf, src ->
+        let pp ppf () =
+          Fmt.pf ppf
+            "let module Step = %a in@\n\
+             let module Twin : sig@\n\
+             %s@\n\
+             end = struct@\n\
+             %s@\n\
+             end in@\n\
+             let twin (type r) (codec : r Wire.Codec.t) : Diff_ocaml.scan_ops \
+             list =@\n\
+             let module M = Twin.Make (struct type nonrec r = r let codec = \
+             codec end) in@\n\
+             [@\n"
+            pp_step fields intf src;
+          pp_backend ppf ~m:"M" fields;
+          pp_view_backend ppf ~m:"M" ~codec:("(", "codec") c;
+          Fmt.pf ppf "]@\nin@\n%s twin %s)@\n" (fst codec) (snd codec)
+        in
+        [ ("twin", true, pp) ]
+    | exception Invalid_argument _ -> []
+  in
+  modules @ twin
 
 let every_other c =
-  List.filteri (fun i _ -> i mod 2 = 0) (Wire_ocaml.scanner_fields c)
-  |> List.map fst
+  List.filteri (fun i _ -> i mod 2 = 0) (Wire_ocaml.outputs c) |> List.map fst
 
 (* {1 Shards}
 
-   Each case, structured scanner and sampled scanner is a top-level value of
-   one of the shards, the index lists them in order, and the shards are
-   balanced by size so that no compiler run has to hold all of them. *)
+   Each case, and each scanner module of a structured or sampled scanner, is a
+   top-level value of one of the shards, and the index lists them in order.
+   The shards are balanced by size so that no compiler run has to hold all of
+   them. A scanner's modules are separate values, so that the largest value,
+   which a shard cannot split, is one module and not all of them: the
+   compiler's peak heap follows the largest functions it allocates registers
+   for more than the size of the file. *)
 
 type def = { name : string; src : string }
+
+(* The definition of each scanner module of [c], named after [prefix] and the
+   module, whose head is [head]: told whether the module's backends read
+   [codec]. *)
+let scanner_defs ~prefix ~head ~codec c modules =
+  List.map
+    (fun (suffix, reads_codec, pp) ->
+      let name = Fmt.str "%s_%s" prefix suffix in
+      let src = Fmt.str "%a%a@\n" head (name, reads_codec) pp () in
+      { name; src })
+    (scanners ~codec c modules)
 
 let scan_cases () =
   List.mapi
     (fun i (Diff_codecs.Scan c) ->
-      let name = Fmt.str "scan_case_%d" i in
       let modules =
         [
           ("Full", target, None);
@@ -324,12 +395,17 @@ let scan_cases () =
         ]
         @ if target = `OxCaml then [ ("Stock", `OCaml, None) ] else []
       in
-      let src =
-        Fmt.str "let %s () : Diff_ocaml.scan_ops list =@\n%a@\n" name
-          (fun ppf () -> pp_scanners ppf ~label:c.label c.codec modules)
-          ()
-      in
-      (c.label, { name; src }))
+      ( c.label,
+        scanner_defs ~prefix:(Fmt.str "scan_case_%d" i)
+          ~head:(fun ppf (name, _) ->
+            Fmt.pf ppf "let %s () : Diff_ocaml.scan_ops list =@\n" name)
+          ~codec:
+            ( Fmt.str
+                "(match List.nth Diff_codecs.scan_cases %d with \
+                 Diff_codecs.Scan sc ->"
+                i,
+              "sc.codec" )
+          c.codec modules ))
     Diff_codecs.scan_cases
 
 let sampled_scanners () =
@@ -337,7 +413,7 @@ let sampled_scanners () =
     List.partition_map
       (fun (label, (Fuzz_gen.Pack g as p)) ->
         let c = Fuzz_gen.codec g in
-        match Wire_ocaml.scanner_fields c with
+        match Wire_ocaml.outputs c with
         | _ -> Left (label, p)
         | exception Invalid_argument msg -> Right (label, msg))
       Diff_ocaml.scan_codecs
@@ -346,22 +422,20 @@ let sampled_scanners () =
     List.mapi
       (fun i (label, Fuzz_gen.Pack g) ->
         let c = Fuzz_gen.codec g in
-        let name = Fmt.str "sampled_%d" i in
-        let src =
-          Fmt.str
-            "let %s : Fuzz_gen.packed -> Diff_ocaml.scan_ops list = function@\n\
-            \  | Fuzz_gen.Pack _ ->@\n\
-             %a@\n"
-            name
-            (fun ppf () ->
-              pp_scanners ppf ~label:"codec" c
-                [
-                  ("Full", target, None);
-                  ("Selected", target, Some (every_other c));
-                ])
-            ()
-        in
-        (label, { name; src }))
+        ( label,
+          scanner_defs ~prefix:(Fmt.str "sampled_%d" i)
+            ~head:(fun ppf (name, reads_codec) ->
+              Fmt.pf ppf
+                "let %s : Fuzz_gen.packed -> Diff_ocaml.scan_ops list = \
+                 function@\n\
+                \  | Fuzz_gen.Pack %s ->@\n"
+                name
+                (if reads_codec then "g" else "_"))
+            ~codec:("(", "(Fuzz_gen.codec g)")
+            c
+            [
+              ("Full", target, None); ("Selected", target, Some (every_other c));
+            ] ))
       accepted
   in
   (accepted, refused)
@@ -371,10 +445,14 @@ let cases () =
     List.partition_map
       (fun (label, Fuzz_gen.Pack g) ->
         let c = Fuzz_gen.codec g in
-        match Wire_ocaml.ml ~target ~codec:"codec" c with
-        | src ->
-            let intf = Wire_ocaml.mli ~target ~codec:"codec" c in
+        match Wire_ocaml.to_ml (Wire_ocaml.v ~target c) with
+        | src when has_record src ->
+            let intf = Wire_ocaml.to_mli (Wire_ocaml.v ~target c) in
             Left (label, Fuzz_gen.Pack g, (src, intf))
+        | _ when Diff_ocaml.specialisable c ->
+            Right
+              (label, "a fixed record whose members would define a name twice")
+        | _ -> Right (label, "no fixed record: its values go through the walk")
         | exception Invalid_argument msg -> Right (label, msg))
       Diff_ocaml.codecs
   in
@@ -430,17 +508,25 @@ let pp_entries ~typ ~qualify ppf (name, entries) =
     entries;
   Fmt.pf ppf "  ]@\n@\n"
 
+(* A scanner's modules, in [qualify]'d names, as one function of [arg]. *)
+let joined ~qualify ~arg defs =
+  Fmt.str "(fun %s -> List.concat [ %s ])" arg
+    (String.concat "; " (List.map (fun d -> qualify d ^ " " ^ arg) defs))
+
 let write_index file ~qualify ~cases ~refused ~scans ~sampled ~scan_refused =
   Out_channel.with_open_text file (fun oc ->
       let ppf = Format.formatter_of_out_channel oc in
-      let defs = pp_entries ~qualify in
       let msgs = pp_entries ~qualify:(Fmt.str "%S") ~typ:"string" in
       Fmt.pf ppf "%slet name = %S@\n@\n" header
         (match target with `OCaml -> "ocaml" | `OxCaml -> "oxcaml");
-      defs ~typ:"(Fuzz_gen.packed -> Diff_ocaml.t)" ppf ("covered", cases);
+      pp_entries ~qualify ~typ:"(Fuzz_gen.packed -> Diff_ocaml.t)" ppf
+        ("covered", cases);
       msgs ppf ("refused", refused);
-      defs ~typ:"(unit -> Diff_ocaml.scan_ops list)" ppf ("scanners", scans);
-      defs ~typ:"(Fuzz_gen.packed -> Diff_ocaml.scan_ops list)" ppf
+      pp_entries
+        ~qualify:(joined ~qualify ~arg:"()")
+        ~typ:"(unit -> Diff_ocaml.scan_ops list)" ppf ("scanners", scans);
+      pp_entries ~qualify:(joined ~qualify ~arg:"p")
+        ~typ:"(Fuzz_gen.packed -> Diff_ocaml.scan_ops list)" ppf
         ("sampled_scanners", sampled);
       msgs ppf ("scan_refused", scan_refused);
       Format.pp_print_flush ppf ())
@@ -457,7 +543,7 @@ let () =
       let cases, refused = cases () in
       let scans = scan_cases () in
       let sampled, scan_refused = sampled_scanners () in
-      let all = List.map snd (cases @ scans @ sampled) in
+      let all = List.map snd cases @ List.concat_map snd (scans @ sampled) in
       let shards = Array.of_list shards in
       let owner = assign (Array.length shards) all in
       Array.iteri

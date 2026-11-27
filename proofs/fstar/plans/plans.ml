@@ -14,6 +14,14 @@ module P = Wire_ocaml.Plan
 module T = Wire.Private.Types
 module L = Wire.Private.Layout
 
+(* The decisions of the module of [c] with the fold [fold], whose visitor is
+   [Step]. *)
+let decisions ?target c =
+  P.decisions ?target
+    ~folds:Wire_ocaml.[ fold "fold" ]
+    ~visitors:[ ("fold", "step.ml") ]
+    c
+
 let ids : (string, int) Hashtbl.t = Hashtbl.create 64
 let next = ref 1
 
@@ -227,9 +235,11 @@ let mfield (f : P.field) =
 (* With [runs], a run of optional fields is one dispatch, the last case its
    default: some case always runs, which the hoisted bounds need. Without, a
    run may run none of its cases. The decisions of both readings are the
-   model's: the emitter hoists only where no path runs none. *)
-let rec dnode ~runs = function
+   model's: the emitter hoists only where no path runs none. A walk binds
+   only the fields [live] keeps: the others are no fields of its plan. *)
+let rec dnode ~runs ~live = function
   | P.Prefix (fields, size) ->
+      let fields = List.filter (fun (f : P.field) -> live f.id) fields in
       S.Prefix (List.filter_map mfield fields, z size)
       :: List.concat_map field_tests fields
   | P.Span e ->
@@ -241,9 +251,9 @@ let rec dnode ~runs = function
   | P.Region (e, at_most, body) ->
       let n = fresh () in
       let e' = fresh () in
-      [ S.Region (z n, z e', value e, at_most, dnodes ~runs body) ]
+      [ S.Region (z n, z e', value e, at_most, dnodes ~runs ~live body) ]
 
-and dnodes ~runs ns =
+and dnodes ~runs ~live ns =
   let rec go acc = function
     | [] -> List.rev acc
     | P.Gate _ :: _ as ns ->
@@ -252,16 +262,16 @@ and dnodes ~runs ns =
           | rest -> (List.rev bodies, rest)
         in
         let bodies, rest = gates [] ns in
-        let case i b = (z i, dnodes ~runs b) in
+        let case i b = (z i, dnodes ~runs ~live b) in
         let g =
           if runs then
             let cases = List.rev (List.tl (List.rev bodies)) in
             let dflt = List.hd (List.rev bodies) in
-            S.Gate (z 0, List.mapi case cases, Some (dnodes ~runs dflt))
+            S.Gate (z 0, List.mapi case cases, Some (dnodes ~runs ~live dflt))
           else S.Gate (z 0, List.mapi case bodies, None)
         in
         go (g :: acc) rest
-    | n :: rest -> go (List.rev_append (dnode ~runs n) acc) rest
+    | n :: rest -> go (List.rev_append (dnode ~runs ~live n) acc) rest
   in
   go [] ns
 
@@ -396,40 +406,81 @@ let rec depth all window =
 let is_const (at : P.pos) = Option.is_none at.var
 let const_at (at : P.pos) = if is_const at then Some (z at.at) else None
 
+(* The outputs of the walk [name]: none for [check], every one for the
+   folds. *)
+let walk_outputs p name = if name = "check" then [] else P.outputs p
+
 (* The plan as Plan.Scan nodes, and what Plan.Proof assumes of it, as F*
-   extracts it. *)
+   extracts it: the plan of the fields every output reads, and that of each
+   walk, with only the fields it binds (Wire_ocaml.Plan.live). *)
 let well_formed name p =
   Hashtbl.reset ids;
   next := 1;
   let wf = nodes (P.nodes p) in
   Hashtbl.reset ids;
   next := 1;
-  let d = dnodes ~runs:true (P.nodes p) in
-  let d' = dnodes ~runs:false (P.nodes p) in
+  let all _ = true in
+  let d = dnodes ~runs:true ~live:all (P.nodes p) in
+  let d' = dnodes ~runs:false ~live:all (P.nodes p) in
   let sc v = v = z 0 in
   if not (S.wf sc d && S.wf sc d') then not_wf := name :: !not_wf;
-  (wf, d, d')
-
-(* The emitter's span bounds against the model's decisions; the number of
-   them. *)
-let span_bounds name ~all d d' =
-  let spans =
-    List.filter_map
-      (function
-        | P.Span_bound s ->
-            Some
-              {
-                D.dsize = value s.size;
-                dkind = (if !fabricate then D.KNext else kind s.bound);
-                depth = z (depth all s.window);
-                dat = const_at s.at;
-              }
-        | _ -> None)
-      all
+  let walks = Hashtbl.create 2 in
+  let walk w =
+    let outputs = walk_outputs p w in
+    let key = List.map (fun (o : P.output) -> o.name) outputs in
+    match Hashtbl.find_opt walks key with
+    | Some m -> m
+    | None ->
+        let live = P.live p outputs in
+        let dw = dnodes ~runs:true ~live (P.nodes p) in
+        let dw' = dnodes ~runs:false ~live (P.nodes p) in
+        if not (S.wf sc dw && S.wf sc dw') then not_wf := name :: !not_wf;
+        let m = D.decisions (z 0) dw @ D.decisions (z 0) dw' in
+        Hashtbl.replace walks key m;
+        m
   in
-  let model = D.decisions (z 0) d @ D.decisions (z 0) d' in
-  let bad = D.unjustified model spans in
-  if bad <> [] then findings := (name, bad, model) :: !findings;
+  (wf, d, d', walk)
+
+(* The emitter's span bounds, each against the model's decisions for the
+   plan of the walk that takes it; the number of them. *)
+let span_bounds name ~walk runs =
+  let decision w = function
+    | P.Span_bound s ->
+        Some
+          ( w,
+            {
+              D.dsize = value s.size;
+              dkind = (if !fabricate then D.KNext else kind s.bound);
+              depth = z (depth (List.concat runs) s.window);
+              dat = const_at s.at;
+            } )
+    | _ -> None
+  in
+  let spans =
+    List.concat_map
+      (fun run ->
+        snd
+          (List.fold_left
+             (fun (w, acc) d ->
+               match d with
+               | P.Walk { name; _ } -> (name, acc)
+               | d -> (
+                   match decision w d with
+                   | Some s -> (w, s :: acc)
+                   | None -> (w, acc)))
+             ("", []) run)
+        |> List.rev)
+      runs
+  in
+  let bad =
+    List.concat_map (fun (w, s) -> D.unjustified (walk w) [ s ]) spans
+  in
+  if bad <> [] then begin
+    let model =
+      List.concat_map walk (List.sort_uniq compare (List.map fst spans))
+    in
+    findings := (name, bad, model) :: !findings
+  end;
   List.length spans
 
 (* The model walks from each start the walks take: no byte known, or those a
@@ -567,20 +618,18 @@ let word_ranges ~found p all =
       | _ -> ())
     all
 
-(* How each walk holds values, by run: [int] in the scanner, [int64] in the
-   step functions, [int64_u] on OxCaml. *)
+(* How each walk holds values, by run: on OCaml [int64] in the walks of the
+   fold and [int] in [check]'s, [int64_u] in every walk on OxCaml. *)
 let walk_values ~found runs =
   List.iteri
     (fun i run ->
       List.iter
         (function
           | P.Walk w ->
-              let step =
-                String.length w.name >= 4
-                && String.sub w.name (String.length w.name - 4) 4 = "step"
-              in
               let expected =
-                match i with 2 -> `Int64_u | 1 when step -> `Int64 | _ -> `Int
+                match i with
+                | 1 -> `Int64_u
+                | _ -> if w.name = "check" then `Int else `Int64
               in
               let values = if !fabricate then `Int else w.values in
               walks := !walks + 1;
@@ -635,8 +684,8 @@ let dispatch_trees ~found all =
       | _ -> ())
     all
 
-(* The walks of a frame loop: those of its frames, knowing its [need] bytes,
-   and those of its short frames, knowing none. *)
+(* The walks of a frame loop: those of its frames, knowing its [need]
+   bytes. *)
 let frame_loop_walks ~found run ~name ~need ~short =
   let walks =
     List.filter_map
@@ -645,7 +694,7 @@ let frame_loop_walks ~found run ~name ~need ~short =
   in
   List.iter
     (fun known ->
-      if known <> need && not (known = 0 && short = Some P.Walked) then
+      if known <> need then
         Fmt.kstr found "frame loop %s walks a frame knowing %d bytes" name known)
     walks;
   if not (List.mem need walks) then
@@ -655,11 +704,31 @@ let frame_loop_walks ~found run ~name ~need ~short =
     when not
            (List.exists
               (function
-                | P.Walk { name = "fold" | "fold_step"; known; _ } -> known = 0
-                | _ -> false)
+                | P.Walk { name = "fold"; known; _ } -> known = 0 | _ -> false)
               run) ->
       Fmt.kstr found "frame loop %s walks short frames by no fold" name
   | _ -> ()
+
+(* Each field a frame loop loads ahead is one the walk reads at that offset
+   and width, inside the loop's [need] bytes. *)
+let ahead_in_need ~found d ~name ~need ahead =
+  if
+    not
+      (D.ahead_justified (z need) d
+         (List.map (fun (v, k, n) -> (z (var v), (z k, z n))) ahead))
+  then
+    Fmt.kstr found "frame loop %s reads %s ahead, not in its %d bytes" name
+      (String.concat ", "
+         (List.map (fun (v, k, n) -> Fmt.str "%s (%d at %d)" v n k) ahead))
+      need
+
+(* A frame loop's [need] bytes are within the [fixed] ones its leading
+   fields need. *)
+let need_fixed ~found ~fixed ~name need =
+  if Prims.op_Greater (z need) fixed then
+    Fmt.kstr found
+      "frame loop %s knows %d bytes, past the %s its leading fields need" name
+      need (Prims.to_string fixed)
 
 (* The fields a frame loop loads ahead, four frames an iteration, inside its
    [need] bytes. *)
@@ -667,30 +736,18 @@ let frame_loop_ahead ~found d ~name ~need ~frames ahead =
   if ahead <> [] then begin
     if frames <> 4 then
       Fmt.kstr found "frame loop %s reads ahead one frame an iteration" name;
-    if
-      not
-        (D.ahead_justified (z need) d
-           (List.map (fun (v, k, n) -> (z (var v), (z k, z n))) ahead))
-    then
-      Fmt.kstr found "frame loop %s reads %s ahead, not in its %d bytes" name
-        (String.concat ", "
-           (List.map (fun (v, k, n) -> Fmt.str "%s (%d at %d)" v n k) ahead))
-        need
+    ahead_in_need ~found d ~name ~need ahead
   end
 
 (* A frame loop as Plan.Loop.frame_walks models it: the frames shorter than
-   its [need] bytes walked by [fold] or by a walk of its own that knows none,
-   the others by a walk that knows [need], and [need] within the [fixed]
+   its [need] bytes walked by [fold], the others by a walk that knows [need], and [need] within the [fixed]
    bytes the leading fields need. *)
 let frame_loop ~found ~fixed d run ~name ~need ~frames ~short ~ahead =
   let short, ahead = if !fabricate then (None, []) else (short, ahead) in
   loops.(0) <- loops.(0) + 1;
   if frames = 4 then loops.(1) <- loops.(1) + 1;
   loops.(2) <- loops.(2) + List.length ahead;
-  if Prims.op_Greater (z need) fixed then
-    Fmt.kstr found
-      "frame loop %s knows %d bytes, past the %s its leading fields need" name
-      need (Prims.to_string fixed);
+  need_fixed ~found ~fixed ~name need;
   if frames <> 1 && frames <> 4 then
     Fmt.kstr found "frame loop %s walks %d frames an iteration" name frames;
   if need = 0 <> Option.is_none short then
@@ -698,6 +755,58 @@ let frame_loop ~found ~fixed d run ~name ~need ~frames ~short ~ahead =
       (if need = 0 then "walks" else "does not walk");
   frame_loop_walks ~found run ~name ~need ~short;
   frame_loop_ahead ~found d ~name ~need ~frames ahead
+
+(* The [_index] loop [name] of a visitor's fold, as Plan.Index models it.
+   With no leading bytes it is the plain loop, which walks each frame
+   through the fold's [_within] (the walk [within], knowing no byte), one
+   frame an iteration or four (Plan.Index.unrolled_frames), and reads
+   nothing ahead. With [need] leading bytes, within the [fixed] ones the
+   leading fields need, it is pipelined, two frames an iteration
+   (Plan.Index.index_loop): a frame whose test passed is walked knowing
+   [need] bytes, any other through [_within], and each field it loads a frame ahead, those of the
+   leading prefixes among them, is one the walk reads at that offset and
+   width, inside the [need] bytes (Plan.Decide.ahead_justified, the premise
+   of Plan.Index.index_loop_correct). The control moves every field loaded
+   ahead past those bytes. *)
+let index_loop ~found ~fixed d run ~name ~within ~need ~frames ~short ~ahead =
+  let ahead =
+    if !fabricate then List.map (fun (v, k, n) -> (v, k + need, n)) ahead
+    else ahead
+  in
+  loops.(0) <- loops.(0) + 1;
+  loops.(2) <- loops.(2) + List.length ahead;
+  if Option.is_some short then
+    Fmt.kstr found "frame loop %s walks short frames apart" name;
+  if
+    not
+      (List.exists
+         (function
+           | P.Walk { name; known = 0; _ } -> name = within | _ -> false)
+         run)
+  then Fmt.kstr found "frame loop %s has no walk %s knowing no byte" name within;
+  let walks =
+    List.filter_map
+      (function P.Walk w when w.name = name -> Some w.known | _ -> None)
+      run
+  in
+  if need = 0 then begin
+    if frames <> 1 && frames <> 4 then
+      Fmt.kstr found "frame loop %s walks %d frames an iteration" name frames;
+    if ahead <> [] then
+      Fmt.kstr found "frame loop %s reads ahead and knows no byte" name;
+    if walks <> [] then
+      Fmt.kstr found "frame loop %s walks a frame of its own" name
+  end
+  else begin
+    need_fixed ~found ~fixed ~name need;
+    if frames <> 2 then
+      Fmt.kstr found "frame loop %s pipelines %d frames an iteration" name
+        frames;
+    if walks = [] || List.exists (fun k -> k <> need) walks then
+      Fmt.kstr found "frame loop %s walks no frame knowing just its %d bytes"
+        name need;
+    ahead_in_need ~found d ~name ~need ahead
+  end
 
 (* The frame loops, and the walks' known bytes against the frame loops'. *)
 let frame_loops ~found ~fixed d runs =
@@ -710,6 +819,11 @@ let frame_loops ~found ~fixed d runs =
       in
       List.iter
         (function
+          | P.Frame_loop { name; need; frames; short; ahead }
+            when Filename.check_suffix name "_index" ->
+              let within = Filename.chop_suffix name "_index" in
+              index_loop ~found ~fixed d run ~name ~within ~need ~frames ~short
+                ~ahead
           | P.Frame_loop { name; need; frames; short; ahead } ->
               frame_loop ~found ~fixed d run ~name ~need ~frames ~short ~ahead
           | P.Walk w ->
@@ -732,17 +846,15 @@ let count_checks ~all prefixes gates =
        (function P.Walk _ | P.Frame_loop _ -> true | _ -> false)
        all)
 
-(* The plan of [c] and the decisions of the scanner, of its step form and of
-   its OxCaml form, each with the decisions of its own walks, against the
+(* The plan of [c] and the decisions of its module with the fold [fold], on
+   OCaml and on OxCaml, each with the decisions of its own walks, against the
    model. *)
 let check : type a. string -> a Wire.Codec.t -> P.t -> unit =
  fun name c p ->
-  let wf, d, d' = well_formed name p in
-  let runs =
-    [ P.decisions c; P.decisions ~step:"Step" c; P.decisions ~target:`OxCaml c ]
-  in
+  let wf, d, d', walk = well_formed name p in
+  let runs = [ decisions c; decisions ~target:`OxCaml c ] in
   let all = List.concat runs in
-  let spans = span_bounds name ~all d d' in
+  let spans = span_bounds name ~walk runs in
   let events = walk_events ~all d d' in
   let model = shared_words name ~all events in
   held_words name runs;
@@ -881,11 +993,7 @@ let () =
     in
     let c = Packet_stack.codec in
     dump "packet stack"
-      [
-        ("ocaml", P.decisions c);
-        ("step", P.decisions ~step:"Step" c);
-        ("oxcaml", P.decisions ~target:`OxCaml c);
-      ];
+      [ ("ocaml", decisions c); ("oxcaml", decisions ~target:`OxCaml c) ];
     exit 0
   end;
   if mode = "leak" then add "hoisted bound in a region (#504)" Leak.codec

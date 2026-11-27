@@ -153,26 +153,6 @@ let bytes () =
     done
   done
 
-let bigstring () =
-  for len = 16 to 40 do
-    let b = fill len in
-    let s =
-      Bigarray.Array1.init Bigarray.char Bigarray.c_layout len (Bytes.get b)
-    in
-    for off = 0 to len - 16 do
-      let get i = Int32.to_int (Bytes.get_int32_le b i) in
-      check "load_bigstring" (lanes_at get off) (Vec.load_bigstring s off);
-      let q = quad () in
-      Vec.store_bigstring s off (of_list q);
-      Bytes.blit_string (String.init 16 (fun i -> s.{off + i})) 0 b off 16;
-      Alcotest.(check (list int))
-        "store_bigstring" (List.map mask q) (lanes_at get off);
-      Alcotest.(check string)
-        "store_bigstring leaves the rest" (Bytes.to_string b)
-        (String.init len (fun i -> s.{i}))
-    done
-  done
-
 let suite =
   ( "vec",
     [
@@ -188,5 +168,4 @@ let suite =
       Alcotest.test_case "before" `Quick before;
       Alcotest.test_case "sum" `Quick sum;
       Alcotest.test_case "load and store" `Quick bytes;
-      Alcotest.test_case "bigstring load and store" `Quick bigstring;
     ] )

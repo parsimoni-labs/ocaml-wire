@@ -110,11 +110,11 @@ type compared_field = { name : string; width : int }
 let compared_fields (Fuzz_gen.Pack g) =
   let s = Wire.Everparse.Raw.struct_of_codec (Fuzz_gen.codec g) in
   let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi s in
-  let reported_as_offset (p : Wire.Everparse.plug_field) =
+  let reported_as_offset (p : Wire.Everparse.visitor_field) =
     if String.ends_with ~suffix:"SetBytes" p.setter then Some p.name else None
   in
   let offsets =
-    List.filter_map reported_as_offset (Wire.Everparse.plug_fields schema)
+    List.filter_map reported_as_offset (Wire.Everparse.visitor_fields schema)
   in
   List.filter_map
     (fun (name, (slot : Wire.Everparse.Raw.int_slot)) ->
@@ -352,16 +352,16 @@ let packet_payload_corpus () =
 
 let small_scan at_most =
   let open Wire in
-  let size = Field.v "size" uint8 in
+  let size_f = Field.v "size" uint8 in
   let inner = if at_most then nested_at_most else nested in
   let codec =
     Codec.v
       (if at_most then "ScanAtMost" else "ScanExact")
-      (fun size value tail -> (size, value, tail))
+      (fun size_f value tail -> (size_f, value, tail))
       Codec.
         [
-          (size $ fun (x, _, _) -> x);
-          ( Field.v "value" (inner ~size:(Field.ref size) uint16be)
+          (size_f $ fun (x, _, _) -> x);
+          ( Field.v "value" (inner ~size:(Field.ref size_f) uint16be)
           $ fun (_, x, _) -> x );
           (Field.v "tail" uint8 $ fun (_, _, x) -> x);
         ]
@@ -429,27 +429,28 @@ let const_region_scan at_most =
 
 let optional_scan ~region =
   let open Wire in
-  let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
+  let tag = Field.v "tag" uint8 and size_f = Field.v "size" uint8 in
   let inner =
-    if region then nested_at_most ~size:(Field.ref size) uint16be else uint16be
+    if region then nested_at_most ~size:(Field.ref size_f) uint16be
+    else uint16be
   in
   let codec =
     Codec.v
       (if region then "ScanOptionalRegion" else "ScanOptionalScalar")
-      (fun tag size value tail -> (tag, size, value, tail))
+      (fun tag size_f value tail -> (tag, size_f, value, tail))
       Codec.
         [
           (tag $ fun (x, _, _, _) -> x);
-          (size $ fun (_, x, _, _) -> x);
+          (size_f $ fun (_, x, _, _) -> x);
           ( Field.optional "value" ~present:Expr.(Field.ref tag = int 1) inner
           $ fun (_, _, x, _) -> x );
           (Field.v "tail" uint8 $ fun (_, _, _, x) -> x);
         ]
   in
-  let project (tag, size, value, tail) =
+  let project (tag, size_f, value, tail) =
     [
       ("tag", UInt8.to_int tag);
-      ("size", UInt8.to_int size);
+      ("size", UInt8.to_int size_f);
       ("value_present", if Option.is_some value then 1 else 0);
       ("value", Option.fold ~none:0 ~some:UInt16.to_int value);
       ("tail", UInt8.to_int tail);
@@ -789,10 +790,10 @@ let refined_size_scan =
           $ snd;
         ]
   in
-  let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
+  let tag = Field.v "tag" uint8 and size_f = Field.v "size" uint8 in
   let codec =
     Codec.v "ScanRefinedSizes"
-      (fun tag inner size data tail -> (tag, inner, size, data, tail))
+      (fun tag inner size_f data tail -> (tag, inner, size_f, data, tail))
       Codec.
         [
           (tag $ fun (x, _, _, _, _) -> x);
@@ -800,8 +801,8 @@ let refined_size_scan =
               ~present:Expr.(Field.ref tag = int 1)
               (codec inner)
           $ fun (_, x, _, _, _) -> x );
-          (size $ fun (_, _, x, _, _) -> x);
-          ( Field.v "data" (byte_slice ~size:Expr.(Field.ref size - int 5))
+          (size_f $ fun (_, _, x, _, _) -> x);
+          ( Field.v "data" (byte_slice ~size:Expr.(Field.ref size_f - int 5))
           $ fun (_, _, _, x, _) -> x );
           (Field.v "tail" uint8 $ fun (_, _, _, _, x) -> x);
         ]
@@ -819,7 +820,7 @@ let refined_size_scan =
    checked against. The two scans below repeat the checked span inside a
    smaller region, in a case and after the dispatch. [region_word] holds a
    scalar because EverParse cannot extract a standalone validator for a
-   constant-size region that holds a record. *)
+   constant-size_f region that holds a record. *)
 let region_word = Wire.(nested_at_most ~size:(int 4) uint32be)
 
 let region_inner =

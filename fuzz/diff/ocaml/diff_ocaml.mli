@@ -5,61 +5,48 @@
     glue written with each one hands them over as a {!t}, every value shown as a
     string. *)
 
-(** Which of a field's getters: [Get.<f>], [Get.<f>_int] for a 32-bit field, or
-    [<f>_of_word] on [Get.<f>_word] for a bitfield. *)
-type view = Get | Get_int | Of_word
-
-type ops = {
-  decode : bytes -> int -> string;
+type t = {
+  decode : bytes -> int -> (string, Wire.Error.t) result;
       (** The generated decoder, the record it returns written back at offset 0
           by the generated encoder. *)
-  validate : bytes -> int -> unit;  (** The generated validator. *)
+  validate : bytes -> int -> (unit, Wire.Error.t) result;
+      (** The generated validator. *)
   encode : string -> bytes -> int -> unit;
       (** [encode s buf off] writes, through the generated encoder, the record
           the bytes [s] decode to. *)
-  gets : (string * view * (bytes -> int -> string)) list;
-      (** Each field's name, a getter of it and that getter. *)
-  reads : (string * view) list;
-      (** The reads {!field-valid} makes, in order: [read_<f>] as
-          {!constructor-Get}, [read_<f>_int] as {!constructor-Get_int}. *)
-  valid : bytes -> string list;
-      (** [Valid.v] on the buffer, then each of {!field-reads}. *)
-  is_valid : bytes -> int -> bool;  (** The generated [is_valid]. *)
-  view : bytes -> int -> string list;
-      (** [View.at buf off], then each of {!field-reads} through [view_<f>]. *)
+  reads : string list;  (** The fields the accessors read, in order. *)
+  valid : bytes -> (string list, Wire.Error.t) result;
+      (** [validate buf 0], then the module's check at offset 0 and each of
+          {!field-reads} through its accessor. *)
+  view : bytes -> int -> (string list, Wire.Error.t) result;
+      (** [validate buf off], then the module's check and each of {!field-reads}
+          through its accessor. *)
   checked : bytes -> int -> bool * string list;
-      (** [View.check buf off]: [View.ok] of it, then each of {!field-reads}
-          through [view_<f>]. *)
+      (** [check buf off]: whether the check passed, then each of {!field-reads}
+          through its accessor. *)
 }
-(** One generated module's functions over one kind of buffer, taking [bytes]:
-    the bigarray ones copy the bytes in, and back out after a write. *)
+(** A generated module's functions, every value shown as a string. *)
 
-type t = { bytes : ops; bigstring : ops }
-(** A generated module: its functions and those of its [Bigstring]. *)
+exception Refused of Wire.Error.t
+(** The error {!ok} raises. *)
+
+val ok : ('a, Wire.Error.t) result -> 'a
+(** [ok r] is the value of [r], its error raised as {!Refused} for {!reference}
+    to compare as the codec's reader answers it. *)
 
 val pp : t Fmt.t
-(** [pp] prints the getters of a generated module. *)
-
-val big : bytes -> Wire.Private.Unchecked.Bigstring.t
-(** [big b] is a bigarray copy of [b]. *)
-
-val blit_back : Wire.Private.Unchecked.Bigstring.t -> bytes -> unit
-(** [blit_back bb b] copies [bb] over [b], of the same length. *)
+(** [pp] prints the fields a generated module's accessors read. *)
 
 val show_code : 'a Wire.Private.Types.typ -> string option
 (** [show_code t] is the source of the function that shows a value of type [t]
     as a generated getter returns it: an integer in decimal, a byte array
     quoted. [None] for a type the backend does not show. *)
 
-val views : 'a Wire.Private.Types.typ -> view list
-(** [views t] is the getters the generated module has for a field of type [t].
-*)
-
 val reference : 'r Wire.Codec.t -> string -> bytes -> int -> string
 (** [reference c name buf off] reads the field [name] of [c] at [off] in [buf]
     with the reader {!Wire.Codec.get} stages, and shows its value as
     {!show_code} shows a generated getter's: an integer in decimal, a byte array
-    quoted. *)
+    quoted. The reader's error is raised as {!Refused}. *)
 
 val codecs : (string * Fuzz_gen.packed) list
 (** [codecs] is the codecs the backend compares: the {!Diff_codecs.candidates}
@@ -77,11 +64,10 @@ val specialisable : 'r Wire.Codec.t -> bool
 val check : string -> Fuzz_gen.packed -> t -> bytes -> unit
 (** [check label p m buf] compares [m], generated from [p]'s codec, with the
     codec on [buf] at several offsets: decode and validate give the same value
-    or raise the same error, every getter reads what {!Wire.Codec.get} reads or
-    raises what it raises, encode writes the same bytes or raises the same error
-    into buffers around the record, and [Valid.v] with its reads agrees with
-    {!Wire.Codec.validate_exn} then {!Wire.Codec.get}, on [bytes] and on a
-    bigarray. Fails with {!Alcobar.failf}. *)
+    or the same error, encode writes the same bytes or raises the same error
+    into buffers around the record, and [check] with its accessors agrees with
+    {!Wire.Codec.validate} then {!Wire.Codec.get}. Fails with {!Alcobar.failf}.
+*)
 
 val report : string -> (string * Fuzz_gen.packed * string) list -> bool
 (** [report name refused] prints how many of the sampled {!codecs}, and of the
@@ -109,6 +95,45 @@ type scan_ops = {
 }
 (** A generated scanner, through its decoder and its frame fold, or their
     unboxed forms. *)
+
+val view_scan :
+  name:string ->
+  codec:'r Wire.Codec.t ->
+  fields:string list ->
+  full:(bytes -> int -> int -> (string * int) list option) ->
+  (bytes -> int -> int -> (string * int) list option) ->
+  scan_ops
+(** [view_scan ~name ~codec ~fields ~full view] is the backend of the views of a
+    scanner of [codec]: [view buf off len] checks the record at [off] in the
+    [len] bytes there and reads each of [fields] through the accessors, an
+    absent one as 0. Each answer is compared, before {!check_scan} compares it
+    with the reference, with [Wire.Codec.View.check] on the frame's bytes alone
+    and with [full], the scanner's own outputs, every one of them, those in
+    records a field holds included. Fails with {!Alcobar.failf}. *)
+
+type values = {
+  decode : bytes -> int -> (string, Wire.Error.t) result;
+      (** The generated decoder, the record it returns written back by the
+          generated encoder in the bytes the generated size measures, or the
+          error. *)
+  validate : bytes -> int -> (unit, Wire.Error.t) result;
+      (** The generated [validate]. *)
+}
+(** The values of a generated module of any shape. *)
+
+val values_scan :
+  name:string ->
+  codec:'r Wire.Codec.t ->
+  fields:string list ->
+  full:(bytes -> int -> int -> (string * int) list option) ->
+  values ->
+  scan_ops
+(** [values_scan ~name ~codec ~fields ~full v] is the backend of the values of a
+    module of [codec]: on each frame, the bytes alone, [v]'s decode gives what
+    {!Wire.Codec.decode} gives, written back by the generated and the codec's
+    encoders alike, or the same error, and its validate agrees with
+    {!Wire.Codec.validate}; it then hands out [full], the module's own outputs.
+    Fails with {!Alcobar.failf}. *)
 
 (** What a scanner is compared with: the codec, and the outputs it states for a
     frame it decodes ([known], or all of them when [None]). *)
@@ -140,7 +165,7 @@ val check_scan :
 (** [check_scan ?oracle r backends buf] compares each scanner with [r]'s codec
     on frames of [buf] at several offsets, bounds past the buffer included: the
     outputs, acceptance against {!Wire.Codec.decode}, its general path and
-    {!Wire.Codec.validate_exn}, [fold_frames] at several strides, and, with
+    {!Wire.Codec.validate}, [fold_frames] at several strides, and, with
     [oracle], the acceptance and consumed prefix of the EverParse C validators
     of the standalone and FFI projections, and the visitor scalars of the FFI
     one. A read must not change [buf]. Fails with {!Alcobar.failf}. *)
@@ -151,8 +176,8 @@ val scan_corpus :
     good, bad and partial frames joined for [fold_frames]. *)
 
 val scannable : 'r Wire.Codec.t -> bool
-(** [scannable c] is [true] when [c] is in the scope {!Wire_ocaml.scanner}
-    documents. *)
+(** [scannable c] is [true] when [c] is in the scope {!Wire_ocaml.v} documents
+    for a fold. *)
 
 val scan_codecs : (string * Fuzz_gen.packed) list
 (** [scan_codecs] is every sampled codec without parameters, fixed or not, and

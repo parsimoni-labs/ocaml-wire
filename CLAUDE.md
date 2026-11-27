@@ -7,6 +7,8 @@ make build              # dune build
 make test               # dune runtest
 make test-wasm          # test/wasm under node via wasm_of_ocaml (needs wasm_of_ocaml, node)
 make 3d                 # validate all schemas with EverParse (needs everparse-3d.exe)
+make prove              # F* proves the scanners proofs/fstar-gen lists (needs EverParse)
+make verify             # Z3 checks the generated code against 3d.exe (needs EverParse, z3)
 make bench              # EverParse C vs OCaml (needs everparse-3d.exe)
 make bench-routing      # APID demux throughput
 make bench-gateway      # TM frame reassembly
@@ -43,7 +45,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
   - `examples/net/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo
 - `bench/` -- benchmarks using schemas from `examples/`
   - `bench/demo/` -- field-level codec benchmark (EverParse C validation vs FFI vs OCaml `Codec.get`/`Codec.set`)
-  - `bench/clcw/` -- CLCW polling loop, uses `Codec.bitfield`/`load_word`/`extract`
+  - `bench/clcw/` -- CLCW polling loop, uses `Codec.Word`
   - `bench/routing/` -- APID demux throughput
   - `bench/gateway/` -- TM frame reassembly
   - `bench/apps/` -- the routing, gateway and CLCW workloads in Wire.Codec, generated OCaml/OxCaml, generated Rust and crates
@@ -128,7 +130,7 @@ codecs share one library, is in [docs/projection.md](docs/projection.md#generate
 The **only** goal of benchmarks is to compare these three tiers -- all derived
 from the same Wire DSL definition:
 
-1. **Pure OCaml** -- `Wire.Codec`'s staged reads and writes (zero-copy field access)
+1. **Pure OCaml** -- `Wire.Codec`'s reads and writes (zero-copy field access)
 2. **EverParse C** -- EverParse-generated verified C validator in a C loop
 3. **OCaml->C FFI** -- OCaml calling the EverParse-generated C validator
 
@@ -155,10 +157,13 @@ measures the trick, not the library, and its win belongs in the generator.
 **Application benchmarks** (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
-does the same work with the codec's read and write API, as a user would:
-`Codec.read_word` once per header and `Codec.of_word` per field
-(`Codec.load_word` and `Codec.extract` for CLCW), `Codec.writer` per header
-written, and `Codec.get`/`Codec.set` for a lone field.
+does the same work as a user would, in the terms of docs/api.md: the
+interpreted view loop for the `Wire.Codec` rows (`Codec.View.check`, `is_ok`
+and `get` once per header, `Codec.View.read` per field and `Codec.View.set`
+per field written in place), the same loop over the generated module for the
+generated rows (`check`, `is_ok`, `get`, an accessor per field, `set_<field>`
+and `write`), and a fold with its visitor `~f` where the workload is one pass
+over many records.
 
 **Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one
 exception to the three tiers: it measures the code generators against

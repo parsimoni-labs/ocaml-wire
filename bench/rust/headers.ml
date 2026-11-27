@@ -186,7 +186,7 @@ type ipv6 = {
 }
 
 let ipv6 =
-  let word name f = Codec.(Field.v name uint32be $ f) in
+  let word label f = Codec.(Field.v label uint32be $ f) in
   Codec.v "IPv6"
     (fun version traffic_class flow_label payload_length next_header hop_limit
          s0 s1 s2 s3 d0 d1 d2 d3 ->

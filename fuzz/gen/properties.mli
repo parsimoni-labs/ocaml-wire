@@ -25,8 +25,8 @@ val check_positive : string -> 'a t -> 'a * bytes -> unit
 
 val validate_one :
   ?env:Wire.Param.env -> 'a t -> bytes -> [> `Crash | `Ok | `Reject ]
-(** [validate_one ?env g bs] is the verdict of {!Wire.Codec.validate_exn} on
-    [bs]. *)
+(** [validate_one ?env g bs] is the verdict of {!Wire.Codec.validate} on [bs].
+*)
 
 val check_validate_positive : string -> 'a t -> bytes -> unit
 (** [check_validate_positive label g bs] requires validate to accept [bs]. *)
@@ -48,7 +48,7 @@ val check_encode_safety : string -> ?env:Wire.Param.env -> 'a t -> 'a -> unit
 val check_decode_validate_agree :
   string -> string -> ?env:Wire.Param.env -> 'a t -> bytes -> unit
 (** [check_decode_validate_agree label kind ?env g bs] requires validate to
-    raise exactly when decode returns [Error], for the same reason. *)
+    answer [Error] exactly when decode does, for the same reason. *)
 
 val hostile_value_stream : 'a t -> 'a option Alcobar.gen
 (** [hostile_value_stream g] is [g]'s hostile values, or [None] samples for a
@@ -71,7 +71,7 @@ val stage_get :
   ?env:Wire.Param.env ->
   'a addressed ->
   ('b, 'a) Wire.Codec.field ->
-  (bytes -> int -> 'b) option
+  (bytes -> int -> ('b, Wire.Error.t) result) option
 (** [stage_get ?env a field] is the staged reader of [field], or [None] where
     the accessor API has none. *)
 
@@ -126,7 +126,7 @@ val check_frame_extent :
 val check_short_prefix :
   string -> string -> ?env:Wire.Param.env -> 'a t -> bytes -> unit
 (** [check_short_prefix label kind ?env g bs] requires nothing shorter than
-    [min_wire_size] to decode. *)
+    [min_size] to decode. *)
 
 val check_read_purity :
   string ->

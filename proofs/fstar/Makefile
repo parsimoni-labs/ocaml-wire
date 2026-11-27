@@ -29,13 +29,16 @@ FSTAR_FLAGS = $(FLAGS) $(CACHED) --include .
 MODEL = Plan.Expr.fst Plan.Sum.fst Plan.Scan.fst Plan.Proof.fst
 MODULES = $(MODEL) Plan.Word.fst Plan.Bytes.fst Plan.Frames.fst Spec.Ipv4.fst Plan.Tree.fst \
   Plan.Range.fst Plan.Decide.fst Plan.Loop.fst Plan.Join.fst \
-  Plan.Values.fst
+  Plan.Values.fst Plan.Index.fst
 
 # defects/Defect.<name>.Buggy.fst fails on one line (F* may report a
 # conjunction there as several errors), defects/Defect.<name>.Fixed.fst
 # verifies.
 DEFECTS = SpanWrap ConstraintWrap WordUnchecked RegionWalk RepeatBudget SumConst
 
+# The defect and mutant rules read F*'s errors, so they ask for its human
+# messages: under GITHUB_ACTIONS, F* writes GitHub annotations by default.
+HUMAN = --message_format human
 
 # defects/<name>.sed rewrites the module its "# mutates:" line names, and
 # the module its "# fails:" line names then fails to verify.
@@ -45,7 +48,8 @@ MUTANTS = fields-after-span o1-drop-negative o1-drop-wrap o1-drop-unchecked \
   short-known ahead-short tree-retest tree-case-first \
   range-top-bits join-known sign-shift \
   word-past-check word-before-window held-leak \
-  region-known-high region-end-unpinned region-start-off
+  region-known-high region-end-unpinned region-start-off \
+  index-ahead-untested index-ahead-past index-known-short region-unread-loads
 
 .PHONY: verify defects plans extract check-extract clean $(DEFECTS:%=defect-%) $(MUTANTS:%=mutant-%)
 
@@ -63,7 +67,7 @@ $(DEFECTS:%=defect-%): defect-%:
 	@mkdir -p $(CACHE)
 	@out=$$(cd defects && $(FSTAR) $(FLAGS) $(CACHED) --include .. Defect.$*.Fixed.fst 2>&1) || \
 	  { echo "$$out"; echo "FAIL $*: the fixed replay does not verify"; exit 1; }
-	@out=$$(cd defects && $(FSTAR) $(FLAGS) $(CACHED) --include .. Defect.$*.Buggy.fst 2>&1); \
+	@out=$$(cd defects && $(FSTAR) $(FLAGS) $(HUMAN) $(CACHED) --include .. Defect.$*.Buggy.fst 2>&1); \
 	  if [ $$? -eq 0 ]; then echo "FAIL $*: the buggy replay verifies"; exit 1; fi; \
 	  n=$$(echo "$$out" | sed -n 's/^\* Error [0-9]* at \([^(]*([0-9]*\),.*/\1/p' | sort -u | wc -l); \
 	  [ $$n -eq 1 ] || \
@@ -75,7 +79,7 @@ $(MUTANTS:%=mutant-%): mutant-%:
 	  f=$$(sed -n 's/^# mutates: //p' $$s); c=$$(sed -n 's/^# fails: //p' $$s); \
 	  rm -rf $$d; mkdir -p $$d; cp $(MODULES) $$d/; sed -f $$s $$f > $$d/$$f; \
 	  if cmp -s $$f $$d/$$f; then echo "FAIL $*: the mutation does not apply"; exit 1; fi; \
-	  out=$$(cd $$d && $(FSTAR) $(FLAGS) $$c 2>&1); \
+	  out=$$(cd $$d && $(FSTAR) $(FLAGS) $(HUMAN) $$c 2>&1); \
 	  if [ $$? -eq 0 ]; then echo "FAIL $*: the mutant verifies"; exit 1; fi; \
 	  t=$$(sed -n 's/^# witness: //p' $$s); \
 	  if [ -n "$$t" ]; then cp defects/$$t $$d/; \

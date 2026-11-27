@@ -3,8 +3,8 @@
 ; Workflow:
 ; 1. BUILD_EVERPARSE=1 dune build @ocaml-wire/test/diff/gen_c
 ;    (generates .3d schemas, runs EverParse, produces C stubs)
-; 2. BUILD_EVERPARSE=1 dune build @ocaml-wire/test/diff/diff
-;    (runs differential tests)
+; 2. BUILD_EVERPARSE=1 dune build @ocaml-wire/test/diff/runtest
+;    (compiles the stubs against EverParse's C and runs differential tests)
 ;
 ; EverParse is slow, so code generation only runs when BUILD_EVERPARSE=1.
 ; Generated C code can be promoted and committed for C API consumers.
@@ -124,8 +124,11 @@
   (= %{env:BUILD_EVERPARSE=} "1"))
  (libraries stubs))
 
+; The stubs call each validator by the name EverParse gives it, so building
+; them checks that name; runtest builds and runs them.
+
 (rule
- (alias diff)
+ (alias runtest)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
  (deps diff_test.exe)

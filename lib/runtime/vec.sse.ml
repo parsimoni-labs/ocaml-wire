@@ -3,17 +3,6 @@ type t = int32x4
 external load : bytes @ local -> int -> t @@ portable = "%caml_bytes_getu128u"
 external store : bytes @ local -> int -> t -> unit @@ portable = "%caml_bytes_setu128u"
 
-external load_bigstring :
-  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t @ local ->
-  int ->
-  t @@ portable = "%caml_bigstring_getu128u"
-
-external store_bigstring :
-  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t @ local ->
-  int ->
-  t ->
-  unit @@ portable = "%caml_bigstring_setu128u"
-
 external add : t -> t -> t @@ portable
   = "caml_vec128_unreachable" "caml_sse2_int32x4_add"
 [@@noalloc] [@@unboxed] [@@builtin]

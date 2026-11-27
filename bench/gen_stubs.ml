@@ -32,24 +32,31 @@ let struct_size s =
 
 let projection_structs = Demo_bench_cases.projection_structs
 
-(* Projection pair for a struct: a string per kind of field, naming the
-   extractor when the kind matches and a no-op constant otherwise. *)
-let projection_strings ~lower ~is_proj ~field_kinds =
-  if not is_proj then ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
+(* Projection pair for a struct: a reader per kind of field, extracting the
+   field through the stubs [S] when the kind matches and a no-op constant
+   otherwise. *)
+let projection_strings ~is_proj ~field_kinds =
+  let zero_int = "(fun _ _ -> 0)" and zero_int64 = "(fun _ _ -> 0L)" in
+  if not is_proj then (zero_int, zero_int64)
   else
     match field_kinds with
     | [ (_, Wire.Everparse.Raw.Int64) ] ->
-        ("(fun _ _ -> 0)", Fmt.str "%s_projected_int64" lower)
-    | [ _ ] -> (Fmt.str "%s_projected_int" lower, "(fun _ _ -> 0L)")
-    | _ -> ("(fun _ _ -> 0)", "(fun _ _ -> 0L)")
+        ( zero_int,
+          "(fun b off -> Result.value ~default:0L (S.parse_k Fun.id b off))" )
+    | [ _ ] ->
+        ( "(fun b off -> Result.value ~default:0 (S.parse_k Fun.id b off))",
+          zero_int64 )
+    | _ -> (zero_int, zero_int64)
 
-(* [ffi_parse] uses [_parse_k] directly (the single C entry point) with a
-   no-op continuation. The OCaml-side record-returning [_parse] wrapper
-   adds an extra C-to-OCaml callback hop just to build a record we'd then
-   discard; the bench measures pure validation cost, so skip the wrapper. *)
+(* [ffi_parse] uses [parse_k] directly (the single C entry point) with a
+   no-op continuation. The record-returning [parse] adds an extra C-to-OCaml
+   callback hop just to build a record we'd then discard; the bench measures
+   pure validation cost, so skip it. *)
 let noop_continuation ~n_args =
   "(fun " ^ String.concat " " (List.init n_args (fun _ -> "_")) ^ " -> ())"
 
+(* The registry applies each schema's stubs to the codec its caller passes:
+   the codec a refused record's error comes from. *)
 let generate_stub_registry ppf structs projection_structs =
   let pr fmt = Fmt.pf ppf fmt in
   let all_structs = structs @ projection_structs in
@@ -60,7 +67,12 @@ let generate_stub_registry ppf structs projection_structs =
   pr "  projected_int : bytes -> int -> int;\n";
   pr "  projected_int64 : bytes -> int -> int64;\n";
   pr "}\n\n";
-  pr "let stubs_of_name = function\n";
+  pr "let stubs_of_name (type r) name (codec : r Wire.Codec.t) =\n";
+  pr "  let module C = struct\n";
+  pr "    type nonrec r = r\n\n";
+  pr "    let codec = codec\n";
+  pr "  end in\n";
+  pr "  match name with\n";
   List.iter
     (fun s ->
       let name = Wire.Everparse.Raw.struct_name s in
@@ -71,9 +83,7 @@ let generate_stub_registry ppf structs projection_structs =
           projection_structs
       in
       let field_kinds = Wire.Everparse.Raw.field_kinds s in
-      let proj_int, proj_int64 =
-        projection_strings ~lower ~is_proj ~field_kinds
-      in
+      let proj_int, proj_int64 = projection_strings ~is_proj ~field_kinds in
       let n_args =
         List.length
           (Wire.Everparse.Raw.field_kinds
@@ -83,9 +93,11 @@ let generate_stub_registry ppf structs projection_structs =
       in
       let cont = noop_continuation ~n_args in
       pr
-        "  | %S -> { check = %s_check; ffi_parse = (fun b off -> %s_parse_k %s \
-         b off); loop = %s_loop; projected_int = %s; projected_int64 = %s }\n"
-        name lower lower cont lower proj_int proj_int64)
+        "  | %S ->\n\
+        \      let module S = %s.Make (C) in\n\
+        \      { check = %s_check; ffi_parse = (fun b off -> ignore (S.parse_k \
+         %s b off)); loop = %s_loop; projected_int = %s; projected_int64 = %s }\n"
+        name (Wire_stubs.module_name s) lower cont lower proj_int proj_int64)
     structs;
   pr "  | name -> failwith (\"C_stubs: unknown schema \" ^ name)\n"
 
@@ -106,18 +118,6 @@ let generate_ml oc =
       pr "external %s_loop : bytes -> int -> int -> int = \"ep_loop_%s\"\n\n"
         lower lower)
     structs;
-  pr "(* Projected field extraction *)\n\n";
-  List.iter
-    (fun s ->
-      let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
-      match Wire.Everparse.Raw.field_kinds s with
-      | [ (_, kind) ] ->
-          let suffix =
-            match kind with Wire.Everparse.Raw.Int64 -> "_int64" | _ -> "_int"
-          in
-          pr "let %s_projected%s = %s_parse_k Fun.id\n\n" lower suffix lower
-      | _ -> ())
-    projection_structs;
   pr "\n(* Per-schema stub registry *)\n\n";
   generate_stub_registry ppf structs projection_structs;
   Format.pp_print_flush ppf ()
@@ -132,7 +132,7 @@ let generate_c oc =
     (fun s ->
       let name = Wire.Everparse.Raw.struct_name s in
       let ep = Wire_3d.everparse_name name in
-      let validator = Wire_stubs.validator_name name in
+      let validator = Wire_3d.validator_name name in
       let lower = String.lowercase_ascii name in
       let n_fields = List.length (Wire.Everparse.Raw.field_names s) in
       ignore n_fields;

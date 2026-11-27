@@ -12,7 +12,7 @@ let err_parse fmt = Fmt.kstr (fun message -> Error message) fmt
 
 let string_error = function
   | Ok value -> Ok value
-  | Error error -> err_parse "%a" pp_parse_error error
+  | Error error -> err_parse "%a" Error.pp error
 
 (* Render a one-field struct carrying [p] to 3D for substring assertions. *)
 let render_param_3d p =
@@ -245,8 +245,8 @@ let test_where_clause_fail () =
   let env = Codec.env c |> Param.bind max_val (UInt16.v 10) in
   match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
-  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
 
 let test_bind_by_name () =
   (* [bind_by_name] binds an input param by name, without the typed handle, and
@@ -271,8 +271,8 @@ let test_bind_by_name () =
   let env = Codec.env c |> Param.bind_by_name "max_val" 10 in
   (match Codec.decode ~env c buf 0 with
   | Ok _ -> Alcotest.fail "expected where failure"
-  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e);
+  | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e);
   (* an unreferenced name is a no-op, not an error *)
   let env =
     Codec.env c
@@ -361,8 +361,8 @@ let test_codec_param_where_fail () =
   let buf = Bytes.of_string "\x05" in
   let env = Codec.env c |> Param.bind limit (UInt8.v 3) in
   match Codec.decode ~env c buf 0 with
-  | Error { kind = Constraint_failed { which = Where; _ }; _ } -> ()
-  | Error e -> Alcotest.failf "wrong error: %a" pp_parse_error e
+  | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
+  | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
   | Ok _ -> Alcotest.fail "expected decode failure"
 
 (* -- 3D rendering -- *)
@@ -509,7 +509,7 @@ let test_param_size_zero () =
   Alcotest.(check int) "tag" 0xFF (UInt8.to_int r.tag)
 
 let test_param_size_reentrant_codec () =
-  let size = Param.input "reentrant_size" uint8 in
+  let size_p = Param.input "reentrant_size" uint8 in
   let codec_ref = ref None in
   let inner_env_ref = ref None in
   let inside = ref false in
@@ -540,13 +540,13 @@ let test_param_size_reentrant_codec () =
       Codec.
         [
           Field.v "Tag" trigger $ fst;
-          Field.v "Data" (byte_array ~size:(Param.expr size)) $ snd;
+          Field.v "Data" (byte_array ~size:(Param.expr size_p)) $ snd;
         ]
   in
   codec_ref := Some codec;
-  let inner_env = Codec.env codec |> Param.bind size (UInt8.v 1) in
+  let inner_env = Codec.env codec |> Param.bind size_p (UInt8.v 1) in
   inner_env_ref := Some inner_env;
-  let outer_env = Codec.env codec |> Param.bind size (UInt8.v 2) in
+  let outer_env = Codec.env codec |> Param.bind size_p (UInt8.v 2) in
   let buf = Bytes.create 3 in
   Codec.encode ~env:outer_env codec (UInt8.v 9, "AB") buf 0;
   Alcotest.(check bytes)
@@ -560,10 +560,10 @@ let test_param_size_in_casetype () =
   (* Casetype dispatch must preserve the outer encode context when its selected
      body is an embedded codec. Otherwise the inner parameter lookup falls back
      to the unbound sentinel and a param-sized byte field rejects its value. *)
-  let size = Param.input "case_size" uint8 in
+  let size_p = Param.input "case_size" uint8 in
   let inner =
     Codec.v "ParamCaseBody" Fun.id
-      Codec.[ Field.v "data" (byte_array ~size:(Param.expr size)) $ Fun.id ]
+      Codec.[ Field.v "data" (byte_array ~size:(Param.expr size_p)) $ Fun.id ]
   in
   let typ =
     casetype "ParamCase" uint8
@@ -576,7 +576,7 @@ let test_param_size_in_casetype () =
   let outer =
     Codec.v "ParamCaseOuter" Fun.id Codec.[ Field.v "case" typ $ Fun.id ]
   in
-  let env = Codec.env outer |> Param.bind size (UInt8.v 2) in
+  let env = Codec.env outer |> Param.bind size_p (UInt8.v 2) in
   let buf = Bytes.create 3 in
   Codec.encode ~env outer (`Body "AB") buf 0;
   Alcotest.(check bytes) "encoded casetype" (Bytes.of_string "\x01AB") buf;
@@ -584,10 +584,10 @@ let test_param_size_in_casetype () =
     "decoded casetype" (Ok "AB")
     (match Codec.decode ~env outer buf 0 with
     | Ok (`Body value) -> Ok value
-    | Error error -> err_parse "%a" pp_parse_error error)
+    | Error error -> err_parse "%a" Error.pp error)
 
 let test_param_through_typ_wrappers () =
-  (* Fixed-size typ wrappers use the scalar fast path. That path must carry the
+  (* Fixed-size_p typ wrappers use the scalar fast path. That path must carry the
      outer context through to an embedded codec's parameterized constraint. *)
   let limit = Param.input "wrapped_limit" uint8 in
   let value = Field.v "value" uint8 in
@@ -680,9 +680,9 @@ let test_multi_domain_decode () =
   Alcotest.(check bool) "second domain" true (Domain.join second)
 
 let test_slice_navigation_requires_parameters () =
-  let size = Param.input "size" uint8 in
+  let size_p = Param.input "size" uint8 in
   let field =
-    Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ Fun.id)
+    Codec.(Field.v "body" (byte_slice ~size:(Param.expr size_p)) $ Fun.id)
   in
   let codec = Codec.v "ParamSlice" Fun.id [ field ] in
   match Codec.View.codec codec with
@@ -690,10 +690,10 @@ let test_slice_navigation_requires_parameters () =
   | exception Invalid_argument _ -> ()
 
 let test_slice_navigation_with_parameters () =
-  let size = Param.input "size" uint8 in
-  let prefix = Field.v "prefix" (byte_array ~size:(Param.expr size)) in
+  let size_p = Param.input "size" uint8 in
+  let prefix = Field.v "prefix" (byte_array ~size:(Param.expr size_p)) in
   let body =
-    Codec.(Field.v "body" (byte_slice ~size:(Param.expr size)) $ snd)
+    Codec.(Field.v "body" (byte_slice ~size:(Param.expr size_p)) $ snd)
   in
   let codec =
     Codec.v "ParamSliceBody"
@@ -701,12 +701,12 @@ let test_slice_navigation_with_parameters () =
       Codec.[ prefix $ fst; body ]
   in
   let buf = Bytes.of_string "_abcDEF" in
-  let env = Codec.env codec |> Param.bind size (UInt8.v 3) in
+  let env = Codec.env codec |> Param.bind size_p (UInt8.v 3) in
   let module V = (val Codec.View.codec ~env codec) in
-  let slice = (Staged.unstage (Codec.get ~env codec body)) buf 1 in
+  let slice = (reader ~env codec body) buf 1 in
   let (Buf.Any b) = Buf.v buf in
   let r = Codec.View.(get (check V.codec b (Buf.length b) 1)) in
-  let read = Codec.View.(read (field V.codec body) b r) in
+  let read = Result.get_ok Codec.View.(read (checked_field V.codec body) b r) in
   Alcotest.(check int)
     "absolute offset"
     (Bytesrw.Bytes.Slice.first slice)

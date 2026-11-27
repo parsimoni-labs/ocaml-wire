@@ -2,34 +2,49 @@
 
     Each interface states the public API of its module and nothing else, with
     doc comments generated from the codec and, for the OxCaml target, the modes
-    and allocation checks of the implementation. Internal to {!Wire_ocaml}. *)
+    and allocation checks of the implementation. {!Writer} puts the parts of one
+    together. Internal to {!Wire_ocaml}. *)
 
-val record :
-  ?target:[ `OCaml | `OxCaml ] ->
-  ?simd:bool ->
-  ?make:string * string ->
-  ?maps:(string * string * Planner.typ) list ->
+type target = [ `OCaml | `OxCaml ]
+
+val record_preamble :
+  Format.formatter ->
+  target:target ->
+  simd:bool ->
+  maps:(string * string * Planner.typ) list ->
   codec:string ->
-  'a Wire.Codec.t ->
-  string
-(** [record ?target ?simd ?make ?maps ~codec c] is the interface of
-    {!Record_module.ml}'s module for [c]. [make] is the constructor's path and
-    the path of the type it returns; each of [maps] is a map's path, the OCaml
-    type of its values and the map. Raises [Invalid_argument] as
-    {!Record_module.ml} does. *)
+  plan:Planner.plan ->
+  size:int ->
+  unit
+(** [record_preamble ppf ~target ~simd ~maps ~codec ~plan ~size] is the head of
+    the interface of the module of a fixed record of [size] bytes: what it is
+    and its fields. Each of [maps] is a map's path, the OCaml type of its values
+    and the map. *)
 
-val scanner :
-  ?target:[ `OCaml | `OxCaml ] ->
-  ?fields:string list ->
-  ?step:string ->
+val record_members :
+  ?views:bool ->
+  Format.formatter ->
+  target:target ->
+  simd:bool ->
+  maps:(string * string * Planner.typ) list ->
   codec:string ->
-  'a Wire.Codec.t ->
-  string
-(** [scanner ?target ?fields ?step ~codec c] is the interface of
-    {!Scan_module.scanner}'s module for [c]. Raises [Invalid_argument] as
-    {!Scan_module.scanner} does. *)
+  plan:Planner.plan ->
+  size:int ->
+  unit
+(** [record_members ?views ppf ~target ~simd ~maps ~codec ~plan ~size] states
+    the members a fixed record adds: its size, record, decoders, writes, and,
+    unless [views], its reads. With [views], the module's views read the fields.
+*)
 
-val bridge : maps:bool -> codec:string -> core:string -> string
-(** [bridge ~maps ~codec ~core] is the interface of the bridge that checks
-    [core] against the codec at [codec], and with [maps] the maps of its fields:
-    a doc comment, since the bridge defines nothing. *)
+val scan_preamble :
+  Format.formatter -> codec:string -> plan:Planner.plan -> unit
+(** [scan_preamble ppf ~codec ~plan] is the head of the interface of a module
+    whose folds hand out outputs of [plan]. *)
+
+val scan_members :
+  Format.formatter ->
+  target:target ->
+  plan:Planner.plan ->
+  folds:Scan_module.fold list ->
+  unit
+(** [scan_members ppf ~target ~plan ~folds] states each of [folds]. *)

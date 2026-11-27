@@ -435,13 +435,14 @@ let test_casetype_case_bodies_keep_refinements () =
    the case-index projection can render. *)
 let test_casetype_integer_tags_dispatch () =
   let dispatches name tag lift =
+    let body = name ^ "Body" in
     let c =
       Codec.v name
         (fun v -> v)
         Codec.
           [
             ( Field.v "b"
-                (casetype (name ^ "Body") tag
+                (casetype body tag
                    [
                      case ~index:(lift 0) uint8 ~inject:Fun.id
                        ~project:Option.some;
@@ -469,13 +470,13 @@ let test_casetype_integer_tags_dispatch () =
    behind a [where], or over a 64-bit base. Each still names one integer per
    case, so each must project to a switch on the enum constant. *)
 let test_3d_casetype_tag_int_carriers () =
-  let dispatch name tag index =
-    Codec.v name
+  let dispatch label tag index =
+    Codec.v label
       (fun v -> v)
       Codec.
         [
           ( Field.v "u"
-              (casetype ("Sel" ^ name) tag
+              (casetype ("Sel" ^ label) tag
                  [ case ~index uint8 ~inject:Fun.id ~project:Option.some ])
           $ fun v -> v );
         ]
@@ -825,10 +826,10 @@ let nested_stack () =
         $ fun (_, _, i) -> i );
       ]
 
-let plug_names s =
-  List.map (fun f -> f.Everparse.name) (Everparse.plug_fields s)
+let visitor_names s =
+  List.map (fun f -> f.Everparse.name) (Everparse.visitor_fields s)
 
-let test_ffi_nested_plug_paths () =
+let test_ffi_nested_visitor_paths () =
   let s = Everparse.project ~mode:`Ffi (nested_stack ()) in
   Alcotest.(check (list string))
     "one member per scalar, named by path, and a flag per optional"
@@ -849,8 +850,8 @@ let test_ffi_nested_plug_paths () =
       "ip_udp_len";
       "ip_pad_present";
     ]
-    (plug_names s);
-  let fields = Everparse.plug_fields s in
+    (visitor_names s);
+  let fields = Everparse.visitor_fields s in
   Alcotest.(check (list int))
     "indices follow declaration order"
     (List.init (List.length fields) Fun.id)
@@ -918,8 +919,8 @@ let test_ffi_member_widths () =
       ("i_g", "uint8_t", "uint8_t");
     ]
     (List.map
-       (fun (f : Everparse.plug_field) -> (f.name, f.c_type, f.val_c_type))
-       (Everparse.plug_fields (Everparse.project ~mode:`Ffi c)))
+       (fun (f : Everparse.visitor_field) -> (f.name, f.c_type, f.val_c_type))
+       (Everparse.visitor_fields (Everparse.project ~mode:`Ffi c)))
 
 (* An optional scalar of an embedded codec has a member after its flag, set
    by a codec of that one field that the optional's region parses. *)
@@ -940,7 +941,7 @@ let test_ffi_nested_optional_scalar () =
   Alcotest.(check (list string))
     "members"
     [ "t"; "i"; "i_k"; "i_o_present"; "i_o" ]
-    (plug_names s);
+    (visitor_names s);
   let out = flatten (to_3d s.module_) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
@@ -984,7 +985,7 @@ let test_ffi_nested_shared_codec () =
   Alcotest.(check (list string))
     "members"
     [ "a"; "a_x"; "a_y"; "b"; "b_x"; "b_y" ]
-    (plug_names s);
+    (visitor_names s);
   let out = flatten (to_3d s.module_) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
@@ -1018,7 +1019,7 @@ let test_ffi_single_field_codec () =
   Alcotest.(check (list string))
     "members"
     [ "g"; "a"; "b"; "b_present"; "b_x" ]
-    (plug_names s);
+    (visitor_names s);
   let out = flatten (to_3d s.module_) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
@@ -1040,14 +1041,14 @@ let test_ffi_unflattened_shapes () =
   in
   Alcotest.(check (list string))
     "no flag without nesting" [ "g"; "a" ]
-    (plug_names (Everparse.project ~mode:`Ffi flat));
+    (visitor_names (Everparse.project ~mode:`Ffi flat));
   let inner = Codec.v "ArrIn" Fun.id Codec.[ Field.v "x" uint8 $ Fun.id ] in
   let arr =
     Codec.v "ArrTop" Fun.id
       Codec.[ Field.v "xs" (array ~len:(int 2) (codec inner)) $ Fun.id ]
   in
   let s = Everparse.project ~mode:`Ffi arr in
-  Alcotest.(check (list string)) "array elements" [ "xs" ] (plug_names s);
+  Alcotest.(check (list string)) "array elements" [ "xs" ] (visitor_names s);
   Alcotest.(check bool)
     "the element struct takes no ctx" true
     (contains ~sub:"typedef struct WireArrIn\n{" (to_3d s.module_))
@@ -1306,7 +1307,7 @@ let test_if_then_else_projects () =
   (* Expr.if_then_else projects to a 3D conditional, e.g. a size where a 0 field
      means a maximum: [byte-size (... ? 65536 : N)]. *)
   let f_n = Field.v "N" uint16be in
-  let size =
+  let span =
     Expr.if_then_else Expr.(Field.ref f_n = int 0) (int 65536) (Field.ref f_n)
   in
   let c =
@@ -1315,7 +1316,7 @@ let test_if_then_else_projects () =
       Codec.
         [
           (f_n $ fun (n, _) -> n);
-          (Field.v "Data" (byte_array ~size) $ fun (_, d) -> d);
+          (Field.v "Data" (byte_array ~size:span) $ fun (_, d) -> d);
         ]
   in
   let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
@@ -1532,7 +1533,7 @@ let test_3d_dep_size_roundtrip () =
   | Ok v ->
       Alcotest.(check int) "frame_length" 7 (UInt16.to_int v.frame_length);
       Alcotest.(check string) "data" "HELLO" v.data
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  | Error e -> Alcotest.failf "%a" Error.pp e
 
 type param_frame = { pf_data : string }
 
@@ -1787,10 +1788,10 @@ let test_lookup_index_bound_exhaustive () =
 let test_optional_scalar_regions () =
   List.iter
     (fun at_most ->
-      let tag = Field.v "tag" uint8 and size = Field.v "size" uint8 in
+      let tag = Field.v "tag" uint8 and size_f = Field.v "size" uint8 in
       let region =
         (if at_most then nested_at_most else nested)
-          ~size:(Field.ref size) uint16be
+          ~size:(Field.ref size_f) uint16be
       in
       let c =
         Codec.v "OptionalRegion"
@@ -1798,7 +1799,7 @@ let test_optional_scalar_regions () =
           Codec.
             [
               (tag $ fun (t, _, _) -> t);
-              (size $ fun (_, s, _) -> s);
+              (size_f $ fun (_, s, _) -> s);
               ( Field.optional "value"
                   ~present:Expr.(Field.ref tag = int 1)
                   region
@@ -1918,7 +1919,7 @@ let suite =
       Alcotest.test_case "3d: optional over a parametric sub-codec" `Quick
         test_3d_optional_over_param_codec;
       Alcotest.test_case "ffi: nested visitor paths" `Quick
-        test_ffi_nested_plug_paths;
+        test_ffi_nested_visitor_paths;
       Alcotest.test_case "ffi: a member is as wide as its setter's value" `Quick
         test_ffi_member_widths;
       Alcotest.test_case "ffi: an optional scalar of an embedded codec" `Quick

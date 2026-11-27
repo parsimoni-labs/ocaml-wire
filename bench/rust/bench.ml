@@ -398,62 +398,59 @@ let codec_packet ~avail acc b len o =
 (* {2 wire.ocaml: the generated view, then a read per field}
 
    The buffer is named once ([Buf.v]) and its length read once; then
-   [View.check b len off] checks a header at [off] once and [View.get] turns
-   the answer into a proof that only [b]'s reads accept, as wire.rust's
-   [Valid::at] does; each [view_<field> b v] is then one load with no bounds
-   check, and the proof is an [int], so nothing is allocated. *)
+   [check b len off] checks a header at [off] once and [get] turns the
+   answer into a proof that only [b]'s accessors accept, as wire.rust's
+   [Valid::at] does; each accessor [<field> b v] is then one load with no
+   bounds check, and the proof is an [int], so nothing is allocated. *)
 
 let view_tcp base acc b len o ~payload =
-  let c = G_tcp.View.check b len o in
-  if not (G_tcp.View.ok c) then base
+  let c = G_tcp.check b len o in
+  if not (G_tcp.ok c) then base
   else
-    let t = G_tcp.View.get c in
-    let w = G_tcp.view_data_offset_word b t in
-    let off = G_tcp.data_offset_of_word w in
+    let t = G_tcp.get c in
+    let off = G_tcp.data_offset b t in
     if off * 4 > payload then base
     else
       tcp_fields acc
-        ~sp:(UInt16.to_int (G_tcp.view_src_port b t))
-        ~dp:(UInt16.to_int (G_tcp.view_dst_port b t))
-        ~seq:(G_tcp.view_seq_int b t) ~ack:(G_tcp.view_ack_int b t)
-        ~win:(UInt16.to_int (G_tcp.view_window b t))
-        ~flags:(G_tcp.flags_of_word w) ~off
+        ~sp:(UInt16.to_int (G_tcp.src_port b t))
+        ~dp:(UInt16.to_int (G_tcp.dst_port b t))
+        ~seq:(UInt32.to_int (G_tcp.seq b t))
+        ~ack:(UInt32.to_int (G_tcp.ack b t))
+        ~win:(UInt16.to_int (G_tcp.window b t))
+        ~flags:(G_tcp.flags b t) ~off
 
 let view_udp base acc b len o ~payload =
-  let c = G_udp.View.check b len o in
-  if not (G_udp.View.ok c) then base
+  let c = G_udp.check b len o in
+  if not (G_udp.ok c) then base
   else
-    let u = G_udp.View.get c in
-    let ulen = UInt16.to_int (G_udp.view_length b u) in
+    let u = G_udp.get c in
+    let ulen = UInt16.to_int (G_udp.length b u) in
     if ulen > payload then base
     else
       udp_fields acc
-        ~sp:(UInt16.to_int (G_udp.view_src_port b u))
-        ~dp:(UInt16.to_int (G_udp.view_dst_port b u))
+        ~sp:(UInt16.to_int (G_udp.src_port b u))
+        ~dp:(UInt16.to_int (G_udp.dst_port b u))
         ~len:ulen
 
 let view_ipv4 base acc b len o ~avail =
-  let c = G_ipv4.View.check b len o in
-  if not (G_ipv4.View.ok c) then base
+  let c = G_ipv4.check b len o in
+  if not (G_ipv4.ok c) then base
   else
-    let ip = G_ipv4.View.get c in
-    let hlen = (G_ipv4.view_ihl b ip :> int) * 4
-    and tlen = UInt16.to_int (G_ipv4.view_total_length b ip) in
+    let ip = G_ipv4.get c in
+    let hlen = (G_ipv4.ihl b ip :> int) * 4
+    and tlen = UInt16.to_int (G_ipv4.total_length b ip) in
     if tlen < hlen || tlen > avail then base
     else
-      let proto = UInt8.to_int (G_ipv4.view_protocol b ip) in
+      let proto = UInt8.to_int (G_ipv4.protocol b ip) in
       let acc =
         ip_fields acc
-          ~src:(G_ipv4.view_src_addr_int b ip)
-          ~dst:(G_ipv4.view_dst_addr_int b ip)
-          ~ttl:(UInt8.to_int (G_ipv4.view_ttl b ip))
+          ~src:(UInt32.to_int (G_ipv4.src_addr b ip))
+          ~dst:(UInt32.to_int (G_ipv4.dst_addr b ip))
+          ~ttl:(UInt8.to_int (G_ipv4.ttl b ip))
           ~proto ~len:tlen
       in
-      let w = G_ipv4.view_flags_word b ip in
-      if
-        G_ipv4.flags_of_word w land 1 <> 0
-        || G_ipv4.fragment_offset_of_word w <> 0
-      then acc
+      if G_ipv4.flags b ip land 1 <> 0 || G_ipv4.fragment_offset b ip <> 0 then
+        acc
       else
         let payload = tlen - hlen in
         match proto with
@@ -462,15 +459,16 @@ let view_ipv4 base acc b len o ~avail =
         | _ -> acc
 
 let view_packet ~avail acc b len o =
-  let c = G_eth.View.check b len o in
-  if not (G_eth.View.ok c) then acc
+  let c = G_eth.check b len o in
+  if not (G_eth.ok c) then acc
   else
-    let e = G_eth.View.get c in
-    let ty = UInt16.to_int (G_eth.view_ether_type b e) in
+    let e = G_eth.get c in
+    let ty = UInt16.to_int (G_eth.ether_type b e) in
     if ty = ipv4 then view_ipv4 acc (acc + ty) b len (o + 14) ~avail
     else acc + ty
 
-let oxcaml = Stack_read.oxcaml
+let oxcaml =
+  match Sys.ocaml_release.extra with Some (_, "ox") -> true | _ -> false
 
 (* The rows take the slot's stride at run time, as a reader of fixed-size
    frames that learns their size from its input does. *)
@@ -598,20 +596,6 @@ let view_linked ~stride buf =
   done;
   !acc
 
-let generated ~stride buf =
-  let acc = ref 0 in
-  for i = 0 to (Bytes.length buf / stride) - 1 do
-    acc := Stack_read.boxed !acc buf (i * stride) stride
-  done;
-  !acc
-
-let generated_unboxed ~stride buf =
-  let acc = ref 0 in
-  for i = 0 to (Bytes.length buf / stride) - 1 do
-    acc := Stack_read.unboxed !acc buf (i * stride) stride
-  done;
-  !acc
-
 let generated_fold ~stride buf =
   let acc = ref 0 in
   for i = 0 to (Bytes.length buf / stride) - 1 do
@@ -638,32 +622,13 @@ let rows stride =
       codec_stack_view ~stride frame_codec packet );
     ("Wire.Codec check/read, linked headers", codec_linked ~stride);
     ("wire.ocaml View.check/view, linked headers" ^ target, view_linked ~stride);
-    ("wire.ocaml fused stack" ^ target, generated ~stride);
     ("wire.ocaml fused stack, fold" ^ target, generated_fold ~stride);
     ( "wire.ocaml fused stack, batch" ^ target,
       fun buf -> Stack_read.batch ~stride 0 buf 0 (Bytes.length buf) );
+    ("wire.ocaml selected outputs, fold" ^ target, generated_selected ~stride);
+    ( "wire.ocaml selected outputs, batch" ^ target,
+      fun buf -> Selected_read.batch ~stride 0 buf 0 (Bytes.length buf) );
   ]
-  @ (if oxcaml then
-       [
-         ( "wire.ocaml fused stack, unboxed batch",
-           fun buf ->
-             Stack_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
-       ]
-     else [])
-  @ [
-      ("wire.ocaml selected outputs, fold" ^ target, generated_selected ~stride);
-      ( "wire.ocaml selected outputs, batch" ^ target,
-        fun buf -> Selected_read.batch ~stride 0 buf 0 (Bytes.length buf) );
-    ]
-  @
-  if oxcaml then
-    [
-      ( "wire.ocaml selected outputs, unboxed batch",
-        fun buf ->
-          Selected_read.batch_unboxed ~stride 0 buf 0 (Bytes.length buf) );
-      ("wire.ocaml fused stack, unboxed API", generated_unboxed ~stride);
-    ]
-  else []
 
 (* {1 Timing}
 
@@ -879,22 +844,25 @@ let flow_rows =
     ( "wire.ocaml scanner, selected outputs, fold_step" ^ target,
       flow_scanner,
       flow_scanner_parse );
+    ( "wire.ocaml check/view, accessors" ^ target,
+      Flow_rows.flow_check,
+      Flow_rows_parse.flow_check );
   ]
 
 let pp_flows ppf (flows, sum) = Fmt.pf ppf "%d flows, %d" flows sum
 let pp_keys ppf (keys, sum) = Fmt.pf ppf "%d keys, %d" keys sum
 
 (* The swap rows, on corpora of their own: one flow counter, flow_swap.ml,
-   over the header modules [Wire.Codec.Make] gives and over the [Global]
-   modules wire.ocaml generates, with the table and without it. Only IPv4
+   over the modules wire.ocaml generates from the header codecs and over
+   their interpreted twins, with the table and without it. Only IPv4
    makes a flow; the other packets are counted by kind, and every row prints
    both. *)
 let swap_rows =
   [
-    ( "swap=interpreted, Wire.Codec.Make",
+    ( "swap=interpreted, twin",
       Flow_swap_interpreted.run,
       Flow_swap_interpreted_parse.run );
-    ("swap=generated, Global" ^ target, Flow_swap.run, Flow_swap_parse.run);
+    ("swap=generated" ^ target, Flow_swap.run, Flow_swap_parse.run);
   ]
 
 let pp_mix pp ppf (r, mix) = Fmt.pf ppf "%a; %a" pp r Flow_mix.pp mix

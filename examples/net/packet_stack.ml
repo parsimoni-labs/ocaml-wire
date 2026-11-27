@@ -387,8 +387,8 @@ let ipv6_of_fields version traffic_class flow_label payload_length next_header
     udp;
   }
 
-let word name (of_ipv6 : ipv6 -> UInt32.t) =
-  Codec.(Field.v name uint32be $ of_ipv6)
+let word label (of_ipv6 : ipv6 -> UInt32.t) =
+  Codec.(Field.v label uint32be $ of_ipv6)
 
 let ipv6 =
   Codec.v "StackIPv6" ipv6_of_fields

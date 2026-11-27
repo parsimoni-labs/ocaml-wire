@@ -126,7 +126,7 @@ let read_guard : type a r.
 (* A fixed-width field after a variable one is the only record reader whose
    position can outrun the buffer without the whole-record bounds check seeing
    it: a trailing greedy field can resolve the final end back to the buffer
-   length. Static reads are covered by [min_wire_size], while variable reads
+   length. Static reads are covered by [min_size], while variable reads
    guard their own spans, so keep their hot paths unchanged. *)
 let guarded_dynamic_reader : type a r.
     (a, r) compiled_field ->
@@ -174,20 +174,34 @@ let guarded_populate : type a r.
 
 (* A field's two validators. [check_only] fills the field's int slot and tests
    its constraint; [full] adds the field action. Decode and [Codec.validate_exn]
-   both run [full], so an action never fires on one path only. *)
-let field_validators ~field_idx ~validator_off ~populate ~check ~act =
+   both run [full], so an action never fires on one path only. A failure names
+   the offset [access] locates the field at, which an earlier variable-size
+   field makes depend on the input. *)
+let field_validators ~field_idx ~access ~populate ~check ~act =
+  let at = access_at access in
   let check_only arr runtime input_end buf base =
     populate arr runtime input_end buf base;
-    let at = at_of base validator_off in
     match check with
-    | Some f when not (eval_arr_at ~at f arr) ->
-        raise_field_constraint ~field_idx ~at arr
-    | _ -> ()
+    | Some f -> (
+        match f arr with
+        | true -> ()
+        | false ->
+            raise_field_constraint ~field_idx
+              ~at:(at runtime input_end buf base)
+              arr
+        | exception exn when Types.is_parse_error exn ->
+            let e = Types.parse_error_of exn in
+            relocate at runtime input_end buf base e)
+    | None -> ()
   in
   let full arr runtime input_end buf base =
     check_only arr runtime input_end buf base;
     match act with
-    | Some f -> eval_arr_at ~at:(at_of base validator_off) f arr
+    | Some f -> (
+        try f arr
+        with exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
+          relocate at runtime input_end buf base e)
     | None -> ()
   in
   (check_only, full)
@@ -323,15 +337,6 @@ let add_min_size record field min_size cf =
       "Codec %s: field %s takes the record past the largest buffer size" record
       field;
   min_size + cf.size_delta
-
-(* Bitfields share a base word; [cf.size_delta] is the correct non-overlapping
-   contribution. Key this off the compiled access rather than the field's type:
-   wrapped bitfields such as [bit (bits ...)] arrive here as [Map]/[Where]/[Enum]
-   even though they still pack into the current word. *)
-let field_size_of_value (fld : (_, _) field) cf =
-  match cf.field_access with
-  | Bitfield _ -> fun _ _ -> cf.size_delta
-  | _ -> fun ctx v -> size_of_typ_value ctx fld.typ (fld.get v)
 
 let plain_span : type a. a typ -> bool = function
   | Byte_array _ | Byte_slice _ | All_bytes -> true
@@ -579,11 +584,27 @@ let field_fault ~field_idx ~check ~act cf (fld : (_, _) field) full =
   match fld.typ with
   | Codec _ ->
       let _, f =
-        field_validators ~field_idx ~validator_off:cf.validator_off
+        field_validators ~field_idx ~access:cf.field_access
           ~populate:cf.populate ~check ~act
       in
       prepend_field_check fld.name f
   | _ -> full
+
+let field_action name act actions =
+  match act with Some act -> (name, act) :: actions | None -> actions
+
+(* The check-pass steps of a field, each at the field's static offset. *)
+let field_validator_steps ~used ~slot ~act ~laid ~min_wire_size
+    (fld : (_, _) field) cf check full =
+  let byte_off = cf.validator_off in
+  List.map
+    (fun step -> (byte_off, step))
+    (field_steps ~used ~name:fld.name ~slot ~voff:byte_off
+       ~conds:(field_conds fld)
+       ~span:(plain_span fld.typ && Option.is_none act)
+       ~laid:(laid_field fld && laid)
+       (check_view ~min_wire_size cf.field_access fld.typ ~act)
+       check full)
 
 let apply_compiled : type a f r.
     (a -> f, r) record -> (a, r) field -> (a, r) compiled_field -> (f, r) record
@@ -595,11 +616,10 @@ let apply_compiled : type a f r.
   let check = compile_field_check cc fld in
   let act = compile_action cc fld.action in
   let check_only, full =
-    field_validators ~field_idx ~validator_off:cf.validator_off
+    field_validators ~field_idx ~access:cf.field_access
       ~populate:(guarded_populate cf fld.typ)
       ~check ~act
   in
-  let byte_off = cf.validator_off in
   let new_field_readers =
     extend_scope fld.name (expr_reader cf fld.typ) cf.nested_readers
       r.field_readers
@@ -624,11 +644,7 @@ let apply_compiled : type a f r.
             ~named:(names_errors ~validates ~check ~act)
         with
         | wr, checks, wgates, pmove, pgate ->
-            let pskip =
-              match wr with
-              | Walk w -> Some w.wskip
-              | Scalar _ | String _ | Slice _ -> None
-            in
+            let pskip = walk_skip wr in
             Some
               {
                 wplaces_rev =
@@ -636,9 +652,7 @@ let apply_compiled : type a f r.
                 wreaders = WSnoc (w.wreaders, wr);
                 wchecks_rev = List.rev_append checks w.wchecks_rev;
                 wstart =
-                  (match (w.wstart, r.next_off, cf.next_off) with
-                  | None, Static n, Dynamic _ -> Some n
-                  | wstart, _, _ -> wstart);
+                  walk_start w.wstart ~before:r.next_off ~after:cf.next_off;
                 wgates;
               }
         | exception Exit -> None)
@@ -654,27 +668,22 @@ let apply_compiled : type a f r.
       layout_rev;
       walk;
       prefix = field_prefix r.prefix ~min_wire_size cf fld;
-      size_of_value_rev = field_size_of_value fld cf :: r.size_of_value_rev;
+      size_of_value_rev =
+        field_size_of_value fld cf ~value_ints:r.value_ints_rev
+        :: r.size_of_value_rev;
+      value_ints_rev = field_value_int fld :: r.value_ints_rev;
       min_wire_size;
       next_off = cf.next_off;
       validators_rev =
-        List.map
-          (fun step -> (byte_off, step))
-          (field_steps ~used:r.used_slots ~name:fld.name ~slot:field_idx
-             ~voff:byte_off ~conds:(field_conds fld)
-             ~span:(plain_span fld.typ && Option.is_none act)
-             ~laid:(laid_field fld && Option.is_some layout_rev)
-             (check_view ~min_wire_size cf.field_access fld.typ ~act)
-             check full)
+        field_validator_steps ~used:r.used_slots ~slot:field_idx ~act
+          ~laid:(Option.is_some layout_rev)
+          ~min_wire_size fld cf check full
         @ r.validators_rev;
-      checkers_rev = (byte_off, check_only) :: r.checkers_rev;
+      checkers_rev = (cf.validator_off, check_only) :: r.checkers_rev;
       faults_rev =
         (fld.name :: List.filter_map fst cf.nested_readers, fault)
         :: r.faults_rev;
-      field_actions_rev =
-        (match act with
-        | Some act_fn -> (fld.name, act_fn) :: r.field_actions_rev
-        | None -> r.field_actions_rev);
+      field_actions_rev = field_action fld.name act r.field_actions_rev;
       n_fields = List.length new_field_readers;
       n_array_slots = List.length new_field_readers + List.length action_vanames;
       r_bf = cf.bf_after;
@@ -930,23 +939,25 @@ let validation_runtime param_slots arr =
 (* A failed [Check], off the hot path. *)
 let check_failed ~name ~slot ~voff arr base =
   try raise_field_constraint ~field_idx:slot ~at:(at_of base voff) arr
-  with Types.Parse_error e ->
-    raise (Types.Parse_error { e with field = name :: e.field })
+  with exn when Types.is_parse_error exn ->
+    let e = Types.parse_error_of exn in
+    Types.raise_parse_error { e with field = name :: e.field }
 
 (* A failed [Range], with the value it read. *)
 let range_failed ~name ~voff v base =
   try
     raise_constraint ~at:(at_of base voff) ~which:Field ~value:(Int64.of_int v)
       ()
-  with Types.Parse_error e ->
-    raise (Types.Parse_error { e with field = name :: e.field })
+  with exn when Types.is_parse_error exn ->
+    let e = Types.parse_error_of exn in
+    Types.raise_parse_error { e with field = name :: e.field }
 
 let check_cond ~name ~voff cond arr base =
   try cond arr
-  with Types.Parse_error e ->
-    raise
-      (Types.Parse_error
-         { e with at = at_of base voff; field = name :: e.field })
+  with exn when Types.is_parse_error exn ->
+    let e = Types.parse_error_of exn in
+    Types.raise_parse_error
+      { e with at = at_of base voff; field = name :: e.field }
 
 (* A failed set test: the field's general validator raises the field's own
    error. It always does, as the set is what its checks accept; the constraint
@@ -1388,11 +1399,12 @@ let build_record_encoder name writers size_of_value ~check =
     | None -> ()
     | Some f -> (
         try f runtime buf off
-        with Types.Parse_error e ->
+        with exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
           Fmt.invalid_arg
             "Codec.encode %s: the encoded record is rejected by its own \
              constraints (%a)"
-            name Types.pp_parse_error e));
+            name Error.pp e));
     !write_off
 
 (* The decoders of a sealed record, and its walk. *)
@@ -1632,7 +1644,9 @@ let build_plain_encode name n puts check =
     | No_checks -> ()
     | pass -> (
         try run_plain_pass pass (Input_end.of_bytes buf) buf off
-        with Types.Parse_error e -> encode_rejected name e)
+        with exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
+          encode_rejected name e)
   in
   let slow v buf off =
     if off < 0 || off > Bytes.length buf - n then
@@ -1747,7 +1761,7 @@ let check_end ~layout =
         else
           match run_plain_pass fast input_end buf off with
           | () -> e
-          | exception Types.Parse_error _ -> -1)
+          | exception exn when Types.is_parse_error exn -> -1)
 
 (* [validate_sized] of a record without parameters: the same bounds checks on
    the measured end, then the layout pass's checks when it accepts, else the

@@ -3,9 +3,9 @@ module Slice = Bytesrw.Bytes.Slice
 open Codec_leaf
 open Codec_repr
 open Codec_elem
-open Codec_compile
 open Codec_seal
 open Codec_fault
+open Codec_access
 
 (* The codec is built in phases, one module each, in dependency order:
    [Codec_leaf] (one field type at a fixed offset), [Codec_repr] (scratch,
@@ -26,7 +26,14 @@ let pp = pp
 type validator = Codec_struct.t
 
 let validator_of_struct = Codec_struct.v
-let validate_struct = Codec_struct.validate
+
+let validate_struct v buf off =
+  match Codec_struct.validate v buf off with
+  | () -> Ok ()
+  | exception exn when Types.is_parse_error exn ->
+      let e = Types.parse_error_of exn in
+      Error e
+
 let struct_size_of = Codec_struct.size_of
 let struct_min_size = Codec_struct.min_size
 let wire_size_info_of_validator = Codec_struct.wire_size_info
@@ -182,23 +189,15 @@ let rec compile (t : 'r t) : 'r compiled =
 let[@inline] compiled (t : 'r t) : 'r compiled =
   match Atomic.get t.compiled with Some c -> c | None -> compile t
 
-let wire_size_opt (t : _ t) =
+let size (t : _ t) =
   match (compiled t).wire_size with Fixed n -> Some n | Variable _ -> None
 
-let wire_size (t : _ t) =
-  match (compiled t).wire_size with
-  | Fixed n -> n
-  | Variable _ ->
-      invalid_arg
-        "Codec.wire_size: variable-size codec (use wire_size_opt or \
-         wire_size_at instead)"
-
-let min_wire_size (t : _ t) =
+let min_size (t : _ t) =
   match (compiled t).wire_size with
   | Fixed n -> n
   | Variable { min_size; _ } -> min_size
 
-let size_of_value_ctx (t : _ t) = (compiled t).size_of_value
+let encoded_size_ctx (t : _ t) = (compiled t).size_of_value
 
 let raw_decode (t : _ t) buf off =
   (compiled t).decode no_runtime (Input_end.of_bytes buf) buf off
@@ -251,23 +250,29 @@ let require_env ~op t = function
    measures as empty and the answer comes back quietly short. That is not a
    smaller record, it is a different verdict about the same bytes, so a codec
    with input params refuses here exactly as it does on [decode] rather than
-   answering. *)
-let wire_size_at ?env:e (t : _ t) buf off =
-  require_env ~op:"wire_size_at" t e;
-  match (compiled t).wire_size with
-  | Fixed n -> n
-  | Variable { compute; _ } ->
-      compute (runtime ?env:e ()) (Input_end.of_bytes buf) buf off - off
+   answering. Bytes that hold no size are input, answered with their error; a
+   negative offset is misuse. *)
+let size_at ?env:e (t : _ t) buf off =
+  require_env ~op:"size_at" t e;
+  if off < 0 then Errors.negative_offset off
+  else
+    match (compiled t).wire_size with
+    | Fixed n -> Ok n
+    | Variable { compute; _ } -> (
+        match compute (runtime ?env:e ()) (Input_end.of_bytes buf) buf off with
+        | stop -> Ok (stop - off)
+        | exception exn when Types.is_parse_error exn ->
+            Error (Types.parse_error_of exn))
 
 (* A parametric field size resolves through [env], as it does for {!encode}.
    Without one the size stays symbolic and a field measured by it refuses
    rather than reporting 0, which a caller would allocate from. *)
-let size_of_value ?env:e (t : _ t) v =
+let encoded_size ?env:e (t : _ t) v =
   (* An env that is given must be this codec's and fully bound, as for encode.
      One that is absent is not an error: a caller legitimately asks for the size
      before it has a budget to bind, and every extent the value itself settles
      still answers. *)
-  (match e with None -> () | Some _ -> require_env ~op:"size_of_value" t e);
+  (match e with None -> () | Some _ -> require_env ~op:"encoded_size" t e);
   (compiled t).size_of_value (runtime ?env:e ()) v
 
 let raw_encode ?env:e t v buf off =
@@ -314,6 +319,10 @@ let embed_check_end (t : 'r t) input_end buf off =
   (compiled t).check_end input_end buf off
 
 let embed_walk (t : 'r t) = (compiled t).walk
+
+type _ Types.codec_ref += Codec_ref : 'r t -> 'r Types.codec_ref
+
+let embed_ref t = Codec_ref t
 
 let wire_size_info_ctx (t : _ t) =
   match (compiled t).wire_size with
@@ -489,14 +498,10 @@ let decode_exn ?consume ?env:e t buf off =
   | _ -> decode_general (Option.value consume ~default:`Prefix) e t buf off
 
 let decode ?consume ?env t buf off =
-  try Ok (decode_exn ?consume ?env t buf off)
-  with Types.Parse_error e -> Error e
-
-let decoder t =
-  let c = compiled t in
-  match c.plain_decode with
-  | Some decode -> Staged.stage decode
-  | None -> Staged.stage (fun buf off -> decode_slow `Prefix None t c buf off)
+  match decode_exn ?consume ?env t buf off with
+  | v -> Ok v
+  | exception exn when Types.is_parse_error exn ->
+      Error (Types.parse_error_of exn)
 
 let encode_slow e t v buf off =
   if off < 0 then
@@ -513,7 +518,7 @@ let encode_slow e t v buf off =
      of the value. Overrun is loud already. *)
   if actual < expected then
     Fmt.invalid_arg
-      "Codec.encode %s: size_of_value reported %d bytes but the encoded form \
+      "Codec.encode %s: encoded_size reported %d bytes but the encoded form \
        spans %d -- writer wrote fewer bytes than promised"
       t.name expected actual
 
@@ -524,12 +529,6 @@ let encode ?env:e t v buf off =
       | Some { plain_encode = Some f; _ } -> f v buf off
       | _ -> encode_slow e t v buf off)
   | _ -> encode_slow e t v buf off
-
-let encoder t =
-  let c = compiled t in
-  match c.plain_encode with
-  | Some f when t.n_params = 0 -> Staged.stage f
-  | _ -> Staged.stage (fun v buf off -> encode_slow None t v buf off)
 
 let collect_params name (fields : Types.field list) where =
   collect_param_handles name fields where
@@ -569,266 +568,32 @@ let validate_exn ?env:e (t : _ t) buf off =
           else c.plain_validate buf off
       | None -> validate_first t buf off)
   | _ ->
-      require_env ~op:"validate_exn" t e;
+      require_env ~op:"validate" t e;
       let env_slots = Option.map (fun (env : Param.env) -> env.slots) e in
       (compiled t).validate ?env_slots buf off
 
 let validate ?env t buf off =
   match validate_exn ?env t buf off with
   | () -> Ok ()
-  | exception Types.Parse_error e -> Error e
+  | exception exn when Types.is_parse_error exn ->
+      let e = Types.parse_error_of exn in
+      Error e
 
 let encode_fresh ~op ?env t v =
-  let buf = Bytes.create (size_of_value ?env t v) in
+  let buf = Bytes.create (encoded_size ?env t v) in
   encode ?env t v buf 0;
   (try validate_exn ?env t buf 0
-   with Types.Parse_error e ->
+   with exn when Types.is_parse_error exn ->
+     let e = Types.parse_error_of exn in
      Fmt.invalid_arg
        "Codec.%s %s: the encoded record is rejected by validation (%a)" op
-       t.name Types.pp_parse_error e);
+       t.name Error.pp e);
   buf
 
 let to_bytes ?env t v = encode_fresh ~op:"to_bytes" ?env t v
 
 let to_string ?env t v =
   Bytes.unsafe_to_string (encode_fresh ~op:"to_string" ?env t v)
-
-(* Build a staged reader from field type and access info.
-   For Fixed: use build_field_reader which handles Where/Enum/Map.
-   For Bitfield: the GADT ensures 'a = int via Bits constructor.
-   For Dynamic: compute offset at read time. *)
-let rec build_staged_reader : type a.
-    a typ -> field_access -> runtime -> Input_end.t -> bytes -> int -> a =
- fun typ access ->
-  match (typ, access) with
-  | Bits _, Bitfield { base; byte_off; shift; width } ->
-      let read = build_bf_accessor_reader base byte_off shift width in
-      fun _runtime _input_end buf base -> read buf base
-  | _, Fixed off ->
-      let read = build_field_reader_ctx typ off in
-      fun runtime input_end buf base -> read runtime input_end buf base
-  | _, Dynamic fn ->
-      let reader_at_0 = build_field_reader_ctx typ 0 in
-      fun runtime input_end buf base ->
-        let off = fn runtime input_end buf base in
-        reader_at_0 runtime input_end buf (base + off)
-  | Byte_slice _, Variable { off; size_fn } ->
-      fun runtime input_end buf base ->
-        let sz = size_fn runtime input_end buf base in
-        Slice.make_or_eod buf ~first:(base + off) ~length:sz
-  | Byte_array _, Variable { off; size_fn } ->
-      fun runtime input_end buf base ->
-        let sz = size_fn runtime input_end buf base in
-        Bytes.sub_string buf (base + off) sz
-  | Byte_array_where { elt_var; cond; test; _ }, Variable { off; size_fn } ->
-      let read = refined_span_reader ~elt_var ~cond ~test in
-      fun runtime input_end buf base ->
-        let sz = size_fn runtime input_end buf base in
-        read buf ~first:(base + off) ~len:sz
-  | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
-      fun runtime input_end buf base ->
-        let fo = off_fn runtime input_end buf base in
-        let sz = size_fn runtime input_end buf base in
-        Slice.make_or_eod buf ~first:(base + fo) ~length:sz
-  | Byte_array _, Variable_dynamic { off_fn; size_fn } ->
-      fun runtime input_end buf base ->
-        let fo = off_fn runtime input_end buf base in
-        let sz = size_fn runtime input_end buf base in
-        Bytes.sub_string buf (base + fo) sz
-  | ( Byte_array_where { elt_var; cond; test; _ },
-      Variable_dynamic { off_fn; size_fn } ) ->
-      let read = refined_span_reader ~elt_var ~cond ~test in
-      fun runtime input_end buf base ->
-        let fo = off_fn runtime input_end buf base in
-        let sz = size_fn runtime input_end buf base in
-        read buf ~first:(base + fo) ~len:sz
-  | Where { inner; _ }, _ -> build_staged_reader inner access
-  | Enum { base; cases; closed; _ }, _ ->
-      let read = build_staged_reader base access in
-      let check =
-        enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
-      in
-      let at = access_at access in
-      fun runtime input_end buf base ->
-        check
-          ~at:(at runtime input_end buf base)
-          (read runtime input_end buf base)
-  | Map { inner; decode; index_bound; _ }, _ -> (
-      let read = build_staged_reader inner access in
-      match index_bound with
-      | None ->
-          fun runtime input_end buf base ->
-            decode (read runtime input_end buf base)
-      | Some _ ->
-          let decode = Types.map_decode ~index_bound decode in
-          let at = access_at access in
-          fun runtime input_end buf base ->
-            decode
-              ~at:(at runtime input_end buf base)
-              (read runtime input_end buf base))
-  | _, Bitfield _ ->
-      invalid_arg "Codec.get: non-bitfield type with bitfield access"
-  | _, Variable _ | _, Variable_dynamic _ ->
-      invalid_arg "Codec.get: unsupported variable-size field type"
-
-(* Every leaf encoder checks the value before it writes a byte, so it puts
-   down the whole field or nothing. A composite one writes part by part: a
-   sub-codec validates the record it has just laid down, a casetype writes its
-   tag ahead of its body, an array walks its elements one at a time. Any of
-   those can raise with bytes already in the buffer. *)
-let rec encoder_writes_before_checking : type a. a typ -> bool = function
-  | Codec _ | Casetype _ | Union _ | Array _ | Repeat _ -> true
-  | Single_elem { elem; _ } -> encoder_writes_before_checking elem
-  | Map { inner; _ } -> encoder_writes_before_checking inner
-  | Where { inner; _ } -> encoder_writes_before_checking inner
-  | Enum { base; _ } -> encoder_writes_before_checking base
-  | Optional { inner; _ } -> encoder_writes_before_checking inner
-  | Optional_or { inner; _ } -> encoder_writes_before_checking inner
-  | Apply { typ; _ } -> encoder_writes_before_checking typ
-  | _ -> false
-
-(* [Codec.set] promises the buffer is untouched when it raises, so a writer
-   that can raise mid-field keeps a copy of the bytes it is about to replace
-   and puts them back. The width is the value-driven size the record encoder
-   budgets the same field with, clipped to what the buffer holds so a short
-   buffer still fails through the encoder's own message. *)
-let field_writer : type a. a typ -> Types.eval_ctx -> bytes -> int -> a -> unit
-    =
- fun typ ->
-  let encode = build_field_encoder_ctx typ in
-  if not (encoder_writes_before_checking typ) then fun runtime buf off value ->
-    ignore (encode runtime buf off value : int)
-  else fun runtime buf off value ->
-    let room = Bytes.length buf - off in
-    let saved =
-      if off >= 0 && room > 0 then
-        Bytes.sub buf off (min (Types.size_of_typ_value runtime typ value) room)
-      else Bytes.empty
-    in
-    match encode runtime buf off value with
-    | _ -> ()
-    | exception e ->
-        let n = Bytes.length saved in
-        if n > 0 then Bytes.blit saved 0 buf off n;
-        raise e
-
-(* Build a staged writer from field type and access info. *)
-let rec build_staged_writer : type a.
-    a typ -> field_access -> runtime -> bytes -> int -> a -> unit =
- fun typ access ->
-  match (typ, access) with
-  | Bits _, Bitfield { base; byte_off; shift; width } ->
-      let write = build_bf_accessor_writer base byte_off shift width in
-      fun _runtime buf base value -> write buf base value
-  | _, Fixed off ->
-      let encode = field_writer typ in
-      fun runtime buf base value -> encode runtime buf (base + off) value
-  | _, Dynamic fn ->
-      let encode = field_writer typ in
-      fun runtime buf base value ->
-        let off = fn runtime (Input_end.of_bytes buf) buf base in
-        encode runtime buf (base + off) value
-  (* A field whose size is only known at run time still owns exactly that many
-     bytes: writing the value's length instead would overwrite the fields that
-     follow. Check before blitting, with the same error [Codec.encode] gives. *)
-  | Byte_slice _, Variable { off; size_fn } ->
-      fun runtime buf base value ->
-        let src = (value : Slice.t) in
-        let len = Slice.length src in
-        var_bytes_check_len size_fn runtime buf base ~actual:len;
-        Bytes.blit (Slice.bytes src) (Slice.first src) buf (base + off) len
-  | Byte_array _, Variable { off; size_fn } ->
-      fun runtime buf base value ->
-        let s = (value : string) in
-        let len = String.length s in
-        var_bytes_check_len size_fn runtime buf base ~actual:len;
-        Bytes.blit_string s 0 buf (base + off) len
-  | Byte_array_where { elt_var; cond; test; _ }, Variable { off; size_fn } ->
-      let check = Eval.check_byte_refinement ~elt_var ~cond ~test in
-      fun runtime buf base value ->
-        let s = (value : string) in
-        let len = String.length s in
-        var_bytes_check_len size_fn runtime buf base ~actual:len;
-        check s;
-        Bytes.blit_string s 0 buf (base + off) len
-  | Byte_slice _, Variable_dynamic { off_fn; size_fn } ->
-      fun runtime buf base value ->
-        let fo = off_fn runtime (Input_end.of_bytes buf) buf base in
-        let src = (value : Slice.t) in
-        let len = Slice.length src in
-        var_bytes_check_len size_fn runtime buf base ~actual:len;
-        Bytes.blit (Slice.bytes src) (Slice.first src) buf (base + fo) len
-  | Byte_array _, Variable_dynamic { off_fn; size_fn } ->
-      fun runtime buf base value ->
-        let fo = off_fn runtime (Input_end.of_bytes buf) buf base in
-        let s = (value : string) in
-        let len = String.length s in
-        var_bytes_check_len size_fn runtime buf base ~actual:len;
-        Bytes.blit_string s 0 buf (base + fo) len
-  | ( Byte_array_where { elt_var; cond; test; _ },
-      Variable_dynamic { off_fn; size_fn } ) ->
-      let check = Eval.check_byte_refinement ~elt_var ~cond ~test in
-      fun runtime buf base value ->
-        let fo = off_fn runtime (Input_end.of_bytes buf) buf base in
-        let s = (value : string) in
-        let len = String.length s in
-        var_bytes_check_len size_fn runtime buf base ~actual:len;
-        check s;
-        Bytes.blit_string s 0 buf (base + fo) len
-  | Where { inner; _ }, _ -> build_staged_writer inner access
-  | Enum { base; _ }, _ -> build_staged_writer base access
-  | Map { inner; encode; _ }, _ ->
-      let write = build_staged_writer inner access in
-      fun runtime buf base value -> write runtime buf base (encode value)
-  | _, Bitfield _ ->
-      invalid_arg "Codec.set: non-bitfield type with bitfield access"
-  | _, Variable _ | _, Variable_dynamic _ ->
-      invalid_arg "Codec.set: unsupported variable-size field type"
-
-(* Fast accessor variants never construct or inspect an evaluation context.
-   Returning [None] keeps parameter-dependent and compound layouts on the
-   context-threaded path above. *)
-let rec build_immediate_staged_reader : type a.
-    a typ -> field_access -> (bytes -> int -> a) option =
- fun typ access ->
-  match (typ, access) with
-  | Bits _, Bitfield { base; byte_off; shift; width } ->
-      Some (build_bf_accessor_reader base byte_off shift width)
-  | _, Fixed off -> build_immediate_reader typ off
-  | Where { inner; _ }, _ -> build_immediate_staged_reader inner access
-  | Enum { base; cases; closed; _ }, _ -> (
-      match build_immediate_staged_reader base access with
-      | None -> None
-      | Some read ->
-          let check =
-            enum_check ~base ~to_int:(Types.int_of_exn base) cases closed
-          in
-          let off = immediate_access_off access in
-          Some (fun buf base -> check ~at:(base + off) (read buf base)))
-  | Map { inner; decode; index_bound; _ }, _ -> (
-      match build_immediate_staged_reader inner access with
-      | None -> None
-      | Some read ->
-          let decode = Types.map_decode ~index_bound decode in
-          let off = immediate_access_off access in
-          Some (fun buf base -> decode ~at:(base + off) (read buf base)))
-  | _ -> None
-
-let rec build_immediate_staged_writer : type a.
-    a typ -> field_access -> (bytes -> int -> a -> unit) option =
- fun typ access ->
-  match (typ, access) with
-  | Bits _, Bitfield { base; byte_off; shift; width } ->
-      Some (build_bf_accessor_writer base byte_off shift width)
-  | _, Fixed off -> build_immediate_setter typ off
-  | Where { inner; _ }, _ -> build_immediate_staged_writer inner access
-  | Enum { base; _ }, _ -> build_immediate_staged_writer base access
-  | Map { inner; encode; _ }, _ -> (
-      match build_immediate_staged_writer inner access with
-      | None -> None
-      | Some write -> Some (fun buf base value -> write buf base (encode value))
-      )
-  | _ -> None
 
 let field_access ~op (codec : _ t) (f : (_, _) field) =
   match List.assoc_opt f.name (compiled codec).field_access with
@@ -837,63 +602,124 @@ let field_access ~op (codec : _ t) (f : (_, _) field) =
       Fmt.invalid_arg "%s: field %S does not belong to codec %S" op f.name
         codec.name
 
+(* What a read of the field [name] answers: its value, or the error of the
+   bytes it read, under the field's name. A negative offset is misuse. *)
+let[@inline never] field_error name (e : parse_error) =
+  Error { e with field = name :: e.field }
+
+let[@inline never] field_eof name ~at ~width len =
+  Error
+    {
+      at;
+      field = [ name ];
+      kind =
+        Unexpected_eof
+          { expected = width; got = (if at > len then 0 else len - at) };
+    }
+
+(* The reader of a field with an action: the action runs on the record's
+   slots, its error placed at the field as [decode] places it. *)
+let action_reader ?env (codec : _ t) (c : _ compiled) rt access act read name =
+  (* Reuse the codec's own domain-local scratch rather than minting another
+         [Domain.DLS] key here: [get c f] returns a reader, but a caller that
+         makes it again instead of reusing it would leak a key per call. [decode_scratch]
+         is sized [n_array_slots] and only ever touched by one operation at a
+         time on a given domain, so sharing it with decode is safe. *)
+  let get_arr = c.decode_scratch in
+  let n = c.n_array_slots in
+  let populate = c.populate in
+  let n_params = codec.n_params in
+  let min_size =
+    match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+  in
+  let at = access_at access in
+  let sync, blit_input =
+    match env with
+    | None -> ((fun _arr -> ()), fun _arr -> ())
+    | Some (e : Param.env) ->
+        let param_base = c.param_base in
+        ( (fun arr ->
+            Array.blit arr.ints param_base e.slots 0 n_params;
+            Array.blit arr.int64s param_base e.wides 0 n_params),
+          fun arr ->
+            if n_params > 0 then begin
+              Array.blit e.slots 0 arr.ints param_base n_params;
+              Array.blit e.wides 0 arr.int64s param_base n_params
+            end )
+  in
+  (* The action reads the record's other fields, so the record must fit;
+         its error is the field's, as [decode] places it. *)
+  let run buf off =
+    let input_end = Input_end.of_bytes buf in
+    let v = read rt input_end buf off in
+    check_min_bounds min_size input_end off;
+    let arr = get_arr () in
+    clear_slots arr n;
+    blit_input arr;
+    populate arr rt input_end buf off;
+    (try act arr
+     with exn when Types.is_parse_error exn ->
+       let e = Types.parse_error_of exn in
+       relocate at rt input_end buf off e);
+    sync arr;
+    v
+  in
+  fun buf off ->
+    if off < 0 then Errors.negative_offset off
+    else
+      match run buf off with
+      | v -> Ok v
+      | exception exn when Types.is_parse_error exn ->
+          let e = Types.parse_error_of exn in
+          field_error name e
+
 let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
-    (bytes -> int -> a) Staged.t =
+    bytes -> int -> (a, parse_error) result =
   (* A field's offset can be driven by an input param, and an unbound one reads
-     0, which stages a reader onto the bytes in front of the field rather than
+     0, which places a reader on the bytes in front of the field rather than
      onto the field. That is the same silent misread [decode] refuses, so it is
      refused here on the same terms. *)
   require_env ~op:"get" codec env;
   let access = field_access ~op:"Codec.get" codec f in
   let read = build_staged_reader f.typ access in
+  let name = f.name in
   (* The context no longer carries the buffer, so [env] resolves once here
      instead of per staged call. *)
   let rt = runtime ?env () in
   let c = compiled codec in
   match List.assoc_opt f.name c.field_actions with
   | None -> (
-      match build_immediate_staged_reader f.typ access with
-      | Some read -> Staged.stage read
-      | None ->
-          Staged.stage (fun buf off -> read rt (Input_end.of_bytes buf) buf off)
-      )
-  | Some act ->
-      (* Reuse the codec's own domain-local scratch rather than minting another
-         [Domain.DLS] key here: [get] returns a staged reader, but a caller that
-         re-stages instead of reusing would leak a key per call. [decode_scratch]
-         is sized [n_array_slots] and only ever touched by one operation at a
-         time on a given domain, so sharing it with decode is safe. *)
-      let get_arr = c.decode_scratch in
-      let n = c.n_array_slots in
-      let populate = c.populate in
-      let n_params = codec.n_params in
-      let sync, blit_input =
-        match env with
-        | None -> ((fun _arr -> ()), fun _arr -> ())
-        | Some (e : Param.env) ->
-            let param_base = c.param_base in
-            ( (fun arr ->
-                Array.blit arr.ints param_base e.slots 0 n_params;
-                Array.blit arr.int64s param_base e.wides 0 n_params),
-              fun arr ->
-                if n_params > 0 then begin
-                  Array.blit e.slots 0 arr.ints param_base n_params;
-                  Array.blit e.wides 0 arr.int64s param_base n_params
-                end )
-      in
-      Staged.stage (fun buf off ->
-          let input_end = Input_end.of_bytes buf in
-          let v = read rt input_end buf off in
-          let arr = get_arr () in
-          clear_slots arr n;
-          blit_input arr;
-          populate arr rt input_end buf off;
-          act arr;
-          sync arr;
-          v)
+      match
+        ( build_immediate_get ~name f.typ access,
+          build_immediate_staged_reader f.typ access,
+          immediate_extent f.typ access )
+      with
+      | Some get, _, _ -> get
+      | None, Some read, Some (off, width) -> (
+          fun buf base ->
+            let len = Bytes.length buf in
+            if base < 0 then Errors.negative_offset base
+            else if base > len - off - width then
+              field_eof name ~at:(base + off) ~width len
+            else
+              match read buf base with
+              | v -> Ok v
+              | exception exn when Types.is_parse_error exn ->
+                  let e = Types.parse_error_of exn in
+                  field_error name e)
+      | _ -> (
+          fun buf base ->
+            if base < 0 then Errors.negative_offset base
+            else
+              match read rt (Input_end.of_bytes buf) buf base with
+              | v -> Ok v
+              | exception exn when Types.is_parse_error exn ->
+                  let e = Types.parse_error_of exn in
+                  field_error name e))
+  | Some act -> action_reader ?env codec c rt access act read name
 
 let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
-    (bytes -> int -> a -> unit) Staged.t =
+    bytes -> int -> a -> unit =
   (* As for [get]: an unbound param places the write on the wrong bytes, which
      for a writer means overwriting a field the caller never named and leaving
      the one it did name as it was. *)
@@ -902,8 +728,8 @@ let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
   let write = build_staged_writer f.typ access in
   let rt = runtime ?env () in
   match build_immediate_staged_writer f.typ access with
-  | Some write -> Staged.stage write
-  | None -> Staged.stage (fun buf off value -> write rt buf off value)
+  | Some write -> write
+  | None -> fun buf off value -> write rt buf off value
 
 (* {1 Writers} *)
 
@@ -945,12 +771,12 @@ let rec wfields : type f r.
       let w =
         match if fast then slot_of ~n codec f else None with
         | Some s -> Slot s
-        | None -> Setter (Staged.unstage (set codec f))
+        | None -> Setter (set codec f)
       in
       WCons (w, wfields ~fast ~n codec rest (f.id :: seen))
 
 let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
-    (bytes -> int -> f) Staged.t =
+    bytes -> int -> f =
   let n =
     match (compiled codec).wire_size with
     | Fixed n -> n
@@ -965,12 +791,12 @@ let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
   let ws = wfields ~fast ~n codec args [] in
   if fast && all_slots ws then
     let t = clear_slots ws (run_of_bytes b n) in
-    Staged.stage (run_writer ~name:codec.name ~n t ws)
+    run_writer ~name:codec.name ~n t ws
   else
     let ws =
       if all_slots ws then wfields ~fast:false ~n codec args [] else ws
     in
-    Staged.stage (set_writer ~name:codec.name ~n b ws)
+    set_writer ~name:codec.name ~n b ws
 
 (* {1 Checked views} *)
 
@@ -978,7 +804,7 @@ let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
 let[@inline never] steps_pass pass input_end buf off =
   match run_plain_pass pass input_end buf off with
   | () -> true
-  | exception Types.Parse_error _ -> false
+  | exception exn when Types.is_parse_error exn -> false
 
 let[@inline] passes pass input_end buf off =
   match pass with
@@ -996,7 +822,7 @@ let[@inline never] accepts_slow env (t : 'r t) buf off =
   &&
   match validate_exn ?env t buf off with
   | () -> true
-  | exception Types.Parse_error _ -> false
+  | exception exn when Types.is_parse_error exn -> false
 
 (* Whether the record at [off] passes [validate], without its error. Small
    enough to inline: the frame and the tests of a fixed-size codec, every
@@ -1109,16 +935,29 @@ module View = struct
   let frame_of (c : _ compiled) =
     match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
 
+  (* The type a view reads a field as, under the [where] and [enum] the check
+     made: a view reads what is there, as the module [Wire_ocaml] writes does. *)
+  let rec read_as : type a. a typ -> a typ = function
+    | Where { inner; _ } -> read_as inner
+    | Enum { base; _ } -> read_as base
+    | t -> t
+
+  let[@inline never] needs_a_check (v : _ codec) (f : _ record_field) =
+    Fmt.invalid_arg
+      "Codec.View.field: field %S of codec %S is read with a check: use \
+       Codec.View.checked_field"
+      f.name v.codec.name
+
   let field (type a r) (v : (_, r) codec) (f : (a, r) record_field) :
       (a, _) field =
     let access = field_access ~op:"Codec.View.field" v.codec f in
     let size = frame_of v.c in
     let plain = not (List.mem_assoc f.name v.c.field_actions) in
+    let typ = read_as f.typ in
     let scalar =
-      if plain then field_scalar ~min_wire_size:size access f.typ else None
+      if plain then field_scalar ~min_wire_size:size access typ else None
     in
-    let get () = Get (Staged.unstage (codec_get ?env:v.env v.codec f)) in
-    match (scalar, f.typ, access) with
+    match (scalar, typ, access) with
     | Some s, _, _ -> (
         match Option.bind (bits_of_scalar s) (word_field ~size) with
         | Some f -> f
@@ -1129,11 +968,22 @@ module View = struct
           word_field ~size { o; n = 4; s = shift; w = width; eq = Equal }
         with
         | Some f -> f
-        | None -> get ())
+        | None ->
+            let read = build_bf_accessor_reader (U32 Big) o shift width in
+            Get read)
     | None, Byte_slice { size = Int length }, Fixed off
       when plain && off >= 0 && length >= 0 && off <= size - length ->
         Bytes { off; length }
-    | None, _, _ -> get ()
+    | None, Byte_array { size = Int length }, Fixed off
+      when plain && off >= 0 && length >= 0 && off <= size - length ->
+        Get (fun buf r -> Bytes.sub_string buf (r + off) length)
+    | None, _, _ -> needs_a_check v f
+
+  let checked_field (type a r) (v : (_, r) codec) (f : (a, r) record_field) :
+      ((a, Error.t) result, _) field =
+    ignore
+      (field_access ~op:"Codec.View.checked_field" v.codec f : field_access);
+    Get (codec_get ?env:v.env v.codec f)
 
   (* A sub-codec field is data too: where its record starts in the record
      around it, and the frame its views read in. A field at a constant offset
@@ -1228,14 +1078,16 @@ module View = struct
       | _, Walked at -> walked at buf r
     with
     | o -> if o >= 0 && o <= len - s.sub_frame then o else -1
-    | exception (Types.Parse_error _ | Types.Unwalked) -> -1
+    | exception Types.Unwalked -> -1
+    | exception exn when Types.is_parse_error exn -> -1
 
   (* A sub-record the walk places, which has no gate of its own: one call
      with no dispatch. *)
   let[@inline never] enter_walked at buf len r frame =
     match walked at buf r with
     | o -> if o >= 0 && o <= len - frame then o else -1
-    | exception (Types.Parse_error _ | Types.Unwalked) -> -1
+    | exception Types.Unwalked -> -1
+    | exception exn when Types.is_parse_error exn -> -1
 
   let[@inline] enter s b len r =
     let buf = (b : _ Buf.t :> bytes) and len = (len : _ Buf.length :> int) in
@@ -1263,131 +1115,115 @@ let field_readers_ctx (t : _ t) =
 let field_readers t =
   List.map
     (fun (name, read) ->
-      (name, fun buf off -> read no_runtime (Input_end.of_bytes buf) buf off))
+      ( name,
+        fun buf off ->
+          match read no_runtime (Input_end.of_bytes buf) buf off with
+          | v -> Ok v
+          | exception exn when Types.is_parse_error exn ->
+              let e = Types.parse_error_of exn in
+              Error e ))
     (field_readers_ctx t)
 
-let field_ref (type a r) (f : (a, r) field) : int expr = Ref (I, f.name)
-
-(* -- Bitfield batch access -- *)
-
-type bitfield = bf_info
-
-(* The word a bitfield sits in, read with one checked load. Where [Optint.t] is
-   the native [int] the word is that [int], with no conversion. *)
-let bf_word_reader base byte_off : bytes -> int -> Optint.t =
-  let n = bf_base_byte_size base in
-  match (Optint.is_immediate, base) with
-  | True, U8 ->
-      fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Unchecked.u8 buf p
-  | True, U16 Little ->
-      fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Unchecked.u16le buf p
-  | True, U16 Big ->
-      fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Unchecked.u16be buf p
-  | True, U32 Little ->
-      fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Int32.to_int (Unchecked.i32le buf p) land mask32
-  | True, U32 Big ->
-      fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Int32.to_int (Unchecked.i32be buf p) land mask32
-  | False, U32 Little ->
-      fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Optint.of_int32 (Unchecked.i32le buf p)
-  | False, U32 Big ->
-      fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Optint.of_int32 (Unchecked.i32be buf p)
-  | False, (U8 | U16 _) ->
-      fun buf off ->
-        let p = off + byte_off in
-        Bitfield.check_word buf p n;
-        Optint.of_int (Bitfield.read_word base buf p)
-
-let bitfield (type r) (codec : r t) (f : (int, r) field) : bitfield =
-  match field_access ~op:"Codec.bitfield" codec f with
-  | Bitfield { base; byte_off; shift; width } ->
-      (* Dispatch on [base] once at construction so the resulting closure
-         is a direct read of the right width with [byte_off] baked in.
-         Avoids the partial-application + runtime [match] that
-         [Bitfield.read_word base] would create. *)
-      let word_reader = bf_word_reader base byte_off in
-      let mask = (1 lsl width) - 1 in
-      {
-        word_reader;
-        bf_shift = shift;
-        bf_mask = Optint.of_int mask;
-        bf_mask_int = mask;
-      }
-  | _ -> Fmt.invalid_arg "Codec.bitfield: field %S is not a bitfield" f.name
-
-let load_word (bf : bitfield) : (bytes -> int -> Optint.t) Staged.t =
-  Staged.stage bf.word_reader
-
-let[@inline always] extract (bf : bitfield) (word : Optint.t) =
-  match Optint.is_immediate with
-  | True -> (word lsr bf.bf_shift) land bf.bf_mask_int
-  | False ->
-      Optint.to_int
-        (Optint.logand (Optint.shift_right_logical word bf.bf_shift) bf.bf_mask)
+let pp_value (t : _ t) ppf v =
+  let ctx = Types.unbound_eval_ctx in
+  let buf = Bytes.create (encoded_size_ctx t ctx v) in
+  let _ : int = embed_encode_ctx t v ctx buf 0 in
+  Fmt.pf ppf "@[<hv 2>%s {" t.name;
+  List.iter
+    (fun (name, reader) ->
+      match reader buf 0 with
+      | Ok n -> Fmt.pf ppf "@ %s = %d;" name n
+      | Error e -> Fmt.pf ppf "@ %s = <%a>;" name Error.pp e)
+    (field_readers t);
+  Fmt.pf ppf "@ }@]"
 
 (* -- Record words -- *)
 
-type 'r word = 'r Codec_run.word
-type ('a, 'r) part = ('a, 'r) Codec_run.part
+module Word = struct
+  type 'r codec = 'r t
+  type ('a, 'r) codec_field = ('a, 'r) field
+  type 'r t = 'r Codec_run.Word.t
+  type 'r reader = 'r Codec_run.Word.reader
+  type 'r check = 'r Codec_run.Word.check
+  type ('a, 'r) field = ('a, 'r) Codec_run.Word.field
 
-let word_size ~op (codec : _ t) =
-  match (compiled codec).wire_size with
-  | Fixed n when 8 * n < Sys.int_size -> n
-  | Fixed n ->
-      Fmt.invalid_arg "%s: codec %S has %d bytes, more than an int holds" op
-        codec.name n
-  | Variable _ ->
-      Fmt.invalid_arg "%s: codec %S is not of a fixed size" op codec.name
+  let size ~op (codec : _ codec) =
+    match (compiled codec).wire_size with
+    | Fixed n when 8 * n < Sys.int_size -> n
+    | Fixed n ->
+        Fmt.invalid_arg "%s: codec %S has %d bytes, more than an int holds" op
+          codec.name n
+    | Variable _ ->
+        Fmt.invalid_arg "%s: codec %S is not of a fixed size" op codec.name
 
-type 'r word_reader = 'r Codec_run.reader
+  (* The extent of each field of [codec], in order, which places the error of
+     a record a buffer cuts as [get] places it. *)
+  let fields (codec : _ codec) =
+    let access = (compiled codec).field_access in
+    List.filter_map
+      (fun (Types.Field { field_name; field_typ; _ }) ->
+        Option.bind field_name (fun name ->
+            Option.bind (List.assoc_opt name access) (fun (_, access) ->
+                Option.map
+                  (fun (at, width) -> (name, at, width))
+                  (immediate_extent field_typ access))))
+      codec.struct_fields
 
-let word_reader (codec : 'r t) : 'r word_reader =
-  Codec_run.reader (word_size ~op:"Codec.word_reader" codec)
+  let reader (codec : 'r codec) : 'r reader =
+    let n = size ~op:"Codec.Word.reader" codec in
+    Codec_run.Word.reader n ~fields:(fields codec)
 
-let read_word = Codec_run.read_word
+  let check = Codec_run.Word.check
+  let ok = Codec_run.Word.ok
+  let get = Codec_run.Word.get
+  let error = Codec_run.Word.error
 
-let word_part (type a r) (codec : r t) (f : (a, r) field) : (a, r) part =
-  let n = word_size ~op:"Codec.word_part" codec in
-  match slot_of ~n codec f with
-  | None ->
-      Fmt.invalid_arg
-        "Codec.word_part: field %S of codec %S is not a big-endian integer or \
-         a bitfield of a byte or a big-endian 16- or 32-bit word"
-        f.name codec.name
-  | Some s ->
-      let signed =
-        match f.typ with Int8 | Int16 _ | Int32 _ -> true | _ -> false
-      in
-      Codec_run.part s.eq ~pos:s.pos ~width:s.width ~signed
+  let field (type a r) (codec : r codec) (f : (a, r) codec_field) : (a, r) field
+      =
+    let n = size ~op:"Codec.Word.field" codec in
+    ignore (field_access ~op:"Codec.Word.field" codec f : field_access);
+    match slot_of ~n codec f with
+    | None ->
+        Fmt.invalid_arg
+          "Codec.Word.field: field %S of codec %S is not a big-endian integer \
+           or a bitfield of a byte or a big-endian 16- or 32-bit word"
+          f.name codec.name
+    | Some s ->
+        let signed =
+          match f.typ with Int8 | Int16 _ | Int32 _ -> true | _ -> false
+        in
+        Codec_run.Word.field s.eq ~pos:s.pos ~width:s.width ~signed
 
-let of_word = Codec_run.of_word
+  let read = Codec_run.Word.read
+end
 
 (* -- Snapshot: batch bitfield access -- *)
 
 (* The support generated code calls into: casts from an [int] it has read, and
    the cold paths, which hand the failing input to the codec itself so the error
    is the one [decode], [validate] or [encode] raises. *)
-module Gen = struct
+(* The field [name] of [c] of type [typ], found by its place rather than by
+   its handle, or [None] when [c] has no field [name]. *)
+let named_field (type a r) (c : r t) name (typ : a Types.typ) :
+    (a, r) field option =
+  match List.assoc_opt name (compiled c).field_access with
+  | Some (id, _) ->
+      Some
+        {
+          id;
+          name;
+          typ;
+          constraint_ = None;
+          action = None;
+          doc = None;
+          get =
+            (fun _ ->
+              Fmt.invalid_arg "%s.%s: a field found by place has no getter"
+                c.name name);
+        }
+  | None -> None
+
+module Gen_core = struct
   let to_struct = to_struct
 
   (* An [int] as a type the proof says is [int]. *)
@@ -1531,33 +1367,37 @@ module Gen = struct
          generate it again"
         t.name
 
-  type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+  type 'b field_k = {
+    k : 'a. 'a Types.typ -> (bytes -> int -> ('a, Error.t) result) -> 'b;
+  }
 
-  (* The reader [Codec.get] stages for a field, found by its name. *)
+  (* The reader [Codec.get] makes for a field, found by its name. *)
   let with_field_reader t name { k } =
-    let typ =
-      List.find_map
-        (fun (Types.Field f) ->
-          if f.field_name = Some name then Some (Types.Pack_typ f.field_typ)
-          else None)
-        (to_struct t).fields
-    in
-    match (typ, List.assoc_opt name (compiled t).field_access) with
-    | Some (Types.Pack_typ typ), Some (_, access) -> (
-        match build_immediate_staged_reader typ access with
-        | Some read -> Some (k typ read)
-        | None ->
-            let read = build_staged_reader typ access in
-            Some
-              (k typ (fun buf off ->
-                   read (runtime ()) (Input_end.of_bytes buf) buf off)))
-    | _ -> None
+    List.find_map
+      (fun (Types.Field f) ->
+        if f.field_name <> Some name then None
+        else
+          let typ = f.field_typ in
+          Option.map (fun field -> k typ (get t field)) (named_field t name typ))
+      (to_struct t).fields
 
   (* A map's functions, typed through its inner type: the wire value is read
      as an [int] (or an [int32] for a 32-bit field), and [dec] decodes it as
      the codec does, the index bound of a lookup checked and a failure placed at
      [at]. *)
-  type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
+  type ('w, 'a) map = {
+    dec : at:int -> 'w -> 'a;
+    get : at:int -> field:string -> 'w -> ('a, Error.t) result;
+    enc : 'a -> 'w;
+  }
+
+  let map_get decode ~at ~field x =
+    match decode ~at x with
+    | a -> Ok a
+    | exception exn when Types.is_parse_error exn ->
+        let e = Types.parse_error_of exn in
+        Error { e with field = field :: e.field }
+
   type 'w view = { of_raw : int -> 'w; to_raw : 'w -> int }
   type 'w view32 = { of_raw32 : int32 -> 'w; to_raw32 : 'w -> int32 }
 
@@ -1587,10 +1427,8 @@ module Gen = struct
         match int_view inner with
         | Some v ->
             let decode = Types.map_decode ~index_bound decode in
-            {
-              dec = (fun ~at x -> decode ~at (v.of_raw x));
-              enc = (fun a -> v.to_raw (encode a));
-            }
+            let dec ~at x = decode ~at (v.of_raw x) in
+            { dec; get = map_get dec; enc = (fun a -> v.to_raw (encode a)) }
         | None -> not_a_map ())
     | _ -> not_a_map ()
 
@@ -1599,10 +1437,8 @@ module Gen = struct
         match int32_view inner with
         | Some v ->
             let decode = Types.map_decode ~index_bound decode in
-            {
-              dec = (fun ~at x -> decode ~at (v.of_raw32 x));
-              enc = (fun a -> v.to_raw32 (encode a));
-            }
+            let dec ~at x = decode ~at (v.of_raw32 x) in
+            { dec; get = map_get dec; enc = (fun a -> v.to_raw32 (encode a)) }
         | None -> not_a_map ())
     | _ -> not_a_map ()
 
@@ -1674,7 +1510,7 @@ module Testing = struct
   let staged_intervals t buf off =
     match (compiled t).plain_pass with
     | Intervals { words = Some f; flat; tables; _ }
-      when off >= 0 && off <= Bytes.length buf - min_wire_size t ->
+      when off >= 0 && off <= Bytes.length buf - min_size t ->
         let scan =
           Codec_intervals.scan_intervals flat tables buf off (Array.length flat)
             0
@@ -1695,50 +1531,261 @@ module Testing = struct
         : string list)
 end
 
-module Make (C : sig
-  type r
+type _ field_kind =
+  | Int : int field_kind
+  | UInt8 : UInt8.t field_kind
+  | UInt16 : UInt16.t field_kind
+  | UInt32 : UInt32.t field_kind
+  | SInt8 : SInt8.t field_kind
+  | SInt16 : SInt16.t field_kind
+  | SInt32 : SInt32.t field_kind
+  | String : string field_kind
+  | Slice : Bytesrw.Bytes.Slice.t field_kind
 
-  val codec : r t
-end) =
-struct
-  type t = C.r
+let rec typ_eq : type a b. a Types.typ -> b field_kind -> (a, b) Type.eq option
+    =
+ fun t k ->
+  match (t, k) with
+  | Types.Bits _, Int -> Some Type.Equal
+  | Types.Uint8, UInt8 -> Some Type.Equal
+  | Types.Uint16 _, UInt16 -> Some Type.Equal
+  | Types.Uint32 _, UInt32 -> Some Type.Equal
+  | Types.Int8, SInt8 -> Some Type.Equal
+  | Types.Int16 _, SInt16 -> Some Type.Equal
+  | Types.Int32 _, SInt32 -> Some Type.Equal
+  | Types.Byte_array _, String -> Some Type.Equal
+  | Types.Byte_slice _, Slice -> Some Type.Equal
+  | Types.Single_elem { elem; _ }, k -> typ_eq elem k
+  | Types.Where { inner; _ }, k -> typ_eq inner k
+  | Types.Enum { base; _ }, k -> typ_eq base k
+  | _ -> None
 
-  let min_size = min_wire_size C.codec
-  let decode buf off = decode C.codec buf off
-  let decode_exn buf off = decode_exn C.codec buf off
-  let encode r buf off = encode C.codec r buf off
-  let validate buf off = validate C.codec buf off
-  let validate_exn buf off = validate_exn C.codec buf off
+module Gen = struct
+  include Gen_core
 
-  (* A negative offset holds no record, as the generated [is_valid] says,
-     where [validate] raises [Invalid_argument]. *)
-  let is_valid buf off = accepts C.codec buf off
+  type 'a kind = 'a field_kind =
+    | Int : int kind
+    | UInt8 : UInt8.t kind
+    | UInt16 : UInt16.t kind
+    | UInt32 : UInt32.t kind
+    | SInt8 : SInt8.t kind
+    | SInt16 : SInt16.t kind
+    | SInt32 : SInt32.t kind
+    | String : string kind
+    | Slice : Bytesrw.Bytes.Slice.t kind
 
-  module Checked = View
+  (* {2 The interpreted twin} *)
 
-  let v = Checked.named C.codec
+  type record = Record : 'r View.named -> record
 
-  module View = struct
-    type 'b t = int
-    type 'b check = int
+  let root c = Record (View.named c)
 
-    let check b len off = Checked.check v b len off
-    let ok = Checked.ok
-    let get = Checked.get
+  (* The field [i] of the record [v], as a field the views read. *)
+  let nth (type r) (v : r View.named) i =
+    match List.nth_opt (to_struct v.codec).fields i with
+    | Some (Types.Field { field_name = Some name; field_typ; _ }) ->
+        (name, Types.Pack_typ field_typ)
+    | Some _ | None -> Fmt.invalid_arg "%s: no named field at %d" v.codec.name i
 
-    let at b _ off =
-      validate_exn (b : _ Wire_runtime.Buf.t :> bytes) off;
-      off
-  end
+  let record_field (type a r) (c : r t) name (typ : a Types.typ) : (a, r) field
+      =
+    match named_field c name typ with
+    | Some f -> f
+    | None -> Fmt.invalid_arg "%s: no field %s" c.name name
 
-  module Field = struct
-    type 'a t = {
-      get : bytes -> int -> 'a;
-      view : 'b. 'b Wire_runtime.Buf.t -> 'b View.t -> 'a;
-    }
-  end
+  let zero : type a. a kind -> a = function
+    | Int -> 0
+    | UInt8 -> UInt8.zero
+    | UInt16 -> UInt16.zero
+    | UInt32 -> UInt32.zero
+    | SInt8 -> SInt8.zero
+    | SInt16 -> SInt16.zero
+    | SInt32 -> SInt32.zero
+    | String -> ""
+    | Slice -> Bytesrw.Bytes.Slice.eod
 
-  let field f =
-    let read = Staged.unstage (get C.codec f) and r = Checked.field v f in
-    { Field.get = read; view = (fun b p -> Checked.read r b p) }
+  let other_type c name =
+    Fmt.invalid_arg "%s: field %s has another type" c.name name
+
+  (* A field's read is a field of the views: one the views read with no
+     check, or [Get] of a read of any other. *)
+  type 'a reader = ('a, unit) View.field
+
+  let[@inline] read (h : _ reader) b r = View.read h b r
+
+  (* An integer output as a value of the kind [k]. *)
+  let of_output : type a. a kind -> int64 -> a =
+   fun k x ->
+    let i = Int64.to_int x in
+    let cast : type t. (t, int) Type.eq -> t = fun Type.Equal -> i in
+    match k with
+    | Int -> i
+    | UInt8 -> cast UInt8.int_eq
+    | UInt16 -> cast UInt16.int_eq
+    | SInt8 -> cast SInt8.int_eq
+    | SInt16 -> cast SInt16.int_eq
+    | UInt32 -> UInt32.of_int i
+    | SInt32 -> SInt32.of_int i
+    | String | Slice -> invalid_arg "Gen: bytes are no output"
+
+  (* A field the views read with no reader of their own, such as an optional
+     field behind a gate the record's bytes decide, is read with the record's
+     outputs, which name it by its label. *)
+  let output (v : _ View.named) name f : _ reader =
+    let s = to_struct v.codec and label = Names.ocaml_label name in
+    View.Get (fun buf r -> f (Scan_outputs.read s buf r) label)
+
+  (* A field a view reads with no check is one direct read; any other is read
+     with its check, answering what [fail] makes of the error, as the module
+     [Wire_ocaml] writes answers a field the bytes written after the check
+     move out of the buffer. *)
+  let view_field (v : _ View.named) name typ ~fail : _ reader option =
+    let f = record_field v.codec name typ in
+    match View.field v f with
+    | f -> Some f
+    | exception Invalid_argument _ -> (
+        match View.checked_field v f with
+        | f ->
+            Some
+              (View.Get
+                 (fun buf r ->
+                   match View.read_other f buf r with
+                   | Ok x -> x
+                   | Error _ -> fail))
+        | exception Invalid_argument _ -> None)
+
+  let field_at (type a) (Record v) i (k : a kind) : a reader =
+    let name, Types.Pack_typ typ = nth v i in
+    let by_output () =
+      output v name (fun o l -> of_output k (Scan_outputs.int o l))
+    in
+    let optional f =
+      View.Get
+        (fun buf r -> Option.value ~default:(zero k) (View.read_other f buf r))
+    in
+    match typ with
+    | Types.Optional { inner; _ } -> (
+        match typ_eq inner k with
+        | Some Type.Equal ->
+            Option.fold ~none:(by_output ()) ~some:optional
+              (view_field v name typ ~fail:None)
+        | None -> other_type v.codec name)
+    | Types.Optional_or { inner; _ } -> (
+        match typ_eq inner k with
+        | Some Type.Equal ->
+            Option.value ~default:(by_output ())
+              (view_field v name typ ~fail:(zero k))
+        | None -> other_type v.codec name)
+    | _ -> (
+        match typ_eq typ k with
+        | Some Type.Equal ->
+            Option.value ~default:(by_output ())
+              (view_field v name typ ~fail:(zero k))
+        | None -> other_type v.codec name)
+
+  let present_at (Record v) i =
+    let name, Types.Pack_typ typ = nth v i in
+    match typ with
+    | Types.Optional _ -> (
+        match view_field v name typ ~fail:None with
+        | Some h ->
+            View.Get (fun buf r -> Option.is_some (View.read_other h buf r))
+        | None ->
+            output v name (fun o l -> Scan_outputs.bool o (l ^ "_present")))
+    | _ -> Fmt.invalid_arg "%s: field %s is not optional" v.codec.name name
+
+  type 'a writer = { write : 'b. 'b Wire_runtime.Buf.t -> int -> 'a -> unit }
+
+  let set_at (type a) (Record v) i (k : a kind) : a writer =
+    let name, Types.Pack_typ typ = nth v i in
+    match typ_eq typ k with
+    | Some Type.Equal ->
+        let write = set v.codec (record_field v.codec name typ) in
+        { write = (fun b r x -> write (b : _ Wire_runtime.Buf.t :> bytes) r x) }
+    | None -> other_type v.codec name
+
+  (* The record a field of type [typ] holds, and the field as a sub-record. *)
+  let held : type a r.
+      r View.named ->
+      (a, r) field ->
+      a Types.typ ->
+      (record * (unit, unit) View.sub) option =
+   fun v f -> function
+    | Types.Codec { codec_ref = Codec_ref c; _ } ->
+        let w = View.named c in
+        Some (Record w, View.sub v w f)
+    | Types.Single_elem { elem = Types.Codec { codec_ref = Codec_ref c; _ }; _ }
+      ->
+        let w = View.named c in
+        Some (Record w, View.sub v w f)
+    | Types.Optional_or
+        { inner = Types.Codec { codec_ref = Codec_ref c; _ }; _ } ->
+        let w = View.named c in
+        Some (Record w, View.sub v w f)
+    | Types.Optional { inner = Types.Codec { codec_ref = Codec_ref c; _ }; _ }
+      ->
+        let w = View.named c in
+        Some (Record w, View.sub_option v w f)
+    | Types.Optional
+        {
+          inner =
+            Types.Single_elem
+              { elem = Types.Codec { codec_ref = Codec_ref c; _ }; _ };
+          _;
+        } ->
+        let w = View.named c in
+        Some (Record w, View.sub_option v w f)
+    | _ -> None
+
+  let held_at (Record v) i =
+    let name, Types.Pack_typ typ = nth v i in
+    match held v (record_field v.codec name typ) typ with
+    | Some h -> h
+    | None -> Fmt.invalid_arg "%s: field %s holds no record" v.codec.name name
+
+  let sub_at r i = fst (held_at r i)
+  let enter_at r i = snd (held_at r i)
+
+  let[@inline] enter (s : (unit, unit) View.sub) b len r : int =
+    View.enter s b len r
+
+  let[@inline] check_at (Record v) b length off : int =
+    View.check v b length off
+
+  let check_window (Record v) (b : _ Wire_runtime.Buf.t) length ~off ~len : int
+      =
+    let length = (length : _ Wire_runtime.Buf.length :> int) in
+    if off < 0 || len < 0 || off > length - len then -1
+    else if
+      accepts v.codec (Bytes.sub (b : _ Wire_runtime.Buf.t :> bytes) off len) 0
+    then off
+    else -1
+
+  let scan c =
+    let s = to_struct c in
+    ignore (Scan_outputs.names s : (string * bool) list);
+    fun buf off len ->
+      if off < 0 || len < 0 || len > Bytes.length buf - off then None
+      else
+        let frame = Bytes.sub buf off len in
+        match validate c frame 0 with
+        | Ok () -> Some (Scan_outputs.values (Scan_outputs.read s frame 0))
+        | Error _ -> None
+
+  let frames ~name buf off len ~stride ~init f =
+    if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then
+      invalid_arg (name ^ ": invalid frame bounds or stride");
+    let rec go acc i =
+      if i = len / stride then acc
+      else go (f acc (off + (i * stride)) stride) (i + 1)
+    in
+    go init 0
+
+  let index ~name ~offs ~lens ~init f =
+    if Array.length offs <> Array.length lens then
+      invalid_arg (name ^ ": offs and lens differ in length");
+    let rec go acc i =
+      if i = Array.length offs then acc else go (f acc offs.(i) lens.(i)) (i + 1)
+    in
+    go init 0
 end

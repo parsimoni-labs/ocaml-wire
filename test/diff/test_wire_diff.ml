@@ -10,7 +10,7 @@ let simple_codec =
   v "Simple" (fun v l -> (v, l)) [ f_diff_version $ fst; f_diff_length $ snd ]
 
 let encode_simple v =
-  let buf = Bytes.create (Codec.wire_size simple_codec) in
+  let buf = Bytes.create (Codec.min_size simple_codec) in
   Codec.encode simple_codec v buf 0;
   Bytes.unsafe_to_string buf
 

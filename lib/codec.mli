@@ -14,9 +14,9 @@
       for untrusted input: a field is read only from a record that passed, in
       the buffer it passed in.
 
-    - {!word_reader} and {!load_word} read the fields of a short fixed header
-      from one word, with a bounds check and no other check. They are faster
-      than {!View} on records shorter than 8 bytes; see {!type-word_reader}.
+    - {!Word} checks that a short fixed header lies in the buffer and reads it
+      as one word, with no other check. It is faster than {!View} on records
+      shorter than 8 bytes.
 
     - {!get} and {!set} read and write one field in place, for bytes the program
       wrote itself. {!get} fires the field's [~action] (if any). Neither checks
@@ -77,38 +77,39 @@ val v :
     field, a field type the codec has no reader or writer for, or fixed fields
     that add up to more than a buffer can hold. *)
 
-val wire_size_opt : 'r t -> int option
-(** Fixed wire size in bytes, or [None] if the codec is variable-length. *)
+val size : 'r t -> int option
+(** [size c] is the number of bytes of every record of [c], or [None] if [c] is
+    of variable size. *)
 
-val wire_size : 'r t -> int
-(** Fixed wire size in bytes.
+val min_size : 'r t -> int
+(** [min_size c] is the fewest bytes a record of [c] takes: its size when [c] is
+    of constant size. *)
 
-    Raises [Invalid_argument] if the codec is variable-length. *)
+val size_at : ?env:Param.env -> 'r t -> bytes -> int -> (int, Error.t) result
+(** [size_at c buf off] is the size of the record at [off] in [buf], read from
+    the sizes the buffer holds, or the error of bytes that hold none: the end of
+    input where the buffer cuts a length field. It does not check that the
+    record fits in [buf].
 
-val min_wire_size : 'r t -> int
-(** Minimum wire size in bytes (for variable-length codecs). *)
+    Raises [Invalid_argument] on a negative [off], and when [c]'s field sizes
+    are driven by an input param and [?env] is omitted, the same as {!decode}:
+    an unbound param reads 0, which would silently measure a param-sized field
+    as empty and report an extent shorter than the record. *)
 
-val wire_size_at : ?env:Param.env -> 'r t -> bytes -> int -> int
-(** Compute the actual wire size from a buffer at a given offset. A codec whose
-    field sizes are driven by an input param needs [?env] to resolve them, and
-    raises [Invalid_argument] without it, the same as {!decode}: an unbound
-    param reads 0, which would silently measure a param-sized field as empty and
-    report an extent shorter than the record. *)
-
-val size_of_value : ?env:Param.env -> 'r t -> 'r -> int
-(** [size_of_value c v] returns the number of bytes that [encode c v] will
-    write. Computed from [v], not from a buffer: works for variable-size codecs
-    whose tail is [all_bytes] / [rest_bytes] / [all_zeros], where the
-    buffer-driven {!wire_size_at} cannot distinguish "value's tail" from
-    "remaining buffer space". Fixed-size byte arrays and slices contribute their
-    declared region size, which {!encode} requires the value to match exactly.
+val encoded_size : ?env:Param.env -> 'r t -> 'r -> int
+(** [encoded_size c v] is the number of bytes [encode c v] writes. Computed from
+    [v], not from a buffer: works for variable-size codecs whose tail is
+    [all_bytes] / [rest_bytes] / [all_zeros], where the buffer-driven {!size_at}
+    cannot distinguish "value's tail" from "remaining buffer space". Fixed-size
+    byte arrays and slices contribute their declared region size, which
+    {!encode} requires the value to match exactly.
 
     Raises [Invalid_argument] for a value {!encode} would refuse, such as a
     casetype value no case projects: there is no size to report for bytes that
     cannot be written. *)
 
-val size_of_value_ctx : 'r t -> Types.eval_ctx -> 'r -> int
-(** Context-threaded {!size_of_value}, for an embedded sub-codec whose parent
+val encoded_size_ctx : 'r t -> Types.eval_ctx -> 'r -> int
+(** Context-threaded {!encoded_size}, for an embedded sub-codec whose parent
     already holds the evaluation context. Internal use. *)
 
 val env : 'r t -> Param.env
@@ -137,16 +138,6 @@ val decode :
     offending param). An unbound input param would resolve a parametric field
     size to 0 and silently truncate the field, so it is rejected up front the
     same way {!encode} does. *)
-
-val decode_exn :
-  ?consume:Types.consumption -> ?env:Param.env -> 'r t -> bytes -> int -> 'r
-(** [decode_exn ?env c buf off] is like {!decode} but raises
-    {!Types.Parse_error} on failure. *)
-
-val decoder : 'r t -> (bytes -> int -> 'r) Staged.t
-(** [decoder c] is [decode_exn c], staged: [c] is compiled when the stage is
-    built, and each call runs its decoder with no other dispatch. Unstage it
-    once and call the result per record. It raises what {!decode_exn} raises. *)
 
 val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
 (** [encode ?env c r buf off] encodes record [r] into [buf] at offset [off].
@@ -199,10 +190,6 @@ val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
     partial record and must be treated as scrap. Only the single-field {!set}
     rolls its write back. *)
 
-val encoder : 'r t -> ('r -> bytes -> int -> unit) Staged.t
-(** [encoder c] is [encode c], staged as {!decoder} is. It raises what {!encode}
-    raises. *)
-
 val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
 (** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs the
     same validation pass as {!validate}. In particular, field [~action]s fire,
@@ -223,39 +210,42 @@ val to_struct : 'r t -> Types.struct_
 
 val validate :
   ?env:Param.env -> 'r t -> bytes -> int -> (unit, Types.parse_error) result
-(** [validate ?env c buf off] is {!validate_exn}, answering the record's error
-    as a value. *)
-
-val validate_exn : ?env:Param.env -> 'r t -> bytes -> int -> unit
-(** [validate_exn ?env c buf off] checks field [~constraint_] and [~where]
-    clauses without constructing a record. Field [~action]s do fire, so a
-    rejecting action fails validation, but assigned output parameters are not
-    written back to [?env]. [?env] supplies bindings for any [Param.input]
-    referenced in those clauses.
+(** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
+    without constructing a record, and answers the record's error as a value.
+    Field [~action]s do fire, so a rejecting action fails validation, but
+    assigned output parameters are not written back to [?env]. [?env] supplies
+    bindings for any [Param.input] referenced in those clauses.
 
     Raises [Invalid_argument] if [off] is negative or if [?env] belongs to
-    another codec or leaves an input parameter unbound, and {!Types.Parse_error}
-    on constraint/where-clause failure. *)
+    another codec or leaves an input parameter unbound. *)
 
 val get :
-  ?env:Param.env -> 'r t -> ('a, 'r) field -> (bytes -> int -> 'a) Staged.t
-(** [get ?env c f] is a staged zero-copy getter for field [f] in codec [c]. If
-    [f] has an action, it fires on every read. [env] syncs output parameters
-    after each action and supplies parameters for dependent field layouts; omit
-    it for parameter-free accessors. Raises [Invalid_argument] when the codec
-    has input params and [env] is omitted, or when it was created for another
-    codec, or when [f] was not bound from a source {!Field.t} used in [c]: an
-    unbound param reads 0, which would stage the reader onto the bytes in front
-    of the field, while a same-named lookalike could interpret those bytes with
-    a different wire type. Does not check record-level where-clauses or other
-    fields' constraints. On untrusted input use {!View}. *)
+  ?env:Param.env ->
+  'r t ->
+  ('a, 'r) field ->
+  bytes ->
+  int ->
+  ('a, Error.t) result
+(** [get ?env c f buf off] is the field [f] of the record at [off] in [buf],
+    read in place. Apply it to [c] and [f] once: the reader is made then. If [f]
+    has an action, it fires on every read. [env] syncs output parameters after
+    each action and supplies parameters for dependent field layouts; omit it for
+    parameter-free accessors. Raises [Invalid_argument] when the codec has input
+    params and [env] is omitted, or when it was created for another codec, or
+    when [f] was not bound from a source {!Field.t} used in [c]: an unbound
+    param reads 0, which would place the reader on the bytes in front of the
+    field, while a same-named lookalike could interpret those bytes with a
+    different wire type. The reader answers the error of bytes that make no
+    value of [f], under [f]'s name, and raises [Invalid_argument] on a negative
+    offset. Does not check record-level where-clauses or other fields'
+    constraints. On untrusted input use {!View}. *)
 
-val writer : 'r t -> 'r -> ('f, 'r) args -> (bytes -> int -> 'f) Staged.t
-(** [writer c template fields] is a staged writer of a record of [c]: called
-    with a buffer, an offset and one value per field of [fields], it writes
-    [template] at the offset with each of those fields set to its value, as
-    {!encode} of [template] then {!set} of each field would. A header that
-    differs from a template in a few fields is one call.
+val writer : 'r t -> 'r -> ('f, 'r) args -> bytes -> int -> 'f
+(** [writer c template fields buf off] writes [template] at [off] in [buf] with
+    each field of [fields] set to the value that follows, one per field, as
+    {!encode} of [template] then {!set} of each field would. Apply it to [c],
+    [template] and [fields] once: the writer is made then. A header that differs
+    from a template in a few fields is one call.
 
     A record of at most 7 bytes whose fields in [fields] are big-endian integers
     or bitfields of a byte or a big-endian 16- or 32-bit word is put together in
@@ -399,25 +389,41 @@ module View : sig
   (** The type for fields of type ['a] in the views of the codec named ['c]. *)
 
   val field : ('c, 'r) codec -> ('a, 'r) record_field -> ('a, 'c) field
-  (** [field v f] is the field [f] in the views of [v]. Make it once per field,
-      not once per record.
+  (** [field v f] is the field [f] in the views of [v], read with no check. Make
+      it once per field, not once per record.
 
-      An integer, a bitfield or a byte slice of constant size, at a constant
-      offset inside the frame of [v] and without an action, is read with no
-      bounds check; a byte slice of size [0] is {!Bytesrw.Bytes.Slice.eod}. Any
-      other field (after a variable-size field, with an action, under a map) is
-      read as {!Codec.get} reads it: with its bounds check, and with its action,
-      which has already run once in {!val-check}.
+      An integer, a bitfield or a byte slice or string of constant size, at a
+      constant offset inside the frame of [v], without an action and under no
+      map, is read with no bounds check; a byte slice of size [0] is
+      {!Bytesrw.Bytes.Slice.eod}. Under an {!Wire.val-enum} or a
+      {!Wire.val-where} it reads the integer there, which the check accepted.
 
       Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
-      codec of [v]. *)
+      codec of [v], or if it is any other field (after a variable-size field,
+      with an action, under a map): read that one with {!checked_field}. *)
+
+  val checked_field :
+    ('c, 'r) codec -> ('a, 'r) record_field -> (('a, Error.t) result, 'c) field
+  (** [checked_field v f] is the field [f] in the views of [v], read as
+      {!Codec.get} reads it: with its bounds check, its value's checks and its
+      action, which has already run once in {!val-check}. Its read answers the
+      error of bytes written after the check that no longer make a value of [f],
+      such as a field they move out of the buffer.
+
+      Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
+      codec of [v], or as {!Codec.get} does. *)
 
   val read : ('a, 'c) field -> 'b Wire_runtime.Buf.t -> ('b, 'c) t -> 'a
-  (** [read f b r] is the value of [f] in the record [r] of [b].
+  (** [read f b r] is the value of [f] in the record [r] of [b]. It never raises
+      and never reads outside [b].
 
       {b Warning.} If bytes of [b] are written after the check, the value may be
-      one the codec's checks refuse, and a field read as {!Codec.get} reads it
-      raises as {!Codec.get} does. No read leaves [b]. *)
+      one the codec's checks refuse. A field of {!field} lies in the frame the
+      check tested, where no bytes move it; a field of {!checked_field} answers
+      the error of bytes that move it out of [b]. The accessors of the views a
+      [Wire_ocaml] module writes, which answer no error, read such a field as
+      absent: [0] for an integer, [false] for a presence, an empty slice or
+      string for bytes. *)
 
   (** {1:subs Sub-records} *)
 
@@ -458,18 +464,15 @@ module View : sig
       check is refused when they move the sub-record out of [b]. *)
 end
 
-val set :
-  ?env:Param.env ->
-  'r t ->
-  ('a, 'r) field ->
-  (bytes -> int -> 'a -> unit) Staged.t
-(** Staged zero-copy field setter. [env] supplies the input params a dependent
-    field layout is measured from; omit it for parameter-free codecs. Raises
-    [Invalid_argument] when the codec has input params and [env] is omitted, or
-    when it was created for another codec, or when the field binding does not
-    share its source {!Field.t} with the field in the codec: an unbound param
-    reads 0, which would put the write on a field the caller never named and
-    leave the one it did name unchanged.
+val set : ?env:Param.env -> 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
+(** [set ?env c f buf off v] writes [v] as the field [f] of the record at [off]
+    in [buf], in place. Apply it to [c] and [f] once: the writer is made then.
+    [env] supplies the input params a dependent field layout is measured from;
+    omit it for parameter-free codecs. Raises [Invalid_argument] when the codec
+    has input params and [env] is omitted, or when it was created for another
+    codec, or when the field binding does not share its source {!Field.t} with
+    the field in the codec: an unbound param reads 0, which would put the write
+    on a field the caller never named and leave the one it did name unchanged.
 
     Raises [Invalid_argument], leaving the buffer untouched, on a value the
     field cannot represent: a byte string whose length differs from the declared
@@ -488,8 +491,8 @@ val set :
 
 val zeroterm_nul_pos : bytes -> first:int -> limit:int -> int
 (** [zeroterm_nul_pos buf ~first ~limit] is the index of the first NUL byte in
-    [\[first, limit)], raising [Parse_error] on an unterminated run. Internal
-    use (shared with the streaming decoders). *)
+    [\[first, limit)], stopping at a parse error on an unterminated run.
+    Internal use (shared with the streaming decoders). *)
 
 val raw_decode : 'r t -> bytes -> int -> 'r
 (** [raw_decode c buf off] decodes without validation. Internal use. *)
@@ -545,6 +548,9 @@ val embed_walk : 'r t -> 'r Types.walk option
     field once and the check that makes the same checks, or [None] when [c] has
     none. Internal use. *)
 
+val embed_ref : 'r t -> 'r Types.codec_ref
+(** [embed_ref t] is [t] as the codec of a sub-codec field. *)
+
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)
 
@@ -571,7 +577,8 @@ val rename : string -> 'r t -> 'r t
 val doc : 'r t -> string option
 (** [doc c] is the note attached via {!v}'s [?doc], if any. *)
 
-val field_readers : 'r t -> (string * (bytes -> int -> int)) list
+val field_readers :
+  'r t -> (string * (bytes -> int -> (int, Types.parse_error) result)) list
 (** [field_readers c] returns the int-valued field readers of [c], indexed by
     field name. Used for cross-codec name resolution when [c] is embedded as a
     sub-codec via {!Wire.codec}. *)
@@ -583,8 +590,9 @@ val field_readers_ctx :
 val pp : Format.formatter -> 'r t -> unit
 (** Pretty-print a codec (shows its name). *)
 
-val field_ref : ('a, 'r) field -> int Types.expr
-(** Expression referencing a field by name. *)
+val pp_value : 'r t -> 'r Fmt.t
+(** [pp_value c] prints a record of [c] field by field, each integer field with
+    its value as {!field_readers} reads it from the record's encoding. *)
 
 type validator
 (** A struct validator without a constructor. The same int-array validation
@@ -597,9 +605,10 @@ val validator_of_struct : Types.struct_ -> validator
     clauses, and per-field actions are compiled to operate on a per-decode int
     array; the resulting validator is reusable. *)
 
-val validate_struct : validator -> bytes -> int -> unit
-(** [validate_struct v buf off] runs the validator. Raises {!Types.Parse_error}
-    on failure. *)
+val validate_struct :
+  validator -> bytes -> int -> (unit, Types.parse_error) result
+(** [validate_struct v buf off] runs the validator, answering its error as a
+    value. *)
 
 val struct_size_of : validator -> bytes -> int -> int
 (** [struct_size_of v buf off] is the byte size of the struct starting at [off].
@@ -613,68 +622,97 @@ val wire_size_info_of_validator :
   validator -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire-size info (parallels {!wire_size_info} for codecs). *)
 
-type bitfield
-(** A bitfield accessor -- shift and mask for one field in a packed word.
+(** Records of at most 7 bytes read as one word.
 
-    The word is read with a bounds check and no other check of the record; on
-    untrusted input use {!View}. These stay for unchecked reads of several
-    bitfields of one word of a record shorter than 8 bytes, such as the 4-byte
-    words of [bench/clcw]: a view reads such a field out of line, where
-    {!extract} is a shift and a mask. *)
+    A check of a record of a fixed size that fits an [int] with a bit to spare
+    reads its bytes, big-endian, into one [int], with one bounds test and, where
+    the buffer holds 8 bytes from the record on, one load; each field is then
+    two shifts and a mask. A check tests no constraint of the record: on
+    untrusted input use {!View}. A word check stays for short fixed headers,
+    such as the 6-byte space packet and frame headers of [bench/routing] and
+    [bench/gateway]: a view reads a field of a frame shorter than 8 bytes out of
+    line, where a word is read once and each field taken from it inline.
 
-val bitfield : 'r t -> (int, 'r) field -> bitfield
-(** [bitfield codec field] returns a bitfield accessor. Raises if [field] is not
-    a bitfield or was not bound from the source {!Field.t} used in [codec]. *)
+    {[
+    open Wire
 
-val load_word : bitfield -> (bytes -> int -> Optint.t) Staged.t
-(** [load_word bf] returns a staged word reader. Force once, then call the
-    resulting function to read the packed base word. Fields sharing the same
-    base word return readers that read the same bytes -- call once and pass the
-    result to multiple {!extract} calls. The word is an [Optint.t] so a 32-bit
-    base survives a platform whose int is narrower: an unboxed native int on a
-    64-bit host. *)
+    type hdr = { kind : int; len : UInt16.t }
 
-val extract : bitfield -> Optint.t -> int
-(** [extract bf word] extracts the field from a pre-loaded word value. Pure
-    shift+mask, no memory access. *)
+    let kind = Codec.(Field.v "kind" (bits ~width:8 U8) $ fun h -> h.kind)
+    let len = Codec.(Field.v "len" uint16be $ fun h -> h.len)
 
-type 'r word = private int
-(** The bytes of a record of a ['r] codec, big-endian, in an [int]. *)
+    let codec =
+      Codec.v "Hdr" (fun kind len -> { kind; len }) Codec.[ kind; len ]
 
-type 'r word_reader
-(** A reader of the records of a ['r] codec as words.
+    let reader = Codec.Word.reader codec
+    let w_len = Codec.Word.field codec len
 
-    The record is read with a bounds check and no other check; on untrusted
-    input use {!View}. The word readers stay for unchecked reads of short fixed
-    headers, such as the 6-byte space packet and frame headers of
-    [bench/routing] and [bench/gateway]: a view reads a field of a frame shorter
-    than 8 bytes out of line, where a word reader reads the header once and
-    takes each field from it inline. *)
+    let len_of buf off =
+      let k = Codec.Word.check reader buf off in
+      if Codec.Word.ok k then Ok (Codec.Word.read w_len (Codec.Word.get k))
+      else Error (Codec.Word.error reader buf off)
 
-val word_reader : 'r t -> 'r word_reader
-(** [word_reader c] reads the records of [c] with {!read_word}. Raises
-    [Invalid_argument] when [c] is not of a fixed size or has more bytes than
-    fit an [int] with a bit to spare (7 on a 64-bit host). *)
+    let () =
+      assert (len_of (Bytes.of_string "\x05\x00\x0c") 0 = Ok (UInt16.v 12));
+      assert (Result.is_error (len_of (Bytes.of_string "\x05") 0))
+    ]} *)
+module Word : sig
+  type 'r codec := 'r t
+  type ('a, 'r) codec_field := ('a, 'r) field
 
-val read_word : 'r word_reader -> bytes -> int -> 'r word
-(** [read_word r buf off] is the record at [off], read with one bounds check
-    and, where [buf] holds 8 bytes from [off] on, one load. Read its fields with
-    {!of_word}. It is a function the caller's compiler knows, so the load is
-    inlined into the caller's loop. Raises [Invalid_argument] when [buf] does
-    not hold the record at [off], as {!get} does. *)
+  type 'r t = private int
+  (** The type for the bytes of a record of a ['r] codec, big-endian. *)
 
-type ('a, 'r) part
-(** A field of a record word. *)
+  type 'r reader
+  (** The type for readers of the records of a ['r] codec. *)
 
-val word_part : 'r t -> ('a, 'r) field -> ('a, 'r) part
-(** [word_part c f] is field [f] of the words {!word_reader} reads. Raises
-    [Invalid_argument] as {!word_reader} does, and when [f] is not one of [c]'s
-    or is not a big-endian integer or a bitfield of a byte or a big-endian 16-
-    or 32-bit word. *)
+  val reader : 'r codec -> 'r reader
+  (** [reader c] reads the records of [c]. Raises [Invalid_argument] when [c] is
+      not of a fixed size or has more bytes than fit an [int] with a bit to
+      spare (7 on a 64-bit host, 3 on a 31- or 32-bit one). *)
 
-val of_word : ('a, 'r) part -> 'r word -> 'a
-(** [of_word p w] is the field [p] of [w]: two shifts and a mask, with no memory
-    access but the part's own. *)
+  type 'r check = private int
+  (** The type for the results of checking a record of a ['r] codec: its word,
+      or a negative [int] where it was refused. *)
+
+  val check : 'r reader -> bytes -> int -> 'r check
+  (** [check r buf off] is the record of [r] at [off] in [buf]. It is a function
+      the caller's compiler knows, so the load is inlined into the caller's
+      loop.
+
+      [check] never raises: a negative [off] or a record [buf] does not hold is
+      refused. Its error is {!error}. *)
+
+  val ok : 'r check -> bool
+  (** [ok k] is [true] iff [k] accepted its record. *)
+
+  val get : 'r check -> 'r t
+  (** [get k] is the word of the record [k] accepted.
+
+      Raises [Invalid_argument] if [ok k] is [false]. Test {!ok} first: a
+      refused record is input, not misuse. *)
+
+  val error : 'r reader -> bytes -> int -> Error.t
+  (** [error r buf off] is the error of a record {!check} refused: the error
+      {!Codec.get} answers for the first field [buf] cuts. Out of line, for the
+      slow path.
+
+      Raises [Invalid_argument] on a negative [off], as {!Codec.get} does, and
+      if {!check} accepts the record. *)
+
+  type ('a, 'r) field
+  (** The type for fields of type ['a] of the words of a ['r] codec. *)
+
+  val field : 'r codec -> ('a, 'r) codec_field -> ('a, 'r) field
+  (** [field c f] is the field [f] of the words of [c]. Raises
+      [Invalid_argument] as {!reader} does, and when [f] is not one of [c]'s or
+      is not a big-endian integer or a bitfield of a byte or a big-endian 16- or
+      32-bit word. *)
+
+  val read : ('a, 'r) field -> 'r t -> 'a
+  (** [read f w] is the field [f] of [w]: two shifts and a mask, with no memory
+      access but the field's own. *)
+end
 
 val blit_string_exact : int -> bytes -> int -> string -> int
 (** [blit_string_exact n buf off s] writes [s] into [buf] at [off] and returns
@@ -702,18 +740,26 @@ module Gen : sig
   val check : 'r t -> string -> unit
   (** [check t d] raises [Invalid_argument] unless [digest t = d]. *)
 
-  type 'b field_k = { k : 'a. 'a Types.typ -> (bytes -> int -> 'a) -> 'b }
+  type 'b field_k = {
+    k : 'a. 'a Types.typ -> (bytes -> int -> ('a, Error.t) result) -> 'b;
+  }
   (** A use of a field's reader, whatever the field's type. *)
 
   val with_field_reader : 'r t -> string -> 'b field_k -> 'b option
-  (** [with_field_reader t name k] is [k.k typ reader], where [reader] is the
-      reader {!get} stages for the field [name] of [t] and [typ] its type, or
-      [None] when [t] has no field [name]. *)
+  (** [with_field_reader t name k] is [k.k typ r], where [r] is the reader
+      {!get} makes for the field [name] of [t] and [typ] its type, or [None]
+      when [t] has no field [name]. *)
 
   (** {2 Maps} *)
 
-  type ('w, 'a) map = { dec : at:int -> 'w -> 'a; enc : 'a -> 'w }
-  (** A map's decoder and encoder over its raw wire value. *)
+  type ('w, 'a) map = {
+    dec : at:int -> 'w -> 'a;
+    get : at:int -> field:string -> 'w -> ('a, Error.t) result;
+    enc : 'a -> 'w;
+  }
+  (** A map's decoder and encoder over its raw wire value. [dec] is for a value
+      the record's check accepted; [get] answers the error of any other, at [at]
+      and under the name it is given. *)
 
   val map_int : 'a Types.typ -> (int, 'a) map
   (** [map_int t] is the map [t] over an integer up to 16 bits wide or a
@@ -730,6 +776,113 @@ module Gen : sig
   val check_map : 'r t -> string -> 'a Types.typ -> unit
   (** [check_map c name t] raises [Invalid_argument] unless the field [name] of
       [c] is the very value [t]. *)
+
+  (** {2 Kinds} *)
+
+  (** The type of a field the twin reads, as the codec declares it. *)
+  type _ kind =
+    | Int : int kind
+    | UInt8 : UInt8.t kind
+    | UInt16 : UInt16.t kind
+    | UInt32 : UInt32.t kind
+    | SInt8 : SInt8.t kind
+    | SInt16 : SInt16.t kind
+    | SInt32 : SInt32.t kind
+    | String : string kind
+    | Slice : Bytesrw.Bytes.Slice.t kind
+
+  (** {2 The interpreted twin}
+
+      What the interpreted twin of a generated module ([Wire_ocaml]) reads its
+      records through: each record of a codec, and each of its fields by its
+      place in the codec's field list, checked against the type the generated
+      module reads. A view and a check are the [int]s of {!View}. *)
+
+  type record
+  (** The type for the records of a codec. *)
+
+  val root : 'r t -> record
+  (** [root c] is the records of [c]. *)
+
+  val sub_at : record -> int -> record
+  (** [sub_at r i] is the records the field [i] of [r] holds. Raises
+      [Invalid_argument] if it holds none. *)
+
+  val enter_at : record -> int -> (unit, unit) View.sub
+  (** [enter_at r i] is the field [i] of [r] as a sub-record. *)
+
+  val enter :
+    (unit, unit) View.sub ->
+    'b Wire_runtime.Buf.t ->
+    'b Wire_runtime.Buf.length ->
+    int ->
+    int
+  (** [enter s b len v] is {!View.enter}. *)
+
+  val check_at :
+    record -> 'b Wire_runtime.Buf.t -> 'b Wire_runtime.Buf.length -> int -> int
+  (** [check_at r b len off] is {!View.check} on the record at [off]. *)
+
+  val check_window :
+    record ->
+    'b Wire_runtime.Buf.t ->
+    'b Wire_runtime.Buf.length ->
+    off:int ->
+    len:int ->
+    int
+  (** [check_window r b length ~off ~len] is [off] when the [len] bytes at [off]
+      lie in [b] and the codec accepts them on their own, and [-1] otherwise. *)
+
+  type 'a reader = ('a, unit) View.field
+  (** A field's read: a field of the views of its codec. *)
+
+  val read : 'a reader -> 'b Wire_runtime.Buf.t -> int -> 'a
+  (** [read h b v] reads the field [h] of the record [v] holds in [b]. *)
+
+  val field_at : record -> int -> 'a kind -> 'a reader
+  (** [field_at r i k] reads the field [i] of [r], of kind [k], or the zero of
+      [k] where it is absent. Raises [Invalid_argument] if it has another kind.
+  *)
+
+  val present_at : record -> int -> bool reader
+  (** [present_at r i] reads whether the optional field [i] of [r] is present.
+  *)
+
+  type 'a writer = { write : 'b. 'b Wire_runtime.Buf.t -> int -> 'a -> unit }
+  (** The write of a field of the record a view holds. *)
+
+  val set_at : record -> int -> 'a kind -> 'a writer
+  (** [set_at r i k] writes the field [i] of [r], as {!Codec.set} does. *)
+
+  val scan : 'r t -> bytes -> int -> int -> int64 array option
+  (** [scan c buf off len] is the outputs of the record in the [len] bytes at
+      [off], which the codec accepts on their own, or [None]: each named scalar
+      field, and for each optional field its presence as [1L] or [0L], in
+      declaration order, an absent field [0L]. *)
+
+  val frames :
+    name:string ->
+    bytes ->
+    int ->
+    int ->
+    stride:int ->
+    init:'a ->
+    ('a -> int -> int -> 'a) ->
+    'a
+  (** [frames ~name buf off len ~stride ~init f] folds [f] over the offset and
+      the length of each of the [len / stride] frames of [stride] bytes at
+      [off]. Raises [Invalid_argument], naming [name], on bad bounds. *)
+
+  val index :
+    name:string ->
+    offs:int array ->
+    lens:int array ->
+    init:'a ->
+    ('a -> int -> int -> 'a) ->
+    'a
+  (** [index ~name ~offs ~lens ~init f] folds [f] over the frames of an index.
+      Raises [Invalid_argument], naming [name], if [offs] and [lens] differ in
+      length. *)
 end
 
 (** Test-only views of how a codec is compiled. *)
@@ -755,22 +908,4 @@ module Testing : sig
 
   val all_paths : string list
   (** Every name {!paths} can return. *)
-end
-
-(** [Make (C)] is [C.codec] as a {!Wire_runtime.Record.S}: the same record
-    module [Wire_ocaml] generates from [C.codec], interpreted. Its checks are
-    {!module-View.val-check} on [C.codec], and [(field f).view] is
-    {!module-View.read} of {!module-View.val-field} [f]. Use it to run code
-    written against {!Wire_runtime.Record.S} on a codec before generating it;
-    use {!module-View} directly otherwise. *)
-module Make (C : sig
-  type r
-
-  val codec : r t
-end) : sig
-  include Wire_runtime.Record.S with type t = C.r
-
-  val field : ('a, C.r) field -> 'a Field.t
-  (** [field f] is the handle of [f]: its getter is {!get} of [f] staged once,
-      its view reads [f] as {!View.read} does. *)
 end

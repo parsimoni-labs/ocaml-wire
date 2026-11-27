@@ -33,7 +33,6 @@ let () =
       Test_lower_3d.suite;
       Test_param.suite;
       Test_ascii.suite;
-      Test_staged.suite;
       Test_uint32.suite;
       Test_unchecked.suite;
       Test_uint64.suite;

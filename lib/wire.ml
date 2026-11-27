@@ -1,9 +1,6 @@
 (* Wire: Dependent Data Descriptions for EverParse 3D *)
 
-module Staged = Staged
-
-module type S = Wire_runtime.Record.S
-
+module Error = Wire_runtime.Error
 module UInt32 = UInt32
 module UInt63 = UInt63
 module Action = Action
@@ -121,8 +118,9 @@ let codec (c : 'r Codec.t) : 'r typ =
   let codec_field_readers = Codec.field_readers_ctx c in
   let codec_struct = Codec.to_struct c in
   let codec_returns_slice = struct_returns_slice codec_struct in
-  let codec_size_of_value = Codec.size_of_value_ctx c in
-  let codec_min_size = Codec.min_wire_size c in
+  let codec_size_of_value = Codec.encoded_size_ctx c in
+  let codec_min_size = Codec.min_size c in
+  let codec_ref = Codec.embed_ref c in
   match Codec.wire_size_info_ctx c with
   | `Fixed n ->
       Codec
@@ -142,6 +140,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_field_readers;
           codec_returns_slice;
           codec_struct;
+          codec_ref;
         }
   | `Variable size_of ->
       Codec
@@ -161,6 +160,7 @@ let codec (c : 'r Codec.t) : 'r typ =
           codec_field_readers;
           codec_returns_slice;
           codec_struct;
+          codec_ref;
         }
 
 type ('elt, 'seq) seq_map = ('elt, 'seq) Types.seq_map =
@@ -274,8 +274,9 @@ let parse_codec_typ ~copy_input decode fixed_size min_size size_of buf off len =
     let copy_end = Input_end.of_bytes copy in
     match decode ctx copy_end copy 0 with
     | value -> (value, off + sz)
-    | exception Parse_error error ->
-        raise (Parse_error { error with at = off + error.at })
+    | exception exn when is_parse_error exn ->
+        let error = parse_error_of exn in
+        raise_parse_error { error with at = off + error.at }
 
 (* Only a closed enum enforces membership; an open enum names known codes but
    accepts any value. [Codec.decode] gates on [closed] the same way, so the two
@@ -325,7 +326,9 @@ let parse_struct_typ s buf off len =
   check_eof len ~off ~n:(Codec.struct_min_size v);
   let sz = Codec.struct_size_of v buf off in
   check_span len ~off ~n:sz;
-  Codec.validate_struct v buf off;
+  (match Codec.validate_struct v buf off with
+  | Ok () -> ()
+  | Error e -> raise_parse_error e);
   ((), off + sz)
 
 let parse_fixed size get buf off len =
@@ -543,30 +546,24 @@ and parse_repeat_loop : type elt seq.
   in
   loop s.empty off
 
-exception Parse_error = Parse_error
-
-let of_string_exn ?(consume = `Prefix) typ s =
-  let buf = Bytes.unsafe_of_string s in
+(* The value at the start of [buf], or the error that stopped it. *)
+let parse_all ~copy_slices consume typ buf =
   let available = Bytes.length buf in
-  let value, consumed = parse_direct ~copy_slices:true typ buf 0 available in
-  check_consumption consume ~consumed ~available;
-  value
+  match
+    let value, consumed = parse_direct ~copy_slices typ buf 0 available in
+    check_consumption consume ~consumed ~available;
+    value
+  with
+  | value -> Ok value
+  | exception exn when is_parse_error exn ->
+      let e = parse_error_of exn in
+      Error e
 
-let of_string ?consume typ s =
-  match of_string_exn ?consume typ s with
-  | v -> Ok v
-  | exception Parse_error e -> Error e
+let of_string ?(consume = `Prefix) typ s =
+  parse_all ~copy_slices:true consume typ (Bytes.unsafe_of_string s)
 
-let of_bytes_exn ?(consume = `Prefix) typ b =
-  let available = Bytes.length b in
-  let value, consumed = parse_direct ~copy_slices:false typ b 0 available in
-  check_consumption consume ~consumed ~available;
-  value
-
-let of_bytes ?consume typ b =
-  match of_bytes_exn ?consume typ b with
-  | v -> Ok v
-  | exception Parse_error e -> Error e
+let of_bytes ?(consume = `Prefix) typ b =
+  parse_all ~copy_slices:false consume typ b
 
 let drain_reader reader =
   let buf = Buffer.create 256 in
@@ -636,9 +633,9 @@ let parse_or_rewind typ reader bytes len =
   | v, off ->
       push_back_bytes reader bytes off (len - off);
       v
-  | exception Parse_error e ->
+  | exception exn when is_parse_error exn ->
       push_back_bytes reader bytes 0 len;
-      raise (Parse_error e)
+      raise exn
 
 (* A growable scratch the incremental reader accumulates slices into, so
    retrying a parse costs nothing beyond the retry. [Buffer.to_bytes] rebuilt
@@ -724,7 +721,7 @@ let of_reader_incremental typ reader =
   let s = scratch_create () in
   let give_up e =
     push_back_bytes reader s.buf 0 s.filled;
-    raise (Parse_error e)
+    raise_parse_error e
   in
   (* Both recoverable kinds read ahead and retry, and give up only when the read
      yields nothing at all. What differs is how far ahead to read. *)
@@ -733,7 +730,8 @@ let of_reader_incremental typ reader =
     | v, off ->
         push_back_bytes reader s.buf off (s.filled - off);
         v
-    | exception Parse_error e -> (
+    | exception exn when is_parse_error exn -> (
+        let e = parse_error_of exn in
         let before = s.filled in
         match e.kind with
         (* A search ran the length of the buffer without meeting its terminator,
@@ -757,7 +755,7 @@ let of_reader_incremental typ reader =
   in
   loop ()
 
-let of_reader_exn typ reader =
+let read_value typ reader =
   if typ_consumes_rest typ then
     let bytes = drain_reader reader in
     parse_or_rewind typ reader bytes (Bytes.length bytes)
@@ -769,9 +767,11 @@ let of_reader_exn typ reader =
     | None -> of_reader_incremental typ reader
 
 let of_reader typ reader =
-  match of_reader_exn typ reader with
+  match read_value typ reader with
   | v -> Ok v
-  | exception Parse_error e -> Error e
+  | exception exn when is_parse_error exn ->
+      let e = parse_error_of exn in
+      Error e
 (* Binary encoding with Bytesrw.Bytes.Writer *)
 
 module Writer = Bytesrw.Bytes.Writer
@@ -1146,17 +1146,6 @@ let to_bytes typ v =
       Buffer.to_bytes buf
 
 let to_string typ v = Bytes.unsafe_to_string (to_bytes typ v)
-
-type 'r codec = 'r Codec.t
-
-let pp_value (type r) (c : r Codec.t) ppf (v : r) =
-  let buf = to_bytes (codec c) v in
-  let readers = Codec.field_readers c in
-  Fmt.pf ppf "@[<hv 2>%s {" (Codec.name c);
-  List.iter
-    (fun (name, reader) -> Fmt.pf ppf "@ %s = %d;" name (reader buf 0))
-    readers;
-  Fmt.pf ppf "@ }@]"
 
 module UInt64 = UInt64
 module SInt32 = SInt32

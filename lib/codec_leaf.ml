@@ -599,6 +599,198 @@ let rec build_immediate_reader : type a.
   | Unit -> Some (fun _buf _base -> ())
   | _ -> None
 
+(* {2 The readers of [Codec.get]}
+
+   A field at a constant offset is read by one closure: it checks that the
+   field's bytes lie in the buffer, loads them and answers [Ok v], with no
+   other call and no handler. The loads of 8 and 16 bits are unchecked; those
+   of 32 and 64 bits check their bounds again, as their unchecked loads box
+   the value wherever they are not inlined. *)
+
+type 'a get = bytes -> int -> ('a, parse_error) result
+
+(* What a reader answers where the [width] bytes at [at] of the field [name] do
+   not lie in [buf]: misuse for a negative record offset [base], the end of the
+   input otherwise. Out of line, as no reader calls it on its fast path. *)
+let[@inline never] short_field name ~base ~at ~width buf =
+  if base < 0 then Errors.negative_offset base
+  else
+    let len = Bytes.length buf in
+    let got = if at > len then 0 else len - at in
+    Error
+      { at; field = [ name ]; kind = Unexpected_eof { expected = width; got } }
+
+(* The unsigned integers that fit an [int]. *)
+let small_uint_reader : type a. name:string -> a typ -> int -> a get option =
+ fun ~name typ off ->
+  match typ with
+  | Uint8 ->
+      let stop = off + 1 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:1 buf
+          else Ok (UInt8.unsafe_get buf (base + off)))
+  | Uint16 Little ->
+      let stop = off + 2 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:2 buf
+          else Ok (UInt16.unsafe_le buf (base + off)))
+  | Uint16 Big ->
+      let stop = off + 2 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:2 buf
+          else Ok (UInt16.unsafe_be buf (base + off)))
+  | Uint32 Little ->
+      let stop = off + 4 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:4 buf
+          else Ok (UInt32.le buf (base + off)))
+  | Uint32 Big ->
+      let stop = off + 4 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:4 buf
+          else Ok (UInt32.be buf (base + off)))
+  | _ -> None
+
+(* The signed integers that fit an [int]. *)
+let small_sint_reader : type a. name:string -> a typ -> int -> a get option =
+ fun ~name typ off ->
+  match typ with
+  | Int8 ->
+      let stop = off + 1 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:1 buf
+          else Ok (SInt8.unsafe_get buf (base + off)))
+  | Int16 Little ->
+      let stop = off + 2 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:2 buf
+          else Ok (SInt16.unsafe_le buf (base + off)))
+  | Int16 Big ->
+      let stop = off + 2 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:2 buf
+          else Ok (SInt16.unsafe_be buf (base + off)))
+  | Int32 Little ->
+      let stop = off + 4 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:4 buf
+          else Ok (SInt32.le buf (base + off)))
+  | Int32 Big ->
+      let stop = off + 4 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:4 buf
+          else Ok (SInt32.be buf (base + off)))
+  | _ -> None
+
+(* The 64-bit integers. *)
+let int64_reader : type a. name:string -> a typ -> int -> a get option =
+ fun ~name typ off ->
+  match typ with
+  | Uint64 Little ->
+      let stop = off + 8 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:8 buf
+          else Ok (UInt64.le buf (base + off)))
+  | Uint64 Big ->
+      let stop = off + 8 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:8 buf
+          else Ok (UInt64.be buf (base + off)))
+  | Int64 Little ->
+      let stop = off + 8 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:8 buf
+          else Ok (Bytes.get_int64_le buf (base + off)))
+  | Int64 Big ->
+      let stop = off + 8 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:8 buf
+          else Ok (Bytes.get_int64_be buf (base + off)))
+  | _ -> None
+
+(* The floats and the unsigned integers of [n] bytes. *)
+let float_reader : type a. name:string -> a typ -> int -> a get option =
+ fun ~name typ off ->
+  match typ with
+  | Float32 Little ->
+      let stop = off + 4 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:4 buf
+          else Ok (Int32.float_of_bits (Bytes.get_int32_le buf (base + off))))
+  | Float32 Big ->
+      let stop = off + 4 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:4 buf
+          else Ok (Int32.float_of_bits (Bytes.get_int32_be buf (base + off))))
+  | Float64 Little ->
+      let stop = off + 8 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:8 buf
+          else Ok (Int64.float_of_bits (Bytes.get_int64_le buf (base + off))))
+  | Float64 Big ->
+      let stop = off + 8 in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:8 buf
+          else Ok (Int64.float_of_bits (Bytes.get_int64_be buf (base + off))))
+  | Uint_var { size = Int n; endian } ->
+      let stop = off + n in
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then
+            short_field name ~base ~at:(base + off) ~width:n buf
+          else Ok (Uint_var.read endian buf (base + off) n))
+  | _ -> None
+
+(* The reader [Codec.get] makes for a scalar field of type [typ] at [off] in
+   its record, named [name]; [None] for any other field. *)
+let build_immediate_get : type a. name:string -> a typ -> int -> a get option =
+ fun ~name typ off ->
+  match small_uint_reader ~name typ off with
+  | Some _ as g -> g
+  | None -> (
+      match small_sint_reader ~name typ off with
+      | Some _ as g -> g
+      | None -> (
+          match int64_reader ~name typ off with
+          | Some _ as g -> g
+          | None -> float_reader ~name typ off))
+
 (* Symmetric bytes-only writer for parameter-independent scalar fields. *)
 let rec build_immediate_encoder : type a.
     a typ -> (bytes -> int -> a -> int) option = function

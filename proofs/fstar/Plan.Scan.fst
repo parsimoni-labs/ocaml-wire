@@ -100,6 +100,19 @@ let rec ahead (l:list node) : nat =
   | Test _ :: r -> ahead r
   | _ -> 0
 
+(* Emitter.reads_nothing (f0bd4b6b): contents that load no byte, prefixes
+   of no field the walk binds and tests, so a region of them may leave its
+   bound to the check after it. The model's also needs no more bytes than a
+   buffer holds, so that their positions stay in the native int. *)
+let rec unread_nodes (b:list node) : bool =
+  match b with
+  | [] -> true
+  | Prefix [] _ :: r -> unread_nodes r
+  | Test _ :: r -> unread_nodes r
+  | _ -> false
+
+let unread (b:list node) : bool = unread_nodes b && ahead b <= max_string_length
+
 let rec wf (sc:scope) (l:list node) : Tot bool (decreases %[lsize l; 0; 0]) =
   match l with
   | [] -> true
@@ -550,8 +563,9 @@ let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
        | None -> exec o rd x w1 en (Join :: r))
   | Join :: r -> exec o rd x w en r
   | Region n e s am b :: r ->
-    (* Emitter.step's [Region]: the bound of a span, never left to the next
-       check, then the contents in a window of their own. *)
+    (* Emitter.step's [Region]: the bound of a span, left to the next check
+       only where the contents load no byte (f0bd4b6b), then the contents in
+       a window of their own. *)
     region_size b am r;
     (match span_size w en s with
      | None -> Fault
@@ -559,14 +573,16 @@ let rec exec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (l:list node)
        let ov = not (fits w.rg s) in
        let nonneg = not ov && nonnegative w s in
        let ends = end_range w (size_range w s) w.p in
-       match (if mem (s, w.p) w.bounded then Some false else outside o w lim en s ov nonneg k) with
+       let implied = o.drop && unread b && checks_next r && nonneg && Some? ends in
+       match (if implied || mem (s, w.p) w.bounded then Some false
+              else outside o w lim en s ov nonneg k) with
        | None -> Fault
        | Some true -> Reject
        | Some false ->
          match pos_plus en w.p k with
          | None -> Fault
          | Some y ->
-           let w1 = bind_span w false n e s ends in
+           let w1 = bind_span w implied n e s ends in
            let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held;
                      frg = region_range w1 n } in
            let x' = { wb = x.wb + posval en w.p; len = k; lim = n; frames = f :: x.frames } in

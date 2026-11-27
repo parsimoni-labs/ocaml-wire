@@ -51,6 +51,11 @@ val set : bytes -> int -> t -> unit
 
 (**/**)
 
+external unsafe_of_int : int -> t = "%identity"
+(** [unsafe_of_int n] is [n] with no check, for code that read [n] from a field
+    of this width: a primitive, so OCaml without flambda keeps no binding that
+    would tag the value. *)
+
 val unsafe_get : bytes -> int -> t
 (** [unsafe_get buf off] is the value at [off], read with no bounds check: the
     caller has checked that the byte is in [buf]. *)

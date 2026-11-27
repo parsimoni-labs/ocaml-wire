@@ -6,7 +6,7 @@
 (test
  (name validate_3d)
  (modules validate_3d)
- (libraries wire wire.3d demo space net alcotest unix fmt))
+ (libraries wire wire.3d demo space net alcotest fmt))
 
 (rule
  (targets

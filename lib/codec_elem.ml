@@ -86,6 +86,47 @@ let build_bf_accessor_reader base byte_off shift width =
         Bitfield.check_word buf (off + byte_off) 4;
         read buf off
 
+(* The reader {!Codec.get} makes for a bitfield: one closure, as
+   {!Codec_leaf.build_immediate_get}. *)
+let build_bf_get ~name base byte_off shift width =
+  let mask = (1 lsl width) - 1 in
+  let n = bf_base_byte_size base in
+  let stop = byte_off + n in
+  let eof buf base =
+    short_field name ~base ~at:(base + byte_off) ~width:n buf
+  in
+  match base with
+  | U8 ->
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then eof buf base
+          else Ok ((Unchecked.u8 buf (base + byte_off) lsr shift) land mask))
+  | U16 Little ->
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then eof buf base
+          else Ok ((Unchecked.u16le buf (base + byte_off) lsr shift) land mask))
+  | U16 Big ->
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then eof buf base
+          else Ok ((Unchecked.u16be buf (base + byte_off) lsr shift) land mask))
+  | U32 Little when Bitfield.int_holds_u32 ->
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then eof buf base
+          else
+            let w = Int32.to_int (Bytes.get_int32_le buf (base + byte_off)) in
+            Ok (((w land mask32) lsr shift) land mask))
+  | U32 Big when Bitfield.int_holds_u32 ->
+      Some
+        (fun buf base ->
+          if base < 0 || base > Bytes.length buf - stop then eof buf base
+          else
+            let w = Int32.to_int (Bytes.get_int32_be buf (base + byte_off)) in
+            Ok (((w land mask32) lsr shift) land mask))
+  | U32 _ -> None
+
 let build_bf_writer base byte_off shift width =
   let mask = (1 lsl width) - 1 in
   match base with

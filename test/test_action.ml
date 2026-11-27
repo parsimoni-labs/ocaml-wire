@@ -208,13 +208,13 @@ let test_var_local () =
 
 (* [if (x > threshold) { out = 1 }], out starting at 0: same codec, the
    branch is taken or not depending on the input byte. *)
-let check_if_gate name ~threshold ~input ~expected =
+let check_if_gate label ~threshold ~input ~expected =
   let out = Param.output "out" uint8 in
   let f_x = Field.v "x" uint8 in
   let f_y = Field.v "y" uint8 in
   let codec =
     let open Codec in
-    v name
+    v label
       (fun x y -> { x; y })
       [
         ( Field.v "x"
@@ -479,7 +479,7 @@ let test_encode_output_no_env () =
       ]
   in
   let seven = UInt8.v 7 in
-  let buf = Bytes.create (Codec.size_of_value codec seven) in
+  let buf = Bytes.create (Codec.encoded_size codec seven) in
   Codec.encode codec seven buf 0;
   Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0);
   let env = Codec.env codec in
@@ -511,7 +511,7 @@ let test_encode_embedded_output_no_env () =
       [ (Field.v "inner" (codec inner) $ fun i -> i) ]
   in
   let seven = UInt8.v 7 in
-  let buf = Bytes.create (Codec.size_of_value outer seven) in
+  let buf = Bytes.create (Codec.encoded_size outer seven) in
   Codec.encode outer seven buf 0;
   Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0)
 

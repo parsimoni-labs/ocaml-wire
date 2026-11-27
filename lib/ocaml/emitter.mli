@@ -8,8 +8,23 @@ open Planner
 
 (** How the code holds integers. [Tagged] is [int]. [Boxed] is [int64] for
     values and [int] for positions; the stock compiler keeps such an [int64]
-    unboxed in a register. [Unboxed] is OxCaml's [int64_u]. *)
-type num = Tagged | Boxed | Unboxed
+    unboxed in a register. [Unboxed] is OxCaml's [int64_u]. [Fstar] is [Tagged]
+    written as F*, [Fstar64] is [Boxed] and [Fstar_u] is [Unboxed], an [int64_u]
+    as its 64-bit pattern: the walk takes the same decisions and writes each
+    operation and load as a call into the module [P] of the F* primitives. *)
+type num = Num.t = Tagged | Boxed | Unboxed | Fstar | Fstar64 | Fstar_u
+
+val rep : num -> num
+(** [rep num] is how [num] holds values: {!constructor-Tagged} for
+    {!constructor-Fstar}, {!constructor-Boxed} for {!constructor-Fstar64},
+    {!constructor-Unboxed} for {!constructor-Fstar_u}, [num] otherwise. *)
+
+val is_fstar : num -> bool
+(** [is_fstar num] is [true] when [num] is written as F*. *)
+
+val int64_of : num -> string -> string
+(** [int64_of num from] is the function that makes the [int64] (or [int64_u])
+    [num] holds of a value of [from], ["int"] or ["int32"]. *)
 
 val pos_num : num -> num
 (** [pos_num num] is how code that holds integers as [num] holds positions,
@@ -41,20 +56,19 @@ val rt : string
 (** [rt] is the name of the runtime library the generated code links. *)
 
 val errors : string
-(** [errors] is the name of the runtime's module of parse errors. *)
+(** [errors] is the name of the runtime's module that raises parse errors. *)
+
+val error : string
+(** [error] is the name of the runtime's module of the parse error type. *)
 
 val bytes_src : src
 (** [bytes_src] reads [bytes]. *)
 
-val bigstring_src : src
-(** [bigstring_src] reads a bigarray of bytes. *)
+val fstar_src : src
+(** [fstar_src] reads a sequence of bytes, in F*. *)
 
 val local_bytes_src : src
 (** [local_bytes_src] reads [bytes] the caller may hold [local], on OxCaml. *)
-
-val local_bigstring_src : src
-(** [local_bigstring_src] reads a bigarray of bytes the caller may hold [local],
-    on OxCaml. *)
 
 (** Where a walk failed: a bound, a field's check, or a where clause. *)
 type failure = Bounds | Check of field * check | Where
@@ -65,6 +79,14 @@ type pos = Decision.pos = { var : string option; at : int }
 
 val values : num -> Decision.values
 (** [values num] is how a walk of [num] holds integer values. *)
+
+(** What an F* walk states of the code it writes: a binding and, when it reads
+    bytes, the value it holds in bytes of the buffer ([be buf o n], [P.bits] of
+    a word), or a fact a test relies on and the value it is about. Each value is
+    written out down to the positions it reads at. *)
+type note =
+  | Let of { var : string; value : string; holds : string option }
+  | Holds of { fact : string; about : string }
 
 type mode = {
   num : num;
@@ -78,26 +100,28 @@ type mode = {
   ahead : Sset.t;
   fail : failure -> string;
   decide : Decision.t -> unit;
+  note : note -> unit;
 }
 (** What a walk writes: how it holds integers, the buffer it reads, whether the
     target is OxCaml, whether it may test two bitfields of a word as one range
     of the word (a scan, which names no failed field), the variables it binds,
     the outputs it hands out, those of them that are slots, the variables its
-    caller binds before it by {!read_ahead}, what it writes on a failure, and
-    what it does with each decision it takes. *)
+    caller binds before it by {!read_ahead}, what it writes on a failure, what
+    it does with each decision it takes and, in an F* walk, with each {!note}.
+*)
 
 type cuts = {
   prefix : string;
   defs : Buffer.t;
   taken : (string, unit) Hashtbl.t;
-  poly : string;
   reserve : int;
+  trace : bool -> bool;
 }
 (** Where the functions a walk is cut into go: their names start with [prefix],
     each distinct from those in [taken]; [defs] holds their definitions, each
-    before the functions that call it; [poly] is written before the parameters
-    of each, as [(type a : bits64) ]; and each keeps room for [reserve]
-    characters, the call that ends the walk. *)
+    before the functions that call it; each keeps room for [reserve] characters,
+    the call that ends the walk; and [trace] is applied to each choice to cut or
+    not, which an F* walk takes from the OCaml one. *)
 
 type fn = { mutable chars : int; mutable decisions : int }
 (** The text written so far in the function being written, on all its paths: its
@@ -112,6 +136,7 @@ type w = {
   views : (string * int T.expr) list;
   words : (string * int) list;
   raws : (string * (string * int)) list;
+  defs : (string * string) list ref;
   deferred : (string * (string * bool)) list ref;
   bounded : (string * string * string * string) list;
   sums : (string * sum) list;
@@ -172,14 +197,6 @@ val bit_endian : T.bitfield_base -> T.endian
 val load : mode -> o:string -> k:int -> bytes:int -> endian:T.endian -> string
 (** [load m ~o ~k ~bytes ~endian] is the text of an unchecked load of [bytes]
     bytes at [k] from [o]. *)
-
-val covers : int -> field -> bool
-(** [covers a f] is [true] when the 8-byte word at [a] holds the field [f]. *)
-
-val words : num -> size:int -> field list -> int list
-(** [words num ~size fields] is the offsets of the 8-byte words worth loading
-    once to read [fields] from a prefix of [size] bytes, with integers held as
-    [num]. *)
 
 val unsigned :
   mode ->
@@ -274,3 +291,14 @@ val live : ?cold:bool -> plan -> outputs:Sset.elt list -> Sset.t
 (** [live ?cold plan ~outputs] is the variables a walk binds: those it reads,
     those it hands out and, for a cold walk, each checked field, whose value its
     error carries. *)
+
+val expr_text : mode -> ranges:(int * int) Smap.t -> 'a T.expr -> string
+(** [expr_text m ~ranges e] is the text of [e] over the plan's variables, each
+    an OCaml variable of the same name, with integers held as [m] holds them and
+    an expression that [ranges] lets leave the native int computed as a walk
+    computes it. *)
+
+val wide_text : mode -> ranges:(int * int) Smap.t -> int T.expr -> string
+(** [wide_text m ~ranges e] is the text of [e] as an [int64] holding its value
+    as an unsigned integer, as a walk computes an expression that can leave the
+    native int. *)

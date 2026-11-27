@@ -1,7 +1,7 @@
 (* [X4] against one record at a time: on random buffers and offsets, a read of
-   four records holds in each lane what [Get.<field>] reads of that record, or
+   four records holds in each lane what the accessors read of that record, or
    fails exactly when 16 bytes do not fit; a write of four records leaves the
-   same bytes, and raises the same error, as four [write_int_at]. *)
+   same bytes, and raises the same error, as four [write]. *)
 
 module G = G_lanes
 module V = Wire_runtime.Vec
@@ -10,16 +10,18 @@ module Buf = Wire_runtime.Buf
 let rand = Random.State.make [| 42 |]
 let widths = [| 4; 4; 8; 3; 5; 6; 2 |]
 
-let per_record buf off =
-  let open Wire_runtime in
+(* The fields of the record at [off] in [b], through its view: a record of
+   [G] has no check, so one that fits passes. *)
+let per_record b off =
+  let v = G.get (G.check b (Buf.length b) off) in
   [
-    (G.Get.a buf off :> int);
-    (G.Get.b buf off :> int);
-    UInt8.to_int (G.Get.c buf off);
-    (G.Get.d buf off :> int);
-    (G.Get.e buf off :> int);
-    (G.Get.f buf off :> int);
-    (G.Get.g buf off :> int);
+    G.a b v;
+    G.b b v;
+    Wire_runtime.UInt8.to_int (G.c b v);
+    G.d b v;
+    G.e b v;
+    G.f b v;
+    G.g b v;
   ]
 
 let lanes w k =
@@ -46,7 +48,7 @@ let test_read () =
     in
     let want =
       if off >= 0 && off + 16 <= len then
-        Some (List.init 4 (fun k -> per_record buf (off + (4 * k))))
+        Some (List.init 4 (fun k -> per_record b (off + (4 * k))))
       else None
     in
     Alcotest.(check (option (list (list int))))
@@ -57,9 +59,10 @@ let test_read () =
 let outcome f =
   match f () with
   | () -> "ok"
-  | exception Wire_runtime.Errors.Parse_error e ->
-      Fmt.str "parse error %a" Wire_runtime.Errors.pp_parse_error e
   | exception Invalid_argument m -> "invalid " ^ m
+  | exception exn when Wire_runtime.Errors.is_error exn ->
+      Fmt.str "parse error %a" Wire_runtime.Error.pp
+        (Wire_runtime.Errors.error_of exn)
 
 let test_write () =
   for _ = 1 to 2000 do
@@ -78,7 +81,6 @@ let test_write () =
     in
     let a = Bytes.make len '\000' and s = Bytes.make len '\000' in
     let (Buf.Any ba) = Buf.v a in
-    let (Buf.Any bs) = Buf.v s in
     let got =
       outcome (fun () ->
           G.X4.write_int_at ba (Buf.length ba) off (vec 0) (vec 1) (vec 2)
@@ -88,8 +90,10 @@ let test_write () =
       outcome (fun () ->
           for k = 0 to 3 do
             let f i = fields.(i).(k) in
-            G.write_int_at bs (Buf.length bs) (off + (4 * k)) (f 0) (f 1) (f 2)
-              (f 3) (f 4) (f 5) (f 6)
+            let c = Wire_runtime.UInt8.v (f 2) in
+            G.write s
+              (off + (4 * k))
+              ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
           done)
     in
     let name = Fmt.str "len %d off %d" len off in
@@ -98,31 +102,34 @@ let test_write () =
   done
 
 (* A part from any lanes is four valid records: [store] of the fields' low
-   bits writes what [write_int_at] writes of the masked values, and raises
+   bits writes what [write] writes of the masked values, and raises
    the same error where the four do not fit. [<field>_of] answers the same
-   part when the lanes fit, and raises what [write_int_at] raises otherwise. *)
+   part when the lanes fit, and raises what [write] raises otherwise. *)
 let test_parts () =
-  let parts =
-    G.X4.[| a_bits; b_bits; c_bits; d_bits; e_bits; f_bits; g_bits |]
+  let parts = G.X4.[| a_bits; b_bits; c_bits; d_bits; e_bits; f_bits; g_bits |]
   and checked = G.X4.[| a_of; b_of; c_of; d_of; e_of; f_of; g_of |] in
   for _ = 1 to 2000 do
     let len = Random.State.int rand 40 in
     let off = Random.State.int rand (len + 5) - 2 in
-    let lanes = Array.init 7 (fun _ -> Array.init 4 (fun _ -> Random.State.int rand 1024)) in
+    let lanes =
+      Array.init 7 (fun _ -> Array.init 4 (fun _ -> Random.State.int rand 1024))
+    in
     let vec i = V.v4 lanes.(i).(0) lanes.(i).(1) lanes.(i).(2) lanes.(i).(3) in
     let part =
-      Array.fold_left G.X4.( ++ ) G.X4.zero (Array.mapi (fun i f -> f (vec i)) parts)
+      Array.fold_left G.X4.( ++ ) G.X4.zero
+        (Array.mapi (fun i f -> f (vec i)) parts)
     in
     let a = Bytes.make len '\000' and s = Bytes.make len '\000' in
     let (Buf.Any ba) = Buf.v a in
-    let (Buf.Any bs) = Buf.v s in
     let got = outcome (fun () -> G.X4.store ba (Buf.length ba) off part) in
     let want =
       outcome (fun () ->
           for k = 0 to 3 do
             let f i = lanes.(i).(k) land ((1 lsl widths.(i)) - 1) in
-            G.write_int_at bs (Buf.length bs) (off + (4 * k)) (f 0) (f 1) (f 2)
-              (f 3) (f 4) (f 5) (f 6)
+            let c = Wire_runtime.UInt8.v (f 2) in
+            G.write s
+              (off + (4 * k))
+              ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
           done)
     in
     let name = Fmt.str "len %d off %d" len off in
@@ -136,7 +143,9 @@ let test_parts () =
           if fits then "ok"
           else
             outcome (fun () ->
-                let bad = Array.find_opt (fun x -> x lsr widths.(i) <> 0) lanes.(i) in
+                let bad =
+                  Array.find_opt (fun x -> x lsr widths.(i) <> 0) lanes.(i)
+                in
                 Wire_runtime.Errors.unsigned_too_wide ~bits:widths.(i)
                   (Option.get bad))
         in
@@ -154,8 +163,11 @@ let test_fill () =
     let parts =
       Array.init count (fun _ ->
           G.X4.c_bits
-            (V.v4 (Random.State.int rand 256) (Random.State.int rand 256)
-               (Random.State.int rand 256) (Random.State.int rand 256)))
+            (V.v4
+               (Random.State.int rand 256)
+               (Random.State.int rand 256)
+               (Random.State.int rand 256)
+               (Random.State.int rand 256)))
     in
     let a = Bytes.make len '\000' and s = Bytes.make len '\000' in
     let (Buf.Any ba) = Buf.v a in
@@ -179,7 +191,7 @@ let suite =
   ( "simd",
     [
       Alcotest.test_case "X4 reads what get reads" `Quick test_read;
-      Alcotest.test_case "X4 writes what write_int_at writes" `Quick test_write;
+      Alcotest.test_case "X4 writes what write writes" `Quick test_write;
       Alcotest.test_case "X4 parts are four valid records" `Quick test_parts;
       Alcotest.test_case "X4 fill checks the span once" `Quick test_fill;
     ] )

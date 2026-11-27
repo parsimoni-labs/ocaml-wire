@@ -14,7 +14,10 @@ let first_fault faults runtime input_end buf off =
   if off >= 0 && off <= Input_end.to_int input_end then
     match faults runtime input_end buf off with
     | () -> ()
-    | exception Types.Parse_error { kind = Unexpected_eof _; _ } -> ()
+    | exception exn when Types.is_parse_error exn -> (
+        match Types.parse_error_of exn with
+        | { kind = Unexpected_eof _; _ } -> ()
+        | _ -> raise exn)
 
 (* The record of [min_size] bytes at [off] does not fit before [input_end]. *)
 let[@inline never] unfit ~faults min_size runtime input_end buf off =

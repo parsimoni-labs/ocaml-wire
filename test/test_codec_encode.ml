@@ -150,9 +150,9 @@ let test_enum_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x02" in
   (match Codec.decode carrier_enum_codec buf 0 with
   | Ok v -> Alcotest.(check int) "decode listed code" 2 (UInt32.to_int v)
-  | Error e -> Alcotest.failf "%a" pp_parse_error e);
-  Codec.validate_exn carrier_enum_codec buf 0;
-  let get = Staged.unstage (Codec.get carrier_enum_codec carrier_enum_field) in
+  | Error e -> Alcotest.failf "%a" Error.pp e);
+  decode_ok (Codec.validate carrier_enum_codec buf 0);
+  let get = reader carrier_enum_codec carrier_enum_field in
   Alcotest.(check int) "get listed code" 2 (UInt32.to_int (get buf 0));
   expect_decode_rejects "unlisted code" carrier_enum_codec "\x00\x00\x00\x63";
   expect_encode_rejects "unlisted code" ~names:[ "Code32"; "got 99" ] (fun () ->
@@ -160,7 +160,7 @@ let test_enum_over_carrier_base () =
   Codec.encode carrier_enum_codec (UInt32.of_int 1) buf 0;
   Alcotest.(check string)
     "encode listed code" "\x00\x00\x00\x01" (Bytes.to_string buf);
-  let set = Staged.unstage (Codec.set carrier_enum_codec carrier_enum_field) in
+  let set = Codec.set carrier_enum_codec carrier_enum_field in
   set buf 0 (UInt32.of_int 2);
   Alcotest.(check string) "set" "\x00\x00\x00\x02" (Bytes.to_string buf)
 
@@ -179,11 +179,9 @@ let test_variants_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x01" in
   (match Codec.decode carrier_variants_codec buf 0 with
   | Ok v -> Alcotest.(check bool) "decode variant" true (v = `Zero)
-  | Error e -> Alcotest.failf "%a" pp_parse_error e);
-  Codec.validate_exn carrier_variants_codec buf 0;
-  let get =
-    Staged.unstage (Codec.get carrier_variants_codec carrier_variants_field)
-  in
+  | Error e -> Alcotest.failf "%a" Error.pp e);
+  decode_ok (Codec.validate carrier_variants_codec buf 0);
+  let get = reader carrier_variants_codec carrier_variants_field in
   Alcotest.(check bool) "get variant" true (get buf 0 = `Zero);
   Codec.encode carrier_variants_codec `Pos buf 0;
   Alcotest.(check string) "encode" "\x00\x00\x00\x02" (Bytes.to_string buf);
@@ -203,11 +201,9 @@ let test_lookup_and_bit_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x02" in
   (match Codec.decode carrier_lookup_codec buf 0 with
   | Ok v -> Alcotest.(check string) "lookup decode" "c" v
-  | Error e -> Alcotest.failf "%a" pp_parse_error e);
-  Codec.validate_exn carrier_lookup_codec buf 0;
-  let get =
-    Staged.unstage (Codec.get carrier_lookup_codec carrier_lookup_field)
-  in
+  | Error e -> Alcotest.failf "%a" Error.pp e);
+  decode_ok (Codec.validate carrier_lookup_codec buf 0);
+  let get = reader carrier_lookup_codec carrier_lookup_field in
   Alcotest.(check string) "lookup get" "c" (get buf 0);
   Codec.encode carrier_lookup_codec "b" buf 0;
   Alcotest.(check string)
@@ -216,7 +212,7 @@ let test_lookup_and_bit_over_carrier_base () =
     "\x00\x00\x00\x07";
   (match Codec.decode carrier_bit_codec buf 0 with
   | Ok v -> Alcotest.(check bool) "bit decode" true v
-  | Error e -> Alcotest.failf "%a" pp_parse_error e);
+  | Error e -> Alcotest.failf "%a" Error.pp e);
   Codec.encode carrier_bit_codec false buf 0;
   Alcotest.(check string) "bit encode" "\x00\x00\x00\x00" (Bytes.to_string buf)
 
@@ -286,22 +282,22 @@ let decode_accepts codec s =
   Result.is_ok (Codec.decode codec (Bytes.of_string s) 0)
 
 let validate_result codec s =
-  match Codec.validate_exn codec (Bytes.of_string s) 0 with
-  | () -> Ok ()
-  | exception Parse_error e -> Error e
+  match Codec.validate codec (Bytes.of_string s) 0 with
+  | Ok () -> Ok ()
+  | Error e -> Error e
 
 let expect_per_byte label ~at = function
-  | Error { kind = Constraint_failed { which = Per_byte; _ }; at = off; _ } ->
+  | Error
+      { Error.kind = Constraint_failed { which = Per_byte; _ }; at = off; _ } ->
       Alcotest.(check int) (label ^ ": offset") at off
   | Error e ->
-      Alcotest.failf "%s: expected a per-byte refusal, got %a" label
-        pp_parse_error e
+      Alcotest.failf "%s: expected a per-byte refusal, got %a" label Error.pp e
   | Ok () -> Alcotest.failf "%s: accepted a byte violating the refinement" label
 
 (* The refinement belongs to the span itself, so the compiled reader has to
    apply it: a [Codec.decode] more permissive than [Wire.of_string] is also more
    permissive than the EverParse validator built from the same schema, and
-   [Codec.validate_exn] is the gate a caller runs before reading untrusted bytes
+   [Codec.validate] is the gate a caller runs before reading untrusted bytes
    zero-copy. *)
 let test_decode_rejects_refined_byte () =
   expect_per_byte "decode" ~at:1
@@ -315,35 +311,30 @@ let test_decode_rejects_refined_byte () =
     (validate_result per_byte_var_codec "\002a\xff");
   (* [get] is documented as unchecked for other fields' constraints, but the
      span's own refinement travels with the reader, as a closed enum's does. *)
-  let get = Staged.unstage (Codec.get per_byte_codec per_byte_cf) in
+  let get = Codec.get per_byte_codec per_byte_cf in
   (match get (Bytes.of_string "a\xffb") 0 with
-  | s -> Alcotest.failf "get returned %S past the refinement" s
-  | exception
-      Parse_error { kind = Constraint_failed { which = Per_byte; _ }; _ } ->
-      ());
+  | Ok s -> Alcotest.failf "get returned %S past the refinement" s
+  | Error { Error.kind = Constraint_failed { which = Per_byte; _ }; _ } -> ()
+  | Error e -> Alcotest.failf "get: wrong error %a" Error.pp e);
   (* The direct parser has always rejected this; it must keep doing so. *)
   match of_string per_byte_typ "a\xffb" with
-  | Error { kind = Constraint_failed { which = Per_byte; _ }; at; _ } ->
+  | Error { Error.kind = Constraint_failed { which = Per_byte; _ }; at; _ } ->
       Alcotest.(check int) "of_string offset" 1 at
-  | Error e -> Alcotest.failf "of_string: wrong error %a" pp_parse_error e
+  | Error e -> Alcotest.failf "of_string: wrong error %a" Error.pp e
   | Ok _ -> Alcotest.fail "of_string accepted a byte violating the refinement"
 
 let test_decode_accepts_conforming_refined_byte () =
   Alcotest.(check (result string string))
     "of_string" (Ok "abc")
-    (Result.map_error
-       (Fmt.str "%a" pp_parse_error)
-       (of_string per_byte_typ "abc"));
+    (Result.map_error (Fmt.str "%a" Error.pp) (of_string per_byte_typ "abc"));
   Alcotest.(check bool) "decode" true (decode_accepts per_byte_codec "abc");
   Alcotest.(check (result unit string))
     "validate" (Ok ())
-    (Result.map_error
-       (Fmt.str "%a" pp_parse_error)
+    (Result.map_error (Fmt.str "%a" Error.pp)
        (validate_result per_byte_codec "abc"));
   Alcotest.(check string)
     "get" "abc"
-    ((Staged.unstage (Codec.get per_byte_codec per_byte_cf))
-       (Bytes.of_string "abc") 0)
+    ((reader per_byte_codec per_byte_cf) (Bytes.of_string "abc") 0)
 
 (* The fuzz harness holds [decode] and [validate] to the same verdict; pin that
    here against the verdict the refinement calls for, so a later change can
@@ -471,44 +462,38 @@ let check_set_exact label ~before ~after ~oversized ~exact set =
 let test_set_exact_var_byte_array () =
   let codec, cf = set_var_codec (fun size -> byte_array ~size) in
   check_set_exact "byte_array at a static offset" ~before:set_var_before
-    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 let test_set_exact_var_byte_array_where () =
   let codec, cf =
     set_var_codec (fun size -> byte_array_where ~size ~per_byte:printable_byte)
   in
   check_set_exact "byte_array_where at a static offset" ~before:set_var_before
-    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 let test_set_exact_var_byte_slice () =
   let codec, cf = set_var_codec (fun size -> byte_slice ~size) in
   check_set_exact "byte_slice at a static offset" ~before:set_var_before
     ~after:set_var_after ~oversized:(slice_of_string "ABCD")
-    ~exact:(slice_of_string "XY")
-    (Staged.unstage (Codec.set codec cf))
+    ~exact:(slice_of_string "XY") (Codec.set codec cf)
 
 let test_set_exact_dyn_byte_array () =
   let codec, cf = set_dyn_codec (fun size -> byte_array ~size) in
   check_set_exact "byte_array at a run-time offset" ~before:set_dyn_before
-    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 let test_set_exact_dyn_byte_array_where () =
   let codec, cf =
     set_dyn_codec (fun size -> byte_array_where ~size ~per_byte:printable_byte)
   in
   check_set_exact "byte_array_where at a run-time offset" ~before:set_dyn_before
-    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 let test_set_exact_dyn_byte_slice () =
   let codec, cf = set_dyn_codec (fun size -> byte_slice ~size) in
   check_set_exact "byte_slice at a run-time offset" ~before:set_dyn_before
     ~after:set_dyn_after ~oversized:(slice_of_string "ABCD")
-    ~exact:(slice_of_string "XY")
-    (Staged.unstage (Codec.set codec cf))
+    ~exact:(slice_of_string "XY") (Codec.set codec cf)
 
 (* A byte field with a literal size takes the fixed-offset writer, which shares
    the encoder's exact-size blit. *)
@@ -521,8 +506,7 @@ let test_set_exact_fixed_byte_array () =
         [ cf; Field.v "trailer" uint8 $ snd ])
   in
   check_set_exact "byte_array at a literal size" ~before:"ab\xff\xee\xee"
-    ~after:"XY\xff\xee\xee" ~oversized:"ABCD" ~exact:"XY"
-    (Staged.unstage (Codec.set codec cf))
+    ~after:"XY\xff\xee\xee" ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
 
 (* A width-refined leaf -- [bits ~width], [uint size] -- is exact for a
    harsher reason than a fixed-size byte field. A masked value is still a legal
@@ -596,7 +580,7 @@ let test_set_exact_uint_width () =
       List.iter
         (fun (endian, ename) ->
           let codec, cf = uint_width_codec ~endian n in
-          let set = Staged.unstage (Codec.set codec cf) in
+          let set = Codec.set codec cf in
           let buf = Bytes.make 8 '\x00' in
           let label = Fmt.str "set uint(%d,%s) <- 0x%X" n ename over in
           expect_exact_width_error label
@@ -629,7 +613,7 @@ let test_uint_width_decodes_exactly () =
           let label = Fmt.str "uint(%d,%s)" size ename in
           let wire = String.make size '\xff' in
           let widest = Int64.sub (Int64.shift_left 1L (8 * size)) 1L in
-          let v = Codec.decode_exn codec (Bytes.of_string wire) 0 in
+          let v = decode_ok (Codec.decode codec (Bytes.of_string wire) 0) in
           Alcotest.(check int64)
             (label ^ ": full-width frame decodes to the number it spells")
             widest (Optint.Int63.to_int64 v);
@@ -687,7 +671,7 @@ let test_encode_exact_bits_width () =
           Codec.encode codec over buf 0;
           Bytes.to_string buf);
       let widest = over - 1 in
-      let buf = Bytes.make (Codec.wire_size codec) '\x00' in
+      let buf = Bytes.make (Codec.min_size codec) '\x00' in
       Codec.encode codec widest buf 0;
       Alcotest.(check string)
         (label ^ ": widest legal value agrees across entry points")
@@ -700,9 +684,9 @@ let test_encode_exact_bits_width () =
 let test_set_exact_bits_width () =
   iter_bits_widths (fun ~base ~bname ~width ~bit_order ~oname ->
       let codec, cf = bits_width_codec ~bit_order ~width base in
-      let size = Codec.wire_size codec in
-      let set = Staged.unstage (Codec.set codec cf) in
-      let get = Staged.unstage (Codec.get codec cf) in
+      let size = Codec.min_size codec in
+      let set = Codec.set codec cf in
+      let get = reader codec cf in
       let over = 1 lsl width in
       let buf = Bytes.make size '\x00' in
       let label = Fmt.str "set bits(%d,%s,%s) <- 0x%X" width bname oname over in
@@ -724,7 +708,7 @@ let test_set_exact_bits_width () =
 let test_set_bits_no_silent_truncation () =
   let cf = Codec.(Field.v "v" (bits ~width:3 U8) $ Fun.id) in
   let codec = Codec.v "SetBits3" Fun.id Codec.[ cf ] in
-  let set = Staged.unstage (Codec.set codec cf) in
+  let set = Codec.set codec cf in
   let buf = Bytes.make 1 '\x00' in
   (match set buf 0 0xFF with
   | () ->
@@ -738,7 +722,7 @@ let test_map_inherits_exact_width () =
   let typ = map ~decode:Fun.id ~encode:Fun.id (bits ~width:3 U8) in
   let cf = Codec.(Field.v "v" typ $ Fun.id) in
   let codec = Codec.v "MapBits3" Fun.id Codec.[ cf ] in
-  let set = Staged.unstage (Codec.set codec cf) in
+  let set = Codec.set codec cf in
   expect_exact_width_error "map(bits(3,U8)) to_string"
     ~sub:"does not fit an unsigned 3-bit field" (fun () ->
       Wire.to_string typ 0xFF);
@@ -884,7 +868,7 @@ let test_encode_int64_carrier_has_no_range () =
         Alcotest.(check int64)
           (Fmt.str "%s <- %Ld round-trips" name v)
           v
-          (to_i64 (Wire.of_string_exn typ s)))
+          (to_i64 (decode_ok (Wire.of_string typ s))))
       Int64.[ min_int; -1L; zero; max_int ]
   in
   (* The two signednesses carry their values in different types now, so the
@@ -938,8 +922,8 @@ let test_constant_size_expression_folds () =
   Codec.encode folded "abcd" buf 0;
   Alcotest.(check string) "constant exact" "abcd" (Bytes.to_string buf);
   (* 2. wire_size *)
-  Alcotest.(check int) "literal wire_size" 4 (Codec.wire_size lit);
-  Alcotest.(check int) "constant wire_size" 4 (Codec.wire_size folded);
+  Alcotest.(check int) "literal wire_size" 4 (Codec.min_size lit);
+  Alcotest.(check int) "constant wire_size" 4 (Codec.min_size folded);
   (* 3. the uint_var 1-7 range guard after constant folding *)
   let uint_var_rejects label size =
     match uint_var size with
@@ -1073,6 +1057,79 @@ let test_fixed_encode_allocates_nothing () =
       if words >= float n then
         Alcotest.failf "%d encodes allocated %.0f words" n words
 
+(* A region sized by an earlier field of the record: encoding the decoded value
+   writes back the bytes, and [encoded_size] is what decode consumed. The size
+   comes from the record, not from a parameter, so neither needs an [env]. *)
+let region_roundtrip label codec input =
+  let v = decode_ok (Codec.decode codec (Bytes.of_string input) 0) in
+  Alcotest.(check int)
+    (label ^ ": size_of_value")
+    (String.length input)
+    (Codec.encoded_size codec v);
+  let out = Bytes.make (String.length input) '\xff' in
+  Codec.encode codec v out 0;
+  Alcotest.(check string) (label ^ ": encode") input (Bytes.to_string out)
+
+let region_pair =
+  Codec.v "RegionPair"
+    (fun a b -> (a, b))
+    Codec.[ Field.v "a" uint8 $ fst; Field.v "b" uint8 $ snd ]
+
+let f_rn = Field.v "n" uint8
+
+let region_codec name field =
+  Codec.v name
+    (fun n r t -> (n, r, t))
+    Codec.
+      [
+        (f_rn $ fun (n, _, _) -> n);
+        (field $ fun (_, r, _) -> r);
+        (Field.v "t" uint8 $ fun (_, _, t) -> t);
+      ]
+
+let region name typ = region_codec name (Field.v "r" typ)
+
+let test_field_sized_region () =
+  let pair = codec region_pair in
+  region_roundtrip "nested"
+    (region "Nested" (nested ~size:(Field.ref f_rn) pair))
+    "\002\x0a\x0b\x0c";
+  region_roundtrip "nested over an expression"
+    (region "NestedExpr" (nested ~size:Expr.(Field.ref f_rn - int 1) pair))
+    "\003\x0a\x0b\x0c";
+  region_roundtrip "nested scalar"
+    (region "NestedScalar" (nested ~size:(Field.ref f_rn) uint16be))
+    "\002\x12\x34\x0c";
+  region_roundtrip "nested_at_most"
+    (region "AtMost" (nested_at_most ~size:(Field.ref f_rn) pair))
+    "\004\x0a\x0b\x00\x00\x0c";
+  let gated =
+    region_codec "Gated"
+      (Field.optional "o"
+         ~present:Expr.(Field.ref f_rn <> int 0)
+         (nested_at_most ~size:(Field.ref f_rn) pair))
+  in
+  region_roundtrip "optional, present" gated "\004\x0a\x0b\x00\x00\x0c";
+  region_roundtrip "optional, absent" gated "\000\x0c";
+  let outer =
+    Codec.v "Outer"
+      (fun x i -> (x, i))
+      Codec.
+        [
+          Field.v "x" uint8 $ fst;
+          Field.v "i"
+            (codec (region "Inner" (nested ~size:(Field.ref f_rn) pair)))
+          $ snd;
+        ]
+  in
+  region_roundtrip "inside a sub-codec" outer "\x07\002\x0a\x0b\x0c";
+  region_roundtrip "zeroterm_at_most"
+    (region "Zeroterm" (zeroterm_at_most ~size:(Field.ref f_rn)))
+    "\003ab\000\x0c";
+  region_roundtrip "uint"
+    (region "UintVar" (uint_var ~endian:Big (Field.ref f_rn)))
+    "\003\x01\x02\x03\x0c"
+
 let suite =
   ( "codec_encode",
     [
@@ -1150,4 +1207,6 @@ let suite =
       Alcotest.test_case "uint: 1-byte like uint8" `Quick test_uint_1byte;
       Alcotest.test_case "uint: 5-byte LE roundtrip" `Quick test_uint_5byte_le;
       Alcotest.test_case "uint_var: dynamic size" `Quick test_uint_var_dynamic;
+      Alcotest.test_case "field-sized region: roundtrip" `Quick
+        test_field_sized_region;
     ] )

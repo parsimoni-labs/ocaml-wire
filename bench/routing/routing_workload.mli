@@ -1,7 +1,7 @@
 (** APID demux: a SpaceWire CCSDS Packet Transfer Protocol router counting the
-    packets of each route, each header read by Wire's {!Wire.Codec.read_word}
-    and its fields taken with {!Wire.Codec.of_word}. The OCaml rows of
-    [bench/routing] and [bench/apps] run it. *)
+    packets of each route, each header checked by Wire's
+    {!Wire.Codec.Word.check} and its fields taken with {!Wire.Codec.Word.read}.
+    The OCaml rows of [bench/routing] and [bench/apps] run it. *)
 
 val generate_stream : int -> bytes * int * int
 (** [generate_stream n] is [(buf, total, payload)]: space packets of variable
@@ -31,7 +31,7 @@ val reset : state -> unit
 val step : buf:bytes -> total_bytes:int -> state -> unit -> unit
 (** [step ~buf ~total_bytes s ()] routes the packet at the offset of [s] in the
     first [total_bytes] bytes of [buf], wrapping to 0 when its header does not
-    fit, and moves to the next packet. *)
+    fit or [buf] cuts it, and moves to the next packet. *)
 
 val run_packets :
   buf:bytes -> total_bytes:int -> state -> int -> int * int * int * int
@@ -41,8 +41,8 @@ val run_packets :
 val stamp : bytes -> int -> apid:int -> seq:int -> dlen:Wire.UInt16.t -> unit
 (** [stamp out o ~apid ~seq ~dlen] writes at [o] in [out] the header of a
     telemetry packet with a secondary header, unsegmented, with APID [apid],
-    sequence count [seq] and data length [dlen], by Wire's staged
-    {!Wire.Codec.writer} of {!Space.packet_default} and those three fields. *)
+    sequence count [seq] and data length [dlen], by Wire's {!Wire.Codec.writer}
+    of {!Space.packet_default} and those three fields. *)
 
 val restamp : buf:bytes -> total_bytes:int -> out:bytes -> int -> unit
 (** [restamp ~buf ~total_bytes ~out n] reads the headers of [n] packets as

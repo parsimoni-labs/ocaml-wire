@@ -236,8 +236,9 @@ let build_layout ~min_size items =
       let len = Input_end.to_int input_end in
       if off < 0 || off > len - min_size then -1
       else
-        try layout_walk items.walk input_end buf off len off
-        with Types.Parse_error _ | Exit -> -1)
+        try layout_walk items.walk input_end buf off len off with
+        | Exit -> -1
+        | exn when Types.is_parse_error exn -> -1)
     items
 
 (* The extent walk: where the record ends, as the general extent computes it,
@@ -296,7 +297,9 @@ let layout_extent ~min_size items compute runtime input_end buf off =
   else
     match extent items input_end buf off with
     | e -> e
-    | exception (Types.Parse_error _ | Exit | Invalid_argument _) ->
+    | exception exn
+      when Types.is_parse_error exn
+           || match exn with Exit | Invalid_argument _ -> true | _ -> false ->
         (* The walk has been tried: the general extent does not try the walks
            of the records under it again. *)
         compute extent_fallback_runtime input_end buf off

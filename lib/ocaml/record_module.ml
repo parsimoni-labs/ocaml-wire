@@ -34,6 +34,7 @@ let hot ?(ox = false) ?(raw32 = false) ~src ~live ~fail () =
     ahead = Sset.empty;
     fail = (fun _ -> fail);
     decide = ignore;
+    note = ignore;
   }
 
 let cold ~src ~live =
@@ -53,6 +54,7 @@ let cold ~src ~live =
       | Check (f, c) -> raise_check f c
       | Where -> errors ^ ".where_clause ~at:off");
     decide = ignore;
+    note = ignore;
   }
 
 (* A fixed record's walk at [off], whose frame is checked before it. *)
@@ -61,7 +63,8 @@ let pp_fixed ppf ~m ~(plan : plan) ~size k =
     plan.nodes (fun _ _ -> k ())
 
 let pp_frame ~src ppf on_short =
-  Fmt.pf ppf "off < 0 || off > %s buf - size then %s buf off" src.len on_short
+  Fmt.pf ppf "off < 0 || off > %s buf - min_size then %s buf off" src.len
+    on_short
 
 let all_fields (plan : plan) = fields_of plan.nodes
 
@@ -78,14 +81,6 @@ let int_view ~src f =
   | _ -> f.id
 
 let map_var f = "map_" ^ f.id
-
-(* A bitfield or a byte array with no map holds its value in a carrier of its
-   own, [Value.<field>], whose constructor checks the width or the length once:
-   a write then needs no check of its own. *)
-let has_carrier f =
-  match (f.map, f.store) with
-  | None, (Bits _ | Bytes _) -> true
-  | Some _, _ | None, Int _ -> false
 
 (* The value handed to the constructor: through the field's map when it has
    one, the failure placed at the field. *)
@@ -112,14 +107,7 @@ let typed_value ~src f =
           Fmt.str "(%s.%s.of_int32 %s_raw)" rt
             (if signed then "SInt32" else "UInt32")
             f.id
-      | Bits _ | Bytes _ -> Fmt.str "(cast Value.%s_eq %s)" f.label f.id)
-
-(* The value handed to a constructor the caller wrote, which cannot name the
-   module's carriers: a bitfield as its [int], a byte array as its [string]. *)
-let plain_typed_value ~src f =
-  match (f.map, f.store) with
-  | None, (Bits _ | Bytes _) -> f.id
-  | _ -> typed_value ~src f
+      | Bits _ | Bytes _ -> f.id)
 
 (* The attributes the OxCaml target adds: an allocation check on a hot path,
    and on a cold one the promise that it only raises. *)
@@ -129,13 +117,16 @@ let cold_attr = function
   | `OxCaml -> "[@inline never][@zero_alloc assume error]"
   | `OCaml -> "[@inline never]"
 
-(* A decoder: the frame, the walk binding every field, then [call] on their
-   [value]s, by default their typed values. *)
-let pp_decode ?(src = bytes_src) ?(ox = false) ?(value = typed_value) ppf ~plan
-    ~size ~head ~call =
+(* [decode]: the frame, the walk binding every field, then the record of
+   their typed values; the record's error where a check fails. *)
+let pp_decode ~src ppf ~plan ~size =
   let fields = all_fields plan in
-  let value = value ~src in
-  Fmt.pf ppf "%s =@\n  if %a@\n  else@\n" head (pp_frame ~src) "fail";
+  let fail = "error buf off" in
+  Fmt.pf ppf
+    "let decode %s off =@\n\
+    \  if off < 0 || off > %s buf - min_size then %s@\n\
+    \  else@\n"
+    src.buf src.len fail;
   (* A 32-bit field is handed out as its [int32], bound whether live or not;
      its [int] is live only where a check reads it. *)
   let outputs =
@@ -144,21 +135,24 @@ let pp_decode ?(src = bytes_src) ?(ox = false) ?(value = typed_value) ppf ~plan
         match f.store with Int { width = 32; _ } -> None | _ -> Some f.id)
       fields
   in
-  let m =
-    hot ~ox ~raw32:true ~src ~live:(live plan ~outputs) ~fail:"fail buf off" ()
-  in
+  let m = hot ~raw32:true ~src ~live:(live plan ~outputs) ~fail () in
   pp_fixed ppf ~m ~plan ~size (fun () ->
-      Fmt.pf ppf "%s@\n" (call (List.map value fields)));
+      Fmt.pf ppf "Ok { %a }@\n"
+        Fmt.(list ~sep:(any "; ") string)
+        (List.map
+           (fun f -> Fmt.str "%s = %s" f.label (typed_value ~src f))
+           fields));
   Fmt.pf ppf "@\n"
 
 (* [is_valid] answers with a boolean, loading only the fields a test reads, so
    a caller that drops a bad record on the floor pays for no exception handler;
-   [validate] raises what the codec raises, found off the hot path by [fail]. *)
+   [validate] answers what the codec answers, found off the hot path by
+   [error]. *)
 let pp_validate ~src ppf ~target ~plan ~size =
   let attr = "[@inline]" ^ zero_alloc target in
   Fmt.pf ppf
     "let%s is_valid %s off =@\n\
-    \  if off < 0 || off > %s buf - size then false@\n\
+    \  if off < 0 || off > %s buf - min_size then false@\n\
     \  else@\n"
     attr src.buf src.len;
   let m =
@@ -168,15 +162,9 @@ let pp_validate ~src ppf ~target ~plan ~size =
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "true@\n");
   Fmt.pf ppf
     "@\n\
-     let%s validate_exn %s off =@\n\
-    \  if not (is_valid buf off) then fail buf off@\n\
-     @\n\
-     let validate %s off =@\n\
-    \  match validate_exn buf off with@\n\
-    \  | () -> Ok ()@\n\
-    \  | exception %s.Parse_error e -> Error e@\n\
+     let validate %s off = if is_valid buf off then Ok () else error buf off@\n\
      @\n"
-    attr src.buf src.buf errors
+    src.buf
 
 (* {2 A record that does not fit}
 
@@ -225,7 +213,8 @@ let short_cold ~src ~live ~size ~ends ~offsets ~where_end =
     }
   in
   let fits n e =
-    Fmt.str "(if %d > avail then %s.frame ~size ~len off else %s)" n errors e
+    Fmt.str "(if %d > avail then %s.frame ~size:min_size ~len off else %s)" n
+      errors e
   in
   let m = cold ~src ~live in
   {
@@ -241,7 +230,8 @@ let short_cold ~src ~live ~size ~ends ~offsets ~where_end =
    its first check that fails, run on the bytes there are, else the frame's. *)
 let pp_short ~src ppf ~target ~plan ~size =
   if not (has_checks plan) then
-    Fmt.pf ppf "let%s short %s off =@\n  %s.frame ~size ~len:(%s buf) off@\n@\n"
+    Fmt.pf ppf
+      "let%s short %s off =@\n  %s.frame ~size:min_size ~len:(%s buf) off@\n@\n"
       (cold_attr target) src.buf errors src.len
   else begin
     let tmp =
@@ -252,7 +242,7 @@ let pp_short ~src ppf ~target ~plan ~size =
       \  let len = %s buf in@\n\
       \  if off >= 0 then begin@\n\
       \    let avail = len - off in@\n\
-      \    let tmp = Bytes.make size '\\000' in@\n\
+      \    let tmp = Bytes.make min_size '\\000' in@\n\
       \    for i = 0 to avail - 1 do@\n\
       \      %s.set_u8 tmp i (%s.u8 buf (off + i))@\n\
       \    done;@\n\
@@ -273,23 +263,28 @@ let pp_short ~src ppf ~target ~plan ~size =
     in
     start ~m ~ppf ~ranges:plan.ranges ~base:"0" ~limit:"len" ~known:size nodes
       (fun _ _ -> Fmt.pf ppf "()@\n");
-    Fmt.pf ppf "  end;@\n  %s.frame ~size ~len off@\n@\n" errors
+    Fmt.pf ppf "  end;@\n  %s.frame ~size:min_size ~len off@\n@\n" errors
   end
 
 let pp_cold ~src ppf ~target ~plan ~size =
   pp_short ~src ppf ~target ~plan ~size;
   Fmt.pf ppf
     "let%s fail %s off =@\n\
-    \  if off < 0 || off > %s buf - size then short buf off;@\n"
+    \  if off < 0 || off > %s buf - min_size then short buf off;@\n"
     (cold_attr target) src.buf src.len;
   let m = cold ~src ~live:(live ~cold:true plan ~outputs:[]) in
   pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "no_error ()@\n");
   Fmt.pf ppf
     "@\n\
+     let[@inline never] error %s off =@\n\
+    \  match fail buf off with@\n\
+    \  | r -> r@\n\
+    \  | exception exn when %s.is_error exn -> Error (%s.error_of exn)@\n\
+     @\n\
      let%s too_short %s off =@\n\
-    \  %s.encode_too_short ~name:codec_name ~size ~len:(%s buf) off@\n\
+    \  %s.encode_too_short ~name:codec_name ~size:min_size ~len:(%s buf) off@\n\
      @\n"
-    (cold_attr target) src.buf errors src.len
+    src.buf errors errors (cold_attr target) src.buf errors src.len
 
 let type_of f =
   let t = Fmt.str "%s.%s.t" rt in
@@ -300,62 +295,18 @@ let type_of f =
   | Int { width = 16; signed = true; _ } -> t "SInt16"
   | Int { signed = false; _ } -> t "UInt32"
   | Int { signed = true; _ } -> t "SInt32"
-  | (Bits _ | Bytes _) when has_carrier f -> "Value." ^ f.label
   | Bits _ -> "int"
   | Bytes _ -> "string"
 
-(* [Value.<field> x] is [x] in the field's carrier, after the check a write
-   would make: its width for a bitfield, its length for a byte array. A
-   carrier's [<field>_eq] proves it is that [int] or [string], for the
-   module's own reads, whose values are in range by construction. *)
-let pp_values ppf fields =
-  match List.filter has_carrier fields with
-  | [] -> ()
-  | fields ->
-      let plain f =
-        match f.store with Bytes _ -> "string" | Bits _ | Int _ -> "int"
-      in
-      Fmt.pf ppf "module Value : sig@\n";
-      List.iter
-        (fun f ->
-          Fmt.pf ppf
-            "  type %s = private %s@\n\
-            \  val %s : %s -> %s@\n\
-            \  val %s_eq : (%s, %s) Type.eq@\n"
-            f.label (plain f) f.label (plain f) f.label f.label f.label
-            (plain f);
-          match f.store with
-          | Bits _ -> Fmt.pf ppf "  val %s_low : int -> %s@\n" f.label f.label
-          | Int _ | Bytes _ -> ())
-        fields;
-      Fmt.pf ppf "end = struct@\n";
-      List.iter
-        (fun f ->
-          Fmt.pf ppf "  type %s = %s@\n@\n  let[@inline] %s x =@\n" f.label
-            (plain f) f.label;
-          (match f.store with
-          | Bits { width; _ } ->
-              Fmt.pf ppf
-                "    if x lsr %d <> 0 then %s.unsigned_too_wide ~bits:%d x \
-                 else x@\n"
-                width errors width
-          | Bytes n ->
-              Fmt.pf ppf
-                "    if String.length x <> %d then@\n\
-                \      %s.byte_length ~expected:%d ~actual:(String.length x)@\n\
-                \    else x@\n"
-                n errors n
-          | Int _ -> Fmt.pf ppf "    x@\n");
-          (match f.store with
-          | Bits { width; _ } ->
-              Fmt.pf ppf "@\n  let[@inline] %s_low x = x land %s@\n" f.label
-                (mask width)
-          | Int _ | Bytes _ -> ());
-          Fmt.pf ppf "@\n  let %s_eq = Type.Equal@\n@\n" f.label)
-        fields;
-      Fmt.pf ppf "end@\n@\n"
-
 let pp_vars ppf fields = pp_list ppf (List.map (fun f -> f.id) fields)
+
+(* The labelled parameters of a write: each field's value under its label. *)
+let pp_labelled ppf fields =
+  pp_list ppf (List.map (fun f -> Fmt.str "~%s:%s" f.label f.id) fields)
+
+let labelled fields args =
+  String.concat " "
+    (List.map2 (fun f a -> Fmt.str "~%s:%s" f.label a) fields args)
 
 (* Writes take each value in its plain form: an [int] for a field up to 16 bits
    or a bitfield, an [int32] for a 32-bit field, a [string] for a byte array. *)
@@ -405,10 +356,11 @@ let member f valid =
    to its field's type, in field order; then the frame; then each bitfield's
    width, byte array's length and enum case, in field order. *)
 let pp_first_error ~src ppf ~target fields =
-  (* A 32-bit value is in range as an [int32]: only an enum tests it. *)
+  (* A 32-bit value is in range as an [int32]: only an enum tests it. Its
+     parameter is named, as every parameter the F* rendering compares is. *)
   let param f =
     match (f.store, f.enum) with
-    | Int { width = 32; _ }, None -> "_"
+    | Int { width = 32; _ }, None -> "_" ^ f.id
     | _ -> f.id
   in
   Fmt.pf ppf "let%s first_error %s off %a =@\n" (cold_attr target) src.buf
@@ -649,10 +601,8 @@ let stores ?(ox = false) ~src ppf fields =
     fields
 
 (* The checks and stores of a write, on the int values of [fields]; a field
-   [in_range] says holds a value in range skips its range check. With [len],
-   the frame is checked against that variable, a length the caller read once,
-   rather than against the buffer's. *)
-let pp_stores ?len ?ox ~src ppf ~plan ~in_range fields =
+   [in_range] says holds a value in range skips its range check. *)
+let pp_stores ?ox ~src ppf ~plan ~in_range fields =
   let bad =
     List.filter_map
       (fun f -> if in_range f then None else out_of_range f)
@@ -675,43 +625,11 @@ let pp_stores ?len ?ox ~src ppf ~plan ~in_range fields =
       Fmt.pf ppf "  if %s then first_error buf off %a@\n  else"
         (String.concat " || " guard)
         pp_vars fields);
-  (match len with
-  | None -> Fmt.pf ppf "  if %a@\n  else begin@\n" (pp_frame ~src) "too_short"
-  | Some len ->
-      Fmt.pf ppf
-        "  if off < 0 || off > %s - size then too_short buf off@\n\
-        \  else begin@\n"
-        len);
+  Fmt.pf ppf "  if %a@\n  else begin@\n" (pp_frame ~src) "too_short";
   stores ?ox ~src ppf fields;
   if has_checks plan then Fmt.pf ppf "    validate_written buf off@\n"
   else Fmt.pf ppf "    ()@\n";
   Fmt.pf ppf "  end@\n@\n"
-
-(* A 32-bit field comes in as an [int32] on either target, and is stored
-   unboxed where the loads are. *)
-let unbox_int32s ~src ppf fields =
-  if src.unboxed then
-    List.iter
-      (fun f ->
-        match f.store with
-        | Int { width = 32; _ } ->
-            Fmt.pf ppf "  let %s = Int32_u.of_int32 %s in@\n" f.id f.id
-        | _ -> ())
-      fields
-
-let pp_write_int ?(src = bytes_src) ppf ~target ~plan =
-  let fields = all_fields plan in
-  if
-    List.exists
-      (fun f -> Option.is_some (out_of_range f) || Option.is_some f.enum)
-      fields
-  then pp_first_error ~src ppf ~target fields;
-  Fmt.pf ppf "let[@@inline]%s write_int %s off %a =@\n" (zero_alloc target)
-    src.buf pp_vars fields;
-  unbox_int32s ~src ppf fields;
-  pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan
-    ~in_range:(fun _ -> false)
-    fields
 
 (* The int a field's typed value stores. *)
 let plain_value ~src f =
@@ -730,69 +648,37 @@ let plain_value ~src f =
             (if signed then "SInt32" else "UInt32")
             f.id
       | Int _ -> Fmt.str "(%s : %s :> int)" f.id (type_of f)
-      | Bits _ -> Fmt.str "(%s : %s :> int)" f.id (type_of f)
-      | Bytes _ -> Fmt.str "(%s : %s :> string)" f.id (type_of f))
+      | Bits _ | Bytes _ -> f.id)
 
-(* [write] takes the codec's typed values. An integer field's type holds it in
-   range, as a bitfield's or a byte array's carrier does, so none is checked
-   again. A map's functions are the caller's code, so its value is checked, and
-   a write through one makes no promise about allocation. *)
-let typed_in_range f =
+(* [write] takes the values a record holds. An integer field's carrier holds
+   it in range, so it is not checked again; a bitfield's [int] and a byte
+   array's [string] are, all at once, which costs less than a check for each.
+   A map's functions are the caller's code, so its value is checked, and a
+   write through one makes no promise about allocation. *)
+let in_range f =
   match (f.map, f.store) with
-  | None, (Int _ | Bits _ | Bytes _) -> true
-  | Some _, _ -> false
+  | None, Int _ -> true
+  | None, (Bits _ | Bytes _) | Some _, _ -> false
 
 let pp_write ?(src = bytes_src) ppf ~target ~plan =
   let fields = all_fields plan in
+  if
+    List.exists
+      (fun f ->
+        ((not (in_range f)) && Option.is_some (out_of_range f))
+        || Option.is_some f.enum)
+      fields
+  then pp_first_error ~src ppf ~target fields;
   let target =
     if List.exists (fun f -> Option.is_some f.map) fields then `OCaml
     else target
   in
   Fmt.pf ppf "let[@@inline]%s write %s off %a =@\n" (zero_alloc target) src.buf
-    pp_vars fields;
+    pp_labelled fields;
   List.iter
     (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value ~src f))
     fields;
-  pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan ~in_range:typed_in_range
-    fields
-
-(* [write_at b len off] is [write], and [write_int_at b len off] [write_int],
-   into the buffer named ['b], whose length the caller read once: the frame is
-   one comparison against [len], so a loop that writes many records measures
-   no buffer. [write_at]'s carriers are in range already; [write_int_at] tests
-   the ranges of all its values at once, which costs less than building a
-   carrier for each value a loop computes. *)
-let pp_write_at ?(src = bytes_src) ~ints ppf ~target ~plan =
-  let fields = all_fields plan in
-  let target =
-    if (not ints) && List.exists (fun f -> Option.is_some f.map) fields then
-      `OCaml
-    else target
-  in
-  let b =
-    match target with
-    | `OxCaml -> Fmt.str "((b : 'b %s.t) @@ local)" src.brand
-    | `OCaml -> Fmt.str "(b : 'b %s.t)" src.brand
-  in
-  Fmt.pf ppf
-    "let[@@inline]%s %s %s (len : 'b %s.length) off %a =@\n\
-    \  let buf = (b : _ %s.t :> %s) and len = (len : _ %s.length :> int) in@\n"
-    (zero_alloc target)
-    (if ints then "write_int_at" else "write_at")
-    b src.brand pp_vars fields src.brand src.typ src.brand;
-  if ints then begin
-    unbox_int32s ~src ppf fields;
-    pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
-      ~in_range:(fun _ -> false)
-      fields
-  end
-  else begin
-    List.iter
-      (fun f -> Fmt.pf ppf "  let %s = %s in@\n" f.id (plain_value ~src f))
-      fields;
-    pp_stores ~len:"len" ~ox:(target = `OxCaml) ~src ppf ~plan
-      ~in_range:typed_in_range fields
-  end
+  pp_stores ~ox:(target = `OxCaml) ~src ppf ~plan ~in_range fields
 
 (* A module whose code holds a value only an [int] of 63 bits holds refuses to
    load on a target whose ints have 32 bits or fewer. *)
@@ -812,21 +698,21 @@ let pp_wide ppf ~codec ~wide ~uses =
       Fmt.pf ppf "let mask32 = Int64.to_int 0xFFFF_FFFFL@\n@\n"
   end
 
-(* The module links wire.runtime and no more: it names the shape of its codec
-   with [digest], which only {!bridge} checks, and raises each error itself. *)
-let pp_header ppf ~codec ~name ~digest ~uses =
+(* The module links wire.runtime and no more, and raises each error itself. *)
+let pp_header ppf ~codec ~name ~uses =
   Fmt.pf ppf
-    "(* Generated by Wire_ocaml from %s. Do not edit: generate it again when \
-     the codec changes. *)@\n\
-     @\n\
-     let digest = %S@\n"
-    codec digest;
+    "(* Generated by Wire_ocaml from the codec %s. Do not edit: generate it \
+     again when the codec changes. *)@\n\
+     @\n"
+    codec;
   if uses "codec_name" || uses "no_error" then
     Fmt.pf ppf "let codec_name = %S@\n" name;
+  (* [cast]'s parameters are variables, as the F* rendering's are: the
+     witness is matched in its body. *)
   if uses "cast" then
     Fmt.pf ppf
-      "let[@@inline] cast : type a b. (a, b) Type.eq -> b -> a = fun \
-       Type.Equal v -> v@\n";
+      "let[@@inline] cast : type a b. (a, b) Type.eq -> b -> a = fun eq v ->@\n\
+      \  match eq with Type.Equal -> v@\n";
   Fmt.pf ppf "@\n";
   if uses "no_error" then
     Fmt.pf ppf
@@ -873,12 +759,17 @@ let pp_maps ppf fields =
     fields;
   Fmt.pf ppf "@\n"
 
-let pp_record ppf fields =
+(* The type of [f] in the record: its map's OCaml type for a field under a
+   map, one of [maps]. *)
+let record_type ~maps f =
+  match f.map with Some path -> List.assoc path maps | None -> type_of f
+
+let pp_record ~maps ppf fields =
   Fmt.pf ppf "type t = {@\n";
-  List.iter (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (type_of f)) fields;
-  Fmt.pf ppf "}@\n@\nlet v %a = { %a }@\n@\n" pp_vars fields
-    Fmt.(list ~sep:(any "; ") string)
-    (List.map (fun f -> Fmt.str "%s = %s" f.label f.id) fields)
+  List.iter
+    (fun f -> Fmt.pf ppf "  %s : %s;@\n" f.label (record_type ~maps f))
+    fields;
+  Fmt.pf ppf "}@\n@\n"
 
 (* [pp ppf r] prints [r] as an OCaml record, with [Format]'s primitives
    only: the module links no [Fmt]. A bitfield and a byte array print through
@@ -886,15 +777,18 @@ let pp_record ppf fields =
 let pp_printer ppf fields =
   let printer f =
     let base = Fmt.str "%s.%s.pp" rt in
-    match f.store with
-    | Int { width = 8; signed = false; _ } -> (base "UInt8", "")
-    | Int { width = 8; signed = true; _ } -> (base "SInt8", "")
-    | Int { width = 16; signed = false; _ } -> (base "UInt16", "")
-    | Int { width = 16; signed = true; _ } -> (base "SInt16", "")
-    | Int { signed = false; _ } -> (base "UInt32", "")
-    | Int { signed = true; _ } -> (base "SInt32", "")
-    | Bits _ -> ("int", " :> int")
-    | Bytes _ -> ("string", " :> string")
+    match (f.map, f.store) with
+    | Some _, _ -> ("opaque", "")
+    | None, store -> (
+        match store with
+        | Int { width = 8; signed = false; _ } -> (base "UInt8", "")
+        | Int { width = 8; signed = true; _ } -> (base "SInt8", "")
+        | Int { width = 16; signed = false; _ } -> (base "UInt16", "")
+        | Int { width = 16; signed = true; _ } -> (base "SInt16", "")
+        | Int { signed = false; _ } -> (base "UInt32", "")
+        | Int { signed = true; _ } -> (base "SInt32", "")
+        | Bits _ -> ("int", " :> int")
+        | Bytes _ -> ("string", " :> string"))
   in
   let has p = List.exists (fun f -> fst (printer f) = p) fields in
   Fmt.pf ppf
@@ -909,6 +803,9 @@ let pp_printer ppf fields =
   if has "string" then
     Fmt.pf ppf
       "  let string ppf s = Format.pp_print_string ppf (String.escaped s) in@\n";
+  (* A map's value is the caller's type, which the module cannot print. *)
+  if has "opaque" then
+    Fmt.pf ppf "  let opaque ppf _ = Format.pp_print_string ppf \"_\" in@\n";
   Fmt.pf ppf
     "  Format.pp_open_hvbox ppf 2;@\n  Format.pp_print_char ppf '{';@\n";
   List.iter
@@ -920,8 +817,8 @@ let pp_printer ppf fields =
     "  Format.pp_print_string ppf \" }\";@\n  Format.pp_close_box ppf ()@\n@\n"
 
 let pp_encode ~src ppf fields =
-  Fmt.pf ppf "let encode t %s off = write buf off %a@\n" src.buf pp_list
-    (List.map (fun f -> "t." ^ f.label) fields)
+  Fmt.pf ppf "let encode t %s off = write buf off %s@\n" src.buf
+    (labelled fields (List.map (fun f -> "t." ^ f.label) fields))
 
 (* [Get.<field> buf off] reads one field as [Codec.get] does, with the same
    bounds-checked load: the compiler's check jumps to a handler that does not
@@ -960,15 +857,46 @@ let checked_read ~src f =
   | Bytes n ->
       Fmt.str "(%s.sub_string buf (off + %d) %d)" src.checked f.offset n
 
-let read_attr target f =
-  match (target, f.store) with
-  | `OxCaml, (Int _ | Bits _) when Option.is_none f.map ->
-      "[@inline][@zero_alloc]"
-  | _ -> "[@inline]"
+(* A getter answers a result, which it allocates: it is inlined, and checked
+   for allocation on neither target. *)
+let getter_attr = "[@inline]"
 
-let pp_getter ~src ppf ~target f =
-  let attr = read_attr target f in
-  Fmt.pf ppf "let%s %s %s off =@\n" attr f.label src.buf;
+(* The bytes of [f] from the record's offset to the field's end. *)
+let field_end f =
+  f.offset
+  +
+  match f.store with
+  | Int { width; _ } -> width / 8
+  | Bits { base; _ } -> Bitfield.byte_size base
+  | Bytes n -> n
+
+(* The value a getter answers: through the field's map when it has one, which
+   answers its own error. *)
+let getter_value ~src f =
+  match (f.map, f.store) with
+  | Some _, Int { width = 32; _ } when src.unboxed ->
+      Fmt.str "(%s.get ~at:(off + %d) ~field:%S (Int32_u.to_int32 %s_raw))"
+        (map_var f) f.offset f.name f.id
+  | Some _, Int { width = 32; _ } ->
+      Fmt.str "(%s.get ~at:(off + %d) ~field:%S %s_raw)" (map_var f) f.offset
+        f.name f.id
+  | Some _, _ ->
+      Fmt.str "(%s.get ~at:(off + %d) ~field:%S %s)" (map_var f) f.offset f.name
+        f.id
+  | None, _ -> Fmt.str "Ok %s" (typed_value ~src f)
+
+(* A getter's frame: the field's bytes lie in the buffer, or the getter
+   answers their end-of-input error. *)
+let pp_get_frame ~src ppf f =
+  Fmt.pf ppf
+    "  if off < 0 || off > %s buf - %d then field_eof %S (%s buf) off %d %d@\n\
+    \  else@\n"
+    src.len (field_end f) f.name src.len f.offset
+    (field_end f - f.offset)
+
+let pp_getter ~src ppf f =
+  Fmt.pf ppf "let%s %s %s off =@\n" getter_attr f.label src.buf;
+  pp_get_frame ~src ppf f;
   (match f.store with
   | Int { width = 32; _ } ->
       (* Its typed value is made from the [int32]; only an enum's test reads
@@ -979,29 +907,32 @@ let pp_getter ~src ppf ~target f =
   | _ -> Fmt.pf ppf "  let %s = %s in@\n" f.id (checked_read ~src f));
   (match f.enum with
   | Some (_, valid) ->
-      Fmt.pf ppf "  if not %s then enum_failed (off + %d) %s [%a] else@\n"
-        (member f valid) f.offset f.id
+      Fmt.pf ppf "  if not %s then enum_failed %S (off + %d) %s [%a] else@\n"
+        (member f valid) f.name f.offset f.id
         Fmt.(list ~sep:(any "; ") (using int_lit string))
         valid
   | None -> ());
-  Fmt.pf ppf "  %s@\n@\n" (typed_value ~src f);
+  Fmt.pf ppf "  %s@\n@\n" (getter_value ~src f);
   match f.store with
   | Int { width = 32; _ } ->
       (* The [int] view of a 32-bit field, with no conversion through its
          typed form. *)
-      Fmt.pf ppf "let%s %s_int %s off =@\n  let %s_raw = %s in@\n  %s@\n@\n"
-        attr f.label src.buf f.id (checked_read ~src f) (int_view ~src f)
+      Fmt.pf ppf "let%s %s_int %s off =@\n" getter_attr f.label src.buf;
+      pp_get_frame ~src ppf f;
+      Fmt.pf ppf "  let %s_raw = %s in@\n  Ok %s@\n@\n" f.id
+        (checked_read ~src f) (int_view ~src f)
   | _ -> ()
 
 (* A bitfield's word, read once for all the fields packed in it:
-   [Get.<field>_word] is the checked load of the word that holds the field, and
+   [Get.<field>_word] is the word that holds the field, framed as [Get.<field>]
+   frames it, so it answers the same error where the buffer cuts the word, and
    [<field>_of_word], outside [Get] since a view's word goes through it too,
    takes the field out of it. *)
 let word_attr = function
   | `OxCaml -> "[@inline][@zero_alloc]"
   | `OCaml -> "[@inline]"
 
-let pp_word_getter ~src ppf ~target f =
+let pp_word_getter ~src ppf f =
   match f.store with
   | Bits { base; _ } ->
       let bytes = Bitfield.byte_size base in
@@ -1012,8 +943,9 @@ let pp_word_getter ~src ppf ~target f =
         if bytes = 4 then Fmt.str "(%s.to_int %s land mask32)" (i32 src) word
         else word
       in
-      Fmt.pf ppf "let%s %s_word %s off = %s@\n@\n" (word_attr target) f.label
-        src.buf word
+      Fmt.pf ppf "let%s %s_word %s off =@\n" getter_attr f.label src.buf;
+      pp_get_frame ~src ppf f;
+      Fmt.pf ppf "  Ok %s@\n@\n" word
   | _ -> ()
 
 let pp_of_word ppf ~target f =
@@ -1026,400 +958,48 @@ let pp_of_word ppf ~target f =
 (* The checked reads are in [Get], named after their fields, so a field's name
    meets none of the module's own. *)
 let pp_getters ?(src = bytes_src) ppf ~target fields =
+  Fmt.pf ppf
+    "let[@inline never] field_eof field len off at width =@\n\
+    \  if off < 0 then %s.negative_offset off@\n\
+    \  else@\n\
+    \    let at = off + at in@\n\
+    \    let got = if at > len then 0 else len - at in@\n\
+    \    Error@\n\
+    \      { %s.at; field = [ field ];@\n\
+    \        kind = Unexpected_eof { expected = width; got } }@\n\
+     @\n"
+    errors error;
   if List.exists (fun f -> Option.is_some f.enum) fields then
     Fmt.pf ppf
-      "let%s enum_failed at value valid =@\n\
-      \  %s.invalid_enum ~at ~field:[] ~value ~valid@\n\
+      "let[@inline never] enum_failed field at value valid =@\n\
+      \  Error { %s.at; field = [ field ]; kind = Invalid_enum { value; valid \
+       } }@\n\
        @\n"
-      (cold_attr target) errors;
+      error;
   Fmt.pf ppf "module Get = struct@\n";
-  List.iter (pp_getter ~src ppf ~target) fields;
-  List.iter (pp_word_getter ~src ppf ~target) fields;
+  List.iter (pp_getter ~src ppf) fields;
+  List.iter (pp_word_getter ~src ppf) fields;
   Fmt.pf ppf "end@\n@\n";
   List.iter (pp_of_word ppf ~target) fields
 
-(* One field at [off] read with no check of its own, in a record of [size]
-   bytes already checked to fit. A 32-bit field is bound as its [int32] only:
-   both its typed value and its [int] view are made from that. *)
-let pp_read ~src ~ox ?size ppf f =
-  let m = hot ~ox ~raw32:true ~src ~live:Sset.empty ~fail:"" () in
-  match f.store with
-  | Int { width = 32; endian; _ } ->
-      Fmt.pf ppf "  let %s_raw = %s in@\n" f.id
-        (load m ~o:"off" ~k:f.offset ~bytes:4 ~endian)
-  | _ ->
-      Fmt.pf ppf "  let %s = %s in@\n" f.id
-        (value m ?size ~o:"off" ~words:[] ~k:0 f)
-
-(* [Valid.v buf] validates the record at offset 0. A buffer's length never
-   changes, so each [read_<field>] after it is one load at a constant offset
-   with no check of its own, and stays in the buffer even if its bytes change;
-   only then may it read a value that breaks a constraint. This is EverParse's
-   validate-then-read, with the proof a type. *)
-let pp_valid ?(src = bytes_src) ppf ~target ~plan =
-  let fields = all_fields plan in
-  Fmt.pf ppf
-    "module Valid : sig@\n\
-    \  type t = private %s@\n\
-     @\n\
-    \  val v : %s -> t@\n\
-     end = struct@\n\
-    \  type t = %s@\n\
-     @\n\
-    \  let[@inline] v buf =@\n\
-    \    if %s buf < size then fail buf 0@\n\
-    \    else begin@\n"
-    src.typ src.typ src.typ src.len;
-  if has_checks plan then Fmt.pf ppf "      validate_exn buf 0;@\n";
-  Fmt.pf ppf "      buf@\n    end@\nend@\n@\n";
-  List.iter
-    (fun f ->
-      let attr = read_attr target f in
-      let read ~suffix ~result =
-        Fmt.pf ppf
-          "let%s read_%s%s (v : Valid.t) =@\n\
-          \  let buf = (v :> %s) and off = 0 in@\n"
-          attr f.label suffix src.typ;
-        pp_read ~src ~ox:false ppf f;
-        Fmt.pf ppf "  %s@\n@\n" result
-      in
-      read ~suffix:"" ~result:(typed_value ~src f);
-      match f.store with
-      | Int { width = 32; _ } -> read ~suffix:"_int" ~result:(int_view ~src f)
-      | _ -> ())
-    fields
-
-(* The buffer [b] named as [buf], and the length [len] as an [int]. The checks'
-   loads are the only reads of [buf]: a record with none binds only [len]. *)
-let pp_bind_len ~src ppf ~live =
-  if Sset.is_empty live then Fmt.pf ppf "    let "
-  else
-    Fmt.pf ppf "    let buf = (b : _ %s.t :> %s)@\n    and " src.brand src.typ;
-  Fmt.pf ppf "len = (len : _ %s.length :> int) in@\n" src.brand
-
-(* [View.with_] is [View.check]'s walk ending in [ok] or [fail] itself, so no
-   answer is built for [ok] and [get] to test again after the branches meet. *)
-let pp_view_with ~src ppf ~target ~plan ~size ~b ~live =
-  let k =
-    match target with
-    | `OxCaml -> "~(ok @ local) ~(fail @ local)"
-    | `OCaml -> "~ok ~fail"
-  in
-  Fmt.pf ppf "@\n  let[@inline] with_ %s len off %s =@\n" b k;
-  pp_bind_len ~src ppf ~live;
-  Fmt.pf ppf "    if off < 0 || off > len - size then fail ()@\n    else@\n";
-  let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"fail ()" () in
-  pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "ok off@\n")
-
-(* The body of [View.check], which answers [refused] for a record it refuses.
-   A record with no check of its own loads nothing, so a negative [off] needs
-   no test: it is the answer, which [View.ok] refuses. *)
-let pp_view_check ~src ppf ~target ~plan ~size ~live =
-  pp_bind_len ~src ppf ~live;
-  if has_checks plan then begin
-    Fmt.pf ppf "    if off < 0 || off > len - size then refused@\n    else@\n";
-    let m = hot ~ox:(target = `OxCaml) ~src ~live ~fail:"refused" () in
-    pp_fixed ppf ~m ~plan ~size (fun () -> Fmt.pf ppf "off@\n")
-  end
-  else Fmt.pf ppf "    if off > len - size then refused else off@\n"
-
-(* A view is a record checked in a named buffer: [View.check b len off] runs
-   the frame check against [len], the buffer's length read once by the caller,
-   and the record's own checks, and answers the offset, or a negative [int].
-   [View.get] turns an answer that passed into a ['b View.t], which only the
-   reads of the buffer named ['b] accept, so each [view_<field> b v] is one
-   load at a constant offset from [v] with no check of its own, and costs no
-   allocation: [b] is the buffer and [v] an [int]. [View.get] tests the
-   comparison [View.ok] makes, so that a compiler which shares the two
-   (flambda2) drops the second test after [if View.ok c]. *)
-let pp_view_module ~src ppf ~target ~plan ~size =
-  let attr =
-    match target with
-    | `OxCaml -> "[@inline][@zero_alloc]"
-    | `OCaml -> "[@inline]"
-  in
-  let param, local =
-    match target with
-    | `OxCaml -> ((fun b -> "(" ^ b ^ " @ local)"), " @ local")
-    | `OCaml -> (Fun.id, "")
-  in
-  let b = param "b" in
-  let live = live plan ~outputs:[] in
-  (* A record whose checks load nothing reads neither [b] nor [buf]. *)
-  let b_param = if Sset.is_empty live then param "_b" else b in
-  Fmt.pf ppf
-    "module View : sig@\n\
-    \  type 'b t = private int@\n\
-    \  type 'b check = private int@\n\
-     @\n\
-    \  val at : 'b %s.t%s -> 'b %s.length -> int -> 'b t@\n\
-    \  val check : 'b %s.t%s -> 'b %s.length -> int -> 'b check@\n\
-    \  val ok : 'b check -> bool@\n\
-    \  val get : 'b check -> 'b t@\n\
-     @\n\
-    \  val with_ :@\n\
-    \    'b %s.t%s -> 'b %s.length -> int -> ok:('b t -> 'a)%s ->@\n\
-    \    fail:(unit -> 'a)%s -> 'a@\n\
-     end = struct@\n\
-    \  type 'b t = int@\n\
-    \  type 'b check = int@\n\
-     @\n\
-    \  let refused = -1@\n\
-     @\n\
-    \  let%s check %s len off =@\n"
-    src.brand local src.brand src.brand local src.brand src.brand local
-    src.brand local local attr b_param;
-  pp_view_check ~src ppf ~target ~plan ~size ~live;
-  pp_view_with ~src ppf ~target ~plan ~size ~b:b_param ~live;
-  Fmt.pf ppf
-    "@\n\
-    \  let%s at %s len off =@\n\
-    \    let c = check b len off in@\n\
-    \    if c < 0 then fail (b : _ %s.t :> %s) off else c@\n\
-     @\n\
-    \  let%s ok c = c >= 0@\n\
-     @\n\
-    \  let failed = Invalid_argument (codec_name ^ \".View.get: the check \
-     failed\")@\n\
-     @\n\
-    \  let%s get c = if c >= 0 then c else raise failed@\n\
-     end@\n\
-     @\n"
-    attr b src.brand src.typ attr attr
-
-let pp_view ?(src = bytes_src) ppf ~target ~plan ~size =
-  let fields = all_fields plan in
-  let ox = target = `OxCaml in
-  pp_view_module ~src ppf ~target ~plan ~size;
-  let b =
-    match target with
-    | `OxCaml -> Fmt.str "((b : 'b %s.t) @@ local)" src.brand
-    | `OCaml -> Fmt.str "(b : 'b %s.t)" src.brand
-  in
-  let head attr name =
-    Fmt.pf ppf
-      "let%s %s %s (v : 'b View.t) =@\n\
-      \  let buf = (b : _ %s.t :> %s) and off = (v : _ View.t :> int) in@\n"
-      attr name b src.brand src.typ
-  in
-  List.iter
-    (fun f ->
-      let attr = read_attr target f in
-      let view ~suffix ~result =
-        head attr (Fmt.str "view_%s%s" f.label suffix);
-        pp_read ~src ~ox ~size ppf f;
-        Fmt.pf ppf "  %s@\n@\n" result
-      in
-      view ~suffix:"" ~result:(typed_value ~src f);
-      match f.store with
-      | Int { width = 32; _ } -> view ~suffix:"_int" ~result:(int_view ~src f)
-      | Bits { base; _ } ->
-          (* The word that holds the field, for [<field>_of_word]: fields
-             packed in one word share one load. *)
-          let m = hot ~ox ~src ~live:Sset.empty ~fail:"" () in
-          head attr (Fmt.str "view_%s_word" f.label);
-          Fmt.pf ppf "  %s@\n@\n"
-            (unsigned m ~size ~o:"off" ~words:[] ~k:f.offset
-               ~bytes:(Bitfield.byte_size base) ~endian:(bit_endian base) ())
-      | _ -> ())
-    fields
-
-(* A record the encoder wrote that fails its own constraints. On OxCaml the
-   check is [is_valid], which the allocation checker follows, and only a record
-   that fails it reaches [rejected], which raises what [validate] found as an
+(* A record the encoder wrote that fails its own constraints. The check is
+   [is_valid], which OxCaml's allocation checker follows, and only a record
+   that fails it reaches [rejected], which raises what [fail] finds as an
    encoding error and so only raises. *)
 let pp_validate_written ~src ppf ~target =
-  match target with
-  | `OCaml ->
-      Fmt.pf ppf
-        "let[@inline never] validate_written %s off =@\n\
-        \  match validate_exn buf off with@\n\
-        \  | () -> ()@\n\
-        \  | exception %s.Parse_error e -> %s.encode_rejected ~name:codec_name \
-         e@\n\
-         @\n"
-        src.buf errors errors
-  | `OxCaml ->
-      Fmt.pf ppf
-        "let%s rejected %s off =@\n\
-        \  match validate_exn buf off with@\n\
-        \  | () -> no_error ()@\n\
-        \  | exception %s.Parse_error e -> %s.encode_rejected ~name:codec_name \
-         e@\n\
-         @\n\
-         let[@inline][@zero_alloc] validate_written %s off =@\n\
-        \  if not (is_valid buf off) then rejected buf off@\n\
-         @\n"
-        (cold_attr target) src.buf errors errors src.buf
-
-(* [decode_local] builds the generated record in the caller's frame, so a
-   decode of integer fields allocates nothing on the heap; a byte array is
-   still a string on the heap, so with one it makes no such promise.
-   [decode_with] takes the constructor as an argument, which flambda2 inlines
-   with it. *)
-let pp_oxcaml ~src ppf ~record ~plan ~size =
-  let fields = all_fields plan in
-  pp_decode ~src ~ox:true ppf ~plan ~size
-    ~head:(Fmt.str "let[@inline] decode_with (make @@ local) %s off" src.buf)
-    ~call:(fun args -> Fmt.str "make %a" pp_list args);
-  let bytes =
-    List.exists
-      (fun f -> match f.store with Bytes _ -> true | _ -> false)
-      fields
-  in
-  if record then
-    pp_decode ~src ~ox:true ppf ~plan ~size
-      ~head:
-        (Fmt.str "let%s decode_local %s off"
-           (if bytes then "" else "[@zero_alloc]")
-           src.buf)
-      ~call:(fun args ->
-        Fmt.str "exclave_ stack_ { %a }"
-          Fmt.(list ~sep:(any "; ") string)
-          (List.map2 (fun f a -> Fmt.str "%s = %s" f.label a) fields args))
-
-(* [decode] answers the codec's error as a value, as [Wire.Codec.decode]
-   does; [decode_exn] raises it. *)
-let pp_decode_result ~src ppf =
   Fmt.pf ppf
-    "let decode %s off =@\n\
-    \  match decode_exn buf off with@\n\
-    \  | v -> Ok v@\n\
-    \  | exception %s.Parse_error e -> Error e@\n\
-     @\n"
-    src.buf errors
-
-(* [Field.<field>] names a field as a value, of the type its getter returns, so
-   code written against [Wire.S] reads it the same way from the interpreted
-   codec: [Field.get f] is [Get.<field>] and [Field.view f] [view_<field>]. A
-   field under a map, whose type is the caller's, has none, nor has an
-   anonymous one. *)
-let field_fields fields =
-  List.filter
-    (fun f ->
-      Option.is_none f.map && not (String.starts_with ~prefix:"_" f.label))
-    fields
-
-let pp_field_module ~src ppf ~target fields =
-  let fields = field_fields fields in
-  let b =
-    match target with
-    | `OxCaml -> Fmt.str "'b %s.t @@ local" src.brand
-    | `OCaml -> Fmt.str "'b %s.t" src.brand
-  in
-  (* A handle is the field's functions, built once: [f.get buf off] of a known
-     handle is a call to a known function, which the compiler inlines where it
-     is written, on OCaml's Closure as on flambda2. *)
-  Fmt.pf ppf
-    "module Field = struct@\n\
-    \  type 'a t = {@\n\
-    \    get : bytes -> int -> 'a;@\n\
-    \    view : 'b. %s -> 'b View.t -> 'a;@\n\
-    \  }@\n\
-     @\n"
-    b;
-  (* On OxCaml [Get.<field>] takes its buffer [local], a mode a handle's
-     [get] does not state, so it is eta-expanded there. *)
-  List.iter
-    (fun f ->
-      let get =
-        match target with
-        | `OxCaml -> Fmt.str "(fun buf off -> Get.%s buf off)" f.label
-        | `OCaml -> "Get." ^ f.label
-      in
-      Fmt.pf ppf "  let %s : %s t = { get = %s; view = view_%s }@\n@\n" f.label
-        (type_of f) get f.label)
-    fields;
-  Fmt.pf ppf "end@\n@\n"
-
-(* On OxCaml, [Global]'s handles: the module's own, for a buffer on the heap. *)
-let pp_global_handles ppf fields =
-  List.iter
-    (fun f ->
-      Fmt.pf ppf
-        "    let %s : %s t =@\n\
-        \      { get = Field.%s.get; view = (fun b v -> Field.%s.view b v) }@\n\
-         @\n"
-        f.label (type_of f) f.label f.label)
-    fields
-
-(* [Global] is the module as a [Wire.S], for code that switches between it and
-   [Wire.Codec.Make] by one line. On OCaml it is the module's own functions; on
-   OxCaml, whose functions take their buffers [local], which an interpreted
-   codec cannot, it states them for buffers on the heap. *)
-let pp_global ~src ppf ~target fields =
-  let fields = field_fields fields in
-  Fmt.pf ppf
-    "module Global = struct@\n\
-    \  type nonrec t = t@\n\
+    "let%s rejected %s off =@\n\
+    \  match fail buf off with@\n\
+    \  | r -> r@\n\
+    \  | exception exn when %s.is_error exn ->@\n\
+    \      %s.encode_rejected ~name:codec_name (%s.error_of exn)@\n\
      @\n\
-    \  let min_size = min_size@\n";
-  match target with
-  | `OCaml ->
-      Fmt.pf ppf
-        "  let decode = decode@\n\
-        \  let decode_exn = decode_exn@\n\
-        \  let encode = encode@\n\
-        \  let validate = validate@\n\
-        \  let validate_exn = validate_exn@\n\
-        \  let is_valid = is_valid@\n\
-        \  module View = View@\n\
-        \  module Field = Field@\n\
-         end@\n\
-         @\n"
-  | `OxCaml ->
-      Fmt.pf ppf
-        "  let decode buf off = decode buf off@\n\
-        \  let decode_exn buf off = decode_exn buf off@\n\
-        \  let encode t buf off = encode t buf off@\n\
-        \  let validate buf off = validate buf off@\n\
-        \  let validate_exn buf off = validate_exn buf off@\n\
-        \  let is_valid buf off = is_valid buf off@\n\
-         @\n\
-        \  module View = struct@\n\
-        \    type 'b t = 'b View.t@\n\
-        \    type 'b check = 'b View.check@\n\
-         @\n\
-        \    let at b len off = View.at b len off@\n\
-        \    let check b len off = View.check b len off@\n\
-        \    let ok = View.ok@\n\
-        \    let get = View.get@\n\
-        \  end@\n\
-         @\n\
-        \  module Field = struct@\n\
-        \    type 'a t = {@\n\
-        \      get : bytes -> int -> 'a;@\n\
-        \      view : 'b. 'b %s.t -> 'b View.t -> 'a;@\n\
-        \    }@\n\
-         @\n"
-        src.brand;
-      pp_global_handles ppf fields;
-      Fmt.pf ppf "  end@\nend@\n@\n"
-
-(* The same reads and writes on a bigarray of bytes, with the same errors. *)
-let pp_bigstring ppf ~target ~make ~record ~plan ~size =
-  let src =
-    match target with `OxCaml -> local_bigstring_src | `OCaml -> bigstring_src
-  in
-  let fields = all_fields plan in
-  Fmt.pf ppf "module Bigstring = struct@\n";
-  pp_cold ~src ppf ~target ~plan ~size;
-  pp_validate ~src ppf ~target ~plan ~size;
-  if has_checks plan then pp_validate_written ~src ppf ~target;
-  let value = if record then typed_value else plain_typed_value in
-  pp_decode ~src ~value ppf ~plan ~size
-    ~head:(Fmt.str "let decode_exn %s off" src.buf) ~call:(fun args ->
-      Fmt.str "%s %a" make pp_list args);
-  pp_decode_result ~src ppf;
-  pp_write_int ~src ppf ~target ~plan;
-  pp_write ~src ppf ~target ~plan;
-  pp_write_at ~src ~ints:true ppf ~target ~plan;
-  pp_write_at ~src ~ints:false ppf ~target ~plan;
-  pp_getters ~src ppf ~target fields;
-  pp_valid ~src ppf ~target ~plan;
-  pp_view ~src ppf ~target ~plan ~size;
-  if record then pp_encode ~src ppf fields;
-  Fmt.pf ppf "end@\n@\n"
+     let%s validate_written %s off =@\n\
+    \  if not (is_valid buf off) then rejected buf off@\n\
+     @\n"
+    (cold_attr target) src.buf errors errors errors
+    (match target with `OxCaml -> "[@inline][@zero_alloc]" | `OCaml -> "")
+    src.buf
 
 (* The bits of a 4-byte record a field occupies in a NEON lane, which holds the
    record's bytes in buffer order read as a little-endian word: [(shift,
@@ -1458,6 +1038,13 @@ let lanes plan ~size =
    parts. Every field is unsigned with no check and the fields cover the
    record, so any part is four valid records, and [store] tests only that they
    fit. *)
+(* A lane's value as [write] takes it: an 8-bit integer through its carrier's
+   checked constructor, which raises for a value out of range. *)
+let lane_value (f, _) =
+  match f.store with
+  | Int _ -> Fmt.str "~%s:(Wire_runtime.UInt8.v %s)" f.label f.id
+  | Bits _ | Bytes _ -> Fmt.str "~%s:%s" f.label f.id
+
 let pp_x4_sig ~src ppf fields =
   let v = "Wire_runtime.Vec.t" in
   Fmt.pf ppf
@@ -1492,9 +1079,16 @@ let pp_x4_sig ~src ppf fields =
     \  module V = Wire_runtime.Vec@\n\
      @\n\
     \  type part = V.t@\n\
+     @\n\
+    \  let[@inline] write_one ((b : 'b %s.t) @@ local) off %s =@\n\
+    \    write (b : _ %s.t :> bytes) off %s@\n\
      @\n"
     src.brand src.brand src.brand src.brand src.brand src.brand
     (String.concat " -> " (List.map (fun _ -> v) fields))
+    src.brand
+    (String.concat " " (List.map (fun (f, _) -> f.id) fields))
+    src.brand
+    (String.concat " " (List.map lane_value fields))
 
 let pp_x4_reads ~src ppf fields =
   Fmt.pf ppf
@@ -1554,8 +1148,8 @@ let pp_x4_parts ppf fields =
     fields
 
 (* [store] writes four records with one store once they fit; if they do not,
-   it writes them one at a time with [write_int_at], which writes the ones that
-   fit and raises for the first that does not, as one record at a time does.
+   it writes them one at a time with [write], which writes the ones that fit
+   and raises for the first that does not, as one record at a time does.
    [fill] checks the span of [count] registers once and stores two per turn,
    or falls back to [store] for each. *)
 let pp_x4_store ~src ppf fields =
@@ -1567,10 +1161,10 @@ let pp_x4_store ~src ppf fields =
       fields
   in
   Fmt.pf ppf
-    "  let[@inline never] one_by_one ((b : 'b %s.t) @@ local) len off p =@\n\
+    "  let[@inline never] one_by_one ((b : 'b %s.t) @@ local) _ off p =@\n\
     \    for k = 0 to 3 do@\n\
     \      let w = V.get p k in@\n\
-    \      write_int_at b len (off + (4 * k)) %s@\n\
+    \      write_one b (off + (4 * k)) %s@\n\
     \    done@\n\
      @\n\
     \  let[@inline] store ((b : 'b %s.t) @@ local) (len : 'b %s.length) off p =@\n\
@@ -1602,7 +1196,7 @@ let pp_x4_store ~src ppf fields =
 
 (* [X4.write_int_at] takes plain lanes: one range test over the fields of each
    width, then [store]; lanes out of range are written one record at a time,
-   which raises what [write_int_at] raises. *)
+   which raises what [write] raises. *)
 let pp_x4_write ~src ppf fields =
   let ids = List.map (fun (f, _) -> f.id) fields in
   let widths =
@@ -1627,10 +1221,9 @@ let pp_x4_write ~src ppf fields =
       fields
   in
   Fmt.pf ppf
-    "  let[@inline never] lanes_one_by_one ((b : 'b %s.t) @@ local) len off %s \
-     =@\n\
+    "  let[@inline never] lanes_one_by_one ((b : 'b %s.t) @@ local) _ off %s =@\n\
     \    for k = 0 to 3 do@\n\
-    \      write_int_at b len (off + (4 * k)) %s@\n\
+    \      write_one b (off + (4 * k)) %s@\n\
     \    done@\n\
      @\n\
     \  let[@inline] write_int_at ((b : 'b %s.t) @@ local) len off %s =@\n\
@@ -1656,51 +1249,38 @@ let pp_x4 ~src ppf ~plan ~size =
       pp_x4_store ~src ppf fields;
       pp_x4_write ~src ppf fields
 
-let pp_body ?(simd = false) ppf ~target ~make ~plan ~size =
-  let fields = all_fields plan in
-  Fmt.pf ppf "let size = %d@\nlet min_size = size@\n@\n" size;
-  pp_values ppf fields;
-  let record = Option.is_none make in
-  if record then begin
-    pp_record ppf fields;
-    pp_printer ppf fields
-  end;
-  let src =
-    match target with `OxCaml -> local_bytes_src | `OCaml -> bytes_src
-  in
+(* The buffer a module reads, [bytes], held [local] on OxCaml. *)
+let src_of = function `OxCaml -> local_bytes_src | `OCaml -> bytes_src
+
+(* The checks, decoders and writes of a fixed record on [src], and with
+   [getters] its reads. *)
+let pp_codec ~src ~getters ppf ~target ~plan ~size =
   pp_cold ~src ppf ~target ~plan ~size;
   pp_validate ~src ppf ~target ~plan ~size;
   if has_checks plan then pp_validate_written ~src ppf ~target;
-  let make = Option.value ~default:"v" make in
-  let value = if record then typed_value else plain_typed_value in
-  pp_decode ~src ~value ppf ~plan ~size
-    ~head:(Fmt.str "let decode_exn %s off" src.buf) ~call:(fun args ->
-      Fmt.str "%s %a" make pp_list args);
-  pp_decode_result ~src ppf;
-  if target = `OxCaml then pp_oxcaml ~src ppf ~record ~plan ~size;
-  pp_write_int ~src ppf ~target ~plan;
+  pp_decode ~src ppf ~plan ~size;
   pp_write ~src ppf ~target ~plan;
-  pp_write_at ~src ~ints:true ppf ~target ~plan;
-  pp_write_at ~src ~ints:false ppf ~target ~plan;
-  pp_getters ~src ppf ~target fields;
-  pp_valid ~src ppf ~target ~plan;
-  pp_view ~src ppf ~target ~plan ~size;
+  if getters then pp_getters ~src ppf ~target (all_fields plan)
+
+let pp_body ?(simd = false) ?accessor ~maps ppf ~target ~plan ~size =
+  let views = Option.is_some accessor in
+  let fields = all_fields plan in
+  Fmt.pf ppf "let min_size = %d@\n@\n" size;
+  pp_record ~maps ppf fields;
+  pp_printer ppf fields;
+  let src = src_of target in
+  (* Beside the module's views, [Get] would be second reads of each field: a
+     module without views keeps them as its reads. *)
+  pp_codec ~src ~getters:(not views) ppf ~target ~plan ~size;
   if simd then pp_x4 ~src ppf ~plan ~size;
-  pp_field_module ~src ppf ~target fields;
-  if record then begin
-    pp_encode ~src ppf fields;
-    pp_global ~src ppf ~target fields
-  end;
-  pp_bigstring ppf ~target ~make ~record ~plan ~size
+  pp_encode ~src ppf fields
 
 let refuse ~codec reason =
   Fmt.invalid_arg "Wire_ocaml: cannot specialise %s: %s" codec reason
 
-(* The names the generated module defines for itself, at top level or in
-   [Bigstring]. *)
+(* The names the generated module defines for itself. *)
 let own_names =
   [
-    "digest";
     "codec_name";
     "cast";
     "no_error";
@@ -1709,30 +1289,20 @@ let own_names =
     "size";
     "is_valid";
     "validate";
-    "validate_exn";
     "validate_written";
     "rejected";
     "decode";
-    "decode_exn";
-    "decode_with";
-    "decode_local";
     "first_error";
-    "write_int";
+    "error";
     "write";
-    "write_at";
-    "write_int_at";
     "enum_failed";
+    "field_eof";
     "Get";
-    "v";
     "encode";
     "min_size";
     "t";
-    "Valid";
-    "View";
-    "Value";
     "Field";
     "Global";
-    "Bigstring";
     "mask32";
     "pp";
   ]
@@ -1740,7 +1310,7 @@ let own_names =
 (* The names inside [Get] that its reads call: a getter of one of these
    names would shadow it for the getters after it. *)
 let getters_own fields =
-  "Get.cast" :: "Get.mask32" :: "Get.enum_failed"
+  "Get.cast" :: "Get.mask32" :: "Get.enum_failed" :: "Get.field_eof"
   :: List.filter_map
        (fun f -> Option.map (fun _ -> "Get." ^ map_var f) f.map)
        fields
@@ -1751,33 +1321,16 @@ let names_of f =
   let l = f.label in
   let derived =
     match f.store with
-    | Int { width = 32; _ } ->
-        [ "Get." ^ l ^ "_int"; "read_" ^ l ^ "_int"; "view_" ^ l ^ "_int" ]
-    | Bits _ -> [ "Get." ^ l ^ "_word"; "view_" ^ l ^ "_word"; l ^ "_of_word" ]
+    | Int { width = 32; _ } -> [ "Get." ^ l ^ "_int" ]
+    | Bits _ -> [ "Get." ^ l ^ "_word"; l ^ "_of_word" ]
     | Int _ | Bytes _ -> []
   in
-  ("Get." ^ l) :: ("read_" ^ l) :: ("view_" ^ l) :: derived
+  ("Get." ^ l) :: derived
 
-(* Who defines a name: the generated module itself, or a field. *)
-type source = Own | Field of string
-
-(* A later definition would shadow an earlier one of the same name. Two fields
-   of one label also define one getter, so this covers the record's fields
-   too. *)
-let check_names ~codec fields =
-  let own = List.map (fun n -> (Own, n)) (own_names @ getters_own fields) in
-  let defined =
-    List.concat_map
-      (fun f -> List.map (fun n -> (Field f.name, n)) (names_of f))
-      fields
-  in
-  match Names.clash (own @ defined) with
-  | Some (Own, Field f, n) | Some (Field f, Own, n) ->
-      Fmt.kstr (refuse ~codec)
-        "field %S defines %s, which the generated module defines for itself" f n
-  | Some (Field g, Field f, n) ->
-      Fmt.kstr (refuse ~codec) "fields %S and %S both define %s" g f n
-  | Some (Own, Own, _) | None -> ()
+(* The names a field of the record defines, those in [Get] qualified, and
+   those [Get]'s reads call. *)
+let field_names fields =
+  (getters_own fields, List.map (fun f -> (f.name, names_of f)) fields)
 
 (* The record module covers a fixed record of named scalars, each one
    argument of [make]: a nested record, an optional field, a slice or an
@@ -1798,8 +1351,9 @@ let record_scope (s : T.struct_) =
       | Some name -> (
           if not (scalar f.field_typ) then
             match f.field_typ with
-            | T.Optional _ ->
+            | T.Optional _ | T.Optional_or _ ->
                 fail_unsupported "field %s: an optional field" name
+            | T.Repeat _ -> fail_unsupported "field %s: a repeated field" name
             | T.Codec _ -> fail_unsupported "field %s: a nested record" name
             | T.Single_elem _ ->
                 fail_unsupported "field %s: a sized region" name
@@ -1816,70 +1370,4 @@ let record_plan ~maps c =
   | [ Prefix (_, n) ] | [ Prefix (_, n); Test _ ] -> (plan, n)
   | _ -> fail_unsupported "its size is not fixed"
 
-let prepare ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ~codec c =
-  match record_plan ~maps c with
-  | exception Unsupported reason -> refuse ~codec reason
-  | _, size when Wire.Codec.wire_size_opt c <> Some size ->
-      refuse ~codec "its size is not fixed"
-  | plan, _
-    when Option.is_none make
-         && List.exists (fun f -> Option.is_some f.map) (all_fields plan) ->
-      refuse ~codec
-        "a field is a map, and the generated record cannot name its type; pass \
-         ~make"
-  | _ when simd && target <> `OxCaml ->
-      refuse ~codec "~simd needs the OxCaml target"
-  | plan, size ->
-      check_names ~codec (all_fields plan);
-      (plan, size)
-
-let pp ?(target = `OCaml) ?(simd = false) ?make ?(maps = []) ~codec ppf c =
-  let digest = Gen.digest c in
-  let plan, size = prepare ~target ~simd ?make ~maps ~codec c in
-  let fields = all_fields plan in
-  (* The body first: the header defines only the helpers it uses. *)
-  let body =
-    Fmt.str "%a"
-      (fun ppf () ->
-        pp_maps ppf fields;
-        pp_body ~simd ppf ~target ~make ~plan ~size)
-      ()
-  in
-  let uses = uses body in
-  pp_header ppf ~codec ~name:plan.record ~digest ~uses;
-  (* On OxCaml a 32-bit or 64-bit value is held unboxed. *)
-  if target = `OxCaml then
-    Fmt.pf ppf
-      "module Int32_u = Wire_runtime.Target.Int32_u@\n\
-       module Int64_u = Wire_runtime.Target.Int64_u@\n\
-       @\n";
-  pp_wide ppf ~codec ~wide:plan.wide ~uses;
-  Fmt.pf ppf "%s" body
-
 let ident = label
-
-let ml ?target ?simd ?make ?maps ~codec c =
-  Fmt.str "%a" (pp ?target ?simd ?make ?maps ~codec) c
-
-let pp_bridge ?(maps = []) ~codec ~core ppf c =
-  let fields =
-    match record_plan ~maps c with
-    | plan, _ -> all_fields plan
-    | exception Unsupported reason -> refuse ~codec reason
-  in
-  Fmt.pf ppf
-    "(* Generated by Wire_ocaml from %s. Do not edit. Checks, when it loads, \
-     that %s still has the shape %s was generated from. *)@\n\
-     @\n\
-     let () = Wire.Private.Gen.check %s %s.digest@\n"
-    codec codec core codec core;
-  List.iter
-    (fun f ->
-      Option.iter
-        (fun path ->
-          Fmt.pf ppf "let () = Wire.Private.Gen.check_map %s %S %s@\n" codec
-            f.name path)
-        f.map)
-    fields
-
-let bridge ?maps ~codec ~core c = Fmt.str "%a" (pp_bridge ?maps ~codec ~core) c

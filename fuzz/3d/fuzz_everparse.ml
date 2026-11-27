@@ -64,7 +64,8 @@ let batch_module_name i tag label =
   Buffer.contents b
 
 let batch_enabled () =
-  Wire_3d.has_3d_exe () && normal_mode () && batch_requested ()
+  Option.is_some (Wire_3d.locate_3d_exe ())
+  && normal_mode () && batch_requested ()
 
 (* Shapes whose FFI projection verifies but whose standalone rendering does
    not. Keep each in the registry and assert its standalone rejection below, so
@@ -92,58 +93,18 @@ let sweep_schemas ~mode ~tag keep =
    FFI writer already, so [`Ffi] uses it and [`Standalone] gets the same
    one-module-per-schema treatment over [Everparse.write ~mode:`Standalone],
    which is what [Wire_3d.generate_3d_standalone] calls. *)
-let ffi_check schemas =
-  let outdir = Filename.temp_dir "wire_fuzz3d_ffi" "" in
-  Fun.protect
-    ~finally:(fun () -> Wire_3d.rm_rf outdir)
-    (fun () -> Wire_3d.batch_check ~outdir schemas)
-
 let standalone_check schemas =
-  let outdir = Filename.temp_dir "wire_fuzz3d_std" "" in
-  Fun.protect
-    ~finally:(fun () -> Wire_3d.rm_rf outdir)
-    (fun () ->
-      let arr = Array.of_list schemas in
-      let log_of i = Filename.concat outdir (string_of_int i ^ ".log") in
-      let jobs =
-        Array.mapi
-          (fun i (s : Wire.Everparse.t) () ->
-            (* Concurrent [3d.exe] runs race on EverParse's shared intermediate
-               files, so each job gets a directory of its own. *)
-            let work = Filename.temp_dir "wire_fuzz3d_stdjob" "" in
-            Fun.protect
-              ~finally:(fun () -> Wire_3d.rm_rf work)
-              (fun () ->
-                Wire.Everparse.write ~mode:`Standalone ~outdir:work ~name:s.name
-                  [ s ];
-                match
-                  Wire_3d.parse_3d ~batch:true ~outdir:work
-                    (Wire.Everparse.filename s)
-                with
-                | Ok () -> ()
-                | Error m ->
-                    Out_channel.with_open_text (log_of i) (fun oc ->
-                        Out_channel.output_string oc m);
-                    failwith "EverParse rejected"))
-          arr
-      in
-      let max_jobs = max 1 (min 4 (Domain.recommended_domain_count ())) in
-      let errors =
-        Wire_3d.fork_pool ~max_jobs jobs
-        |> Array.to_list
-        |> List.mapi (fun i passed ->
-            if passed then None
-            else
-              let msg =
-                try In_channel.with_open_text (log_of i) In_channel.input_all
-                with Sys_error _ -> ""
-              in
-              Fmt.kstr
-                (fun s -> Some s)
-                "%s:\n%s" arr.(i).Wire.Everparse.name msg)
-        |> List.filter_map Fun.id
-      in
-      match errors with [] -> Ok () | _ -> Error (String.concat "\n" errors))
+  let job (s : Wire.Everparse.t) dir =
+    Wire.Everparse.write ~mode:`Standalone ~outdir:dir ~name:s.name [ s ];
+    match
+      Wire_3d.parse_3d ~batch:true ~outdir:dir (Wire.Everparse.filename s)
+    with
+    | Ok () -> ()
+    | Error m -> failwith m
+  in
+  Wire_3d.pool
+    (List.map (fun (s : Wire.Everparse.t) -> (s.name, job s)) schemas)
+  |> Result.map ignore
 
 let run check = function [] -> None | schemas -> Some (check schemas)
 
@@ -157,7 +118,8 @@ let sweeps =
   [
     sweep ~mode:`Standalone ~tag:"S" ~check:standalone_check ~name:"standalone"
       (fun name -> not (List.mem name no_3d_standalone));
-    sweep ~mode:`Ffi ~tag:"F" ~check:ffi_check ~name:"ffi" (Fun.const true);
+    sweep ~mode:`Ffi ~tag:"F" ~check:Wire_3d.batch_check ~name:"ffi"
+      (Fun.const true);
   ]
 
 let refused_sweeps =
@@ -372,12 +334,9 @@ let record_spans codec env b =
   match Wire.Codec.decode ?env codec b 0 with
   | Error _ -> false
   | Ok _ -> (
-      match
-        Wire.Codec.validate_exn ?env codec b 0;
-        Wire.Codec.wire_size_at ?env codec b 0
-      with
-      | n -> Int.equal n (Bytes.length b)
-      | exception Wire.Parse_error _ -> false)
+      match Wire.Codec.validate ?env codec b 0 with
+      | Error _ -> false
+      | Ok () -> Wire.Codec.size_at ?env codec b 0 = Ok (Bytes.length b))
 
 (* Shapes whose accepting side the seeder cannot construct, so
    [generate_corpus] refuses rather than emit a corpus that says the same thing
@@ -445,14 +404,17 @@ let corpus_oracle_case (label, Fuzz_gen.Pack g) =
 let reencodes g codec env v sz =
   let buf = Bytes.create sz in
   match Wire.Codec.encode ?env codec v buf 0 with
-  | exception Wire.Parse_error e ->
-      Fmt.kstr (fun s -> Some s) "re-encoding raised %a" Wire.pp_parse_error e
+  | exception exn when Wire.Private.Types.is_parse_error exn ->
+      Fmt.kstr
+        (fun s -> Some s)
+        "re-encoding raised %a" Wire.Error.pp
+        (Wire.Private.Types.parse_error_of exn)
   | () -> (
       match Wire.Codec.decode ?env codec buf 0 with
       | Error e ->
           Fmt.kstr
             (fun s -> Some s)
-            "re-encoded bytes no longer decode: %a" Wire.pp_parse_error e
+            "re-encoded bytes no longer decode: %a" Wire.Error.pp e
       | Ok v' ->
           if Fuzz_gen.equal g v v' then None
           else Some "re-encoding does not preserve the value")
@@ -466,15 +428,15 @@ let accepted_agrees g codec env b =
   | Error _ -> None
   | Ok v -> (
       let len = Bytes.length b in
-      match Wire.Codec.size_of_value ?env codec v with
+      match Wire.Codec.encoded_size ?env codec v with
       | exception Invalid_argument m ->
           Fmt.kstr
             (fun s -> Some s)
-            "size_of_value refused an accepted record: %s" m
+            "encoded_size refused an accepted record: %s" m
       | sz when not (Int.equal sz len) ->
           Fmt.kstr
             (fun s -> Some s)
-            "size_of_value answers %d for a %d byte record" sz len
+            "encoded_size answers %d for a %d byte record" sz len
       | sz -> reencodes g codec env v sz)
 
 (* A rejected record: the offset is a real position, and a failure about one
@@ -489,19 +451,20 @@ let rejection_is_attributed codec env b =
   match Wire.Codec.decode ?env codec b 0 with
   | Ok _ -> None
   | Error e -> (
-      if e.Wire.at < 0 || e.Wire.at > len then
+      if e.Wire.Error.at < 0 || e.Wire.Error.at > len then
         Fmt.kstr
           (fun s -> Some s)
-          "reports offset %d outside a %d byte buffer, for %a at [%s]" e.Wire.at
-          len Wire.pp_error_kind e.Wire.kind
-          (String.concat "/" e.Wire.field)
+          "reports offset %d outside a %d byte buffer, for %a at [%s]"
+          e.Wire.Error.at len Wire.Error.pp_kind e.Wire.Error.kind
+          (String.concat "/" e.Wire.Error.field)
       else
-        match e.Wire.kind with
-        | (Wire.Invalid_tag _ | Wire.Invalid_enum _ | Wire.Value_out_of_range _)
-          when List.compare_length_with e.Wire.field 0 = 0 ->
+        match e.Wire.Error.kind with
+        | Wire.Error.Invalid_tag _ | Wire.Error.Invalid_enum _
+        | Wire.Error.Value_out_of_range _
+          when List.compare_length_with e.Wire.Error.field 0 = 0 ->
             Fmt.kstr
               (fun s -> Some s)
-              "blames no field for %a" Wire.pp_error_kind e.Wire.kind
+              "blames no field for %a" Wire.Error.pp_kind e.Wire.Error.kind
         | _ -> None)
 
 let corpus_property_case (label, Fuzz_gen.Pack g) =

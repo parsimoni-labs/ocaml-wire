@@ -87,7 +87,7 @@ val uses_wire_ctx : t -> bool
     {!Raw.of_module} do so only if they explicitly declare the extern typedef.
 *)
 
-type plug_field = {
+type visitor_field = {
   name : string;  (** Field name as declared in the codec. *)
   idx : int;  (** Index passed to the [WireSet*] callback. *)
   c_type : string;
@@ -99,24 +99,24 @@ type plug_field = {
     {!Wire_3d}'s [<Name>_Fields] default visitor) to materialise a typed struct
     plus [WireSet*] switch dispatchers from a schema. *)
 
-val plug_member : string -> string
-(** [plug_member name] is the visitor struct member a field named [name] takes:
-    [name] escaped against C's keywords and the macros of the headers the
+val visitor_member : string -> string
+(** [visitor_member name] is the visitor struct member a field named [name]
+    takes: [name] escaped against C's keywords and the macros of the headers the
     visitor includes ([int_], [NULL_], and [int__] for [int_]), so distinct
     names stay distinct members. *)
 
-val plug_fields : t -> plug_field list
-(** [plug_fields s] enumerates the visitor's members in index order: the named
-    fields of the source struct in declaration order and, when the struct embeds
-    another codec (as a field, under an optional or in a sized region), each
-    scalar of every embedded codec and a [<path>_present] flag per optional,
-    named by path ([ipv4_tcp_src_port]). An optional integer or float of an
-    embedded codec follows its flag. Returns [[]] for schemas without a
+val visitor_fields : t -> visitor_field list
+(** [visitor_fields s] enumerates the visitor's members in index order: the
+    named fields of the source struct in declaration order and, when the struct
+    embeds another codec (as a field, under an optional or in a sized region),
+    each scalar of every embedded codec and a [<path>_present] flag per
+    optional, named by path ([ipv4_tcp_src_port]). An optional integer or float
+    of an embedded codec follows its flag. Returns [[]] for schemas without a
     {!field-source} struct. Raises [Invalid_argument] when two members share a
     name. *)
 
-val plug_setters : t -> (string * string) list
-(** [plug_setters s] lists the unique [WireSet*] setters referenced by [s] as
+val visitor_setters : t -> (string * string) list
+(** [visitor_setters s] lists the unique [WireSet*] setters referenced by [s] as
     [(setter, val_c_type)] pairs. Each one needs an implementation in the
     visitor. *)
 

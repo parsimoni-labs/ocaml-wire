@@ -50,9 +50,11 @@ let metadata (Diff_codecs.Scan case) names maximum length bytes =
     if not scope then None
     else
       Option.bind bytes (fun b ->
-          match Wire.Codec.decode case.codec b 0 with
-          | Ok v -> Some (case.project v, Wire.Codec.wire_size_at case.codec b 0)
-          | Error _ -> None)
+          match
+            (Wire.Codec.decode case.codec b 0, Wire.Codec.size_at case.codec b 0)
+          with
+          | Ok v, Ok n -> Some (case.project v, n)
+          | Error _, _ | _, Error _ -> None)
   in
   (* A zero-byte final beat is legal; the codec decides whether an empty
      frame is valid. Nonfinal zero masks are tested by the stream lanes. *)
@@ -86,7 +88,7 @@ let export label maximum slot input output =
       (fun (Diff_codecs.Scan c) -> c.label = label)
       Diff_codecs.scan_cases
   in
-  let names = List.map fst (Wire_ocaml.scanner_fields c.codec) in
+  let names = List.map fst (Wire_ocaml.outputs c.codec) in
   let oracle = Diff_driver.oracle label in
   Diff_driver.report_oracle "cloud reference";
   let check =

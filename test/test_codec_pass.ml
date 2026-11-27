@@ -20,12 +20,12 @@ let test_validate_check_free_no_alloc () =
         ]
   in
   let buf = Bytes.make 32 '\007' in
-  Codec.validate_exn c buf 0;
+  decode_ok (Codec.validate c buf 0);
   (* warm up any one-time setup *)
   let n = 100_000 in
   let before = Gc.minor_words () in
   for _ = 1 to n do
-    Codec.validate_exn c buf 0
+    decode_ok (Codec.validate c buf 0)
   done;
   let per_call = (Gc.minor_words () -. before) /. float_of_int n in
   Alcotest.(check bool)
@@ -76,8 +76,10 @@ let test_decode_scalars_agree_with_get () =
         (fun _pad x -> x)
         Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); b ]
     in
-    let get = Staged.unstage (Codec.get c b) in
-    Alcotest.(check bool) name true (Codec.decode_exn c buf 0 = get buf 0)
+    let get = reader c b in
+    Alcotest.(check bool)
+      name true
+      (decode_ok (Codec.decode c buf 0) = get buf 0)
   in
   check "uint8" uint8;
   check "uint16" uint16;
@@ -98,11 +100,11 @@ let test_decode_scalars_agree_with_get () =
           (fun _pad hi lo -> (hi, lo))
           Codec.[ (Field.v "pad" uint8 $ fun _ -> UInt8.v 0); hi; lo ]
       in
-      let get f = Staged.unstage (Codec.get c f) buf 0 in
+      let get f = (reader c f) buf 0 in
       Alcotest.(check (pair int int))
         name
         (get hi, get lo)
-        (Codec.decode_exn c buf 0))
+        (ok (Codec.decode c buf 0)))
     [ ("bits u8", U8); ("bits u16", U16); ("bits u16be", U16be) ]
 
 (* The fixed fields are read with no check of their own, so the offset is
@@ -163,7 +165,7 @@ let test_array_size_overflow () =
    interval test. Its slot is still filled when a later constraint or the
    [where] clause reads it, and a failure reports the field and its value. *)
 let test_constraint_intervals () =
-  let describe (e : parse_error) =
+  let describe (e : Error.t) =
     let value =
       match e.kind with Constraint_failed { value; _ } -> value | _ -> None
     in
@@ -192,9 +194,7 @@ let test_constraint_intervals () =
     Bytes.set_uint8 buf 0 x;
     Bytes.set_uint8 buf 1 y;
     let validated =
-      match Codec.validate_exn c buf 0 with
-      | () -> "ok"
-      | exception Wire.Parse_error e -> describe e
+      match Codec.validate c buf 0 with Ok () -> "ok" | Error e -> describe e
     in
     let decoded =
       match Codec.decode c buf 0 with Ok _ -> "ok" | Error e -> describe e
@@ -221,9 +221,9 @@ let test_constraint_intervals () =
   in
   Alcotest.(check bool)
     "an empty interval refuses everything" true
-    (match Codec.validate_exn never (Bytes.make 1 '\xff') 0 with
-    | () -> false
-    | exception Wire.Parse_error _ -> true)
+    (match Codec.validate never (Bytes.make 1 '\xff') 0 with
+    | Ok () -> false
+    | Error _ -> true)
 
 (* A failure reports the frame's own value, never one a previous decode left in
    the scratch: a 64-bit value an int cannot hold leaves the int slot unset. *)
@@ -244,7 +244,7 @@ let test_failure_value_is_this_frames () =
   let failure c b =
     match Codec.decode c b 0 with
     | Ok _ -> Alcotest.fail "expected a constraint failure"
-    | Error e -> Fmt.str "%a" pp_parse_error e
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   let fresh = failure (codec ()) (frame (-1L)) in
   let c = codec () in
@@ -364,7 +364,7 @@ let test_wide_presence () =
   match Codec.decode c (frame 9 Int64.min_int) 0 with
   | Ok (_, Some d) -> Alcotest.(check int) "2^63: d" 0xaa (UInt8.to_int d)
   | Ok (_, None) -> Alcotest.fail "2^63: d absent"
-  | Error e -> Alcotest.failf "2^63: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "2^63: %a" Error.pp e
 
 (* A fixed codec of plain fields encodes through one frame check and one write
    per field. Bitfield words start from zero whatever the buffer held, a value
@@ -395,7 +395,7 @@ let test_plain_encode () =
   Codec.encode c v buf 0;
   Alcotest.(check string)
     "bytes" "\xb1\x9a\xbc\x01\x02\xff\xff\xff\xfe" (Bytes.to_string buf);
-  Alcotest.(check bool) "roundtrip" true (Codec.decode_exn c buf 0 = v);
+  Alcotest.(check bool) "roundtrip" true (decode_ok (Codec.decode c buf 0) = v);
   let refused name f =
     Alcotest.(check bool)
       name true
@@ -426,7 +426,7 @@ let test_view_read () =
     let k = Codec.View.check V.codec b (Buf.length b) 0 in
     Codec.View.read (Codec.View.field V.codec f) b (Codec.View.get k)
   in
-  let get f = Staged.unstage (Codec.get c f) buf 0 in
+  let get f = (reader c f) buf 0 in
   Alcotest.(check bool) "accepted" true (check buf 0);
   Alcotest.(check bool) "uint8" true (read a = get a);
   Alcotest.(check int) "bits" (get b) (read b);
@@ -455,7 +455,7 @@ let test_view_read () =
 let test_view_short_frames () =
   let check_codec (type r) name (c : r Codec.t) fields =
     let module V = (val Codec.View.codec c) in
-    let size = Codec.wire_size c in
+    let size = Codec.min_size c in
     for i = 0 to 63 do
       let buf =
         Bytes.init (size + 3) (fun j ->
@@ -470,7 +470,7 @@ let test_view_short_frames () =
           (fun f ->
             Alcotest.(check int)
               (Fmt.str "%s %d" name i)
-              (Staged.unstage (Codec.get c f) buf off)
+              ((reader c f) buf off)
               (Codec.View.read (Codec.View.field V.codec f) b r))
           fields
     done
@@ -525,9 +525,9 @@ let test_shared_byte_constraints () =
   let outcome byte =
     let buf = Bytes.make 1 (Char.chr byte) in
     let validated =
-      match Codec.validate_exn c buf 0 with
-      | () -> "ok"
-      | exception Wire.Parse_error e -> String.concat "." e.field
+      match Codec.validate c buf 0 with
+      | Ok () -> "ok"
+      | Error e -> String.concat "." e.field
     in
     let decoded =
       match Codec.decode c buf 0 with
@@ -562,10 +562,10 @@ let test_shared_byte_constraints () =
   in
   let two_outcome b0 b1 =
     match
-      Codec.validate_exn two (Bytes.init 2 (function 0 -> b0 | _ -> b1)) 0
+      Codec.validate two (Bytes.init 2 (function 0 -> b0 | _ -> b1)) 0
     with
-    | () -> "ok"
-    | exception Wire.Parse_error e -> String.concat "." e.field
+    | Ok () -> "ok"
+    | Error e -> String.concat "." e.field
   in
   Alcotest.(check string) "two tables" "ok" (two_outcome '\x45' '\x31');
   Alcotest.(check string) "second table" "hi" (two_outcome '\x45' '\x41');
@@ -689,7 +689,7 @@ let test_mapped_and_disjunctive_checks () =
           (lo $ fun (_, _, _, l) -> l);
         ]
   in
-  let describe (e : parse_error) =
+  let describe (e : Error.t) =
     let kind =
       match e.kind with
       | Constraint_failed _ -> "constraint"
@@ -704,9 +704,7 @@ let test_mapped_and_disjunctive_checks () =
     Bytes.set_uint8 buf 2 k;
     Bytes.set_uint8 buf 3 b;
     let validated =
-      match Codec.validate_exn c buf 0 with
-      | () -> "ok"
-      | exception Wire.Parse_error e -> describe e
+      match Codec.validate c buf 0 with Ok () -> "ok" | Error e -> describe e
     in
     let decoded =
       match Codec.decode c buf 0 with Ok _ -> "ok" | Error e -> describe e
@@ -766,8 +764,8 @@ let staged_scalars ~d_typ ~f_typ =
   let rand = Random.State.make [| 42 |] in
   for _ = 1 to 2000 do
     let buf = Bytes.init 15 (fun _ -> Char.chr (Random.State.int rand 256)) in
-    let v = Codec.decode_exn codec buf 0 in
-    let get x = Staged.unstage (Codec.get codec x) buf 0 in
+    let v = decode_ok (Codec.decode codec buf 0) in
+    let get x = (reader codec x) buf 0 in
     let a', b', c', d', e', f', g', h', i', j' = v in
     Alcotest.(check bool) "a" true (a' = get a);
     Alcotest.(check bool) "b" true (b' = get b);
@@ -803,8 +801,8 @@ let test_staged_spans () =
   let rand = Random.State.make [| 7 |] in
   for _ = 1 to 500 do
     let buf = Bytes.init 11 (fun _ -> Char.chr (Random.State.int rand 256)) in
-    let ((a', _, b') as v) = Codec.decode_exn codec buf 0 in
-    let get x = Staged.unstage (Codec.get codec x) buf 0 in
+    let ((a', _, b') as v) = decode_ok (Codec.decode codec buf 0) in
+    let get x = (reader codec x) buf 0 in
     Alcotest.(check string) "a" (get a) a';
     Alcotest.(check string) "b" (get b) b';
     let out = Bytes.make 11 '\x00' in
@@ -844,14 +842,14 @@ let test_layout_pass () =
   let fast, _ = page ~params:false and slow, env = page ~params:true in
   let outcome c env buf =
     let v =
-      match Codec.validate_exn ?env c buf 0 with
-      | () -> "ok"
-      | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
+      match Codec.validate ?env c buf 0 with
+      | Ok () -> "ok"
+      | Error e -> Fmt.str "%a" Error.pp e
     in
     let d =
       match Codec.decode ?env c buf 0 with
       | Ok (_, _, a, _, rest) -> Fmt.str "ok %S %S" a rest
-      | Error e -> Fmt.str "%a" pp_parse_error e
+      | Error e -> Fmt.str "%a" Error.pp e
     in
     v ^ " / " ^ d
   in
@@ -888,9 +886,7 @@ let test_layout_size_overflow () =
       Bytes.set_uint16_be buf 0 0xffff;
       let decoded = Result.is_ok (Codec.decode c buf 0) in
       let validated =
-        match Codec.validate_exn c buf 0 with
-        | () -> true
-        | exception Wire.Parse_error _ -> false
+        match Codec.validate c buf 0 with Ok () -> true | Error _ -> false
       in
       Alcotest.(check bool) "decode refuses" false decoded;
       Alcotest.(check bool) "validate agrees with decode" decoded validated;
@@ -972,9 +968,9 @@ let test_layout_gated_optional () =
   (match Codec.decode c buf 0 with
   | Ok _ -> Alcotest.fail "decode accepted a missing payload"
   | Error _ -> ());
-  match Codec.validate_exn c buf 0 with
-  | () -> Alcotest.fail "validate accepted a missing payload"
-  | exception Wire.Parse_error _ -> ()
+  match Codec.validate c buf 0 with
+  | Ok () -> Alcotest.fail "validate accepted a missing payload"
+  | Error _ -> ()
 
 (* Fields are read in declaration order, so the first field whose decoding
    fails is the one reported. Nine fields used to be read last to first. *)
@@ -995,7 +991,7 @@ let test_decode_reads_in_order () =
       (fun _ _ _ _ _ _ _ _ _ -> ())
       Codec.[ f 1; f 2; f 3; f 4; f 5; f 6; f 7; f 8; f 9 ]
   in
-  Codec.decode_exn c (Bytes.make 9 '\x00') 0;
+  decode_ok (Codec.decode c (Bytes.make 9 '\x00') 0);
   Alcotest.(check (list int))
     "read order"
     [ 1; 2; 3; 4; 5; 6; 7; 8; 9 ]
@@ -1021,9 +1017,9 @@ let test_fresh_domain_validate_flat_in_validator_count () =
       (fun x -> x)
       Codec.[ (Field.v "x" uint8 $ fun x -> x) ]
   in
-  (* [wire_size_opt] forces the compile, which builds the validator. *)
+  (* [Codec.size] forces the compile, which builds the validator. *)
   for i = 1 to 10_000 do
-    ignore (Sys.opaque_identity (Codec.wire_size_opt (Fmt.kstr mk "S%d" i)))
+    ignore (Sys.opaque_identity (Codec.size (Fmt.kstr mk "S%d" i)))
   done;
   let c = mk "Last" in
   let buf = Bytes.make 8 '\007' in
@@ -1031,7 +1027,7 @@ let test_fresh_domain_validate_flat_in_validator_count () =
     Domain.join
       (Domain.spawn (fun () ->
            let before = Gc.allocated_bytes () in
-           Codec.validate_exn c buf 0;
+           decode_ok (Codec.validate c buf 0);
            (Gc.allocated_bytes () -. before) /. 8.))
   in
   Fmt.kstr
@@ -1083,7 +1079,7 @@ let test_v_defers_compilation () =
   let decoded, first = words (fun () -> Codec.decode c buf 0) in
   (match decoded with
   | Ok r -> Alcotest.(check string) "body" "abc" r.Deferred.body
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e);
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e);
   Fmt.kstr
     (fun msg -> Alcotest.(check bool) msg true (built < first))
     "Codec.v allocates less than the first decode, which compiles (v: %.0f \
@@ -1098,7 +1094,7 @@ let test_first_use_races_across_domains () =
   let decode () =
     match Codec.decode c buf 0 with
     | Ok r -> r.Deferred.body
-    | Error e -> Fmt.str "%a" pp_parse_error e
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   let ds = List.init 4 (fun _ -> Domain.spawn decode) in
   List.iter (fun d -> Alcotest.(check string) "body" "abc" (Domain.join d)) ds
@@ -1154,9 +1150,9 @@ let test_v_rejects_bad_description_eagerly () =
    bound, and on a buffer too short for the frame. *)
 let test_fixed_spans_keep_intervals () =
   let outcome c buf =
-    match Codec.validate_exn c buf 0 with
-    | () -> "ok"
-    | exception Wire.Parse_error e -> Fmt.str "%a" pp_parse_error e
+    match Codec.validate c buf 0 with
+    | Ok () -> "ok"
+    | Error e -> Fmt.str "%a" Error.pp e
   in
   let comparisons =
     Expr.

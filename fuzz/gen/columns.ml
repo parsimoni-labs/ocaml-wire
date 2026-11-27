@@ -545,7 +545,7 @@ let flat ?(impure = false) name (groups : group list) : cell array t =
   let codec = Wire.Codec.v name (k []) fields in
   let general = Wire.Private.Testing.general codec in
   let encode v =
-    let buf = Bytes.create (Wire.Codec.size_of_value general v) in
+    let buf = Bytes.create (Wire.Codec.encoded_size general v) in
     Wire.Codec.encode general v buf 0;
     buf
   in

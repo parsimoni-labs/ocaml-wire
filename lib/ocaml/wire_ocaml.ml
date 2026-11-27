@@ -8,37 +8,251 @@ open Scan_module
 
 (* The generator is built in phases, one module each, in dependency order:
    [Planner] (a codec read as a plan of nodes), [Emitter] (the checks and reads
-   of a plan as OCaml text), [Record_module] (the record, its decoder, encoder
-   and accessors) and [Scan_module] (the scanner over structured codecs). This
-   module holds the interface. *)
+   of a plan as OCaml text), then the parts of the one module of a codec,
+   [Record_module] (a fixed record's members), [Scan_module] (the walks and
+   folds) and [View_module] (the views), which [Writer] puts together with
+   their interface ([Interface]). This module holds the interface. *)
 
 type target = [ `OCaml | `OxCaml ]
 type map = { path : string; ocaml : string; typ : Planner.typ }
 
 let map path ~typ m = { path; ocaml = typ; typ = Typ m }
-let ident = ident
-let typs = Option.map (List.map (fun m -> (m.path, m.typ)))
 let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
+let outputs = scanner_fields
 
-let ml ?target ?simd ?make ?maps ~codec c =
-  ml ?target ?simd ?make:(Option.map fst make) ?maps:(typs maps) ~codec c
+type view = { module_name : string option; members : view_member list }
 
-let mli ?target ?simd ?make ?maps ~codec c =
-  Interface.record ?target ?simd ?make ?maps:(named maps) ~codec c
+and view_member =
+  | Int of { name : string; output : string; carrier : string option }
+  | Bool of { name : string; output : string }
+  | Record of { name : string; presence : string option; view : view }
+  | Bytes of { name : string; slice : bool }
 
-let bridge ?maps ~codec ~core c = bridge ?maps:(typs maps) ~codec ~core c
+(* The outputs of a record reached by the path [prefix] are named after it,
+   with the field's name as the folds hand it out, unescaped. *)
+let views c =
+  let t =
+    Option.get
+      (Writer.views (Writer.v ~require:`Walk ~codec:(Gen.to_struct c).name c))
+  in
+  let global prefix name = if prefix = "" then name else prefix ^ "_" ^ name in
+  let rec view prefix (r : View_module.record) =
+    {
+      module_name = r.module_name;
+      members =
+        List.map
+          (function
+            | View_module.Scalar { name; field } ->
+                let o = Option.get field.output in
+                Int
+                  {
+                    name;
+                    output = global prefix o.name;
+                    carrier = Option.map fst (View_module.carrier field);
+                  }
+            | View_module.Bytes { name; slice; _ } -> Bytes { name; slice }
+            | Present { name; presence } ->
+                Bool { name; output = global prefix presence.name }
+            | Sub { name; sub; presence } ->
+                let path = String.concat "_" (Option.get sub.path) in
+                Record
+                  {
+                    name;
+                    presence =
+                      Option.map
+                        (fun (o : output) -> global prefix o.name)
+                        presence;
+                    view =
+                      view (global prefix path)
+                        (List.find
+                           (fun (r : View_module.record) -> r.id = sub.codec_id)
+                           t.records);
+                  })
+          r.members;
+    }
+  in
+  view "" t.root
 
-let bridge_mli ?(maps = []) ~codec ~core c =
-  (* The checks the bridge would refuse, refused here too. *)
-  ignore (bridge ~maps ~codec ~core c);
-  Interface.bridge ~maps:(maps <> []) ~codec ~core
+let fstar ?fields ~codec c =
+  try Fstar_module.modules ?fields ~codec c
+  with Unsupported why -> refuse ~codec why
 
-let scanner_fields = scanner_fields
+(* {1 The generator} *)
 
-let scanner ?target ?fields ?step ~codec c =
-  scanner ?target ?fields ?step ~codec c
+type fold = Writer.fold
 
-let scanner_mli = Interface.scanner
+let fold ?outputs name = { Writer.name; outputs }
+
+(* The compiler the generator runs on, which is the one that builds what it
+   writes. *)
+let building : target =
+  match Sys.ocaml_release.extra with Some (_, "ox") -> `OxCaml | _ -> `OCaml
+
+type t =
+  | T : {
+      name : string;
+      target : target;
+      simd : bool;
+      folds : fold list;
+      maps : map list option;
+      codec : 'r Wire.Codec.t;
+    }
+      -> t
+
+(* The module of a visitor's source file: [flow_step.ml] is [Flow_step]. *)
+let visitor_module file =
+  let base = Filename.basename file in
+  let stem =
+    match String.index_opt base '.' with
+    | Some i -> String.sub base 0 i
+    | None -> base
+  in
+  String.capitalize_ascii stem
+
+let writer (T t) =
+  let require =
+    if t.simd || Option.is_some t.maps then `Record
+    else match t.folds with _ :: _ -> `Walk | [] -> `Any
+  in
+  Writer.v ~target:t.target ~simd:t.simd ?maps:(named t.maps) ~folds:t.folds
+    ~require ~codec:(Gen.to_struct t.codec).name t.codec
+
+(* The module each fold of [t] calls by name, from [visitors], its source
+   file by fold: each names a fold [t] declares, and each fold has one. *)
+let visitor_modules (T t) visitors =
+  List.iter
+    (fun (n, _) ->
+      if not (List.exists (fun (f : fold) -> f.name = n) t.folds) then
+        Fmt.invalid_arg "Wire_ocaml: %s declares no fold %S" t.name n)
+    visitors;
+  List.map
+    (fun (f : fold) ->
+      match List.assoc_opt f.name visitors with
+      | Some file -> (f.name, visitor_module file)
+      | None ->
+          Fmt.invalid_arg
+            "Wire_ocaml: %s declares the fold %S, which no visitor names" t.name
+            f.name)
+    t.folds
+
+let v ?name ?(target = building) ?(simd = false) ?(folds = []) ?maps codec =
+  let name =
+    match name with
+    | Some n -> n
+    | None ->
+        String.lowercase_ascii
+          (View_module.module_of_codec (Gen.to_struct codec).name)
+  in
+  let t = T { name; target; simd; folds; maps; codec } in
+  (* Refused when declared, not when printed. *)
+  ignore (writer t : Writer.t);
+  t
+
+let name (T t) = t.name
+
+let to_ml ?(twin = false) ?(visitors = []) t =
+  let visitors = visitor_modules t visitors and w = writer t in
+  if twin then Writer.twin_ml ~visitors w else Writer.ml ~visitors w
+
+let to_mli ?(twin = false) ?(visitors = []) t =
+  let visitors = visitor_modules t visitors and w = writer t in
+  if twin then Writer.twin_mli ~visitors w else Writer.mli ~visitors w
+
+(* {2 The generator's command line} *)
+
+let usage =
+  "usage: gen.exe [--visitor FOLD=FILE]... FILE...\n\
+   Writes each FILE, <name>.ml or <name>.mli, the module or the interface of \
+   the module <name>, and <name>_codec.ml or <name>_codec.mli, its interpreted \
+   twin; FOLD of each written module calls the visitor of the source file FILE \
+   by name."
+
+let fail fmt =
+  Fmt.kstr
+    (fun msg ->
+      Fmt.epr "%s: %s@.%s@." Sys.executable_name msg usage;
+      exit 2)
+    fmt
+
+(* The visitors and the files a command line names. *)
+let rec parse visitors files = function
+  | [] -> (List.rev visitors, List.rev files)
+  | "--visitor" :: v :: rest -> (
+      match String.index_opt v '=' with
+      | Some i ->
+          let fold = String.sub v 0 i
+          and file = String.sub v (i + 1) (String.length v - i - 1) in
+          parse ((fold, file) :: visitors) files rest
+      | None -> fail "--visitor %s: expected FOLD=FILE" v)
+  | "--visitor" :: [] -> fail "--visitor needs FOLD=FILE"
+  | file :: rest -> parse visitors (file :: files) rest
+
+(* The module a file is written from and which of its texts it holds:
+   [stack.mli] is the interface of [stack]. *)
+let target_of file =
+  let base = Filename.basename file in
+  let twin = "_codec" in
+  let unit stem =
+    if String.ends_with ~suffix:twin stem then
+      (String.sub stem 0 (String.length stem - String.length twin), true)
+    else (stem, false)
+  in
+  match String.split_on_char '.' base with
+  | stem :: "ml" :: _ -> (unit stem, `Ml)
+  | stem :: "mli" :: _ -> (unit stem, `Mli)
+  | _ -> fail "%s: not a .ml or .mli file" file
+
+let write file text =
+  let oc = open_out_bin file in
+  output_string oc text;
+  close_out oc
+
+let main ts =
+  let visitors, files = parse [] [] (List.tl (Array.to_list Sys.argv)) in
+  if files = [] then fail "no file to write";
+  let written =
+    List.map
+      (fun file ->
+        let (stem, twin), kind = target_of file in
+        match List.find_opt (fun t -> name t = stem) ts with
+        | None ->
+            fail "%s: no module %s among %s" file stem
+              (String.concat ", " (List.map name ts))
+        | Some t -> (file, (kind, twin), t))
+      files
+  in
+  List.iter
+    (fun (fold, file) ->
+      if
+        not
+          (List.exists
+             (fun (_, _, T t) ->
+               List.exists (fun (f : fold) -> f.name = fold) t.folds)
+             written)
+      then
+        fail "--visitor %s=%s: no module written declares a fold %s" fold file
+          fold)
+    visitors;
+  (* Every text is written once all are: a fold no visitor names refuses
+     the command line before any file is written. *)
+  let texts =
+    List.map
+      (fun (file, kind, (T t as m)) ->
+        let visitors =
+          List.filter
+            (fun (fold, _) ->
+              List.exists (fun (f : fold) -> f.name = fold) t.folds)
+            visitors
+        in
+        match kind with
+        | `Ml, twin -> (file, to_ml ~twin ~visitors m)
+        | `Mli, twin -> (file, to_mli ~twin ~visitors m))
+      written
+  in
+  List.iter (fun (file, text) -> write file text) texts
+
+(* The module of a codec, as [Plan] reads it. *)
+let declared = v
 
 (* {1 The plan, for other backends} *)
 
@@ -107,7 +321,7 @@ module Plan = struct
     | If of bool T.expr * choice * choice
 
   type join = Decision.join = Joined | Copied
-  type short_frames = Decision.short_frames = Apart | Inline | Walked
+  type short_frames = Decision.short_frames = Apart | Inline
 
   type decision = Decision.t =
     | Walk of { name : string; values : values; known : int }
@@ -157,10 +371,11 @@ module Plan = struct
 
   let pp_decision = Decision.pp
 
-  let decisions ?target ?fields ?step c =
+  let decisions ?(target = `OCaml) ?(folds = []) ?(visitors = []) c =
     let acc = ref [] in
     let decide d = acc := d :: !acc in
-    ignore (Scan_module.scanner ~decide ?target ?fields ?step ~codec:"c" c);
+    let t = declared ~target ~folds c in
+    ignore (Writer.ml ~decide ~visitors:(visitor_modules t visitors) (writer t));
     List.rev !acc
 
   let select t names =
@@ -208,4 +423,46 @@ module Plan = struct
   let shared tree =
     let shared, case_shared, _ = Dispatch_tree.reach tree in
     (shared, case_shared)
+
+  type nonrec sub = sub = {
+    var : string;
+    path : string list option;
+    codec_id : int;
+    codec_name : string;
+    fixed_size : int option;
+    codec : T.struct_;
+  }
+
+  type member = View_module.member =
+    | Scalar of { name : string; field : field }
+    | Present of { name : string; presence : output }
+    | Sub of { name : string; sub : sub; presence : output option }
+    | Bytes of { name : string; label : string; at : bytes_at; slice : bool }
+
+  and bytes_at = View_module.bytes_at = Fixed of field | Sized of node
+
+  type record = View_module.record = {
+    id : int;
+    codec_name : string;
+    module_name : string option;
+    struct_ : T.struct_;
+    plan : plan;
+    subs : sub list;
+    fixed : int;
+    fixed_size : int option;
+    members : member list;
+  }
+
+  type records = View_module.t = {
+    root : record;
+    records : record list;
+    size : int option;
+  }
+
+  let records ?reserved c =
+    match View_module.of_codec ?reserved c with
+    | r -> r
+    | exception Unsupported why -> invalid_arg why
+
+  let settable = View_module.settable
 end

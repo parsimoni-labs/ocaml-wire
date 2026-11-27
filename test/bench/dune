@@ -5,6 +5,7 @@
 
 (executable
  (name bench)
+ (modules bench)
  (enabled_if
   (= %{env:BUILD_EVERPARSE=} "1"))
  (libraries

@@ -60,7 +60,7 @@ From the repository root:
 
 ```sh
 mkdir -p _build/hardcaml-artifacts
-hw env BUILD_EVERPARSE=1 WIRE_DIFF_JOBS=1 WIRE_FUZZ_REPEAT=1000 \
+hw env BUILD_EVERPARSE=1 WIRE_3D_JOBS=1 WIRE_FUZZ_REPEAT=1000 \
   dune build --root . --build-dir _build_hw --profile release -j 2 \
   @fuzz/diff/hardcaml/runtest @fuzz/diff/hardcaml-stream/runtest \
   @test/hardcaml/runtest

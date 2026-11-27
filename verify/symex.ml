@@ -87,7 +87,7 @@ and ctx = {
 (* A check of the generated code: a condition that sends it to a rejection,
    or a load that checks its own bounds. *)
 and check = { id : string; text : string; check_kind : check_kind }
-and check_kind = Branch | Checked_load
+and check_kind = Branch | Argument | Checked_load
 
 and obligation = {
   kind : kind;
@@ -395,10 +395,7 @@ let continuation name answer =
   let run _ctx path _loc _args k = k path (Answer answer) in
   { pname = name; arity = None; run }
 
-let accept = continuation "valid" true
-let reject = continuation "invalid" false
-
-(* The step scanners call their consumer by name, as [Step]. *)
+(* A fold calls its visitor by name, as [Step]. *)
 let step_continuations =
   [ continuation "Step.valid" true; continuation "Step.invalid" false ]
 
@@ -406,6 +403,15 @@ let compare64 loc a b =
   let a = i64 loc a and b = i64 loc b in
   Int
     (Smt.ite (Smt.slt a b) (Smt.int63 (-1))
+       (Smt.ite (Smt.eq a b) (Smt.int63 0) (Smt.int63 1)))
+
+(* [Int64.unsigned_compare] and the runtime's [unsigned_compare], OxCaml's
+   [%int64#_unsigned_compare]: -1, 0 or 1 as [a] is below, equal to or above
+   [b], both read as unsigned 64-bit integers. *)
+let unsigned_compare64 loc a b =
+  let a = i64 loc a and b = i64 loc b in
+  Int
+    (Smt.ite (Smt.ult a b) (Smt.int63 (-1))
        (Smt.ite (Smt.eq a b) (Smt.int63 0) (Smt.int63 1)))
 
 let int64_prims prefix =
@@ -428,6 +434,9 @@ let int64_prims prefix =
     shift (p "shift_right") 64 Smt.ashr i64 (fun t -> I64 t);
     binary (p "compare") 2 (fun loc -> function
       | [ a; b ] -> compare64 loc a b
+      | _ -> assert false);
+    binary (p "unsigned_compare") 2 (fun loc -> function
+      | [ a; b ] -> unsigned_compare64 loc a b
       | _ -> assert false);
     binary (p "equal") 2 (fun loc -> function
       | [ a; b ] -> Bool (Smt.eq (i64 loc a) (i64 loc b))
@@ -501,10 +510,28 @@ let conversion_prims =
     unary "Wire_runtime.Target.offset" (fun loc a ->
         Int (Smt.extract 62 0 (i64 loc a)));
   ]
+  (* A narrow carrier's [unsafe_of_int] is the identity on the [int] its
+     accessor loaded. *)
+  @ List.map
+      (fun m -> unary (m ^ ".unsafe_of_int") (fun loc a -> Int (int loc a)))
+      [
+        "Wire_runtime.UInt8";
+        "Wire_runtime.UInt16";
+        "Wire_runtime.SInt8";
+        "Wire_runtime.SInt16";
+      ]
+
+(* The OxCaml runtime's comparison of two int64_u. *)
+let runtime_prims =
+  [
+    binary "Wire_runtime.Target.unsigned_compare" 2 (fun loc -> function
+      | [ a; b ] -> unsigned_compare64 loc a b
+      | _ -> assert false);
+  ]
 
 let prims =
   let l =
-    step_continuations @ ref_prims @ conversion_prims
+    step_continuations @ ref_prims @ conversion_prims @ runtime_prims
     @ [
         int_op "+" Smt.add;
         int_op "-" Smt.sub;
@@ -534,13 +561,11 @@ let prims =
         raising "failwith";
         raising "raise";
         length "Bytes.length";
-        length "Wire_runtime.Unchecked.Bigstring.length";
       ]
     @ int64_prims "Int64"
     @ int64_prims "Wire_runtime.Target.Int64_u"
     @ int64_prims "Stdlib_upstream_compatible.Int64_u"
     @ loads "Wire_runtime.Unchecked" ~at:false
-    @ loads "Wire_runtime.Unchecked.Bigstring" ~at:false
     @ loads "Wire_runtime.Target.Local" ~at:false
     @ loads "Wire_runtime.Target.Local" ~at:true
     @ checked_loads "Bytes"
@@ -826,8 +851,16 @@ let is_rejection e =
   | Pexp_construct ({ txt = Lident "false"; _ }, None) -> true
   | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
       match Longident.flatten txt with
-      | [ ("invalid" | "invalid_arg" | "fail") ] | [ "Step"; "invalid" ] -> true
+      | [ ("invalid_arg" | "fail") ] | [ "Step"; "invalid" ] -> true
       | _ -> false)
+  | _ -> false
+
+(* Whether [e] rejects a misuse of the API, with [Invalid_argument]. *)
+let is_misuse e =
+  match e.pexp_desc with
+  | Pexp_apply
+      ({ pexp_desc = Pexp_ident { txt = Lident "invalid_arg"; _ }; _ }, _) ->
+      true
   | _ -> false
 
 let rec disjuncts e =
@@ -963,11 +996,11 @@ and eval ctx env path e k =
       in
       if is_rejection t then
         (* Each disjunct of a condition that rejects is a check. *)
+        let kind = if is_misuse t then Argument else Branch in
         let kept =
           List.filter
             (fun d ->
-              not
-                (meet ctx d.pexp_loc Branch (Pprintast.string_of_expression d)))
+              not (meet ctx d.pexp_loc kind (Pprintast.string_of_expression d)))
             (disjuncts c)
         in
         eval_or ctx env path kept (fun path vc ->
@@ -1488,18 +1521,20 @@ let load_reference ctx ~file src =
 
 (* {1 Entries} *)
 
-type input = Int_input of string | Buffer_input of string
+type input =
+  | Int_input of string
+  | I64_input of string
+  | Buffer_input of string
 
 let entry_env inputs =
   let locals =
     List.fold_left
       (fun m -> function
         | Int_input x -> SMap.add x (Int (Smt.name x (Smt.Bv 63))) m
+        | I64_input x -> SMap.add x (I64 (Smt.name x (Smt.Bv 64))) m
         | Buffer_input x -> SMap.add x Buffer m)
       SMap.empty inputs
   in
-  let locals = SMap.add "valid" (Prim (accept, [])) locals in
-  let locals = SMap.add "invalid" (Prim (reject, [])) locals in
   { locals; scope = [] }
 
 (* [formula ctx env src] is the boolean expression [src] as one term: the

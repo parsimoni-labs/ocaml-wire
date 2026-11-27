@@ -7,7 +7,7 @@
 
 open Wire
 
-let summary (e : parse_error) =
+let summary (e : Error.t) =
   let where = Fmt.str "%s@%d" (String.concat "." e.field) e.at in
   match e.kind with
   | Unexpected_eof _ -> "eof"
@@ -15,7 +15,7 @@ let summary (e : parse_error) =
   | Constraint_failed { which = Where; _ } -> where ^ " where"
   | Constraint_failed { which = Action | Per_byte; _ } -> where ^ " other"
   | Invalid_enum _ -> where ^ " enum"
-  | kind -> Fmt.str "%s %a" where pp_error_kind kind
+  | kind -> Fmt.str "%s %a" where Error.pp_kind kind
 
 let result = function Ok _ -> "ok" | Error e -> summary e
 
@@ -219,6 +219,66 @@ let test_region () =
   check region "\x04\x0b" "eof";
   check region "\x04\x0b\x00\x00\x00" "o.x@1 field"
 
+(* A field after a variable-size one sits at an offset read from the input. Its
+   error names that offset, as a field at a fixed offset does, whichever check
+   refuses it. *)
+let f_sa = Field.v "a" ~self_constraint:(fun s -> Expr.(s = int 1)) uint8
+let f_slen = Field.v "len" uint8
+
+let after_span =
+  Codec.v "AfterSpan"
+    (fun a l d t -> (a, l, d, t))
+    Codec.
+      [
+        (f_sa $ fun (a, _, _, _) -> a);
+        (f_slen $ fun (_, l, _, _) -> l);
+        ( Field.v "data" (byte_slice ~size:(Field.ref f_slen))
+        $ fun (_, _, d, _) -> d );
+        ( Field.v "t" ~self_constraint:(fun s -> Expr.(s = int 2)) uint8
+        $ fun (_, _, _, t) -> t );
+      ]
+
+let span_then field =
+  Codec.v "SpanThen"
+    (fun l d x -> (l, d, x))
+    Codec.
+      [
+        (f_slen $ fun (l, _, _) -> l);
+        ( Field.v "data" (byte_slice ~size:(Field.ref f_slen)) $ fun (_, d, _) ->
+          d );
+        (field $ fun (_, _, x) -> x);
+      ]
+
+let test_after_span () =
+  check after_span "\001\001a\003" "t@3 field";
+  check after_span "\001\002ab\003" "t@4 field";
+  check after_span "\002\001a\002" "a@0 field";
+  let k = Field.v "k" (enum "K" [ ("A", 1); ("B", 2) ] uint8) in
+  check (span_then k) "\001a\007" "k@2 enum";
+  check (span_then k) "\002ab\007" "k@3 enum";
+  let v = Field.v "v" (variants "V" [ ("A", `A) ] uint8) in
+  check (span_then v) "\001a\007" "v@2 enum";
+  let l = Field.v "l" (lookup [ `A; `B ] uint8) in
+  check (span_then l) "\001a\007" "l@2 invalid tag: 7";
+  let w = Field.v "w" (where Expr.false_ uint16be) in
+  check (span_then w) "\001a\000\000" "w@2 field";
+  let c = Field.v "c" ~constraint_:Expr.(Field.ref f_slen = int 5) uint8 in
+  check (span_then c) "\001a\000" "c@2 field";
+  let u = Field.v "u" ~self_int64:(fun s -> Expr.(s = int64 5L)) uint64 in
+  check (span_then u) "\001a\000\000\000\000\000\000\000\000" "u@2 field";
+  let x = Field.v "x" ~action:(Action.on_success [ Action.abort ]) uint8 in
+  check (span_then x) "\001a\000" "x@2 other"
+
+(* [at] is absolute: a record decoded at offset 2 reports its field at 2 more. *)
+let test_after_span_base () =
+  let buf = Bytes.of_string "\255\255\001\001a\003" in
+  Alcotest.(check string)
+    "decode" "t@5 field"
+    (result (Codec.decode after_span buf 2));
+  Alcotest.(check string)
+    "validate" "t@5 field"
+    (result (Codec.validate after_span buf 2))
+
 let suite =
   ( "codec_fault",
     [
@@ -234,4 +294,7 @@ let suite =
       Alcotest.test_case "where over a field" `Quick test_where_field;
       Alcotest.test_case "where over a param" `Quick test_where_param;
       Alcotest.test_case "region" `Quick test_region;
+      Alcotest.test_case "after a span" `Quick test_after_span;
+      Alcotest.test_case "after a span, at an offset" `Quick
+        test_after_span_base;
     ] )

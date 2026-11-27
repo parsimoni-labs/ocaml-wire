@@ -23,14 +23,13 @@ let[@inline] mul a b =
 (* [Value_out_of_range] carries an [int64], but a product may overflow that as
    well as the native int. The first value on the overflowing side is enough
    to report the failed range check without wrapping its diagnostic too. *)
-let[@inline never] overflow ~positive =
+let[@inline never] [@zero_alloc assume error] overflow ~positive =
   let value =
     if positive then Int64.succ (Int64.of_int max_int)
     else Int64.pred (Int64.of_int min_int)
   in
-  raise
-    (Errors.Parse_error
-       { at = 0; field = []; kind = Value_out_of_range { value } })
+  Errors.fail
+    { Error.at = 0; field = []; kind = Error.Value_out_of_range { value } }
 
 let[@inline] checked_add a b =
   let sum = a + b in

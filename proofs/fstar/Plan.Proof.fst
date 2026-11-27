@@ -571,6 +571,73 @@ let prefix_words (o:opts) (rd:reader) (x:win) (w:st) (en:env) (fs:list field) (s
     words_ok_append x.wb x.len rd held fw;
     reads_w_ok x.wb x.len rd (held @ fw) en (posval en w.p) fs w.sc size
 
+(* {1 A region whose contents load no byte (f0bd4b6b)} *)
+
+(* The walk of such contents keeps the variables, sums and held words it
+   started from, and its ranges and facts hold. *)
+let like (w0 w:st) (en:env) : prop =
+  w.sc == w0.sc /\ w.sums == w0.sums /\ w.held == [] /\ None? w.p.pv /\
+  sound_ranges w.rg en /\ facts_ok w.sc en w.facts
+
+let refine_sound (w:st) (en:env) (c:cond)
+  : Lemma (requires sound_ranges w.rg en /\ facts_ok w.sc en w.facts /\ cond_closed w.sc c /\
+                    holds en c == Some true)
+          (ensures sound_ranges (refine w c).rg en /\ facts_ok (refine w c).sc en (refine w c).facts)
+  = match c with
+    | Ge a b ->
+      ev_eval en a; ev_eval en b;
+      let w' = refine w c in
+      introduce forall (v:var). (match w'.rg v with
+             | Some (lo, hi) -> in_int lo /\ in_int hi /\ lo <= en v /\ en v <= hi
+             | None -> True)
+      with (match a, b with
+            | V x, Lit _ -> assert (match w.rg x with Some (lo, hi) -> lo <= en x /\ en x <= hi | None -> True)
+            | Lit _, V x -> assert (match w.rg x with Some (lo, hi) -> lo <= en x /\ en x <= hi | None -> True)
+            | _ -> ())
+    | Eq _ _ -> ()
+
+let rec ahead_unread (b tail:list node)
+  : Lemma (requires unread_nodes b) (ensures ahead (b @ tail) == ahead b + ahead tail)
+  = match b with [] -> () | _ :: r -> ahead_unread r tail
+
+let rec wf_unread (sc:scope) (b tail:list node)
+  : Lemma (requires unread_nodes b /\ wf sc (b @ tail)) (ensures wf sc tail)
+  = match b with [] -> () | _ :: r -> wf_unread sc r tail
+
+(* Contents that load no byte reject, or reach [tail] from a walk like the
+   one they started from, at a constant position no further than the bytes
+   they need: so where every such walk of [tail] rejects, they reject. *)
+#push-options "--fuel 2 --ifuel 2 --z3rlimit 100"
+let rec unread_reject (o:opts) (rd:reader) (x:win) (w0 w:st) (en:env) (b tail:list node)
+  : Lemma (requires unread_nodes b /\ like w0 w en /\ w.p.at + ahead b <= max_string_length /\
+                    in_int (en x.lim) /\ wf w.sc (b @ tail) /\ ahead tail == 0 /\
+                    (forall (w2:st). (like w0 w2 en /\ w2.p.at <= max_string_length) ==>
+                                exec o rd x w2 en tail == Reject))
+          (ensures exec o rd x w en (b @ tail) == Reject)
+          (decreases b)
+  = match b with
+    | [] -> ()
+    | Prefix fs size :: b' ->
+      ahead_unread b tail;
+      ahead_unread b' tail;
+      let need = ahead (b @ tail) in
+      let k = if w.known >= need then w.known else need in
+      let w2 = { w with known = k - size; p = { w.p with at = w.p.at + size }; held = [] } in
+      unread_reject o rd x w0 w2 en b' tail
+    | Test c :: b' ->
+      (match holds en c with
+       | Some true -> refine_sound w en c; unread_reject o rd x w0 (refine w c) en b' tail
+       | _ -> ())
+#pop-options
+
+(* The walk after such contents, at the end of the region the bound of
+   which was left to it: what the walk before the region knew. *)
+let close_pending (len:nat) (lim:var) (w1 w2:st) (en:env) (h:list (int & nat))
+  : Lemma (requires inv len lim w1 en true /\ w2.sc == w1.sc /\ w2.sums == w1.sums /\
+                    sound_ranges w2.rg en /\ facts_ok w2.sc en w2.facts)
+          (ensures inv len lim ({ w2 with known = 0; p = w1.p; bounded = w1.bounded; held = h }) en true)
+  = ()
+
 let pos_bound (len:nat) (lim:var) (w:st) (en:env) (pending:bool)
   : Lemma (requires inv len lim w en pending) (ensures 0 <= w.p.at /\ (not pending ==> w.p.at <= len))
   = match w.p.pv with Some v -> assert (0 <= en v) | None -> ()
@@ -698,11 +765,12 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
       let ov = not (fits w.rg s) in
       let nonneg = not ov && nonnegative w s in
       let ends = end_range w (size_range w s) w.p in
+      let implied = o.drop && unread b && checks_next r && nonneg && Some? ends in
       if fits w.rg s then fits_ev w.rg en s;
       ev_eval en s;
       let opened (k:int)
         : Lemma (requires ev en s == Some k /\ k >= 0 /\ pv + k <= len /\ span_size w en s == Some k /\ pv >= 0)
-                (ensures (let w1 = bind_span w false n e s ends in
+                (ensures (let w1 = bind_span w implied n e s ends in
                           let en1 = upd (upd en n k) e (pv + k) in
                           let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held;
                                     frg = region_range w1 n } in
@@ -710,9 +778,9 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
                           let w' = { w1 with p = { pv = None; at = 0 }; known = fst (region_range w1 n); bounded = []; held = [] } in
                           exec o rd x' w' en1 (b @ (Close am :: r)) ==
                           spec rd (x.wb + pv) k ((x.wb, len, pv + k) :: fr) en1 0 (b @ (Close am :: r))))
-        = let w1 = bind_span w false n e s ends in
+        = let w1 = bind_span w implied n e s ends in
           let en1 = upd (upd en n k) e (pv + k) in
-          bind_span_ok len lim w en pending false n e s k;
+          bind_span_ok len lim w en pending implied n e s k;
           let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held;
                     frg = region_range w1 n } in
           let x' = { wb = x.wb + pv; len = k; lim = n; frames = f :: x.frames } in
@@ -726,7 +794,45 @@ let rec exec_spec (o:opts) (rd:reader) (x:win) (w:st) (en:env) (pending:bool) (l
           assert (held_ok o rd x' w');
           exec_spec o rd x' w' en1 false (b @ (Close am :: r))
       in
-      if mem (s, w.p) w.bounded then begin
+      if implied then begin
+        nonnegative_ok w en s;
+        let k = eval en s in
+        end_range_ok w en s k;
+        if pv + k <= len then opened k
+        else begin
+          (* The region runs past the window: its contents read nothing and
+             reject, or the check after it rejects. *)
+          let w1 = bind_span w implied n e s ends in
+          let en1 = upd (upd en n k) e (pv + k) in
+          bind_span_ok len lim w en pending implied n e s k;
+          let f = { fwb = x.wb; flen = len; flim = lim; fp = w1.p; fbounded = w1.bounded; fheld = w1.held;
+                    frg = region_range w1 n } in
+          let x' = { wb = x.wb + pv; len = k; lim = n; frames = f :: x.frames } in
+          let w' = { w1 with p = { pv = None; at = 0 }; known = fst (region_range w1 n); bounded = []; held = [] } in
+          frames_agree w.sc w1.sc en en1 x.wb len x.frames;
+          wf_unread w1.sc b (Close am :: r);
+          let close (w2:st)
+            : Lemma (requires like w' w2 en1 /\ w2.p.at <= max_string_length)
+                    (ensures exec o rd x' w2 en1 (Close am :: r) == Reject)
+            = max_string_length_small ();
+              close_pending len lim w1 w2 en1 w1.held;
+              let w3 = { w2 with known = 0; p = w1.p; bounded = w1.bounded; held = w1.held } in
+              let xo = { wb = x.wb; len = len; lim = lim; frames = x.frames } in
+              assert (held_ok o rd xo w3);
+              assert (frames_ok w3.sc en1 xo.wb xo.len xo.frames);
+              assert (wf w3.sc r);
+              exec_spec o rd xo w3 en1 true r;
+              assert (posval en1 w3.p == pv + k);
+              assert (exec o rd xo w3 en1 r == Reject);
+              assert (ev en1 (pos_expr w2.p) == Some w2.p.at);
+              assert (exec o rd x' w2 en1 (Close am :: r) ==
+                      (if am || ends_exact f.frg w2.p || w2.p.at = k then exec o rd xo w3 en1 r else Reject))
+          in
+          FStar.Classical.forall_intro (FStar.Classical.move_requires close);
+          unread_reject o rd x' w' w' en1 b (Close am :: r)
+        end
+      end
+      else if mem (s, w.p) w.bounded then begin
         bounded_size len lim w en pending s;
         let k = Some?.v (ev en s) in
         opened k

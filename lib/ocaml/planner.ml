@@ -126,7 +126,9 @@ let store_range = function
 
 let corners op (lo, hi) (lo', hi') =
   let apply a b =
-    match op a b with v -> Some v | exception Wire.Parse_error _ -> None
+    match op a b with
+    | v -> Some v
+    | exception exn when Types.is_parse_error exn -> None
   in
   let ends = [ apply lo lo'; apply lo hi'; apply hi lo'; apply hi hi' ] in
   if List.mem None ends then None
@@ -311,11 +313,27 @@ let rec is_leaf : type a. a T.typ -> bool = function
   | T.Map { inner; _ } -> is_leaf inner
   | t -> Option.is_some (leaf t)
 
+(* One past the longest [bytes]: no offset or size reaches it. *)
+let beyond = Sys.max_string_length + 1
+
+(* A record held by a field, kept as a span of its size where a plan keeps
+   records apart: [var] stands for that size. *)
+type sub = {
+  var : string;
+  path : string list option;
+  codec_id : int;
+  codec_name : string;
+  fixed_size : int option;
+  codec : T.struct_;
+}
+
 type st = {
   maps : maps;
   mutable count : int;
   mutable outs : output list;
   mutable ranges : (int * int) Smap.t;
+  mutable subs : sub list option;
+  mutable spans : (string list * node) list;
 }
 
 let fresh st prefix name =
@@ -463,7 +481,24 @@ and composite : type a.
     node list =
  fun st path ~name env t ->
   match t with
-  | T.Codec { codec_struct; _ } -> record st path codec_struct
+  | T.Codec { codec_struct; codec_id; codec_name; codec_fixed_size; _ } -> (
+      match st.subs with
+      | None -> record st path codec_struct
+      | Some subs ->
+          let var = fresh st "s" (Option.fold ~none:"anon" ~some:label name) in
+          st.ranges <- Smap.add var (0, beyond) st.ranges;
+          st.subs <-
+            Some
+              ({
+                 var;
+                 path;
+                 codec_id;
+                 codec_name;
+                 fixed_size = codec_fixed_size;
+                 codec = codec_struct;
+               }
+              :: subs);
+          [ Span (T.Ref (T.I, var)) ])
   | T.Single_elem { size; elem; at_most } ->
       let size = bind env size in
       [ Region (size, at_most, element st path ~name env elem) ]
@@ -483,9 +518,16 @@ and composite : type a.
         | [] -> acc
       in
       [ Gate (present, p, added [] st.outs, body) ]
-  | T.Byte_slice { size } -> [ Span (bind env size) ]
-  | T.Byte_array { size } -> [ Span (bind env size) ]
+  | T.Byte_slice { size } | T.Byte_array { size } ->
+      let span = Span (bind env size) in
+      (* A plan that keeps records apart names the span of each field. *)
+      (match (st.subs, path) with
+      | Some _, Some p -> st.spans <- (p, span) :: st.spans
+      | _ -> ());
+      [ span ]
   | T.Unit -> []
+  | T.Optional_or _ -> fail_unsupported "an optional field with a default"
+  | T.Repeat _ -> fail_unsupported "a repeated field"
   | t -> fail_unsupported "its type, %a" T.pp_typ t
 
 and element : type a.
@@ -507,8 +549,6 @@ and element : type a.
    with saturating arithmetic (Rust's [saturating_add]), capped at [beyond],
    one past the longest [bytes]. Their sums never wrap, and a bound check
    against [beyond] always fails. *)
-
-let beyond = Sys.max_string_length + 1
 
 let extent a b =
   if a < 0 || b < 0 then invalid_arg "Planner.extent: a negative extent"
@@ -546,17 +586,27 @@ let rec plan_wide ranges nodes =
       | Region (e, _, body) -> wide_expr ranges e || plan_wide ranges body)
     nodes
 
-let plan_of ?(maps = no_maps) (s : T.struct_) =
-  let st = { maps; count = 0; outs = []; ranges = Smap.empty } in
+let plan_with ?(maps = no_maps) ~subs (s : T.struct_) =
+  let st =
+    { maps; count = 0; outs = []; ranges = Smap.empty; subs; spans = [] }
+  in
   let nodes = fuse (record st (Some []) s) in
   let outputs = List.rev st.outs in
-  {
-    record = s.name;
-    nodes;
-    outputs;
-    ranges = st.ranges;
-    wide = plan_wide st.ranges nodes;
-  }
+  ( {
+      record = s.name;
+      nodes;
+      outputs;
+      ranges = st.ranges;
+      wide = plan_wide st.ranges nodes;
+    },
+    List.rev (Option.value ~default:[] st.subs),
+    List.rev st.spans )
+
+let plan_of ?maps s =
+  let plan, _, _ = plan_with ?maps ~subs:None s in
+  plan
+
+let plan_apart s = plan_with ~subs:(Some []) s
 
 let rec fields_of nodes =
   List.concat_map
@@ -787,7 +837,7 @@ let sum_add a b =
     { terms; const }
   with
   | s -> Some s
-  | exception Wire.Parse_error _ -> None
+  | exception exn when Types.is_parse_error exn -> None
 
 let sum_neg s =
   match
@@ -797,7 +847,7 @@ let sum_neg s =
     }
   with
   | s -> Some s
-  | exception Wire.Parse_error _ -> None
+  | exception exn when Types.is_parse_error exn -> None
 
 let sum_sub a b = Option.bind (sum_neg b) (sum_add a)
 
@@ -845,4 +895,4 @@ let sum_fails d =
     else (Option.value lhs ~default:(int 0), minus rhs (T.checked_sub 0 d.const))
   with
   | sides -> Some sides
-  | exception Wire.Parse_error _ -> None
+  | exception exn when Types.is_parse_error exn -> None

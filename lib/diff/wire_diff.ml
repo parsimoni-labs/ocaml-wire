@@ -23,16 +23,17 @@ type result =
   | Only_c_ok of string
   | Only_ocaml_ok of string
 
-let wire_size (Harness h) = Wire.Codec.wire_size h.codec
+let wire_size (Harness h) = Wire.Codec.min_size h.codec
 let string_of_record codec v = Wire.Codec.to_string codec v
-let record_of_string codec s = Wire.Codec.decode_exn codec (Bytes.of_string s) 0
+let record_of_string codec s = Wire.Codec.decode codec (Bytes.of_string s) 0
 
 let default_ocaml_read codec project buf =
-  let buf_too_short = String.length buf < Wire.Codec.wire_size codec in
+  let buf_too_short = String.length buf < Wire.Codec.min_size codec in
   if String.length buf = 0 || buf_too_short then None
   else
-    try Some (project (record_of_string codec buf))
-    with Wire.Parse_error _ -> None
+    match record_of_string codec buf with
+    | Ok r -> Some (project r)
+    | Error _ -> None
 
 let v ~name ~codec ~read ~write ~project ~equal ?ocaml_read () =
   let ocaml_read =
@@ -114,8 +115,9 @@ let harness ~name ~codec ~read ~write ~project ~equal ?ocaml_read () =
     in
     if String.length padded = 0 then None
     else
-      try Some (record_of_string codec_inner padded)
-      with Wire.Parse_error _ -> None
+      match record_of_string codec_inner padded with
+      | Ok r -> Some r
+      | Error _ -> None
   in
   {
     name = (match h with Harness h -> h.name);

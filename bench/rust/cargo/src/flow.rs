@@ -232,32 +232,77 @@ fn index(buf: &[u8]) -> Vec<(usize, usize)> {
 
 type Frames<'a> = &'a [(usize, usize)];
 
-// The scanner of `Packet_stack.capture`, handing out only the classifier's
-// fields.
-fn wire_rust_scanner<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
-    for &(o, n) in frames {
-        let Some(f) = flow_scan::scan(&buf[o..o + n]) else { continue };
-        if f.ipv4_present {
-            let p = if f.ipv4_tcp_present {
-                ports(f.ipv4_tcp_src_port, f.ipv4_tcp_dst_port)
-            } else if f.ipv4_udp_present {
-                ports(f.ipv4_udp_src_port, f.ipv4_udp_dst_port)
+/// The visitor of the fold `classify` of `Packet_stack.capture`, which
+/// hands each packet's key to the sink.
+pub struct Classify<'s, S: Sink>(pub &'s mut S);
+
+impl<S: Sink> flow_scan::classify::Visitor for Classify<'_, S> {
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    fn valid(
+        &mut self,
+        ipv4_present: bool,
+        ipv4_total_length: u16,
+        ipv4_protocol: u8,
+        ipv4_src: u32,
+        ipv4_dst: u32,
+        ipv4_tcp_present: bool,
+        ipv4_tcp_src_port: u16,
+        ipv4_tcp_dst_port: u16,
+        ipv4_udp_present: bool,
+        ipv4_udp_src_port: u16,
+        ipv4_udp_dst_port: u16,
+        ipv6_present: bool,
+        ipv6_payload_length: u16,
+        ipv6_next_header: u8,
+        ipv6_src0: u32,
+        ipv6_src1: u32,
+        ipv6_src2: u32,
+        ipv6_src3: u32,
+        ipv6_dst0: u32,
+        ipv6_dst1: u32,
+        ipv6_dst2: u32,
+        ipv6_dst3: u32,
+        ipv6_tcp_present: bool,
+        ipv6_tcp_src_port: u16,
+        ipv6_tcp_dst_port: u16,
+        ipv6_udp_present: bool,
+        ipv6_udp_src_port: u16,
+        ipv6_udp_dst_port: u16,
+    ) {
+        if ipv4_present {
+            let p = if ipv4_tcp_present {
+                ports(ipv4_tcp_src_port, ipv4_tcp_dst_port)
+            } else if ipv4_udp_present {
+                ports(ipv4_udp_src_port, ipv4_udp_dst_port)
             } else {
                 0
             };
-            t.add4(f.ipv4_src, f.ipv4_dst, f.ipv4_protocol, p, f.ipv4_total_length as u64);
-        } else if f.ipv6_present {
-            let p = if f.ipv6_tcp_present {
-                ports(f.ipv6_tcp_src_port, f.ipv6_tcp_dst_port)
-            } else if f.ipv6_udp_present {
-                ports(f.ipv6_udp_src_port, f.ipv6_udp_dst_port)
+            self.0.add4(ipv4_src, ipv4_dst, ipv4_protocol, p, ipv4_total_length as u64);
+        } else if ipv6_present {
+            let p = if ipv6_tcp_present {
+                ports(ipv6_tcp_src_port, ipv6_tcp_dst_port)
+            } else if ipv6_udp_present {
+                ports(ipv6_udp_src_port, ipv6_udp_dst_port)
             } else {
                 0
             };
-            let s = [f.ipv6_src0, f.ipv6_src1, f.ipv6_src2, f.ipv6_src3];
-            let d = [f.ipv6_dst0, f.ipv6_dst1, f.ipv6_dst2, f.ipv6_dst3];
-            t.add6(s, d, f.ipv6_next_header, p, 40 + f.ipv6_payload_length as u64);
+            let s = [ipv6_src0, ipv6_src1, ipv6_src2, ipv6_src3];
+            let d = [ipv6_dst0, ipv6_dst1, ipv6_dst2, ipv6_dst3];
+            self.0.add6(s, d, ipv6_next_header, p, 40 + ipv6_payload_length as u64);
         }
+    }
+
+    #[inline(always)]
+    fn invalid(&mut self) {}
+}
+
+// The fold `classify` of `Packet_stack.capture`, handing out only the
+// classifier's fields, over each frame.
+fn wire_rust_scanner<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
+    let mut v = Classify(t);
+    for &(o, n) in frames {
+        flow_scan::classify(&mut v, buf, o, n);
     }
 }
 
@@ -266,14 +311,14 @@ fn wire_rust_scanner<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
 fn linked_ports(p: &[u8], o: usize, proto: u8) -> Option<u32> {
     match proto {
         6 => {
-            let t = tcp::Valid::at(p, o).ok()?;
+            let t = tcp::check(p, o).get()?;
             if o + t.data_offset() as usize * 4 > p.len() {
                 return None;
             }
             Some(ports(t.src_port(), t.dst_port()))
         }
         17 => {
-            let u = udp::Valid::at(p, o).ok()?;
+            let u = udp::check(p, o).get()?;
             Some(ports(u.src_port(), u.dst_port()))
         }
         _ => Some(0),
@@ -283,28 +328,28 @@ fn linked_ports(p: &[u8], o: usize, proto: u8) -> Option<u32> {
 fn wire_rust_linked<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
     for &(o, n) in frames {
         let p = &buf[o..o + n];
-        let Ok(e) = eth::Valid::new(p) else { continue };
+        let Some(e) = eth::check(p, 0).get() else { continue };
         match e.ether_type() {
             IPV4 => {
-                let Ok(ip) = ipv4::Valid::at(p, eth::SIZE) else { continue };
+                let Some(ip) = ipv4::check(p, eth::MIN_SIZE).get() else { continue };
                 let hlen = ip.ihl() as usize * 4;
                 let total = ip.total_length();
-                if (total as usize) < hlen || eth::SIZE + hlen > p.len() {
+                if (total as usize) < hlen || eth::MIN_SIZE + hlen > p.len() {
                     continue;
                 }
                 let proto = ip.protocol();
                 let pt = if ip.flags() & 1 != 0 || ip.fragment_offset() != 0 {
                     0
                 } else {
-                    let Some(pt) = linked_ports(p, eth::SIZE + hlen, proto) else { continue };
+                    let Some(pt) = linked_ports(p, eth::MIN_SIZE + hlen, proto) else { continue };
                     pt
                 };
                 t.add4(ip.src_addr(), ip.dst_addr(), proto, pt, total as u64);
             }
             IPV6 => {
-                let Ok(ip) = ipv6::Valid::at(p, eth::SIZE) else { continue };
+                let Some(ip) = ipv6::check(p, eth::MIN_SIZE).get() else { continue };
                 let proto = ip.next_header();
-                let Some(pt) = linked_ports(p, eth::SIZE + ipv6::SIZE, proto) else { continue };
+                let Some(pt) = linked_ports(p, eth::MIN_SIZE + ipv6::MIN_SIZE, proto) else { continue };
                 let s = [ip.src0(), ip.src1(), ip.src2(), ip.src3()];
                 let d = [ip.dst0(), ip.dst1(), ip.dst2(), ip.dst3()];
                 t.add6(s, d, proto, pt, 40 + ip.payload_length() as u64);

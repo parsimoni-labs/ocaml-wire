@@ -85,7 +85,7 @@ let test_agrees_with_codec () =
       | _ -> assert false)
   in
   let values = [ 5; 17; 99; 3000; 2; 41; 0xABCDE ] in
-  let size = Codec.wire_size c in
+  let size = Codec.min_size c in
   let buf = Bytes.make size '\000' in
   Codec.encode c values buf 0;
   let laid, laid_size = place spec in
@@ -145,12 +145,12 @@ let member_c_type mk =
       (fun _ a -> a)
       Codec.[ (f_g $ fun _ -> UInt8.zero); (f_a $ fun a -> a) ]
   in
-  let fields = Everparse.plug_fields (Everparse.project ~mode:`Ffi c) in
+  let fields = Everparse.visitor_fields (Everparse.project ~mode:`Ffi c) in
   match List.find_opt (fun f -> f.Everparse.name = "a") fields with
   | Some f -> f.c_type
   | None -> Alcotest.failf "no visitor field a"
 
-let test_plug_member_c_types () =
+let test_visitor_member_c_types () =
   let id t = map ~decode:Fun.id ~encode:Fun.id t in
   let static t _ = Field.optional "a" ~present:Expr.true_ t in
   let gated t g = Field.optional "a" ~present:Expr.(g <> int 0) t in
@@ -198,5 +198,5 @@ let suite =
       Alcotest.test_case "agrees with the codec" `Quick test_agrees_with_codec;
       Alcotest.test_case "leaf types" `Quick test_leaf;
       Alcotest.test_case "visitor member C types" `Quick
-        test_plug_member_c_types;
+        test_visitor_member_c_types;
     ] )

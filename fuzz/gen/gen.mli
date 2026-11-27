@@ -116,7 +116,7 @@ val triple_fields :
 
 val encode_via_codec : 'a Wire.Codec.t -> 'a -> bytes
 (** [encode_via_codec codec v] is the canonical encoding of [v]: a buffer sized
-    by [size_of_value] and filled by [encode]. *)
+    by [encoded_size] and filled by [encode]. *)
 
 val unlisted_enum_gen : mask:int -> int list -> int Alcobar.gen
 (** [unlisted_enum_gen ~mask valid] generates numbers under [mask] that are not

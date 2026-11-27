@@ -220,7 +220,7 @@ let bit inner =
     Alcobar.map
       Alcobar.[ Alcobar.bool ]
       (fun b ->
-        let sz = Wire.Codec.size_of_value codec b in
+        let sz = Wire.Codec.encoded_size codec b in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec b buf 0;
         (b, buf))
@@ -822,7 +822,7 @@ let opt_dyn_span_positive codec =
           (if present then Some (Wire.UInt16.v v) else None),
           String.make tail_len '\x00' )
       in
-      let sz = Wire.Codec.size_of_value codec value in
+      let sz = Wire.Codec.encoded_size codec value in
       let buf = Bytes.create sz in
       Wire.Codec.encode codec value buf 0;
       (value, buf))
@@ -929,7 +929,7 @@ let union_span_positive codec =
         | _ -> Unknown (Wire.UInt8.v tag, Wire.UInt8.v (v land 0xff))
       in
       let value = (String.make span_len 'x', body, Wire.UInt8.v tail) in
-      let buf = Bytes.create (Wire.Codec.size_of_value codec value) in
+      let buf = Bytes.create (Wire.Codec.encoded_size codec value) in
       Wire.Codec.encode codec value buf 0;
       (value, buf))
 
@@ -1068,7 +1068,7 @@ let casetype_tagged name tag lift cases =
                 (fun (s : env_strategy) -> s.positive (Wire.Codec.env codec))
                 env_strategy
             in
-            let buf = Bytes.create (Wire.Codec.size_of_value codec v) in
+            let buf = Bytes.create (Wire.Codec.encoded_size codec v) in
             Wire.Codec.encode ?env codec v buf 0;
             (v, buf)))
   in

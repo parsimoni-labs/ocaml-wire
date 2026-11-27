@@ -60,7 +60,7 @@ cases of that time with 20,000 inputs each in combinational, registered and
 internally pipelined modes.
 
 ```sh
-hw env BUILD_EVERPARSE=1 WIRE_DIFF_JOBS=1 WIRE_FUZZ_REPEAT=20000 \
+hw env BUILD_EVERPARSE=1 WIRE_3D_JOBS=1 WIRE_FUZZ_REPEAT=20000 \
   dune build --root . --build-dir _build_hw --profile release -j 2 \
   @fuzz/diff/hardcaml/runtest
 hw dune exec --root . --build-dir _build_hw --profile release -j 2 \

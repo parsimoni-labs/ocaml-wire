@@ -16,6 +16,9 @@ let[@inline never] out_of_range n =
 let[@inline] v n = if n lsr 8 <> 0 then out_of_range n else n
 let v_opt n = if n < min_int || n > max_int then None else Some n
 let to_int n = n
+
+include Prims.Identity
+
 let get buf off = Bytes.get_uint8 buf off
 let set buf off n = Bytes.set_uint8 buf off n
 let unsafe_get = Unchecked.u8

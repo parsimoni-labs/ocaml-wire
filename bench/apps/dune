@@ -12,37 +12,28 @@
  (libraries space wire wire.ocaml wire.rust))
 
 (rule
- (enabled_if
-  (<> %{ocaml-config:ox} true))
- (targets
-  g_space_packet.ml
-  g_space_packet.mli
-  g_tm_frame.ml
-  g_tm_frame.mli
-  g_clcw.ml
-  g_clcw.mli)
+ (targets g_space_packet.ml g_space_packet.mli)
  (action
-  (run ./gen.exe --ocaml)))
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_tm_frame.ml g_tm_frame.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+; On OxCaml for arm64 and amd64 the CLCW records get SIMD lanes, which [Lanes]
+; uses.
 
 (rule
  (enabled_if
-  (and
-   (= %{ocaml-config:ox} true)
+  (or
+   (<> %{ocaml-config:ox} true)
    (and
     (<> %{architecture} arm64)
     (<> %{architecture} amd64))))
- (targets
-  g_space_packet.ml
-  g_space_packet.mli
-  g_tm_frame.ml
-  g_tm_frame.mli
-  g_clcw.ml
-  g_clcw.mli)
+ (targets g_clcw.ml g_clcw.mli)
  (action
-  (run ./gen.exe --oxcaml)))
-
-; On arm64 and amd64 the records that have SIMD lanes get them, which [Lanes]
-; uses.
+  (run ./gen.exe %{targets})))
 
 (rule
  (enabled_if
@@ -51,15 +42,12 @@
    (or
     (= %{architecture} arm64)
     (= %{architecture} amd64))))
- (targets
-  g_space_packet.ml
-  g_space_packet.mli
-  g_tm_frame.ml
-  g_tm_frame.mli
-  g_clcw.ml
-  g_clcw.mli)
+ (targets g_clcw.ml g_clcw.mli)
  (action
-  (run ./gen.exe --oxcaml --simd)))
+  (setenv
+   WIRE_SIMD
+   1
+   (run ./gen.exe %{targets}))))
 
 ; [Lanes] is the CLCW logic over those lanes, four words per NEON register, on
 ; OxCaml for arm64 or amd64; elsewhere it has no rows.

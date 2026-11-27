@@ -66,6 +66,8 @@ type cursor = {
 
 (* A record's walk in its three modes over one plan: its value, only its
    checks, or its value naming the errors under each field it moves over. *)
+type _ codec_ref = ..
+
 type 'r walk = {
   wvalue : cursor -> 'r;
   wskip : cursor -> unit;
@@ -107,10 +109,10 @@ let rec eval_set_param64 ctx name value =
    or [~constraint_] ([Field]), a codec/typ [~where] ([Where]), a field
    [~action] ([Action]), or a [byte_array_where] per-byte refinement
    ([Per_byte]). *)
-type predicate = Errors.predicate = Where | Field | Action | Per_byte
+type predicate = Error.predicate = Where | Field | Action | Per_byte
 type consumption = [ `Prefix | `All ]
 
-type error_kind = Errors.error_kind =
+type error_kind = Error.kind =
   | Unexpected_eof of { expected : int; got : int }
   | Trailing_bytes of int
   | Invalid_enum of { value : int; valid : int list }
@@ -124,21 +126,16 @@ type error_kind = Errors.error_kind =
 (* [at] is the absolute byte offset of the failing field in the input; [field]
    is the root-to-leaf path of field names to it (e.g. ["header"; "vcid"]),
    empty at a top-level or anonymous position. *)
-type parse_error = Errors.parse_error = {
+type parse_error = Error.t = {
   at : int;
   field : string list;
   kind : error_kind;
 }
 
-exception Parse_error = Errors.Parse_error
-
-let parse_error ?(at = 0) ?(field = []) kind = { at; field; kind }
-
-let eof ?(at = 0) ?(field = []) ~expected ~got () =
-  { at; field; kind = Unexpected_eof { expected; got } }
-
-let err ~at kind = parse_error ~at kind
-let raise_error ~at kind = raise (Parse_error (err ~at kind))
+let raise_parse_error = Errors.fail
+let is_parse_error = Errors.is_error
+let parse_error_of = Errors.error_of
+let raise_error ~at kind = raise_parse_error { at; field = []; kind }
 
 let check_consumption mode ~consumed ~available =
   match mode with
@@ -163,7 +160,9 @@ let map_decode ~index_bound decode =
   | None -> fun ~at:_ v -> decode v
   | Some _ -> (
       fun ~at v ->
-        try decode v with Parse_error e -> raise (Parse_error { e with at }))
+        try decode v
+        with exn when is_parse_error exn ->
+          raise_parse_error { (parse_error_of exn) with at })
 
 (* [int_of_exn] is handed a value and nothing else, so an out-of-range one has
    no offset to name and reports 0, the same blind spot [map_decode] covers for
@@ -171,7 +170,9 @@ let map_decode ~index_bound decode =
    there; only a carrier wider than the native int can raise, and the handler is
    installed only for those, so a byte- or word-wide read pays nothing. *)
 let relocate_at ~at f =
-  try f () with Parse_error e -> raise (Parse_error { e with at })
+  try f ()
+  with exn when is_parse_error exn ->
+    raise_parse_error { (parse_error_of exn) with at }
 
 let raise_invalid_enum ~at ~value ~valid =
   raise_error ~at (Invalid_enum { value; valid })
@@ -382,6 +383,7 @@ and _ typ =
       codec_struct : struct_;
           (** Structural representation of the codec. Mirrors [codec_decode] /
               [codec_encode] but in a form 3D projection can walk. *)
+      codec_ref : 'r codec_ref;  (** The codec itself. *)
     }
       -> 'r typ
   | Optional : { present : bool expr; inner : 'a typ } -> 'a option typ
@@ -596,16 +598,22 @@ and int_binop leaf f a b =
 let const_int_expr e = int_expr_with (fun _ -> None) e
 
 (* A size expression resolved as far as the encode-side context allows. A bound
-   input parameter answers; a reference to a sibling field or to a position does
-   not, because a value on its own does not carry the record around it. *)
-let rec size_in_ctx ctx e =
+   input parameter answers; a reference to a sibling field answers through
+   [field], which only the record around the value can supply; a position does
+   not answer. *)
+let rec param_in_ctx ctx name =
   match ctx with
   | Unbound -> None
-  | Checked ctx -> size_in_ctx ctx e
-  | Bound _ ->
-      int_expr_with
-        (function Param_ref p -> Some (eval_param ctx p.name) | _ -> None)
-        e
+  | Checked ctx -> param_in_ctx ctx name
+  | Bound _ -> Some (eval_param ctx name)
+
+let size_in_ctx ?(field = fun _ -> None) ctx e =
+  int_expr_with
+    (function
+      | Param_ref p -> param_in_ctx ctx p.name
+      | Ref (_, name) -> field name
+      | _ -> None)
+    e
 
 (* [fold_size e] is [e] with a reference-free constant folded to its literal.
    Every smart constructor taking a size or length expression runs its argument
@@ -1566,53 +1574,3 @@ let casetype_decl name params tag cases =
 
 (* Module *)
 type module_ = { doc : string option; decls : decl list }
-
-let pp_error_kind = Errors.pp_error_kind
-let pp_parse_error = Errors.pp_parse_error
-
-let predicate_rank (p : predicate) =
-  match p with Where -> 0 | Field -> 1 | Action -> 2 | Per_byte -> 3
-
-let compare_predicate a b = Int.compare (predicate_rank a) (predicate_rank b)
-
-let kind_rank = function
-  | Unexpected_eof _ -> 0
-  | Trailing_bytes _ -> 1
-  | Invalid_enum _ -> 2
-  | Invalid_tag _ -> 3
-  | Missing_terminator -> 4
-  | Non_zero_padding -> 5
-  | Value_out_of_range _ -> 6
-  | Zero_divisor -> 7
-  | Constraint_failed _ -> 8
-
-let compare_error_kind a b =
-  match (a, b) with
-  | Unexpected_eof a, Unexpected_eof b ->
-      let c = Int.compare a.expected b.expected in
-      if c <> 0 then c else Int.compare a.got b.got
-  | Trailing_bytes a, Trailing_bytes b -> Int.compare a b
-  | Invalid_enum a, Invalid_enum b ->
-      let c = Int.compare a.value b.value in
-      if c <> 0 then c else List.compare Int.compare a.valid b.valid
-  | Invalid_tag a, Invalid_tag b -> Int.compare a b
-  | Value_out_of_range a, Value_out_of_range b -> Int64.compare a.value b.value
-  | Constraint_failed a, Constraint_failed b ->
-      let c = compare_predicate a.which b.which in
-      if c <> 0 then c else Option.compare Int64.compare a.value b.value
-  | Missing_terminator, Missing_terminator
-  | Non_zero_padding, Non_zero_padding
-  | Zero_divisor, Zero_divisor ->
-      0
-  | _ -> Int.compare (kind_rank a) (kind_rank b)
-
-let equal_error_kind a b = compare_error_kind a b = 0
-
-let compare_parse_error a b =
-  let c = compare_error_kind a.kind b.kind in
-  if c <> 0 then c
-  else
-    let c = Int.compare a.at b.at in
-    if c <> 0 then c else List.compare String.compare a.field b.field
-
-let equal_parse_error a b = compare_parse_error a b = 0

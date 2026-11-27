@@ -5,7 +5,13 @@
 ; Alcobar bounds each test iteration with SIGALRM, which Windows does not have
 ; ([Sys.signal] raises there), so every runner under fuzz/ passes the timeout
 ; read from [alcobar-timeout]: none on Windows, where [--budget] still bounds
-; each test, and ALCOBAR_TIMEOUT or Alcobar's 2 s elsewhere.
+; each test, and ALCOBAR_TIMEOUT or 30 s elsewhere.
+;
+; The alarm is there to fail a livelock, which overruns any bound. It counts
+; wall-clock time, so it also counts the time a loaded CI worker leaves the
+; process descheduled: no iteration of the suite takes 2 ms of CPU, yet on the
+; s390x ocaml-ci worker, about 3 times slower, iterations of 0.5 ms hit a 2 s
+; alarm. 30 s still fails a livelock and leaves room for such a stall.
 
 (rule
  (target alcobar-timeout)
@@ -23,7 +29,7 @@
  (action
   (with-stdout-to
    %{target}
-   (echo %{env:ALCOBAR_TIMEOUT=2}))))
+   (echo %{env:ALCOBAR_TIMEOUT=30}))))
 
 ; Alcobar seeds its PRNG from a constant and never self-inits, so a run with no
 ; [-s] replays one fixed input set, and the seed each test gets is drawn in test

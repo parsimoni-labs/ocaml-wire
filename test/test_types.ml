@@ -25,15 +25,16 @@ let test_struct_name () =
 let test_runtime_errors () =
   let e =
     {
-      Wire.at = 3;
+      Wire.Error.at = 3;
       field = [ "TTL" ];
       kind = Constraint_failed { which = Field; value = Some 0L };
     }
   in
   match Wire_runtime.Errors.field_constraint ~at:3 ~field:"TTL" 0 with
   | _ -> Alcotest.fail "no exception raised"
-  | exception Wire.Parse_error got ->
-      Alcotest.(check bool) "same error" true (Wire.equal_parse_error e got)
+  | exception exn when Wire_runtime.Errors.is_error exn ->
+      let got = Wire_runtime.Errors.error_of exn in
+      Alcotest.(check bool) "same error" true (Wire.Error.equal e got)
 
 let suite =
   ( "types",

@@ -23,19 +23,20 @@ let test_int_of () =
 
 (* [int_of_exn] returns the same value as [int_of] on the representable cases,
    but where [int_of] returns [None] it fails instead of silently coercing to 0:
-   an out-of-range 64-bit value raises [Parse_error (Value_out_of_range _)], and
+   an out-of-range 64-bit value stops at [Value_out_of_range], and
    a non-integer type is a schema error that raises [Invalid_argument]. *)
 let raises_out_of_range name f =
   match f () with
-  | _ -> Alcotest.failf "%s: expected Parse_error, got a value" name
-  | exception Types.Parse_error { Types.kind = Types.Value_out_of_range _; _ }
-    ->
-      ()
+  | _ -> Alcotest.failf "%s: expected a parse error, got a value" name
+  | exception exn when Types.is_parse_error exn -> (
+      match Types.parse_error_of exn with
+      | { Types.kind = Types.Value_out_of_range _; _ } -> ()
+      | e -> Alcotest.failf "%s: %a" name Wire.Error.pp e)
 
 let raises_parse_error name f =
   match f () with
-  | _ -> Alcotest.failf "%s: expected Parse_error, got a value" name
-  | exception Types.Parse_error _ -> ()
+  | _ -> Alcotest.failf "%s: expected a parse error, got a value" name
+  | exception exn when Types.is_parse_error exn -> ()
   | exception Division_by_zero ->
       Alcotest.failf "%s: leaked Division_by_zero" name
 

@@ -13,9 +13,9 @@ compare the OCaml, OxCaml and Rust code generators across languages.
 
 Metrics: ns/op, allocation (words), ratio vs C, throughput.
 
-The C validator checks the schema as it extracts fields. A staged OCaml
-`Codec.get` reads the requested field and does not validate the whole record;
-call `Codec.validate_exn` separately when that is required. The timing ratio
+The C validator checks the schema as it extracts fields. The reader OCaml
+`Codec.get c f` makes reads the requested field and does not validate the whole record;
+call `Codec.validate` separately when that is required. The timing ratio
 therefore includes different amounts of validation work.
 
 ## Rules
@@ -52,8 +52,8 @@ make bench-demo           # requires EverParse (everparse-3d.exe in PATH)
 
 Throughput on realistic workloads. The C loop calls the EverParse validator for
 field extraction, then runs application logic. The OCaml loop does the same
-work with `Codec.read_word` and `Codec.of_word` (CLCW: `Codec.load_word`
-and `Codec.extract`), and writes with `Codec.writer`.
+work with `Codec.Word.check` and `Codec.Word.read`, and writes with
+`Codec.writer`.
 
 | Target | Scenario | Protocols |
 |---|---|---|
@@ -83,9 +83,9 @@ relay does to produce it:
 
 | Row | Implementation | API |
 |---|---|---|
-| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.read_word` per header, then `Codec.of_word` per field; for CLCW `Codec.load_word` once, then `Codec.extract` per field. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
-| `wire.ocaml` | generated OCaml, `Wire_ocaml.ml` of `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `Get.<field>` per field; for CLCW `Get.lockout_word` once, then `<field>_of_word` per field. Writing: `write_int` per header |
-| `wire.rust` | generated Rust, `Wire_rust.rs` of the same codecs | `Valid::at` per header, then its accessors, for routing and gateway; for CLCW the functions `wire.ocaml` calls. Writing: `write` per header |
+| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.Word.check`, `ok` and `get` per header, then `Codec.Word.read` per field, for CLCW too. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
+| `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field. Writing: `write`, which takes the fields' values and tests each bitfield's range, per header |
+| `wire.rust` | generated Rust, the module `Wire_rust.v` declares for the same codecs | `check(buf, off)` and `get` per header, then an accessor per field, for CLCW too. Writing: `encode` of a `Record` literal per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
 | `ccsds_primary_header` 0.15 (routing) | hand-written | `PrimaryHeader::from_slice`, then `control.apid()` and `length.length_field()`. Writing: the setters of its three words, then their bytes |
 | `gaia-ccsds-c2a` 1.2 (routing, CLCW) | `modular-bitfield` structs over zerocopy | `PrimaryHeader` through `LayoutVerified::new_unaligned_from_prefix`, as its `SpacePacket` reads it; `CLCW::from_bytes`. Writing: the `with_<field>` builders, then `into_bytes` |
@@ -100,7 +100,7 @@ written as a user of each library writes it, with plain checked indexing,
 and every row gives the same result. `bench/apps/loops.ml` writes the loops
 over the generated OCaml, the same source for OCaml 5 and for OxCaml.
 `bench/apps/cargo/src/main.rs` writes them over the generated Rust, whose
-`Valid::at` checks a header once before its accessors read it, and over the
+`check` checks a header once before its accessors read it, and over the
 crates; the Rust rows of a workload share one loop and differ only in the
 header reader and writer they call.
 No EverParse row runs here: those stay in `make bench-routing`,
@@ -213,14 +213,11 @@ generated reads and writes are not where the gap is: each field is one
 load, a swap and a mask, or one merged store, as in the crates. Two
 differences came from the harness, where the OCaml loops differed from the
 Rust ones, and are gone: the gateway loops took the packet size from
-`Gateway_workload.pkt_size`, which `Codec.wire_size` computes when the
+`Gateway_workload.pkt_size`, which `Codec.min_size` computes when the
 program starts, where the Rust rows use the constant `space_packet::SIZE +
 64`, so OxCaml added it as a variable and built the data length's bytes
-again per packet (`asr`, `rev16`, `uxth`); and `routing_write` kept each
-route's sequence count as an `int`, so `write_at`'s carrier checked its
-range per packet (`lsr #14`, `orr`, `cmp`, `b.eq`), where it now keeps the
-count in its carrier and wraps it with `seqcount_low`, as the Rust rows
-wrap it with `& 0x3FFF`. The rest is the compiler and the runtime, with the
+again per packet (`asr`, `rev16`, `uxth`). The rest is the compiler and
+the runtime, with the
 open OxCaml issue of each compiler item where one exists:
 
 | Workload | Instructions per item beyond the crate's loop, and the issue |
@@ -228,15 +225,15 @@ open OxCaml issue of each compiler item where one exists:
 | `routing` | route table address reloaded (`adrp`, `add`, `ldr`) and `len - size` recomputed, 4: oxcaml/oxcaml#8175; the 11-bit APID's index into the 2048-entry table checked, 3: oxcaml/oxcaml#2436; the offset untagged and retagged around each load, 2 to 3: oxcaml/oxcaml#8171; the check's answer moved through a join (`mov`, `mov`) before its test, 2: oxcaml/oxcaml#8182; an extra `b` on the back edge, 1: oxcaml/oxcaml#8177; the poll (`ldr`, `cmp`, `b.ls`), 3, and the `dmb ishld` before the count's store, 1: the runtime |
 | `routing_write` | the routing items above; the write's `off < 0` tested again after the read's check of the same offset, 2: oxcaml/oxcaml#8182; the 32-bit store's swap as `rev x` then `asr #32`, 1, and `uxth` after `rev16`, 1: oxcaml/oxcaml#8184; the data length tagged then untagged for its store, 2: oxcaml/oxcaml#8173 |
 | `gateway` | per packet, the FNV prime and basis rebuilt by `mov`/`movk`, 8: oxcaml/oxcaml#8183 and oxcaml/oxcaml#8175; the `ok` flag of the `while` taken through `cset` and `cbnz` twice, 4, and the `or #1` of `hash_int` on a tagged `int`, 2: no issue yet; the poll, 3: the runtime |
-| `gateway_write` | per packet, the store addresses computed from the tagged offset, 2: oxcaml/oxcaml#8171; the 32-bit store's swap, 1: oxcaml/oxcaml#8184; APID and count masked and untagged from the tagged packet number, 4: tagging; `off + 70` and the frame end recomputed, 1: oxcaml/oxcaml#8175; the poll, 3: the runtime. Per frame, the range test of the four computed header fields `write_int_at` takes, 8: oxcaml/oxcaml#2436 |
+| `gateway_write` | per packet, the store addresses computed from the tagged offset, 2: oxcaml/oxcaml#8171; the 32-bit store's swap, 1: oxcaml/oxcaml#8184; APID and count masked and untagged from the tagged packet number, 4: tagging; `off + 70` and the frame end recomputed, 1: oxcaml/oxcaml#8175; the poll, 3: the runtime. Per frame, the range test of the four computed header fields `write` makes, 8: oxcaml/oxcaml#2436 |
 | `clcw` | each of three flags as `lsr`, `orr`, `and`, `cmp`, `b.ne` where `gaia-ccsds-c2a` has one `tst` and one `tbnz` for all three, 12: oxcaml/oxcaml#8172; the word zero-extended again after `rev w`, 1: oxcaml/oxcaml#8184; the word tagged, 2; the bounds of each word checked, which `chunks_exact` proves, 5: oxcaml/oxcaml#2436; the offset tagged, 3: oxcaml/oxcaml#8171; the poll, 3: the runtime |
 | `clcw_write` | LLVM vectorises the crate's loop, OxCaml vectorises none (the NEON lanes row is that loop written by hand); one word at a time, the range test of the four computed fields, 7: oxcaml/oxcaml#2436; each field untagged before its shift, 4: tagging; the 32-bit store's swap, 1: oxcaml/oxcaml#8184 |
 
 A flag tested as `w land mask <> 0` instead of `(w lsr k) land 1 <> 0`
 takes one instruction fewer on OxCaml, `mov`, `and`, `cmp`, `b.ne`, as the
 tagged mask is not an arm64 logical immediate, and is no `tst` or `tbnz`
-until oxcaml/oxcaml#8172 is fixed: the `clcw` loop goes from 43 to 40. The generated
-`<field>_of_word` returns the field's `int`, so that form would need a
+until oxcaml/oxcaml#8172 is fixed: the `clcw` loop goes from 43 to 40. A
+generated accessor returns the field's `int`, so that form would need a
 boolean reader of a 1-bit field, which no codec here declares (`Wire.bit`
 goes through a named map).
 
@@ -263,11 +260,10 @@ On writing, the crates never branch on a field's value:
 `spacepackets`' `u11::new` and `u14::new` assert, which LLVM proves cannot
 fire, so no range branch is left in their loops. The generated OCaml checks
 a value against its field's width wherever the compiler cannot prove it
-fits: on `gateway_write`, every field of the frame header `write_int_at`
-takes; on `clcw_write`, the four fields that vary per word. On
-`routing_write` no range is tested: LLVM proves the `[u16; 4]` counts stay
-below 2^14 and drops `ccsds_primary_header`'s mask, and the OxCaml loop keeps
-them in `Value.seqcount`, whose type proves it. Per packet of
+fits: on `gateway_write`, every field of the frame header `write` takes; on
+`clcw_write`, the four fields that vary per word; on `routing_write`, the
+APID and the sequence count, where LLVM proves the `[u16; 4]` counts stay
+below 2^14 and drops `ccsds_primary_header`'s mask. Per packet of
 `gateway_write`, `spacepackets` stores the data length from a register set
 before the loop and addresses both stores from one base, where OxCaml stores
 the constant data length with `orr` and `strh`, computes the second store's
@@ -278,7 +274,7 @@ build 16 CLCW words, with the byte order folded into the shifts. Stock OCaml
 also assembles the 32-bit word on tagged integers, with a `sxtw` on each
 side of the `rev` that does nothing (`sxtw x3, w2`, `rev w4, w3`,
 `sxtw x5, w4`, `str w5`), where OxCaml builds it untagged. `Wire.Codec`
-writes a header with one call to a staged `Codec.writer`, which puts the
+writes a header with one call to the writer `Codec.writer` makes, which puts the
 default header and the fields that vary together in an `int` and stores it.
 These headers are at most 6 bytes, so no row stores a 64-bit word: the
 generated writes are `str w` and `strh`, and the only `dmb ishld` OxCaml puts
@@ -327,10 +323,10 @@ pick for exactly this work:
 | `Wire.Codec stack decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of one bounded stack codec |
 | `Wire.Codec stack check/enter/read` | interpreted codec (OCaml 5, OxCaml) | `View.check` of the same bounded stack codec, which builds nothing, then `View.enter` of each layer present (a `View.sub` or `View.sub_option` per sub-codec field) and a `View.read` of a `View.field` per field |
 | `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | a `Codec.View.codec` per header codec; `View.check`/`View.ok`/`View.get` per header, then a `View.read` of a `View.field` per field; the harness links the layers |
-| `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the scanner of the stack: `decode`, `fold` and `fold_frames` (batch), on OxCaml also their unboxed forms; `selected outputs` hands out only the checksum's fields |
-| `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `View.check`/`View.ok` per header, then a `view_<field>` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
-| `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.scanner` of the stack | `scan` per frame; `selected outputs` hands out only the checksum's fields |
-| `wire.rust, linked headers` | generated Rust of the fixed headers | `Valid::at` per header, then a read per field; the harness links the layers |
+| `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the fold `checksum` of the stack and `checksum_frames` (batch), which call the checksum visitor by name; `selected outputs` hands out only the checksum's fields |
+| `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `check b len off`/`ok`/`get` per fixed header, then an accessor `<field> b v` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
+| `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.v` of the stack | the fold `checksum_frames` (batch), handing the outputs to the checksum visitor `gen.exe` writes; `selected outputs` hands out only the checksum's fields |
+| `wire.rust, linked headers` | generated Rust modules of the fixed headers | `check(buf, off)`/`get` per header, then the accessor of each field; the harness links the layers |
 | `EverParse C, default visitor` (`BUILD_EVERPARSE=1`) | the verified validator EverParse generates from `Packet_stack.codec` | `EthernetStackValidateWireEthernetStack` per slot, then the members of the default `EthernetStack_Fields` visitor, zeroed per slot |
 | `EverParse C, inline visitor` (`BUILD_EVERPARSE=1`) | the same validator, compiled with a custom visitor | the validator per slot, then the same members of a visitor copied from `EthernetStack_Fields.c` and trimmed to them, its setters `static inline` in the validator's translation unit |
 | `etherparse` 0.21 | hand-written | `SlicedPacket::from_ethernet`, its one-call path |
@@ -356,7 +352,7 @@ Every row does the work `SlicedPacket::from_ethernet` does on each packet:
 
 The stack rows use `examples/net/packet_stack.ml`: one codec owns Ethernet
 and protocol dispatch, fragment handling, options, and the nested payload
-bounds. `Wire_ocaml.scanner` and `Wire_rust.scanner` write those rules out
+bounds. The folds of `Wire_ocaml` and `Wire_rust` write those rules out
 from one plan as a fused scanner; the harness only folds returned scalar
 fields into the checksum. Its
 `off`/`len` arguments bound each frame even inside a larger corpus buffer.
@@ -364,8 +360,7 @@ fields into the checksum. Its
 slot and constructs its ordinary nested values. Byte fields are zero-copy
 slices.
 
-The frame loop of the batch rows (`fold_frames` and its unboxed and step
-forms) walks four frames per iteration, so that it polls for signals once
+The frame loop of the batch rows (`fold_frames` and its step form) walks four frames per iteration, so that it polls for signals once
 per four frames. Each iteration first computes where its four frames start
 and loads the field their transport header is chosen on, the IPv4
 protocol, then walks the frames: a mispredicted branch of one frame does
@@ -381,9 +376,7 @@ into a checksum, and the report fails if they disagree.
 
 The existing `test/ocaml` and `fuzz/diff/ocaml` suites compare scanner
 acceptance and scalar fields with `Codec`, including truncation at every
-byte, nonzero frame offsets, IPv4/TCP options and arbitrary mutations.
-Their `ocaml-ox` lanes also compare boxed and unboxed APIs and check
-`decode_unboxed` with `[@zero_alloc]` in release builds. With
+byte, nonzero frame offsets, IPv4/TCP options and arbitrary mutations. With
 `BUILD_EVERPARSE=1`, the same differential driver compiles the projected
 3D schemas through EverParse and compares C acceptance, consumed length and
 the scalar members of the default visitor, nested fields included.
@@ -589,10 +582,11 @@ passes and not timed; the report fails unless every row agrees. The default pack
 | Row | Implementation | Parse |
 |---|---|---|
 | `Wire.Codec capture decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of the pcap record around the frame, its `incl_len` bounding `Packet_stack.capture`, then the nested values |
-| `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of `headers.ml`, IPv6 included | `View.check`/`View.ok` per header, `view_<field>` per field; the harness links the layers and checks each header ends inside the capture |
-| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `fold_index_step` over the frames, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
-| `wire.rust scanner, selected outputs` | generated Rust scanner of `Packet_stack.capture` | `scan` per frame |
-| `wire.rust, linked headers` | generated Rust of `headers.ml` | `Valid::at` per header, then a read per field; the harness links the layers |
+| `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of `headers.ml`, IPv6 included | `check b len off`/`ok`/`get` per fixed header, an accessor `<field> b v` per field; the harness links the layers and checks each header ends inside the capture |
+| `wire.ocaml scanner, selected outputs, fold_step` | generated OCaml scanner of `Packet_stack.capture` | `classify_index` over the frames, handing the classifier's fields to `Flow_step` (`Flow_parse` without the table) by name |
+| `wire.ocaml check/view, accessors` | the views the generated OCaml scanner of `Packet_stack.capture` writes | `check` per frame, then the accessor of each field, each sub-record (`ipv4`, `ipv6`, `tcp`, `udp`) entered through the accessor of its field, which tests its presence and places it again |
+| `wire.rust scanner, selected outputs` | generated Rust module of `Packet_stack.capture` | the fold `classify` per frame, handing the classifier's fields to the visitor `Classify` of `flow.rs` |
+| `wire.rust, linked headers` | generated Rust modules of `headers.ml` | `check(buf, off)`/`get` per header, then the accessor of each field; the harness links the layers |
 | EverParse C (`BUILD_EVERPARSE=1`) | the verified validator of `Packet_stack.capture` | `CapturedStackValidateWireCapturedStack` per frame, then the members of the default `CapturedStack_Fields` visitor, zeroed per frame |
 | `etherparse 0.21, lax` | hand-written | `LaxSlicedPacket::from_ethernet` |
 | `smoltcp 0.14` | hand-written | `EthernetFrame::new_checked`, `TcpPacket::new_checked`; the IPv4, IPv6 and UDP layers through `new_unchecked` after the adapter's checks, because `new_checked` bounds them by their length fields and rejects a header-only capture |
@@ -891,6 +885,40 @@ In the same counts the `View` row takes 223.0 instructions and 60.2 cycles
 on the OCaml parse; `pnet_packet` takes 67.2 and 26.9 and the Rust scanner
 68.9 and 27.0, counted alike at a load average of 13 and 14.
 
+Half of what every row spends on the parse is branches it mispredicts. The
+same packets sorted by kind (Ethernet type, then IPv4 protocol or IPv6 next
+header), which leaves the parse-only result unchanged, take `pnet_packet`
+11.2 cycles instead of 22.5, the Rust scanner 12.3 instead of 23.0, the
+OxCaml scanner 15.9 instead of 28.2 and the OCaml one 31.8 instead of 49.3,
+with the same instructions (one batch, load average 20). After a
+mispredicted branch the next frame's walk starts again from its index: a
+load of its offset, then of its Ethernet type at that offset, before its
+first choice. `fold_index_step` now loads the next frame's offset, length
+and dispatch fields before it walks the current one, two frames an iteration
+([How a codec runs](../docs/execution.md#generated-code)). Counted nine
+times, interleaved, medians, at a load average of 52 before and 55 after:
+
+| Row on `mawi`, parse only | Instructions | Cycles |
+| --- | ---: | ---: |
+| scanner, OxCaml | 73.1 to 77.1 | 32.7 to 24.2 |
+| scanner, OCaml flambda | 144.7 to 150.1 | 46.5 to 38.5 |
+| scanner, OCaml | 150.3 to 164.3 | 50.3 to 42.4 |
+
+`pnet_packet` took 66.9 instructions and 23.7 cycles and the Rust scanner
+68.8 and 23.5 in the same rounds. Another such batch, at a load average of 38
+to 51, gave 26.1 cycles on OxCaml against 22.7 for `pnet_packet`, and two
+batches of the OxCaml rows alone, at 28 to 50, 20.4 and 20.9 against 22.4
+and 22.5: the cycles of one row move by several between batches at this
+load, so the OxCaml scanner parses level with `pnet_packet`, where it took 9
+cycles more. Seven rounds at a load average of 7 gave 21.5 cycles on OxCaml
+against 30.0 before, 23.7 for `pnet_packet` and 24.0 for the Rust scanner,
+with flambda at 30.8 and OCaml at 35.7. On the sorted packets it takes 13.0
+cycles instead of 15.6.
+With the table the parse is not what bounds the row: the OxCaml scanner
+took 190 cycles against 200, within the noise, and 204 instructions against
+182, as `Flow_step` calls the table's `add4` and `add6` out of line and the
+frame the loop carries is spilled around each call.
+
 What the OxCaml parse still spends beyond `pnet_packet` is mostly the
 compiler's: the key's constant part is built again for each key, the loop
 over the index computes the address of each tagged index (2 per frame) and
@@ -908,19 +936,96 @@ the constraints, 9.0%), 9.9% in the compiled constraint expressions, 7.4% in
 costs little: 51.1 minor words (409 bytes) per packet on OCaml 5.4.1, none
 promoted, and no GC function of the runtime reaches 5 samples.
 
+### The generated views
+
+The row `wire.ocaml check/view, accessors` reads the frames through the
+views the scanner of `Packet_stack.capture` writes (docs/execution.md,
+Generated code): one `check` per frame, which makes every check of the
+frame once, then an accessor per field, `ipv4 b len v` answering a check
+of `Captured_ipv4` and `Captured_ipv4.tcp` one of `Stack_tcp`, each
+testing again the presence of its record and placing it. The loop is
+`flow_rows.ml`'s, as the other rows': no unchecked array read, the IPv4
+and IPv6 keys in a function each. It is compared below with the scanner's
+`fold_step` row, with the linked headers row and with the hand-written
+prototype of the same module the design was measured on (its `check` and
+`enter` written by hand, with the IPv4 header's own word tests, one
+function per frame), not committed.
+
+Counted with `bench/count.sh` on `mawi parse`, on the tree of the commit
+that adds this section with the prototype's module and row added for the
+count, each row five times, the median of its instructions and of its
+cycles per packet, at a load average of 2.9 before and 4.2 after:
+
+| Row, parse only | OCaml | OCaml flambda | OxCaml |
+| --- | ---: | ---: | ---: |
+| check/view, accessors | 237.1 / 51.6 | 244.0 / 53.0 | 174.3 / 43.1 |
+| scanner, `fold_step` | 150.0 / 43.1 | 144.6 / 42.0 | 73.2 / 30.0 |
+| `View.check`, linked headers | 222.2 / 48.8 | 250.1 / 52.7 | 197.9 / 48.8 |
+| prototype, check + enter, re-read | 230.0 / 50.7 | 233.7 / 52.8 | 213.0 / 50.2 |
+
+`pnet_packet 0.35` takes 66.7 / 22.5 and the Rust scanner 68.7 / 23.0,
+counted alike. On OxCaml the views spend 39 instructions and 7 cycles
+less than the prototype, and 24 and 6 less than the linked headers: the
+check is the scanner's walk on `int64#`, and each accessor's tests read
+`int64#` too, a bitfield through its word with one masked test, fields
+sharing a 64-bit word from one load of it, a span and the record after it
+with one bound test. They still spend 101 instructions and 13 cycles more
+than `fold_step`: what remains per IPv4 TCP packet, read in the
+disassembly, is the re-read by design (the EtherType again for `ipv4`,
+the IPv4 word and protocol again for `tcp`, about 20 instructions), the
+answer of each check joined from its failures then tested by `ok` and
+`get` (about 4 per record), the IHL tested again not to make the options
+negative (2), positions and returned fields tagged at the accessor's
+boundary, and the call of the IPv4 or IPv6 function with its spills
+around the walk. On OCaml and flambda the views cost 7 and 10 more than
+the prototype: the same IHL test, a bitfield word masked to 16 bits and
+then by its test, and `ok` and `get` testing the answer twice, which only
+flambda2 merges.
+
+Since the one module per codec, an accessor returns its field's carrier,
+a `UInt16.t` for a port, which the row reads as `(x :> int)`, and a
+`UInt32.t` for an address, read with `UInt32.to_int`. The 16-bit and 8-bit
+carriers type the accessor's `int` with their `unsafe_of_int`, the
+`%identity` primitive: through `cast` and `UInt16.to_int`, two inlined
+functions, OCaml without flambda kept a binding that tags each port and
+then untags it to shift it, 1.7 more instructions a packet.
+
+The one module per codec changes no row that reads a generated module:
+`bench/count.sh`, five runs of each row, the tree before it (`fc6e0ec4`)
+and after it interleaved within each run, median of five, on the ARM64
+macOS host at a load average of 15.1 before and 16.1 after. Instructions
+/ cycles per item (apps, 100,000 items) or per packet (the MAWI parse);
+every row gave the same result on both trees:
+
+| Row | OCaml before | OCaml after | flambda before | flambda after | OxCaml before | OxCaml after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| routing | 56.2 / 16.1 | 56.2 / 14.9 | 56.1 / 15.1 | 56.1 / 15.0 | 44.2 / 13.8 | 44.1 / 13.3 |
+| gateway | 762 / 196 | 762 / 193 | 964 / 193 | 964 / 193 | 626 / 194 | 625 / 191 |
+| clcw | 46.9 / 7.3 | 46.9 / 6.8 | 46.9 / 7.4 | 47.0 / 7.5 | 42.0 / 6.8 | 42.0 / 6.7 |
+| routing_write | 97.1 / 19.6 | 97.1 / 19.4 | 96.2 / 19.5 | 96.1 / 18.8 | 68.1 / 18.3 | 68.1 / 17.8 |
+| gateway_write | 782 / 87.4 | 783 / 86.9 | 783 / 79.8 | 783 / 84.5 | 511 / 69.3 | 511 / 61.2 |
+| clcw_write | 66.2 / 8.1 | 66.1 / 8.2 | 66.1 / 7.9 | 66.1 / 7.9 | 51.1 / 6.2 | 51.2 / 6.8 |
+| MAWI scanner, `fold_step` | 149.8 / 43.4 | 149.9 / 44.0 | 144.8 / 41.4 | 144.6 / 41.2 | 72.9 / 28.8 | 73.3 / 29.5 |
+| MAWI check/view, accessors | 237.2 / 52.1 | 237.3 / 51.9 | 244.1 / 53.4 | 244.2 / 53.4 | 174.7 / 45.8 | 174.3 / 43.8 |
+| MAWI `View.check`, linked headers | 222.3 / 49.2 | 222.4 / 48.3 | 249.3 / 51.0 | 249.3 / 51.0 | 198.6 / 54.1 | 197.7 / 49.1 |
+| MAWI swap, generated `Global` | 188.8 / 43.4 | 188.8 / 44.0 | 209.3 / 46.1 | 209.2 / 45.3 | 188.3 / 44.3 | 188.4 / 44.3 |
+
+The NEON lanes rows, on OxCaml, count 10.4 / 1.0 (clcw) and 7.1 / 1.2
+(clcw_write) before and 10.4 / 1.0 and 7.1 / 1.1 after.
+
 ### One loop, interpreted or generated (`make bench-flow-swap`)
 
-Code written against `Wire.S` runs on the interpreted codec,
-`Wire.Codec.Make`, or on the `Global` module `Wire_ocaml` generates from the
-same codec. `bench/rust/flow_swap.ml` is one flow counter written so: its
-header modules are those of `swap.ml`, and its one line
-`module H = Swap.Generated` picks them; the dune rules build the interpreted
-rows from the same file with that line replaced by
-`module H = Swap.Interpreted`, and the parse-only rows by making `Flow_sum`
-the sink. The generated side is one line per header,
-`module Ipv4 = G_ipv4.Global`; the interpreted side applies `Codec.Make` and
-names the handles the loop reads (`ihl`, `src_addr`, ...) with `field`, since
-`Wire.S` declares the type of a handle but no handle.
+Code written against a generated module's views runs on its interpreted
+twin, the functor Wire_ocaml writes beside it over the codec value.
+`bench/rust/flow_swap.ml` is one flow counter written so: its header modules
+are those of `swap.ml`, and its one line `module H = Swap.Generated` picks
+them; the dune rules build the interpreted rows from the same file with that
+line replaced by `module H = Swap.Interpreted`, and the parse-only rows by
+making `Flow_sum` the sink. Each side is one line per header,
+`module Ipv4 = G_ipv4` or
+`module Ipv4 = G_ipv4_codec.Make (struct type r = Headers.ipv4 let codec = Headers.ipv4 end)`,
+with the same accessors (`ihl`, `src_addr`, ...) reading the types the codec
+declares.
 
 Per frame the loop checks Ethernet, IPv4 (its options skipped by IHL) and
 TCP or UDP with the checks of the classifier above, and hands the IPv4

@@ -3,7 +3,8 @@
 
 open Wire
 
-let needs_3d_exe () = if not (Wire_3d.has_3d_exe ()) then Alcotest.skip ()
+let needs_3d_exe () =
+  if Option.is_none (Wire_3d.locate_3d_exe ()) then Alcotest.skip ()
 
 (* Values stored into outputs of each width: a [uint16] that an earlier
    refinement bounds below 256 narrowed into a [uint8], an increment guarded by
@@ -12,7 +13,7 @@ let needs_3d_exe () = if not (Wire_3d.has_3d_exe ()) then Alcotest.skip ()
 let assign_codec =
   let small = Param.output "small" uint8 in
   let next = Param.output "next" uint8 in
-  let size = Param.output "size" uint32be in
+  let size_p = Param.output "size" uint32be in
   let wide = Param.output "wide" uint16be in
   let x = Field.v "x" uint16be ~self_constraint:Expr.(fun x -> x <= int 200) in
   let y = Field.v "y" uint8 in
@@ -26,7 +27,7 @@ let assign_codec =
             (Action.on_success
                [
                  Action.assign small (Field.ref x);
-                 Action.assign size sizeof_this;
+                 Action.assign size_p sizeof_this;
                  Action.assign wide (Field.ref y);
                  Action.if_
                    Expr.(Field.ref y < int 255)

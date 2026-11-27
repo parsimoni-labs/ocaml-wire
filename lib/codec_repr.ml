@@ -77,12 +77,13 @@ let domain_local_slots n =
 let set_int_slot s idx v = s.ints.(idx) <- v
 let set_int64_slot s idx v = s.int64s.(idx) <- v
 
-(* The absolute offset of a field that failed: the record's [base] plus the
-   field's own offset inside it, or [base] alone when the layout makes that
-   offset dynamic ([-1]) and there is nothing better to say. [Types.parse_error]
-   promises [at] is "the absolute byte offset of the failing field", so a caller
-   that locates the field from [at] reads or rewrites the wrong bytes for every
-   field but the first if the record's base is reported instead. *)
+(* The absolute offset of a field that failed at a fixed offset: the record's
+   [base] plus the field's own offset inside it. [Types.parse_error] promises
+   [at] is "the absolute byte offset of the failing field", so a caller that
+   locates the field from [at] reads or rewrites the wrong bytes for every field
+   but the first if the record's base is reported instead. A field after a
+   variable-size one has no fixed offset ([-1]); its checks locate it with
+   [access_at] and [relocate] instead. *)
 let at_of base field_off = if field_off >= 0 then base + field_off else base
 
 (* Raise a field-constraint failure, reporting the offending field's value so a
@@ -334,19 +335,6 @@ let rec build_populate : type a.
       fun _slots runtime input_end buf base ->
         ignore (reader runtime input_end buf base)
 
-(* Bitfield extraction descriptor: word reader + packed shift/mask.
-   Packing shift and mask into a single int lets [extract] be a direct
-   [@inline always] function instead of an indirect closure call. *)
-(* The word travels as [Optint.t] so a 32-bit base word survives a narrow-int
-   platform: an unboxed native [int] on a 64-bit host, a boxed [int32] where
-   the int cannot hold the word. *)
-type bf_info = {
-  word_reader : bytes -> int -> Optint.t;
-  bf_shift : int;
-  bf_mask : Optint.t;
-  bf_mask_int : int;
-}
-
 let no_runtime = Types.unbound_eval_ctx
 
 (* Saturating addition of an offset and a size. A saturated sum lies outside
@@ -425,6 +413,13 @@ let access_at : field_access -> runtime -> Input_end.t -> bytes -> int -> int =
       fun _runtime _input_end _buf base -> base + byte_off
   | Dynamic off_fn | Variable_dynamic { off_fn; _ } ->
       fun runtime input_end buf base -> base + off_fn runtime input_end buf base
+
+(* [relocate at runtime input_end buf base e] raises [e] at the offset [at]
+   resolves for the field that failed. A check calls it only once it has
+   failed, so a field an earlier variable-size one moves pays nothing to locate
+   itself when the check passes. *)
+let[@inline never] relocate at runtime input_end buf base e =
+  raise_parse_error { e with at = at runtime input_end buf base }
 
 (* [access_at] for the environment-free readers, which never see an offset that
    depends on the buffer: [build_immediate_staged_reader] hands back [None] for
@@ -741,8 +736,11 @@ let bytes_leaves
 
 let eval_buffer_expr f runtime input_end buf base =
   try f runtime input_end buf base
-  with Parse_error ({ kind = Value_out_of_range _ | Zero_divisor; _ } as e) ->
-    raise (Parse_error { e with at = base })
+  with exn when is_parse_error exn -> (
+    match parse_error_of exn with
+    | { kind = Value_out_of_range _ | Zero_divisor; _ } as e ->
+        raise_parse_error { e with at = base }
+    | _ -> raise exn)
 
 let compile_expr ?sizeof_this env e =
   let f = Expr_compiler.compile_int (bytes_leaves ?sizeof_this env) e in
@@ -890,7 +888,9 @@ let rec compile_bool_arr cc (e : bool expr) : slots -> bool =
   | _ -> general ()
 
 let eval_arr_at ~at f arr =
-  try f arr with Parse_error e -> raise (Parse_error { e with at })
+  try f arr
+  with exn when is_parse_error exn ->
+    raise_parse_error { (parse_error_of exn) with at }
 
 (* Compile action statements to operate on an int array instead of Eval.ctx.
    Assign updates the mutable parameter's array slot.
@@ -1112,10 +1112,14 @@ type ('f, 'r) record =
       (* The fields' descriptor writes, while every field has one. *)
       size_of_value_rev : (Types.eval_ctx -> 'r -> int) list;
           (* Per-field value-driven size functions (one per writer). At
-             seal we sum them into [size_of_value]; encode uses that
+             seal we sum them into [encoded_size]; encode uses that
              instead of the buffer-driven [wire_size.compute] when sizing
              scratch buffers, because the latter misreads variable tails
              (all_bytes / rest_bytes / all_zeros) as "remaining buffer". *)
+      value_ints_rev : (string * ('r -> int option)) list;
+          (* Each named field's integer view, read from the record value: what
+             a size naming an earlier field resolves to when [encoded_size]
+             measures the value, as decode reads it from the buffer. *)
       min_wire_size : int;
           (* sum of all fixed-size fields -- minimum buffer size *)
       next_off : next_off; (* where the next field starts *)
@@ -1328,6 +1332,7 @@ let record_start ?where ?doc name make =
           };
       prefix = [];
       size_of_value_rev = [];
+      value_ints_rev = [];
       min_wire_size = 0;
       next_off = Static 0;
       fixed_prefix = Stdlib.ref 0;
@@ -1359,3 +1364,15 @@ let bind (f : 'a Field.t) get =
   }
 
 let ( $ ) = bind
+
+(* What the walk skips a field with: a sub-record's own skip, else nothing. *)
+let walk_skip : type a. a walk_read -> _ = function
+  | Walk w -> Some w.wskip
+  | Scalar _ | String _ | Slice _ -> None
+
+(* Where the walk's dynamic part starts: the offset of the first field whose
+   extent is dynamic. *)
+let walk_start wstart ~before ~after =
+  match (wstart, before, after) with
+  | None, Static n, Dynamic _ -> Some n
+  | wstart, _, _ -> wstart

@@ -143,7 +143,7 @@ region wrapper around it take `ctx`, and each of its scalar fields calls the
 entrypoint's setter with its own index. Members are named by path, the field
 names from the entrypoint down joined with underscores (`ipv4_src`,
 `ipv4_tcp_src_port`), with a `<path>_present` flag per optional, the names
-`Wire_ocaml.scanner` gives its outputs; a path that spells another member's
+`Wire_ocaml.outputs` gives a fold's outputs; a path that spells another member's
 name is refused when the codec is projected. A sub-codec reached at two
 paths is declared once per path (`Leaf_a`, `Leaf_b`), since each copy calls
 the setters with its own indices. An optional integer or float of an
@@ -155,7 +155,7 @@ The validator writes a member only for what it parses. A presence flag is
 written on every successful validation, 1 or 0; the fields under an absent
 optional are not written and keep the visitor's initial value. The generated
 stubs, the differential oracle and the benchmark loops zero the visitor before
-each validation, so those fields read 0, as in `Wire_ocaml.scanner`. A
+each validation, so those fields read 0, as in a fold of `Wire_ocaml`. A
 caller that reuses a visitor without zeroing it reads them only when their
 flag is 1.
 
@@ -178,6 +178,14 @@ the same entrypoint name collide and are separated with `Codec.rename`.
 headers share a translation unit is benign: it is only an opaque pointer
 cast back in each validator's own translation unit.
 
+Every EverParse run goes through `Wire_3d.pool`: one `.3d` module per job,
+each in a directory of its own (concurrent runs race on the intermediate
+files EverParse writes beside its output), with its output captured in a
+log of its own, which a failure reports under the module's name.
+`run_everparse` then copies the module's files into the output directory.
+`WIRE_3D_JOBS` sets how many jobs run at once, by default the smaller of 4
+and the number of cores, since F* can approach 1 GB per process.
+
 ## Narrow-int targets
 
 js_of_ocaml (32-bit ints) and wasm_of_ocaml (31-bit) are supported
@@ -189,3 +197,9 @@ through `Int32` literals, `u63` and `uint` through `Int64` and
 and `Gc.minor_words` checks skipped on `Sys.Other` backends.
 `make test-wasm` fails on integer-overflow warnings except optint's
 known `0x7fffffff`/`0x40000000`.
+
+On js_of_ocaml a decoded `float64` or `float32` NaN may lose its payload:
+the float is a JS number, and V8 resets a NaN it stores in an array of
+numbers to the default NaN, which is what it then re-encodes as. Read a field as `uint64` or `uint32` to keep a NaN
+payload bit-exact. wasm_of_ocaml keeps the payload. The fuzz suite compares
+NaNs by NaN-ness on js_of_ocaml and by bit pattern elsewhere.

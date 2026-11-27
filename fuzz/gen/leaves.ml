@@ -124,16 +124,30 @@ let float_boundaries =
     Float.nan;
   ]
 
+(* A float under js_of_ocaml is a JS number, and V8 resets a NaN stored in an
+   array of numbers to the default NaN, so the payload of a decoded NaN is not
+   kept there. *)
+let nan_payload_kept =
+  match Sys.backend_type with
+  | Sys.Other "js_of_ocaml" -> false
+  | Sys.Native | Sys.Bytecode | Sys.Other _ -> true
+
 (* Equality on floats compares bit patterns so NaN round-trips check
-   bit-identity, not [Float.equal]. *)
-let float64_bits_equal a b =
-  Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
+   bit-identity, not [Float.equal]; where NaN payloads are not kept, any NaN
+   equals any NaN. *)
+let float_equal bits a b =
+  if Float.is_nan a && not nan_payload_kept then Float.is_nan b else bits a b
+
+let float64_bits_equal =
+  float_equal (fun a b ->
+      Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b))
 
 (* Float32 encodes through Int32 bits, which truncates a 64-bit float's
    mantissa. Round-trip equality has to compare the value as it would
    look after that truncation. *)
-let float32_bits_equal a b =
-  Int32.equal (Int32.bits_of_float a) (Int32.bits_of_float b)
+let float32_bits_equal =
+  float_equal (fun a b ->
+      Int32.equal (Int32.bits_of_float a) (Int32.bits_of_float b))
 
 let float32_truncate x = Int32.float_of_bits (Int32.bits_of_float x)
 let float32_value_gen = Alcobar.map Alcobar.[ Alcobar.float ] float32_truncate
@@ -257,7 +271,7 @@ let all_bytes =
     Alcobar.map
       Alcobar.[ value_gen ]
       (fun s ->
-        let sz = Wire.Codec.size_of_value codec s in
+        let sz = Wire.Codec.encoded_size codec s in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec s buf 0;
         (s, buf))
@@ -286,7 +300,7 @@ let all_zeros =
     Alcobar.map
       Alcobar.[ zeros_gen ]
       (fun s ->
-        let sz = Wire.Codec.size_of_value codec s in
+        let sz = Wire.Codec.encoded_size codec s in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec s buf 0;
         (s, buf))
@@ -328,7 +342,7 @@ let zeroterm =
     Alcobar.map
       Alcobar.[ nul_free_gen ]
       (fun s ->
-        let sz = Wire.Codec.size_of_value codec s in
+        let sz = Wire.Codec.encoded_size codec s in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec s buf 0;
         (s, buf))
@@ -366,7 +380,7 @@ let zeroterm_at_most n =
     Alcobar.map
       Alcobar.[ value_gen ]
       (fun s ->
-        let sz = Wire.Codec.size_of_value codec s in
+        let sz = Wire.Codec.encoded_size codec s in
         let buf = Bytes.create sz in
         Wire.Codec.encode codec s buf 0;
         (s, buf))
@@ -781,13 +795,13 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
        a budget that is not a multiple of the element size encodes fewer bytes
        than the budget, and the prefix must match what is written. *)
     let items_bytes =
-      match Wire.Codec.wire_size_opt inner.codec with
+      match Wire.Codec.size inner.codec with
       | Some size -> fun xs -> Wire.UInt16.v (size * List.length xs)
       | None ->
           fun xs ->
             Wire.UInt16.v
               (List.fold_left
-                 (fun acc v -> acc + Wire.Codec.size_of_value inner.codec v)
+                 (fun acc v -> acc + Wire.Codec.encoded_size inner.codec v)
                  0 xs)
     in
     Wire.Codec.v name
@@ -835,7 +849,7 @@ let repeat ?(name = "_rep") ~bytes inner =
 let codec_wrap (c : 'a Wire.Codec.t) ~value_gen ~equal =
   let typ = Wire.codec c in
   let encode v =
-    let sz = Wire.Codec.size_of_value c v in
+    let sz = Wire.Codec.encoded_size c v in
     let buf = Bytes.create sz in
     Wire.Codec.encode c v buf 0;
     buf

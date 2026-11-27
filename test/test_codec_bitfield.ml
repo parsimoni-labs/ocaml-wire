@@ -32,14 +32,14 @@ let bf16_codec =
       (Field.v "len" (bits ~width:2 U16be) $ fun t -> t.len);
     ]
 
-let test_codec_bitfield_wire_size () =
-  Alcotest.(check int) "bf32 wire_size" 4 (Codec.wire_size bf32_codec);
-  Alcotest.(check int) "bf16 wire_size" 4 (Codec.wire_size bf16_codec)
+let test_codec_bitfield_size () =
+  Alcotest.(check int) "bf32 size" 4 (Codec.min_size bf32_codec);
+  Alcotest.(check int) "bf16 size" 4 (Codec.min_size bf16_codec)
 
 let test_codec_bitfield_roundtrip () =
   let original = { a = 5; b = 20; c = 0x1234; d = 0xAB } in
   match encode_record bf32_codec original with
-  | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "encode: %a" Error.pp e
   | Ok encoded -> (
       match decode_record bf32_codec encoded with
       | Ok decoded ->
@@ -47,7 +47,7 @@ let test_codec_bitfield_roundtrip () =
           Alcotest.(check int) "b" original.b decoded.b;
           Alcotest.(check int) "c" original.c decoded.c;
           Alcotest.(check int) "d" original.d decoded.d
-      | Error e -> Alcotest.failf "%a" pp_parse_error e)
+      | Error e -> Alcotest.failf "%a" Error.pp e)
 
 let test_codec_bitfield_byte_layout () =
   (* a=5 (3b), b=20 (5b), c=0x1234 (16b), d=0xAB (8b)
@@ -55,7 +55,7 @@ let test_codec_bitfield_byte_layout () =
      = 0xB4 0x12 0x34 0xAB *)
   let v = { a = 5; b = 20; c = 0x1234; d = 0xAB } in
   match encode_record bf32_codec v with
-  | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "encode: %a" Error.pp e
   | Ok encoded ->
       Alcotest.(check int) "length" 4 (String.length encoded);
       Alcotest.(check int) "byte 0" 0xB4 (Char.code encoded.[0]);
@@ -72,13 +72,13 @@ let test_codec_bitfield_decode () =
       Alcotest.(check int) "b" 20 v.b;
       Alcotest.(check int) "c" 0x1234 v.c;
       Alcotest.(check int) "d" 0xAB v.d
-  | Error e -> Alcotest.failf "%a" pp_parse_error e
+  | Error e -> Alcotest.failf "%a" Error.pp e
 
 let test_codec_bitfield_multi_group () =
   (* Two U16be groups: (3+2+11=16) + (14+2=16) = 32 bits = 4 bytes *)
   let v = { ver = 5; flags = 2; id = 0x7FF; count = 0x3FFF; len = 3 } in
   match encode_record bf16_codec v with
-  | Error e -> Alcotest.failf "encode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "encode: %a" Error.pp e
   | Ok encoded -> (
       Alcotest.(check int) "length" 4 (String.length encoded);
       (* First group: 101_10_11111111111 = 0xB7FF *)
@@ -95,7 +95,7 @@ let test_codec_bitfield_multi_group () =
           Alcotest.(check int) "id" v.id decoded.id;
           Alcotest.(check int) "count" v.count decoded.count;
           Alcotest.(check int) "len" v.len decoded.len
-      | Error e -> Alcotest.failf "%a" pp_parse_error e)
+      | Error e -> Alcotest.failf "%a" Error.pp e)
 
 let test_codec_bitfield_overflow_u8 () =
   let v = { a = 0x8; b = 0; c = 0; d = 0 } in
@@ -126,7 +126,7 @@ let test_codec_bitfield_max_valid () =
   (* All fields at their maximum valid values *)
   let v = { a = 7; b = 31; c = 0xFFFF; d = 0xFF } in
   match encode_record bf32_codec v with
-  | Error e -> Alcotest.failf "encode max valid: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "encode max valid: %a" Error.pp e
   | Ok encoded -> (
       match decode_record bf32_codec encoded with
       | Ok decoded ->
@@ -134,13 +134,13 @@ let test_codec_bitfield_max_valid () =
           Alcotest.(check int) "b" 31 decoded.b;
           Alcotest.(check int) "c" 0xFFFF decoded.c;
           Alcotest.(check int) "d" 0xFF decoded.d
-      | Error e -> Alcotest.failf "%a" pp_parse_error e)
+      | Error e -> Alcotest.failf "%a" Error.pp e)
 
 let test_codec_bitfield_overflow_1bit () =
   (* Single-bit field: only 0 and 1 are valid *)
   let f = Field.v "flag" (bits ~width:1 U8) in
   let codec = Codec.v "OneBit" Fun.id Codec.[ f $ Fun.id ] in
-  let ws = Codec.wire_size codec in
+  let ws = Codec.min_size codec in
   let buf = Bytes.create ws in
   (try
      Codec.encode codec 2 buf 0;
@@ -155,9 +155,7 @@ let test_fixed_byte_region_size_of_value () =
     let codec = Codec.v label Fun.id Codec.[ Field.v "data" typ $ Fun.id ] in
     List.iter
       (fun (case, value, expected) ->
-        Alcotest.(check int)
-          (case ^ " size") 3
-          (Codec.size_of_value codec value);
+        Alcotest.(check int) (case ^ " size") 3 (Codec.encoded_size codec value);
         let buf = Bytes.create 3 in
         Codec.encode codec value buf 0;
         Alcotest.(check bytes) case (Bytes.of_string expected) buf)
@@ -188,7 +186,7 @@ let test_fixed_byte_region_size_of_value () =
       in
       Alcotest.(check int)
         (case ^ " slice size") 3
-        (Codec.size_of_value codec slice);
+        (Codec.encoded_size codec slice);
       let buf = Bytes.create 3 in
       Codec.encode codec slice buf 0;
       Alcotest.(check bytes) (case ^ " slice") (Bytes.of_string expected) buf)
@@ -201,8 +199,8 @@ let test_packed_bf_size () =
     Codec.v "Packed" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ]
   in
   Alcotest.(check int)
-    "size_of_value matches wire_size" (Codec.wire_size codec)
-    (Codec.size_of_value codec (0, 0))
+    "encoded_size matches min_size" (Codec.min_size codec)
+    (Codec.encoded_size codec (0, 0))
 
 type packed_bool_header = {
   magic : string;
@@ -227,11 +225,11 @@ let test_packed_mapped_bf_size () =
     { magic = "dtn!"; version = UInt8.v 4; reserved = 0; flag = true }
   in
   Alcotest.(check int)
-    "wire_size counts packed bool bitfield once" 6
-    (Codec.wire_size packed_bool_header_codec);
+    "min_size counts packed bool bitfield once" 6
+    (Codec.min_size packed_bool_header_codec);
   Alcotest.(check int)
-    "size_of_value matches wire_size" 6
-    (Codec.size_of_value packed_bool_header_codec value);
+    "encoded_size matches min_size" 6
+    (Codec.encoded_size packed_bool_header_codec value);
   let buf = Bytes.create 6 in
   Codec.encode packed_bool_header_codec value buf 0;
   Alcotest.(check string)
@@ -266,10 +264,8 @@ let test_view_get_bitfield () =
     (codec, cf_a, cf_d)
   in
   let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
-  Alcotest.(check int) "get a" 5 ((Staged.unstage (Codec.get codec cf_a)) buf 0);
-  Alcotest.(check int)
-    "get d" 0xAB
-    ((Staged.unstage (Codec.get codec cf_d)) buf 0)
+  Alcotest.(check int) "get a" 5 ((reader codec cf_a) buf 0);
+  Alcotest.(check int) "get d" 0xAB ((reader codec cf_d) buf 0)
 
 let test_view_set_bitfield () =
   let codec, cf_a, cf_d =
@@ -291,24 +287,20 @@ let test_view_set_bitfield () =
     (codec, cf_a, cf_d)
   in
   let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
-  (Staged.unstage (Codec.set codec cf_a)) buf 0 3;
-  Alcotest.(check int)
-    "get a after set" 3
-    ((Staged.unstage (Codec.get codec cf_a)) buf 0);
+  Codec.set codec cf_a buf 0 3;
+  Alcotest.(check int) "get a after set" 3 ((reader codec cf_a) buf 0);
   let r = decode_ok (Codec.decode codec buf 0) in
   Alcotest.(check int) "b preserved" 20 r.b;
   Alcotest.(check int) "c preserved" 0x1234 r.c;
   Alcotest.(check int) "d preserved" 0xAB r.d;
-  (Staged.unstage (Codec.set codec cf_d)) buf 0 0x42;
-  Alcotest.(check int)
-    "get d after set" 0x42
-    ((Staged.unstage (Codec.get codec cf_d)) buf 0);
+  Codec.set codec cf_d buf 0 0x42;
+  Alcotest.(check int) "get d after set" 0x42 ((reader codec cf_d) buf 0);
   let r = decode_ok (Codec.decode codec buf 0) in
   Alcotest.(check int) "a still 3" 3 r.a;
   Alcotest.(check int) "b still 20" 20 r.b;
   Alcotest.(check int) "c still 0x1234" 0x1234 r.c
 
-(* -- Bitfield batch access -- *)
+(* -- Bitfields read from a record's word -- *)
 
 type bf_rec = { hi : int; lo : int }
 
@@ -320,70 +312,28 @@ let bf_cf_lo = Codec.(bf_f_lo $ fun r -> r.lo)
 let bf_codec =
   Codec.v "BfBatch" (fun hi lo -> { hi; lo }) Codec.[ bf_cf_hi; bf_cf_lo ]
 
-let test_bitfield_extract () =
+let test_bitfield_word_read () =
   (* Default [bit_order = Msb_first]: [hi] is the top nibble. *)
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xA7;
-  let hi = Codec.bitfield bf_codec bf_cf_hi in
-  let lo = Codec.bitfield bf_codec bf_cf_lo in
-  let load = Staged.unstage (Codec.load_word hi) in
-  let w = load buf 0 in
-  let hi = Codec.extract hi w in
-  let lo = Codec.extract lo w in
-  (* Compare against Codec.get *)
-  let get_hi = Staged.unstage (Codec.get bf_codec bf_cf_hi) in
-  let get_lo = Staged.unstage (Codec.get bf_codec bf_cf_lo) in
-  Alcotest.(check int) "extract hi = get hi" (get_hi buf 0) hi;
-  Alcotest.(check int) "extract lo = get lo" (get_lo buf 0) lo;
+  let k = Codec.Word.(check (reader bf_codec)) buf 0 in
+  let w = Codec.Word.get k in
+  let hi = Codec.Word.(read (field bf_codec bf_cf_hi)) w in
+  let lo = Codec.Word.(read (field bf_codec bf_cf_lo)) w in
+  let get_hi = reader bf_codec bf_cf_hi in
+  let get_lo = reader bf_codec bf_cf_lo in
+  Alcotest.(check int) "Word.read hi = get hi" (get_hi buf 0) hi;
+  Alcotest.(check int) "Word.read lo = get lo" (get_lo buf 0) lo;
   Alcotest.(check int) "hi" 0xA hi;
   Alcotest.(check int) "lo" 0x7 lo
 
-let test_bitfield_non_bf_raises () =
+let test_bitfield_word_non_bf_raises () =
   let f_x = Field.v "x" (map ~decode:UInt8.to_int ~encode:UInt8.v uint8) in
   let cf_x = Codec.(f_x $ fun x -> x) in
   let codec = Codec.v "NonBf" (fun x -> x) Codec.[ cf_x ] in
-  match Codec.bitfield codec cf_x with
+  match Codec.Word.field codec cf_x with
   | _ -> Alcotest.fail "expected Invalid_argument"
   | exception Invalid_argument _ -> ()
-
-let test_bitfield_short_buffer () =
-  (* Reading a uint32be bitfield from a 2-byte buffer should not segfault *)
-  let f_a = Field.v "a" (bits ~width:8 U32be) in
-  let cf_a = Codec.(f_a $ fun a -> a) in
-  let codec = Codec.v "Short" (fun a -> a) Codec.[ cf_a ] in
-  let bf = Codec.bitfield codec cf_a in
-  let load = Staged.unstage (Codec.load_word bf) in
-  (* Short buffer -- should read garbage but not crash *)
-  let buf = Bytes.create 8 in
-  Bytes.set_int32_be buf 0 0x12345678l;
-  let w = load buf 0 in
-  let v = Codec.extract bf w in
-  Alcotest.(check int) "extract from valid buf" 0x12 v
-
-let test_bitfield_load_shared () =
-  (* Two fields in the same base word should get the same word value *)
-  let f_a = Field.v "a" (bits ~width:4 U32be) in
-  let f_b = Field.v "b" (bits ~width:4 U32be) in
-  let cf_a = Codec.(f_a $ fst) in
-  let cf_b = Codec.(f_b $ snd) in
-  let codec = Codec.v "Shared" (fun a b -> (a, b)) Codec.[ cf_a; cf_b ] in
-  let a = Codec.bitfield codec cf_a in
-  let b = Codec.bitfield codec cf_b in
-  let load_a = Staged.unstage (Codec.load_word a) in
-  let load_b = Staged.unstage (Codec.load_word b) in
-  let buf = Bytes.create 4 in
-  Bytes.set_int32_be buf 0 0xABCDEF01l;
-  let wa = load_a buf 0 in
-  let wb = load_b buf 0 in
-  (* Same base word, same value *)
-  (* [Codec.load_word] hands back the bitfield's raw base word, an [Optint.t],
-     not a uint32 field value. *)
-  Alcotest.check (Alcotest.testable Optint.pp Optint.equal) "same word" wa wb;
-  let a = Codec.extract a wa in
-  let b = Codec.extract b wa in
-  (* a = top 4 bits of 0xABCDEF01 = 0xA, b = next 4 bits = 0xB *)
-  Alcotest.(check int) "a" 0xA a;
-  Alcotest.(check int) "b" 0xB b
 
 (* -- Adversarial bit-order tests --
 
@@ -472,7 +422,7 @@ let test_bitorder_diff_start_newword () =
   (* Two fields with the same base but different [bit_order] must NOT share
      a base word -- the codec allocates a fresh byte for each. Catches any
      regression that would let mismatched bit orders silently collide. *)
-  Alcotest.(check int) "wire size = 2" 2 (Codec.wire_size bit_order_split_codec);
+  Alcotest.(check int) "wire size = 2" 2 (Codec.min_size bit_order_split_codec);
   let buf = Bytes.create 2 in
   Codec.encode bit_order_split_codec { x = 0xA; y = 0x5 } buf 0;
   Alcotest.(check int)
@@ -483,8 +433,7 @@ let test_bitorder_diff_start_newword () =
 let suite =
   ( "codec_bitfield",
     [
-      Alcotest.test_case "codec bitfield: wire_size" `Quick
-        test_codec_bitfield_wire_size;
+      Alcotest.test_case "codec bitfield: size" `Quick test_codec_bitfield_size;
       Alcotest.test_case "codec bitfield: roundtrip" `Quick
         test_codec_bitfield_roundtrip;
       Alcotest.test_case "codec bitfield: byte layout" `Quick
@@ -523,12 +472,8 @@ let suite =
         test_bitorder_lsbfirst_opt_in;
       Alcotest.test_case "bit_order: different orders separate words" `Quick
         test_bitorder_diff_start_newword;
-      Alcotest.test_case "bitfield: extract matches get" `Quick
-        test_bitfield_extract;
-      Alcotest.test_case "bitfield: non-bf field raises" `Quick
-        test_bitfield_non_bf_raises;
-      Alcotest.test_case "bitfield: short buffer" `Quick
-        test_bitfield_short_buffer;
-      Alcotest.test_case "bitfield: load_word shared" `Quick
-        test_bitfield_load_shared;
+      Alcotest.test_case "bitfield: Word.read matches get" `Quick
+        test_bitfield_word_read;
+      Alcotest.test_case "bitfield: a mapped field is no word field" `Quick
+        test_bitfield_word_non_bf_raises;
     ] )

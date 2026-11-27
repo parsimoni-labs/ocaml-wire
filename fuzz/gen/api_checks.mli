@@ -11,7 +11,7 @@ val semantic_invariant_cases : string -> Alcobar.test_case list
     validate-then-get bounds over exact adversarial examples. *)
 
 val api_cases : string -> Alcobar.test_case list
-(** [api_cases label] exercises staged [Codec.get] / [set] accessors, slice
-    navigation, batch bitfield extraction, custom sequence maps, struct
-    validators, metadata helpers and Everparse / Raw projection helpers.
-    File-writing helpers run once per process. *)
+(** [api_cases label] exercises [Codec.get] / [set] accessors, slice navigation,
+    batch bitfield extraction, custom sequence maps, struct validators, metadata
+    helpers and Everparse / Raw projection helpers. File-writing helpers run
+    once per process. *)

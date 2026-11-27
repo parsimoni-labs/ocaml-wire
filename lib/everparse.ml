@@ -201,7 +201,7 @@ let bytes_setter schema_name : setter_info =
    through [map] / [where]) also gets one slot per scalar of every embedded
    codec and one [<path>_present] flag per optional, at any depth, each named by
    its path: the field names from the entrypoint down, joined with underscores,
-   the names [Wire_ocaml.scanner] gives its outputs. The embedded structs and
+   the names [Wire_ocaml.outputs] gives a fold's outputs. The embedded structs and
    the optional casetypes over them take the [ctx] parameter, and their fields
    call the entrypoint's setters with the slot's index, exactly as the
    entrypoint's own fields do. A codec reached inside an array, a repeat or a
@@ -216,7 +216,7 @@ let bytes_setter schema_name : setter_info =
    a literal no big-endian type ([(UINT16BE) 0] is a [UINT16]), so the
    validator cannot pass a zero to a big-endian setter. Initialising the visitor
    to zero before each validation, as the generated stubs do, makes them read 0,
-   the value [Wire_ocaml.scanner] gives an absent field. *)
+   the value a fold of [Wire_ocaml] gives an absent field. *)
 
 type slot = {
   member : string;
@@ -232,7 +232,7 @@ type walk = {
   uses : (string, int) Hashtbl.t;
 }
 
-let plug_member name = Names.escape Names.c_keywords name
+let visitor_member name = Names.escape Names.c_keywords name
 let ctx_struct = Types.struct_ "WireCtx" []
 let ctx_param = Types.mutable_param "ctx" (Types.struct_typ ctx_struct)
 
@@ -343,7 +343,7 @@ let boxed : type a. walk -> path:string -> a Types.typ -> a Types.typ =
       fields = List.map (fun f -> with_setter_calls f calls) s.fields;
     }
   in
-  let size = Codec.min_wire_size c in
+  let size = Codec.min_size c in
   Types.Codec
     {
       codec_name = s.name;
@@ -357,10 +357,11 @@ let boxed : type a. walk -> path:string -> a Types.typ -> a Types.typ =
       codec_fixed_size = Some size;
       codec_min_size = size;
       codec_size_of = (fun _ _ _ _ -> size);
-      codec_size_of_value = Codec.size_of_value_ctx c;
+      codec_size_of_value = Codec.encoded_size_ctx c;
       codec_field_readers = Codec.field_readers_ctx c;
       codec_returns_slice = false;
       codec_struct;
+      codec_ref = Codec.embed_ref c;
     }
 
 let box_optional : type a.
@@ -470,7 +471,7 @@ let flatten schema (s : Types.struct_) =
   let slots = List.rev !(w.slots) in
   (* A path can spell a field's own name ([ip_src] beside [ip.src]): refuse it,
      as the visitor cannot hold both. Spellings that differ but fold alike are
-     refused where the visitor is written ([Wire_3d.check_plug_names]). *)
+     refused where the visitor is written ([Wire_3d.check_visitor_names]). *)
   let seen = Hashtbl.create 16 in
   List.iter
     (fun sl ->
@@ -736,7 +737,7 @@ let uses_wire_ctx s =
       | _ -> false)
     s.module_.decls
 
-type plug_field = {
+type visitor_field = {
   name : string;
   idx : int;
   c_type : string;
@@ -747,7 +748,7 @@ type plug_field = {
 (* A member holds what its setter is passed: a value as wide as the integer
    under any [map], [where], [enum] or optional, or the 32-bit offset
    [<Name>SetBytes] hands out. *)
-let plug_field (s : t) sl =
+let visitor_field (s : t) sl =
   let setter = slot_setter s.name sl in
   let (Types.Pack_typ val_typ) = setter.val_typ in
   let c_type = Types.c_type_of val_typ in
@@ -759,14 +760,14 @@ let plug_field (s : t) sl =
     val_c_type = c_type;
   }
 
-let plug_fields s =
+let visitor_fields s =
   match s.source with
   | None -> []
   | Some src ->
       let _, _, slots = flatten s.name src in
-      List.map (plug_field s) slots
+      List.map (visitor_field s) slots
 
-let plug_setters s =
+let visitor_setters s =
   let seen = Hashtbl.create 8 in
   List.filter_map
     (fun f ->
@@ -775,7 +776,7 @@ let plug_setters s =
         Hashtbl.add seen f.setter ();
         Some (f.setter, f.val_c_type)
       end)
-    (plug_fields s)
+    (visitor_fields s)
 
 let entrypoint_struct s =
   List.find_map

@@ -10,8 +10,10 @@ open Demo_bench_cases
 type case = { id : Demo_bench_cases.id; label : string; packed : Wire_diff.t }
 
 let of_case (type a) (Read_case c : a read_case) =
-  let stubs = C_stubs.stubs_of_name (Everparse.Raw.struct_name c.struct_) in
-  let size = Codec.wire_size c.codec in
+  let stubs =
+    C_stubs.stubs_of_name (Everparse.Raw.struct_name c.struct_) c.codec
+  in
+  let size = Codec.min_size c.codec in
   let c_parse : bytes -> a =
     match c.of_c_field with
     | Int f -> fun buf -> f (stubs.projected_int buf 0)
@@ -23,12 +25,14 @@ let of_case (type a) (Read_case c : a read_case) =
   in
   let ocaml_read buf =
     if String.length buf < size then None
-    else Some (c.get (Bytes.of_string buf) 0)
+    else Result.to_option (c.get (Bytes.of_string buf) 0)
   in
   let project v =
     let buf = Bytes.create size in
     Codec.encode c.codec v buf 0;
-    c.get buf 0
+    match c.get buf 0 with
+    | Ok v -> v
+    | Error e -> Fmt.failwith "%s: %a" c.label Error.pp e
   in
   let write _ = None in
   let packed =
@@ -44,7 +48,9 @@ let verify_of_id id =
   let (C (Read_case r)) =
     List.find (fun (C (Read_case r)) -> r.id = id) projection_cases
   in
-  let stubs = C_stubs.stubs_of_name (Everparse.Raw.struct_name r.struct_) in
+  let stubs =
+    C_stubs.stubs_of_name (Everparse.Raw.struct_name r.struct_) r.codec
+  in
   fun () ->
     Array.iteri
       (fun i item ->

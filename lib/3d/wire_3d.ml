@@ -38,6 +38,16 @@ let pascal_case name =
    that mode even for a name with no underscore of its own. *)
 let everparse_name name = pascal_case (String.capitalize_ascii name ^ "_")
 
+(* EverParse names the validator of the struct [name] of the 3D module
+   [module_name] after the module and the struct's tag, which the 3D printer
+   gives: [pascal_case (module_name ^ "_validate_" ^ tag)]. *)
+let validator_of ~module_name name =
+  pascal_case
+    (module_name ^ "_validate_" ^ Wire.Private.Types.struct_tag_name name)
+
+let validator_name name =
+  validator_of ~module_name:(String.capitalize_ascii name) name
+
 (* EverParse derives the C output filename from the [.3d] filename, which
    [Wire.Everparse.filename] already writes with [String.capitalize_ascii].
    All filenames wire.3d emits or references must go through the same
@@ -136,55 +146,6 @@ let read_extern_names ~outdir s =
     else scan (i + 1) acc
   in
   scan 0 []
-
-(* EverParse's top-level validator function follows its own normalization rule
-   and includes the 3D struct tag after [Validate]. Rather than duplicate that
-   logic, extract the complete function name from the generated [<Name>.h]. *)
-let read_validate_name ~outdir s =
-  let path = Filename.concat outdir (file_base s ^ ".h") in
-  let ic = open_in path in
-  let found = ref None in
-  let needle = "Validate" in
-  let nlen = String.length needle in
-  let is_ident c =
-    (c >= 'A' && c <= 'Z')
-    || (c >= 'a' && c <= 'z')
-    || (c >= '0' && c <= '9')
-    || c = '_'
-  in
-  (* Find [Validate] inside the declaration and return its complete surrounding
-     C identifier. Scanning every position lets the module name itself contain a
-     [V]; the identifier boundaries also discard the return type and arguments. *)
-  let identifier_containing_validate line =
-    let len = String.length line in
-    let rec scan i =
-      if i + nlen > len then None
-      else if i > 0 && is_ident line.[i - 1] && String.sub line i nlen = needle
-      then begin
-        let j = ref i in
-        while !j > 0 && is_ident line.[!j - 1] do
-          decr j
-        done;
-        let k = ref (i + nlen) in
-        while !k < len && is_ident line.[!k] do
-          incr k
-        done;
-        Some (String.sub line !j (!k - !j))
-      end
-      else scan (i + 1)
-    in
-    scan 0
-  in
-  (try
-     while !found = None do
-       let line = String.trim (input_line ic) in
-       found := identifier_containing_validate line
-     done
-   with End_of_file -> ());
-  close_in ic;
-  match !found with
-  | Some n -> n
-  | None -> Fmt.failwith "could not find Validate function name in %s" path
 
 let write_3d ~outdir schemas =
   check_name_collisions schemas;
@@ -352,8 +313,6 @@ let patch_everparse_endianness ~outdir =
   let patched = with_freestanding_endianness content in
   Out_channel.with_open_bin dst (fun oc -> Out_channel.output_string oc patched)
 
-let has_3d_exe () = locate_3d_exe () <> None
-
 (* The [_ExternalTypedefs.h] header seen by the EverParse-generated validator
    and wrapper. The default shipped by wire.3d is a forward declaration that
    ties WIRECTX to the matching [<Name>_Fields] visitor struct. Users who want
@@ -380,20 +339,21 @@ let write_external_typedefs ~outdir schemas =
       end)
     schemas
 
-let plug_prefix s =
+let visitor_prefix s =
   String.uppercase_ascii (c_ident s) |> fun p ->
   String.map (fun c -> if c = '-' then '_' else c) p
 
-let index_macro s name = plug_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
+let index_macro s name =
+  visitor_prefix s ^ "_IDX_" ^ String.uppercase_ascii name
 
 (* The visitor names each field twice in C: the [_IDX_] macro upper-cases the
    name, so [X] and [x] would define one macro twice. The struct member's
    escape is injective, so only the macro can clash, but both are checked.
    Refuse naming both fields before writing either file. *)
-let check_plug_names s =
-  let fields = Wire.Everparse.plug_fields s in
+let check_visitor_names s =
+  let fields = Wire.Everparse.visitor_fields s in
   List.iter
-    (fun (f : Wire.Everparse.plug_field) ->
+    (fun (f : Wire.Everparse.visitor_field) ->
       if not (Wire.Private.Names.is_identifier f.name) then
         Fmt.invalid_arg
           "Wire_3d: in %S, field %S is not an identifier \
@@ -414,12 +374,12 @@ let check_plug_names s =
           s.name a b what id
   in
   check "macro" (index_macro s);
-  check "struct member" Wire.Everparse.plug_member
+  check "struct member" Wire.Everparse.visitor_member
 
 (* Typed-struct visitor: one C struct per schema with one member per named field,
    plus a [WireSet*] implementation that switches on idx to populate it. *)
 let write_fields_header ~outdir s =
-  let fields = Wire.Everparse.plug_fields s in
+  let fields = Wire.Everparse.visitor_fields s in
   let base = file_base s in
   let ident = c_ident s in
   let path = Filename.concat outdir (base ^ "_Fields.h") in
@@ -447,7 +407,7 @@ let write_fields_header ~outdir s =
   List.iter
     (fun f ->
       pr "  %s %s;@\n" f.Wire.Everparse.c_type
-        (Wire.Everparse.plug_member f.name))
+        (Wire.Everparse.visitor_member f.name))
     fields;
   if fields = [] then pr "  int _unused;@\n";
   pr "} %sFields;@\n" ident;
@@ -461,7 +421,7 @@ let write_fields_header ~outdir s =
    float; everyone else takes a value cast. *)
 let emit_setter_case ppf logical f =
   if String.equal f.Wire.Everparse.setter logical then
-    let member = Wire.Everparse.plug_member f.name in
+    let member = Wire.Everparse.visitor_member f.name in
     match f.c_type with
     | "float" | "double" ->
         Fmt.pf ppf
@@ -501,8 +461,8 @@ let physical_setter_names ~outdir s setters =
     setters
 
 let write_fields_impl ~outdir s =
-  let fields = Wire.Everparse.plug_fields s in
-  let setters = Wire.Everparse.plug_setters s in
+  let fields = Wire.Everparse.visitor_fields s in
+  let setters = Wire.Everparse.visitor_setters s in
   let base = file_base s in
   let ident = c_ident s in
   let physical_names = physical_setter_names ~outdir s setters in
@@ -535,7 +495,7 @@ let write_fields_impl ~outdir s =
 
 let write_fields ~outdir schemas =
   check_name_collisions schemas;
-  List.iter check_plug_names schemas;
+  List.iter check_visitor_names schemas;
   List.iter
     (fun s ->
       if Wire.Everparse.uses_wire_ctx s then begin
@@ -664,6 +624,36 @@ let run_3d ?output ~outdir exe flags file =
   if Sys.win32 then run_3d_spawned ?output ~outdir exe flags file
   else run_process ?output ~cwd:outdir exe (flags @ [ file ])
 
+let copy_file ~src ~dst =
+  let contents = In_channel.with_open_bin src In_channel.input_all in
+  Out_channel.with_open_bin dst (fun oc ->
+      Out_channel.output_string oc contents)
+
+(* The headers every 3d.exe run writes, the same for every module. *)
+let everparse_headers = [ "EverParse.h"; "EverParseEndianness.h" ]
+
+(* Copy into [outdir] what a 3d.exe run on [three_d] wrote in [dir], the only
+   module there: its files, all named after it, and EverParse's headers. Each
+   file lands under a temporary name and is renamed into place, so a header
+   two concurrent runs publish is never seen half written. *)
+let publish ~dir ~outdir three_d =
+  let base = Filename.remove_extension three_d in
+  Array.iter
+    (fun f ->
+      if
+        f <> three_d
+        && (String.starts_with ~prefix:base f || List.mem f everparse_headers)
+      then begin
+        let tmp = Filename.temp_file ~temp_dir:outdir f ".part" in
+        copy_file ~src:(Filename.concat dir f) ~dst:tmp;
+        Sys.rename tmp (Filename.concat outdir f)
+      end)
+    (Sys.readdir dir)
+
+(* Each file runs through 3d.exe in a {!Proc.pool} job, in a directory of its
+   own, since concurrent runs race on the intermediate files EverParse writes
+   beside its output; the job then publishes the module's files into
+   [outdir]. *)
 let run_everparse_files ?(quiet = true) ~outdir files =
   let exe =
     match locate_3d_exe () with
@@ -671,18 +661,25 @@ let run_everparse_files ?(quiet = true) ~outdir files =
     | None -> failwith not_found_3d_exe
   in
   let version = everparse_version exe in
-  List.iter
-    (fun f ->
-      let output = if quiet then Dev_null else Inherit in
-      let ret =
-        run_3d ~output ~outdir exe [ "--batch" ] f |> process_status_code
-      in
-      if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret;
-      harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
-      write_provenance ~outdir ~version f)
-    files;
-  (* Last, because every 3d.exe run above rewrites this header. *)
-  patch_everparse_endianness ~outdir
+  (* Asked once here, so the jobs inherit the answer. *)
+  ignore (fstar_flags exe : string list);
+  let job f dir =
+    let three_d = Filename.basename f in
+    copy_file ~src:(Filename.concat outdir f) ~dst:(Filename.concat dir three_d);
+    let ret = run_3d ~outdir:dir exe [ "--batch" ] three_d in
+    if process_status_code ret <> 0 then
+      Fmt.failwith "EverParse failed on %s with code %d" f
+        (process_status_code ret);
+    harden_wrapper ~outdir:dir (Filename.remove_extension three_d);
+    write_provenance ~outdir:dir ~version three_d;
+    publish ~dir ~outdir three_d
+  in
+  match pool (List.map (fun f -> (f, job f)) files) with
+  | Ok logs ->
+      if not quiet then List.iter print_string logs;
+      (* Last, because every 3d.exe run above writes this header. *)
+      patch_everparse_endianness ~outdir
+  | Error failed -> failwith failed
 
 let run_everparse ?(quiet = true) ~outdir schemas =
   run_everparse_files ~quiet ~outdir (List.map Wire.Everparse.filename schemas)
@@ -766,13 +763,13 @@ let emit_random_checks ppf ~validator ~ctx_arg wire_size =
   pr "      CHECK(\"random position correct\", r == %d);\n" wire_size;
   pr "    }\n"
 
-let emit_schema_test ~outdir ppf s wire_size =
+let emit_schema_test ppf s wire_size =
   let pr fmt = Fmt.pf ppf fmt in
-  (* Read the validator name straight out of EverParse's generated [.h]
-     -- the one authoritative source. EverParse applies its own naming
-     rules (different for the top-level Validate function vs. the extern
-     callbacks); any attempt to re-implement them here has drifted before. *)
-  let validator = read_validate_name ~outdir s in
+  let validator =
+    match Wire.Everparse.entrypoint_struct s with
+    | Some st -> validator_of ~module_name:(file_base s) (Raw.struct_name st)
+    | None -> Fmt.failwith "%s: the schema has no entrypoint to test" s.name
+  in
   let lower = String.lowercase_ascii s.name in
   let uses_ctx = Wire.Everparse.uses_wire_ctx s in
   let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
@@ -837,7 +834,7 @@ let generate_test ~outdir schemas =
   pr "} while(0)\n\n";
   pr "int main(void) {\n";
   pr "  int failures = 0;\n";
-  List.iter (fun (s, ws) -> emit_schema_test ~outdir ppf s ws) fixed_schemas;
+  List.iter (fun (s, ws) -> emit_schema_test ppf s ws) fixed_schemas;
   pr "\n  if (failures == 0)\n";
   pr "    printf(\"All tests passed.\\n\");\n";
   pr "  else\n";
@@ -854,16 +851,7 @@ let generate_3d ~outdir schemas =
   ensure_dir outdir;
   write_3d ~outdir schemas
 
-let copy_file ~src ~dst =
-  let contents = In_channel.with_open_bin src In_channel.input_all in
-  Out_channel.with_open_bin dst (fun oc ->
-      Out_channel.output_string oc contents)
-
-let rm_rf dir =
-  (try Sys.readdir dir with Sys_error _ -> [||])
-  |> Array.iter (fun f ->
-      try Sys.remove (Filename.concat dir f) with Sys_error _ -> ());
-  try Sys.rmdir dir with Sys_error _ -> ()
+let rm_rf = rm_rf
 
 (* Regenerate into a scratch directory through the same writer the committed
    [.3d] came from, so the drift check compares against the real generator
@@ -883,69 +871,34 @@ let generate_3d_check ~outdir schemas =
             ~dst:(Filename.concat outdir (file ^ ".gen")))
         schemas)
 
-let default_job_count () = max 1 (min 4 (Domain.recommended_domain_count ()))
-let fork_pool = fork_pool
+let max_jobs = max_jobs
+let pool = pool
 
-(* Verify every schema through EverParse, the way its own corpus is tested (one
-   schema per .3d module, each accepted iff F* verifies it). The cost is
-   dominated by per-module F* verification (CPU-bound, several seconds each);
-   per-invocation startup is negligible, so a single [3d.exe --batch] over
-   everything just verifies serially on one core. The schemas are instead
-   verified concurrently in a {!fork_pool} (at most [max_jobs] at once), each
-   [3d.exe] run in its own directory (concurrent runs race on EverParse's shared
-   intermediate files). The pool overlaps the per-module work across cores and
-   load-balances as runs finish, the only lever for this cost. [Ok ()] iff
-   EverParse accepts every schema, else [Error] naming the offending schema(s)
-   with their captured diagnostics. The caller provides schemas with distinct
-   names (each becomes its own .3d module). *)
-let batch_check ?max_jobs ~outdir schemas =
+(* Verify every schema through EverParse, the way its own corpus is tested: one
+   schema per .3d module, each accepted iff F* verifies it, in a {!pool} job of
+   its own. *)
+let batch_check schemas =
   check_name_collisions schemas;
-  match (locate_3d_exe (), schemas) with
-  | None, _ -> Error not_found_3d_exe
-  | Some _, [] -> Ok ()
-  | Some exe, _ -> (
-      ensure_dir outdir;
-      let arr : t array = Array.of_list schemas in
-      let log_of i = Filename.concat outdir (arr.(i).name ^ ".batchlog") in
-      let jobs =
-        Array.mapi
-          (fun i schema () ->
-            let work = Filename.temp_dir "wire_batchchk" "" in
-            Fun.protect
-              ~finally:(fun () -> rm_rf work)
-              (fun () ->
-                generate_3d ~outdir:work [ schema ];
-                let status =
-                  run_3d
-                    ~output:(File (log_of i))
-                    ~outdir:work exe
-                    [ "--batch"; "--no_copy_everparse_h" ]
-                    (Wire.Everparse.filename schema)
-                in
-                if process_status_code status <> 0 then
-                  failwith "EverParse rejected"))
-          arr
+  match locate_3d_exe () with
+  | None -> Error not_found_3d_exe
+  | Some exe ->
+      ignore (fstar_flags exe : string list);
+      let job schema dir =
+        generate_3d ~outdir:dir [ schema ];
+        let status =
+          run_3d ~outdir:dir exe
+            [ "--batch"; "--no_copy_everparse_h" ]
+            (Wire.Everparse.filename schema)
+        in
+        if process_status_code status <> 0 then failwith "EverParse rejected"
       in
-      let max_jobs = Option.value max_jobs ~default:(default_job_count ()) in
-      let ok = fork_pool ~max_jobs jobs in
-      let errors =
-        Array.to_list ok
-        |> List.mapi (fun i passed ->
-            if passed then None
-            else
-              let msg =
-                try In_channel.with_open_text (log_of i) In_channel.input_all
-                with Sys_error _ -> ""
-              in
-              Fmt.kstr (fun s -> Some s) "%s:\n%s" arr.(i).name msg)
-        |> List.filter_map Fun.id
-      in
-      match errors with [] -> Ok () | _ -> Error (String.concat "\n" errors))
+      pool (List.map (fun (s : t) -> (s.name, job s)) schemas)
+      |> Result.map ignore
 
 let generate_c ?(quiet = true) ~outdir schemas =
   check_name_collisions schemas;
   ensure_dir outdir;
-  if has_3d_exe () then begin
+  if Option.is_some (locate_3d_exe ()) then begin
     run_everparse ~quiet ~outdir schemas;
     write_external_typedefs ~outdir schemas;
     write_fields ~outdir schemas;
@@ -1150,12 +1103,12 @@ let codec_verdict ?env c buf =
   match Wire.Codec.decode ?env c buf 0 with
   | Error e -> `Reject e
   | Ok _ -> (
-      match
-        Wire.Codec.validate_exn ?env c buf 0;
-        Wire.Codec.wire_size_at ?env c buf 0
-      with
-      | n -> if n = Bytes.length buf then `Accept else `Resize n
-      | exception Wire.Parse_error e -> `Reject e)
+      match Wire.Codec.validate ?env c buf 0 with
+      | Error e -> `Reject e
+      | Ok () -> (
+          match Wire.Codec.size_at ?env c buf 0 with
+          | Error e -> `Reject e
+          | Ok n -> if n = Bytes.length buf then `Accept else `Resize n))
 
 let codec_accepts ?env c buf =
   match codec_verdict ?env c buf with `Accept -> true | _ -> false
@@ -1215,7 +1168,7 @@ let write_slot buf off (slot : Raw.int_slot) v =
       Bytes.set buf (off + i) (Char.chr byte)
     done
 
-let seed_for seeds (e : Wire.parse_error) =
+let seed_for seeds (e : Wire.Error.t) =
   match List.rev e.field with
   | leaf :: _ ->
       List.find_opt
@@ -1227,12 +1180,12 @@ let seed_for seeds (e : Wire.parse_error) =
    writing one where the scan gave up: both are structural, so neither needs a
    value the declaration singles out. Anything else is repairable only when the
    failing field's declaration names candidate values. *)
-let repair_for ~seeds ~len (e : Wire.parse_error) =
+let repair_for ~seeds ~len (e : Wire.Error.t) =
   match e.kind with
-  | Wire.Unexpected_eof { expected; got } when expected > got ->
+  | Wire.Error.Unexpected_eof { expected; got } when expected > got ->
       `Grow (len + expected - got)
-  | Wire.Missing_terminator when e.at < len -> `Terminate e.at
-  | Wire.Missing_terminator -> `Grow (e.at + 1)
+  | Wire.Error.Missing_terminator when e.at < len -> `Terminate e.at
+  | Wire.Error.Missing_terminator -> `Grow (e.at + 1)
   | _ -> (
       match seed_for seeds e with
       | Some seed -> `Place (e.at, seed)
@@ -1427,7 +1380,7 @@ let corpus_of_codec ~count ppf (Pack c) =
     | Some source -> Raw.field_seeds source
     | None -> []
   in
-  let center = Wire.Codec.min_wire_size c in
+  let center = Wire.Codec.min_size c in
   let draw_params () = List.map (fun _ -> fuzz_param_value rng center) pnames in
   let env_of pvals =
     match pnames with
@@ -1640,7 +1593,7 @@ let emit_agree_main ppf =
    say so rather than guess a symbol that would only fail at link time. *)
 let schema_entrypoint_name s =
   match s.source with
-  | Some source -> "Wire" ^ Raw.struct_name source
+  | Some source -> Wire.Private.Types.struct_tag_name (Raw.struct_name source)
   | None ->
       Fmt.failwith "%s: raw-module schema has no entrypoint struct tag" s.name
 
@@ -1702,7 +1655,7 @@ let generate_3d_standalone_check ?name ~outdir ~package codecs =
 
 let generate_c_standalone ?(quiet = true) ?name ~outdir ~package () =
   ensure_dir outdir;
-  if has_3d_exe () then
+  if Option.is_some (locate_3d_exe ()) then
     run_everparse_files ~quiet ~outdir
       [ standalone_base ?name ~package () ^ ".3d" ]
   else failwith (not_found_3d_exe ^ ". Install EverParse to regenerate C files.")

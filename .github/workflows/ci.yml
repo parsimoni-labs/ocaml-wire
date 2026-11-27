@@ -113,7 +113,7 @@ jobs:
       WIRE_FUZZ_SEED: ${{ github.run_id }}
       WIRE_FUZZ_REPEAT: 1000
       WIRE_FUZZ_BUDGET: 0
-      WIRE_DIFF_JOBS: 1
+      WIRE_3D_JOBS: 1
     steps:
       - uses: actions/checkout@v7
       - uses: ocaml/setup-ocaml@v3
@@ -251,7 +251,9 @@ jobs:
       # merlint --build runs this itself but reports only the exit code, so
       # run it here first to get the compiler error on its own line.
       - run: opam exec -- dune build @check
-      - run: opam exec -- merlint --build
+      # merlint runs from the switch install-merlint builds it in, with the
+      # project switch's dune and compiler.
+      - run: opam exec -- "$(opam var --switch=merlint bin)/merlint" --build
 
   # Static analysis over the hand-written C. EverParse proves the parsers it
   # generates, but nothing covered the benchmark C written by hand around them,
@@ -474,7 +476,110 @@ jobs:
       - name: Run the suites that need EverParse-generated C
         run: |
           opam exec -- dune build \
-            @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest \
-            @test/bench/runtest @test/ocaml/runtest @fuzz/diff/ocaml/runtest
+            @test/stubs/runtest @test/diff/runtest @fuzz/diff/runtest \
+            @test/bench-diff/runtest @test/bench/runtest @test/ocaml/runtest \
+            @fuzz/diff/ocaml/runtest
+        env:
+          BUILD_EVERPARSE: 1
+
+  # make prove: F* proves the scanners of the codecs proofs/fstar-gen/dune
+  # lists equal to the parser 3d.exe writes for each, and refuses the mutant
+  # there, with the F* and Z3 EverParse ships. The checked modules are cached
+  # on the EverParse release, the F* library and the generator; F* checks
+  # again any module whose source or dependencies changed, and make prove
+  # removes every entry the run did not use, so the cache saved is only
+  # what this tree needs. WIRE_FSTAR_CACHE names the directory the cache
+  # step saves, instead of the default in _build.
+  #
+  # The job then checks the model of the planner in proofs/fstar with the
+  # same F*: its theorems (verify), the checker plans.exe runs against the
+  # extraction of the model (check-extract), every decision the emitter
+  # reports for the sampled codecs against the model (plans) and every past
+  # defect and mutant refused (defects). plans.exe links the fuzzers'
+  # codecs, hence --with-test. From a cold F* cache, on one loaded host:
+  # verify 100 s of CPU, check-extract 1 s, plans 6 s once plans.exe is
+  # built (23 s), defects 9 to 14 min of CPU, 6 to 7 min with -j4.
+  prove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.3'
+
+      - run: opam install . --deps-only --with-test
+
+      - name: Install EverParse
+        run: |
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/wire-fstar
+          key: fstar-${{ hashFiles('.github/ci-dependencies.env', 'proofs/fstar-gen/**', 'proofs/fstar/Plan.Word.fst', 'scripts/fstar-gen/**', 'bench/rust/headers.ml', 'lib/**', 'examples/**') }}
+          restore-keys: |
+            fstar-
+
+      - name: Prove the scanners against 3d.exe
+        run: WIRE_FSTAR_CACHE=$HOME/.cache/wire-fstar opam exec -- make prove
+
+      - name: Check the planner model
+        run: opam exec -- make -C proofs/fstar verify check-extract
+
+      - name: Refuse the past defects and the mutants of the model
+        run: opam exec -- make -C proofs/fstar -j4 defects
+
+      - name: Check the emitter's decisions against the model
+        run: opam exec -- make -C proofs/fstar plans
+
+  # verify/ executes the generated scanners and record modules symbolically
+  # and has Z3, the one EverParse ships, prove their reads in bounds and
+  # their answers equal to those of 3d.exe's specification, refuse the
+  # defects planted in mutants (stride_threshold_ox among them, the
+  # positive control of the OxCaml frame loop) and classify every check of
+  # the scanners as needed for safety or for semantics, the OxCaml frame
+  # loop's bounds included. These rules took 6.3 minutes of CPU and 2.1
+  # minutes one at a time (@verify/runtest 334 s of CPU in 108 s,
+  # @verify/classify 45 s in 18 s) on an 18-core machine under a load of 19
+  # to 35; the job runs beside everparse-3d, which takes 80 to 130 minutes,
+  # so it should not lengthen the run. One rule at a time: each runs four
+  # Z3 processes, one per core of the runner.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.4'
+
+      - run: opam install . --deps-only
+
+      - name: Install EverParse
+        run: |
+          source .github/ci-dependencies.env
+          bash .github/scripts/install-archive \
+            "$EVERPARSE_LINUX_X86_64_URL" \
+            "$EVERPARSE_LINUX_X86_64_SHA256" \
+            "$HOME/.local"
+          echo "$HOME/.local/everparse/bin" >> "$GITHUB_PATH"
+          z3=$(sed -n 's/^EVERPARSE_Z3_VERSION ?= //p' \
+            "$HOME/.local/everparse/lib/everparse/z3-version.Makefile")
+          z3=$HOME/.local/everparse/lib/fstar/z3-$z3/bin
+          test -x "$z3/z3"
+          echo "$z3" >> "$GITHUB_PATH"
+
+      # The rules are skipped, and the lane green, when z3 is not in PATH.
+      - run: z3 --version
+
+      - name: Verify the generated code against 3d.exe
+        run: opam exec -- dune build -j 1 @verify/runtest @verify/classify
         env:
           BUILD_EVERPARSE: 1

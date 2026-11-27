@@ -1,0 +1,6 @@
+(rule
+ (targets WireGen.Tables.fst)
+ (action
+  (with-stdout-to
+   WireGen.Tables.fst
+   (run %{exe:../../../scripts/fstar-gen/tables.exe}))))

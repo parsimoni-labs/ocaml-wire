@@ -1,16 +1,15 @@
-; Differential fuzzer: each sampled codec of Diff_ocaml.codecs against the Rust
-; Wire_rust generates from it, and the Rust scanners of each structured case of
-; Diff_codecs.scan_cases and each sampled shape against the codec, on the
-; case's boundary corpus and on random inputs. Compiling that code needs
-; rustc, so the lane
-; builds only with BUILD_RUST=1 (rustc in PATH), as the EverParse lane needs
+; Differential fuzzer: the module Wire_rust generates from each sampled codec
+; of Diff_ocaml.codecs, each structured case of Diff_codecs.scan_cases and each
+; sampled shape, against the codec, on the case's boundary corpus and on
+; random inputs. Compiling that code needs rustc, so the lane builds only with
+; BUILD_RUST=1 (rustc in PATH), as the EverParse lane needs
 ; BUILD_EVERPARSE=1. The generator (test/diff/gen_rust.ml) is pure OCaml and
 ; always builds.
 
 (library
  (name diff_rust)
  (modules diff_rust)
- (libraries wire fuzz_gen diff_ocaml alcobar fmt))
+ (libraries wire wire.ocaml fuzz_gen diff_ocaml alcobar fmt))
 
 ; The generator writes a module per codec and lib.rs, which rustc compiles
 ; into one no_std static library with a single C entry point.
@@ -67,8 +66,8 @@
   (language c)
   (names rust_ffi)))
 
-; The seed, repeat and budget knobs of fuzz/dune, with a budget of one second
-; per codec by default.
+; The timeout, seed, repeat and budget knobs of fuzz/dune, with a budget of
+; one second per codec by default.
 
 (rule
  (alias runtest)
@@ -79,6 +78,8 @@
  (action
   (run
    %{exe:fuzz.exe}
+   --timeout
+   %{read:../../alcobar-timeout}
    -s
    %{env:WIRE_FUZZ_SEED=42}
    -r

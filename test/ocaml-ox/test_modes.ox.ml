@@ -1,28 +1,32 @@
 (* The modes of the code Wire_ocaml generates for OxCaml: a function that reads
    or writes a buffer without keeping it takes it [local], so the buffer may be
-   on the caller's stack; [decode_with] takes its constructor [local]; and every
-   function is [portable], so a parallel task may call it. Only an OxCaml
-   compiler builds this file. *)
+   on the caller's stack, and reads it through views that allocate nothing;
+   and every function is [portable], so a parallel task may call it. Only an
+   OxCaml compiler builds this file. *)
 
 let packet =
   "\x45\x00\x00\x3c\x1c\x46\x40\x00\x40\x06\xb1\xe6\xc0\xa8\x00\x68\xc0\xa8\x00\x01"
 
 let size = String.length packet
 
-(* What the getters read of the header in [b], folded into one [int]. *)
+(* What the accessors read of the header in [b], folded into one [int]. *)
 let[@inline] fields (b @ local) =
-  Bool.to_int (G_ipv4.is_valid b 0)
-  + (G_ipv4.Get.versionihl b 0 :> int)
-  + (G_ipv4.Get.ttl b 0 :> int)
-  + (G_ipv4.Get.frag b 0 :> int)
-  + G_ipv4.Get.src_int b 0
-  + G_ipv4.Get.dst_int b 0
+  let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
+  if G_ipv4.ok c then
+    let v = G_ipv4.get c in
+    (G_ipv4.versionihl n v :> int)
+    + (G_ipv4.ttl n v :> int)
+    + (G_ipv4.frag n v :> int)
+    + Wire_runtime.SInt32.to_int (G_ipv4.src n v)
+    + Wire_runtime.UInt32.to_int (G_ipv4.dst n v)
+  else -1
 
 let stack_fields () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
-  G_ipv4.validate_exn b 0;
   let r = fields b in
+  if r < 0 then Alcotest.fail "the header is refused";
   r
 
 let test_stack_reads () =
@@ -37,17 +41,20 @@ let stack_view () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
-  let c = G_ipv4.View.check n (Wire_runtime.Buf.length n) 0 in
-  if G_ipv4.View.ok c then
-    let v = G_ipv4.View.get c in
-    (G_ipv4.view_ttl n v :> int) + G_ipv4.view_src_int n v
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
+  if G_ipv4.ok c then
+    let v = G_ipv4.get c in
+    Wire_runtime.UInt8.to_int (G_ipv4.ttl n v)
+    + Wire_runtime.SInt32.to_int (G_ipv4.src n v)
   else -1
 
+let decoded () = Result.get_ok (G_ipv4_record.decode (Bytes.of_string packet) 0)
+
 let test_stack_view () =
+  let r = decoded () in
   Alcotest.(check int)
     "same fields"
-    ((G_ipv4.Get.ttl (Bytes.of_string packet) 0 :> int)
-    + G_ipv4.Get.src_int (Bytes.of_string packet) 0)
+    ((r.ttl :> int) + Wire_runtime.SInt32.to_int r.src)
     (stack_view ())
 
 (* What a decoded header holds, folded into one [int]. *)
@@ -55,23 +62,40 @@ let[@inline] record (r : G_ipv4_record.t @ local) =
   (r.versionihl :> int) + (r.length :> int) + (r.ttl :> int)
   + (r.frag :> int) + (r.sum :> int)
 
-(* [decode_with] with a constructor that closes over a local value, and
-   [decode_local], both on a buffer on the stack. *)
+(* What the view of the header in [b] holds, folded into one [int] as {!record}
+   folds it, or [-1] for a header its check refuses. *)
+let[@inline] folded (b @ local) =
+  let module G = G_ipv4_record in
+  let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
+  let c = G.check n (Wire_runtime.Buf.length n) 0 in
+  if G.ok c then
+    let v = G.get c in
+    (G.versionihl n v :> int)
+    + (G.length n v :> int)
+    + (G.ttl n v :> int)
+    + (G.frag n v :> int)
+    + (G.sum n v :> int)
+  else -1
+
+(* A view read by a function that closes over a local value, on a buffer on
+   the stack. *)
 let stack_decode () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
   let local_ bias = ref 1 in
-  let with_ =
-    G_ipv4.decode_with
-      (fun vihl _tos len _id _frag ttl _proto _sum _src _dst ->
-        !bias + (vihl :> int) + (len :> int) + (ttl :> int))
-      b 0
+  let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
+  let read v =
+    !bias
+    + (G_ipv4.versionihl n v :> int)
+    + (G_ipv4.length n v :> int)
+    + (G_ipv4.ttl n v :> int)
   in
-  let r = G_ipv4_record.decode_local b 0 in
-  with_ + record r
+  let with_ = if G_ipv4.ok c then read (G_ipv4.get c) else -1 in
+  with_ + folded b
 
 let test_stack_decode () =
-  let r = G_ipv4_record.decode_exn (Bytes.of_string packet) 0 in
+  let r = decoded () in
   let want =
     1 + (r.versionihl :> int) + (r.length :> int) + (r.ttl :> int) + record r
   in
@@ -80,31 +104,20 @@ let test_stack_decode () =
 (* A header written to a buffer on the stack decodes as the one it was
    decoded from. *)
 let stack_write () =
-  let r = G_ipv4_record.decode_exn (Bytes.of_string packet) 0 in
+  let r = decoded () in
   let b = Bytes.create__stack size in
   G_ipv4_record.encode r b 0;
-  let back = record (G_ipv4_record.decode_local b 0) in
-  let valid = G_ipv4.is_valid b 0 in
-  valid && back = record r
+  let back = folded b in
+  back >= 0 && back = record r
 
 let test_stack_write () = Alcotest.(check bool) "written" true (stack_write ())
-
-(* The bigarray variant takes its buffer [local] too. *)
-let test_bigstring () =
-  let heap = Bigarray.(Array1.create char c_layout size) in
-  String.iteri (fun i c -> heap.{i} <- c) packet;
-  let local_ b = heap in
-  Alcotest.(check int)
-    "src"
-    (G_ipv4.Get.src_int (Bytes.of_string packet) 0)
-    (G_ipv4.Bigstring.Get.src_int b 0)
 
 (* A portable function may call the generated code, as a parallel task does. *)
 let (portable_read @ portable) =
  fun buf ->
-  if G_ipv4.is_valid buf 0 then
-    G_ipv4.Get.src_int buf 0 + (G_ipv4.Get.ttl buf 0 :> int)
-  else -1
+  match G_ipv4.decode buf 0 with
+  | Ok r -> Wire_runtime.SInt32.to_int r.G_ipv4.src + (r.ttl :> int)
+  | Error _ -> -1
 
 (* The runtime itself is portable: each module the generated code calls. *)
 let (portable_runtime @ portable) =
@@ -121,9 +134,10 @@ let (portable_runtime @ portable) =
 
 let test_portable () =
   let b = Bytes.of_string packet in
+  let r = decoded () in
   Alcotest.(check int)
     "read"
-    (G_ipv4.Get.src_int b 0 + (G_ipv4.Get.ttl b 0 :> int))
+    (Wire_runtime.SInt32.to_int r.src + (r.ttl :> int))
     (portable_read b);
   Alcotest.(check int)
     "runtime"
@@ -132,9 +146,9 @@ let test_portable () =
     + Int32.to_int (Bytes.get_int32_be b 16))
     (portable_runtime b)
 
-(* Neither the reads nor the decodes above allocate on the heap, 32-bit fields
-   included, in any profile: the dev one, which inlines nothing across
-   modules, too. *)
+(* Neither the reads of a view nor the decodes above allocate on the heap,
+   32-bit fields included, in any profile: the dev one, which inlines nothing
+   across modules, too. A getter allocates the result it answers. *)
 let words f =
   let before = Gc.minor_words () in
   for _ = 1 to 1_000 do
@@ -144,7 +158,7 @@ let words f =
 
 let test_no_allocation () =
   let base = words (fun () -> 0) in
-  Alcotest.(check (float 0.)) "reads" base (words stack_fields);
+  Alcotest.(check (float 0.)) "reads" base (words stack_view);
   Alcotest.(check (float 0.)) "decodes" base (words stack_decode)
 
 let suite =
@@ -155,7 +169,6 @@ let suite =
       Alcotest.test_case "decodes a buffer on the stack" `Quick
         test_stack_decode;
       Alcotest.test_case "writes a buffer on the stack" `Quick test_stack_write;
-      Alcotest.test_case "bigstring takes a local buffer" `Quick test_bigstring;
       Alcotest.test_case "portable" `Quick test_portable;
       Alcotest.test_case "no allocation" `Quick test_no_allocation;
     ] )

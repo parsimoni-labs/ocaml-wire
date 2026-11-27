@@ -22,7 +22,7 @@ let minimal_codec =
   Codec.v "Minimal" (fun v -> { m_value = v }) [ bf_minimal_value ]
 
 let minimal_struct = Everparse.Raw.struct_of_codec minimal_codec
-let minimal_size = Codec.wire_size minimal_codec
+let minimal_size = Codec.min_size minimal_codec
 let minimal_default = { m_value = UInt8.v 42 }
 
 let minimal_data n =
@@ -59,7 +59,7 @@ let all_ints_codec =
       ]
 
 let all_ints_struct = Everparse.Raw.struct_of_codec all_ints_codec
-let all_ints_size = Codec.wire_size all_ints_codec
+let all_ints_size = Codec.min_size all_ints_codec
 
 let all_ints_default =
   {
@@ -95,7 +95,7 @@ let bf8_codec =
     Codec.[ (Field.v "Tag" (bits ~width:3 U8) $ fun b -> b.tag); bf_bf8_value ]
 
 let bf8_struct = Everparse.Raw.struct_of_codec bf8_codec
-let bf8_size = Codec.wire_size bf8_codec
+let bf8_size = Codec.min_size bf8_codec
 let bf8_default = { tag = 5; value = 19 }
 
 let bf8_data n =
@@ -123,7 +123,7 @@ let bf16_codec =
       ]
 
 let bf16_struct = Everparse.Raw.struct_of_codec bf16_codec
-let bf16_size = Codec.wire_size bf16_codec
+let bf16_size = Codec.min_size bf16_codec
 let bf16_default = { flag = 1; type_ = 9; id = 1023 }
 
 let bf16_data n =
@@ -152,7 +152,7 @@ let bf32_codec =
       ]
 
 let bf32_struct = Everparse.Raw.struct_of_codec bf32_codec
-let bf32_size = Codec.wire_size bf32_codec
+let bf32_size = Codec.min_size bf32_codec
 let bf32_default = { flags = 5; chan = 26; seq = 4660; pri = 171 }
 
 let bf32_data n =
@@ -186,7 +186,7 @@ let bool_fields_codec =
       ]
 
 let bool_fields_struct = Everparse.Raw.struct_of_codec bool_fields_codec
-let bool_fields_size = Codec.wire_size bool_fields_codec
+let bool_fields_size = Codec.min_size bool_fields_codec
 
 let bool_fields_default =
   { active = true; valid = false; mode = 7; code = UInt8.v 0xAB }
@@ -247,7 +247,7 @@ let large_mixed_codec =
       ]
 
 let large_mixed_struct = Everparse.Raw.struct_of_codec large_mixed_codec
-let large_mixed_size = Codec.wire_size large_mixed_codec
+let large_mixed_size = Codec.min_size large_mixed_codec
 
 let large_mixed_default =
   {
@@ -315,7 +315,7 @@ let mapped_codec =
     Codec.[ bf_mp_priority; (f_mp_value $ fun m -> m.value) ]
 
 let mapped_struct = Everparse.Raw.struct_of_codec mapped_codec
-let mapped_size = Codec.wire_size mapped_codec
+let mapped_size = Codec.min_size mapped_codec
 let mapped_default = { priority = High; value = UInt8.v 42 }
 
 let mapped_data n =
@@ -350,7 +350,7 @@ let cases_demo_codec =
     Codec.[ bf_cd_type; (f_cd_id $ fun c -> c.id) ]
 
 let cases_demo_struct = Everparse.Raw.struct_of_codec cases_demo_codec
-let cases_demo_size = Codec.wire_size cases_demo_codec
+let cases_demo_size = Codec.min_size cases_demo_codec
 let cases_demo_default = { type_ = Telemetry; id = 42 }
 
 let cases_demo_data n =
@@ -388,7 +388,7 @@ let enum_demo_codec =
     Codec.[ bf_en_status; (f_en_code $ fun e -> e.code) ]
 
 let enum_demo_struct = Everparse.Raw.struct_of_codec enum_demo_codec
-let enum_demo_size = Codec.wire_size enum_demo_codec
+let enum_demo_size = Codec.min_size enum_demo_codec
 let enum_demo_default = { status = `Ok; code = UInt8.v 42 }
 
 let enum_demo_data n =
@@ -422,7 +422,7 @@ let constrained_codec =
     Codec.[ (f_co_version $ fun c -> c.version); bf_co_data ]
 
 let constrained_struct = Everparse.Raw.struct_of_codec constrained_codec
-let constrained_size = Codec.wire_size constrained_codec
+let constrained_size = Codec.min_size constrained_codec
 let constrained_default = { version = UInt8.zero; data = UInt8.v 42 }
 
 let constrained_data n =

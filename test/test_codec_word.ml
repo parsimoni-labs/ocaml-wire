@@ -1,5 +1,5 @@
-(* Tests for codec.ml: [Codec.read_word] and [Codec.of_word] read what [get]
-   reads. *)
+(* Tests for codec.ml: [Codec.Word] reads what [get] reads, and refuses what
+   [get] refuses with the error [get] answers. *)
 
 open Wire
 open Test_helpers
@@ -49,22 +49,23 @@ let signed_codec =
    offset of a random buffer: from 8 bytes before its end, where one 8-byte
    load reads the record, to the last offset that holds it. *)
 let check_parts codec parts =
-  let size = Codec.wire_size codec in
+  let size = Codec.min_size codec in
   let rand = Random.State.make [| 3 |] in
   let buf = Bytes.init 64 (fun _ -> Char.chr (Random.State.int rand 256)) in
-  let read = Codec.read_word (Codec.word_reader codec) in
+  let r = Codec.Word.reader codec in
   for off = 0 to Bytes.length buf - size do
-    let w = read buf off in
+    let k = Codec.Word.check r buf off in
+    if not (Codec.Word.ok k) then Alcotest.failf "offset %d: refused" off;
+    let w = Codec.Word.get k in
     List.iter (fun check -> check buf off w) parts
   done
 
 let same codec f pp =
-  let get = Staged.unstage (Codec.get codec f)
-  and p = Codec.word_part codec f in
+  let get = reader codec f and p = Codec.Word.field codec f in
   fun buf off w ->
-    let expected = get buf off and got = Codec.of_word p w in
+    let expected = get buf off and got = Codec.Word.read p w in
     if expected <> got then
-      Alcotest.failf "offset %d: get %a, of_word %a" off pp expected pp got
+      Alcotest.failf "offset %d: get %a, Word.read %a" off pp expected pp got
 
 let pp_int = Fmt.int
 let pp_u8 ppf v = Fmt.int ppf (UInt8.to_int v)
@@ -75,7 +76,7 @@ let pp_s16 ppf v = Fmt.int ppf (SInt16.to_int v)
 let test_hdr_equals_get () =
   if Sys.int_size < 63 then
     expect_invalid "6 bytes on a narrow int" (fun () ->
-        ignore (Codec.word_reader hdr_codec : hdr Codec.word_reader))
+        ignore (Codec.Word.reader hdr_codec : hdr Codec.Word.reader))
   else
     check_parts hdr_codec
       [
@@ -97,13 +98,92 @@ let test_signed_equals_get () =
         same signed_codec g_low pp_int;
       ]
 
+(* A negative offset is refused, even where it puts the record in the
+   buffer: [check] never raises, and [error] raises on it as [get] does. *)
 let test_out_of_bounds () =
   if Sys.int_size >= 63 then begin
-    let read = Codec.read_word (Codec.word_reader hdr_codec) in
+    let r = Codec.Word.reader hdr_codec in
     let buf = Bytes.make 10 '\000' in
-    expect_invalid "negative offset" (fun () -> ignore (read buf (-1)));
-    expect_invalid "past the end" (fun () -> ignore (read buf 5));
-    ignore (read buf 4 : hdr Codec.word)
+    let refused name off =
+      Alcotest.(check bool) name false Codec.Word.(ok (check r buf off));
+      expect_invalid (name ^ ": its error") (fun () ->
+          ignore (Codec.Word.error r buf off : Error.t))
+    in
+    refused "negative offset" (-1);
+    refused "a negative offset that puts the record in the buffer" (-4);
+    let k = Codec.Word.check r buf 4 in
+    Alcotest.(check bool) "the last offset" true (Codec.Word.ok k);
+    expect_invalid "the error of a record the check accepts" (fun () ->
+        ignore (Codec.Word.error r buf 4 : Error.t))
+  end
+
+(* A word check takes its record's offset from the caller: a buffer that cuts
+   the record is input, refused, and its error is the one [get] answers for
+   the first field the buffer cuts, at that field's offset and under its
+   name. *)
+let test_short_buffer () =
+  if Sys.int_size >= 63 then begin
+    let r = Codec.Word.reader hdr_codec in
+    let error = Alcotest.testable Error.pp Error.equal in
+    let answers name buf off ~expected =
+      Alcotest.(check bool) name false Codec.Word.(ok (check r buf off));
+      Alcotest.check error name expected (Codec.Word.error r buf off)
+    in
+    answers "a record the buffer cuts" (Bytes.make 4 '\000') 0
+      ~expected:
+        {
+          at = 3;
+          field = [ "Len" ];
+          kind = Unexpected_eof { expected = 2; got = 1 };
+        };
+    answers "a record whose last byte the buffer cuts" (Bytes.make 10 '\000') 5
+      ~expected:
+        {
+          at = 10;
+          field = [ "Hi" ];
+          kind = Unexpected_eof { expected = 1; got = 0 };
+        };
+    answers "a record past the buffer" (Bytes.make 10 '\000') 12
+      ~expected:
+        {
+          at = 12;
+          field = [ "Ver" ];
+          kind = Unexpected_eof { expected = 2; got = 0 };
+        }
+  end
+
+(* At every offset of every buffer shorter than 8 bytes from it, a word check
+   refuses exactly where [get] fails on a field, with the error of the first
+   field [get] fails on. *)
+let test_short_buffer_agrees_with_get () =
+  if Sys.int_size >= 63 then begin
+    let r = Codec.Word.reader hdr_codec in
+    let get f =
+      let get = Codec.get hdr_codec f in
+      fun buf off -> Result.map ignore (get buf off)
+    in
+    let gets =
+      [ get h_ver; get h_id; get h_seq; get h_len; get h_hi; get h_lo ]
+    in
+    let error = Alcotest.testable Error.pp Error.equal in
+    for len = 0 to 9 do
+      let buf = Bytes.make len '\042' in
+      for off = 0 to len + 2 do
+        let expected =
+          List.find_map
+            (fun get ->
+              match get buf off with Ok () -> None | Error e -> Some e)
+            gets
+        in
+        let got =
+          if Codec.Word.(ok (check r buf off)) then None
+          else Some (Codec.Word.error r buf off)
+        in
+        Alcotest.(check (option error))
+          (Fmt.str "offset %d of %d bytes" off len)
+          expected got
+      done
+    done
   end
 
 type wide = { a : UInt32.t; b : UInt32.t }
@@ -118,16 +198,23 @@ let l_x = Codec.(Field.v "X" uint16 $ fun r -> r.x)
 let l_y = Codec.(Field.v "Y" uint8 $ fun r -> r.y)
 let le_codec = Codec.v "WordLe" (fun x y -> { x; y }) Codec.[ l_x; l_y ]
 
+(* The word of a refused check is misuse. *)
+let test_get_refused () =
+  let r = Codec.Word.reader le_codec in
+  let k = Codec.Word.check r (Bytes.make 2 '\000') 0 in
+  Alcotest.(check bool) "refused" false (Codec.Word.ok k);
+  expect_invalid "get" (fun () -> ignore (Codec.Word.get k : le Codec.Word.t))
+
 let test_staging_refusals () =
   expect_invalid "8 bytes" (fun () ->
-      ignore (Codec.word_reader wide_codec : wide Codec.word_reader));
+      ignore (Codec.Word.reader wide_codec : wide Codec.Word.reader));
   expect_invalid "a part of 8 bytes" (fun () ->
-      ignore (Codec.word_part wide_codec w_a));
+      ignore (Codec.Word.field wide_codec w_a));
   expect_invalid "a little-endian integer" (fun () ->
-      ignore (Codec.word_part le_codec l_x));
+      ignore (Codec.Word.field le_codec l_x));
   let lookalike = Codec.(Field.v "Y" uint8 $ fun r -> r.y) in
   expect_invalid "a field the codec does not hold" (fun () ->
-      ignore (Codec.word_part le_codec lookalike));
+      ignore (Codec.Word.field le_codec lookalike));
   let var_len = Field.v "N" uint8 in
   let var_codec =
     Codec.v "WordVar"
@@ -140,7 +227,7 @@ let test_staging_refusals () =
   in
   expect_invalid "a variable-size codec" (fun () ->
       ignore
-        (Codec.word_reader var_codec : (UInt8.t * string) Codec.word_reader))
+        (Codec.Word.reader var_codec : (UInt8.t * string) Codec.Word.reader))
 
 let per_call_words f =
   ignore (Sys.opaque_identity (f ()));
@@ -155,22 +242,34 @@ let per_call_words f =
 let test_no_allocation () =
   skip_unless_gc_counters ();
   if Sys.int_size >= 63 then begin
-    let read = Codec.read_word (Codec.word_reader hdr_codec) in
-    let p = Codec.word_part hdr_codec h_id in
+    let r = Codec.Word.reader hdr_codec in
+    let p = Codec.Word.field hdr_codec h_id in
     let buf = Bytes.make 16 '\007' in
+    let w = Codec.Word.get (Codec.Word.check r buf 0) in
     Alcotest.(check int)
-      "word and of_word allocate nothing" 0
+      "a field allocates nothing" 0
+      (per_call_words (fun () -> Codec.Word.read p w));
+    Alcotest.(check int)
+      "a check and its field allocate nothing" 0
       (per_call_words (fun () ->
-           Codec.of_word p (read buf 0) + Codec.of_word p (read buf 10)))
+           let k = Codec.Word.check r buf 0 in
+           if Codec.Word.ok k then Codec.Word.read p (Codec.Word.get k) else 0));
+    Alcotest.(check int)
+      "a refused check allocates nothing" 0
+      (per_call_words (fun () -> Codec.Word.(ok (check r buf 12))))
   end
 
 let suite =
   ( "codec_word",
     [
-      Alcotest.test_case "header: of_word = get" `Quick test_hdr_equals_get;
-      Alcotest.test_case "signed and 32-bit word: of_word = get" `Quick
+      Alcotest.test_case "header: Word.read = get" `Quick test_hdr_equals_get;
+      Alcotest.test_case "signed and 32-bit word: Word.read = get" `Quick
         test_signed_equals_get;
       Alcotest.test_case "out of bounds" `Quick test_out_of_bounds;
+      Alcotest.test_case "the word of a refused check" `Quick test_get_refused;
+      Alcotest.test_case "a short buffer is refused" `Quick test_short_buffer;
+      Alcotest.test_case "a short buffer: the error get answers" `Quick
+        test_short_buffer_agrees_with_get;
       Alcotest.test_case "staging refusals" `Quick test_staging_refusals;
-      Alcotest.test_case "word allocates nothing" `Quick test_no_allocation;
+      Alcotest.test_case "a read allocates nothing" `Quick test_no_allocation;
     ] )

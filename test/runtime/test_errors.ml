@@ -10,7 +10,9 @@ let one_line s = String.map (function '\n' -> ' ' | c -> c) s
 let parse_error f =
   match f () with
   | _ -> Alcotest.fail "no exception raised"
-  | exception Parse_error e -> Fmt.kstr one_line "%a" pp_parse_error e
+  | exception exn when Wire_runtime.Errors.is_error exn ->
+      Fmt.kstr one_line "%a" Wire_runtime.Error.pp
+        (Wire_runtime.Errors.error_of exn)
 
 let invalid f =
   match f () with

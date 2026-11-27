@@ -156,6 +156,14 @@ val mapped_make :
 val mapped_len : (int, mapped) Codec.field
 (** [mapped_len] is the mapped 16-bit field of {!val-mapped}. *)
 
+val mapped_proto : ([ `Icmp | `Tcp | `Udp ], mapped) Codec.field
+(** [mapped_proto] is the lookup of {!val-mapped}, a byte indexing three
+    protocols. *)
+
+val mapped_rest : (int, mapped) Codec.field
+(** [mapped_rest] is the 7-bit field of {!val-mapped}, in the byte it shares
+    with the flag. *)
+
 val mapped : mapped Codec.t
 (** [mapped] has every field under a map: over 16- and 32-bit integers, a lookup
     with an index bound, and a bitfield. *)

@@ -17,7 +17,7 @@ and the EverParse `.3d` schema that compiles to a verified C parser. Define
 the format, then:
 
 - **Name reusable fields** with `Field.v` and assemble records with `Codec`
-- **Read and write fields in-place** via staged `Codec.get` / `Codec.set` --
+- **Read and write fields in-place** via `Codec.get` / `Codec.set` --
   zero-copy, with zero per-call allocation for parameter-free immediate types
   (int, bool)
 - **Decode records** via `Codec.decode`, allocate validated encodings with
@@ -83,14 +83,20 @@ let decode_packet buf = Codec.decode ~consume:`All codec buf 0
 ### Zero-copy field access
 
 ```ocaml
-(* Staged for performance -- force once, reuse the closure *)
-let get_version = Staged.unstage (Codec.get codec bf_version)
-let set_version = Staged.unstage (Codec.set codec bf_version)
+(* Applied to the codec and the field once: the reader and the writer *)
+let get_version = Codec.get codec bf_version
+let set_version = Codec.set codec bf_version
 
 let buf =
   Codec.to_bytes codec
     { version = 1; flags = 2; length = UInt16.v 1024; tag = UInt8.zero }
-let v = get_version buf 0        (* read version without allocating a record *)
+(* Read version without allocating a record; bytes too short for it, or
+   that make no value of it, are an error. *)
+let () =
+  match get_version buf 0 with
+  | Ok v -> assert (v = 1)
+  | Error e -> Fmt.failwith "%a" Error.pp e
+
 let () = set_version buf 0 3     (* mutate version in place *)
 ```
 
@@ -163,14 +169,14 @@ whole-buffer check themselves.
 ### Custom visitor (hot-path optimisation)
 
 If profiling says the field stores are hot, copy the shipped `<Name>_Fields.c`
-to your own `my_plug.c`, delete the `case`s for fields you don't need, and
+to your own `my_visitor.c`, delete the `case`s for fields you don't need, and
 link your copy instead of the default. Override `<Name>_ExternalTypedefs.h`
 and `<Name>_Fields.h` in your include path if you also want a smaller
 `WIRECTX` struct; skip the override and the default struct just carries a
 few unused bytes.
 
 ```c
-/* my_plug.c -- started from SpacePacket_Fields.c, trimmed to one field */
+/* my_visitor.c -- started from SpacePacket_Fields.c, trimmed to one field */
 #include <stdint.h>
 #include "SpacePacket_Fields.h"
 #include "SpacePacket_ExternalTypedefs.h"

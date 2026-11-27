@@ -13,13 +13,13 @@ module Buf = Wire_runtime.Buf
 let clcw buf =
   let (Buf.Any b) = Buf.v buf in
   let len = Buf.length b in
-  let words = Bytes.length buf / C.size in
+  let words = Bytes.length buf / C.min_size in
   let one = V.v 1 and ff = V.v 0xFF in
   (* The report before word 0 is 255, so word 0 expects 0. *)
   let prev = ref (V.v 0xFF) and good = ref (V.v 0) in
   let i = ref 0 and stopped = ref false in
   while (not !stopped) && !i + 4 <= words do
-    C.X4.with_ b len (!i * C.size)
+    C.X4.with_ b len (!i * C.min_size)
       ~ok:(fun w ->
         let r = C.X4.reportvalue w in
         let flags =
@@ -34,19 +34,20 @@ let clcw buf =
   let anomalies = ref (!i - V.sum !good) in
   let expected = ref ((V.get !prev 3 + 1) land 0xFF) in
   while (not !stopped) && !i < words do
-    C.View.with_ b len (!i * C.size)
-      ~ok:(fun v ->
-        let w = C.view_lockout_word b v in
-        let report = C.reportvalue_of_word w in
-        if
-          C.lockout_of_word w <> 0
-          || C.wait_of_word w <> 0
-          || C.retransmit_of_word w <> 0
-          || report <> !expected
-        then incr anomalies;
-        expected := (report + 1) land 0xFF;
-        incr i)
-      ~fail:(fun () -> stopped := true)
+    let c = C.check b len (!i * C.min_size) in
+    if C.ok c then begin
+      let v = C.get c in
+      let report = C.reportvalue b v in
+      if
+        C.lockout b v <> 0
+        || C.wait b v <> 0
+        || C.retransmit b v <> 0
+        || report <> !expected
+      then incr anomalies;
+      expected := (report + 1) land 0xFF;
+      incr i
+    end
+    else stopped := true
   done;
   !anomalies
 
@@ -73,11 +74,12 @@ let report n out =
         ++ retransmit_bits (V.shift_right_logical 13 x)
         ++ reportvalue_bits x));
   for i = n / 4 * 4 to n - 1 do
-    C.write_int_at o olen (i * C.size) 0 0 0 1 7 0 0 0
-      (((i land 0xFFF) + 1) lsr 12)
-      (((i land 0x3F) + 1) lsr 6)
-      ((i lsr 13) land 1)
-      0 0 (i land 0xFF)
+    C.write out (i * C.min_size) ~controlwordtype:0 ~clcwversion:0
+      ~statusfield:0 ~copineffect:1 ~vcid:7 ~spare:0 ~norf:0 ~nobitlock:0
+      ~lockout:(((i land 0xFFF) + 1) lsr 12)
+      ~wait:(((i land 0x3F) + 1) lsr 6)
+      ~retransmit:((i lsr 13) land 1)
+      ~farmbcounter:0 ~spare2:0 ~reportvalue:(i land 0xFF)
   done;
   out
 

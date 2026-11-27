@@ -3,8 +3,9 @@
    main.exe [OPTION]... SPECS FILE:KIND:PARSER:BOUND...
 
    For each entry of the generated module FILE (KIND says which: record, or
-   scanner/N and scanner-ox/N for the scanner on OCaml and on OxCaml, N the
-   shortest stride fold_frames walks without frame checks), proves with Z3
+   step/N and step-ox/N for the fold [fold_step] on OCaml and on OxCaml, N
+   the shortest stride fold_step_frames walks without frame checks), proves
+   with Z3
    that every unchecked read is inside the buffer and inside the window the
    entry is given, that every shift amount is in range, that no input
    raises, and, when the entry answers accept or reject, that on each path
@@ -15,7 +16,15 @@
    --bounds-only skips the specification, --only ENTRY keeps one entry,
    --expect-refuted P succeeds when a property holding P is refuted, --jobs
    and --timeout set the Z3 processes and their seconds, --keep keeps the
-   scripts. *)
+   scripts.
+
+   --classify-checks takes each check of each entry with an answer out in
+   turn (--check LINE:COL or its text keeps one) and says whether it is
+   needed for safety, for semantics, or redundant: an entry with a
+   specification answers accept or reject, and the frame loop with any
+   arguments answers whether it raises, for its argument checks only.
+   --expect C1,C2 fails unless some check is classified and every one is of
+   those classes. *)
 
 let read file = In_channel.with_open_bin file In_channel.input_all
 
@@ -53,33 +62,54 @@ let entry ?(pre = "true") ?spec ?(misuse = false) ?(contracts = []) ~bound
     ~inputs ~window name expr =
   { Check.name; inputs; pre; expr; window; spec; bound; misuse; contracts }
 
-(* A record module: [is_valid buf off], [View.check b len off] and every
-   [view_*] accessor behind a check. *)
+(* The parameters of the top-level function [name]; none when the module
+   has no such function, whose entry then fails as it is walked. *)
+let function_params ctx name =
+  match Hashtbl.find_opt ctx.globals name with
+  | Some (Unevaluated ({ pexp_desc = Pexp_function (params, _, _); _ }, _)) ->
+      params
+  | _ -> []
+
+(* The name a parameter binds, under its type constraint. *)
+let param_var (p : Parsetree.function_param) =
+  match p.pparam_desc with
+  | Pparam_val (Nolabel, None, pat) -> (
+      match pat.ppat_desc with
+      | Ppat_var { txt; _ }
+      | Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, _) ->
+          Some txt
+      | _ -> None)
+  | _ -> None
+
+(* The accessors of the views of a record module: its top-level functions of
+   a buffer [b] and a view [v], but its setters. *)
+let accessors ctx =
+  Hashtbl.fold
+    (fun k _ acc ->
+      if String.contains k '.' || String.starts_with ~prefix:"set_" k then acc
+      else
+        match List.map param_var (function_params ctx k) with
+        | [ Some "b"; Some "v" ] -> k :: acc
+        | _ -> acc)
+    ctx.globals []
+  |> List.sort_uniq String.compare
+
+(* A record module: [is_valid buf off], [check b len off] and every
+   accessor behind a check. *)
 let record ~spec ~bound ctx =
-  let view_names =
-    Hashtbl.fold
-      (fun k _ acc ->
-        if String.starts_with ~prefix:"view_" k && not (String.contains k '.')
-        then k :: acc
-        else acc)
-      ctx.globals []
-    |> List.sort String.compare
-  in
   let viewed = [ b; Int_input "len"; Int_input "off" ] in
   let pre = "len = Bytes.length b" and window = ("off", "len - off") in
+  let checked = "check b len off" in
   entry ~spec ~bound ~inputs:[ buf; Int_input "off" ]
     ~window:("off", "Bytes.length buf - off")
     "is_valid" "is_valid buf off"
-  :: entry ~pre ~spec ~bound ~inputs:viewed ~window "View.check"
-       "View.ok (View.check b len off)"
+  :: entry ~pre ~spec ~bound ~inputs:viewed ~window "check"
+       (Fmt.str "ok (%s)" checked)
   :: List.map
        (fun v ->
-         entry ~pre ~bound ~inputs:viewed ~window (v ^ " after View.check")
-           (Fmt.str
-              "let c = View.check b len off in if View.ok c then %s b \
-               (View.get c) else 0"
-              v))
-       view_names
+         entry ~pre ~bound ~inputs:viewed ~window (v ^ " after check")
+           (Fmt.str "let c = %s in if ok c then %s b (get c) else 0" checked v))
+       (accessors ctx)
 
 (* What fold_frames must establish of each frame it hands frames_record,
    which is proved as an entry of its own from it. *)
@@ -94,14 +124,6 @@ let frame_pre_ox min_stride =
      (Bytes.length buf)) stop"
     min_stride
 
-(* The parameters of the top-level function [name]; none when the module
-   has no such function, whose entry then fails as it is walked. *)
-let function_params ctx name =
-  match Hashtbl.find_opt ctx.globals name with
-  | Some (Unevaluated ({ pexp_desc = Pexp_function (params, _, _); _ }, _)) ->
-      params
-  | _ -> []
-
 (* The arguments the frame loop loads ahead of [record]'s walk, each with
    the expression of the frame start [base] that the loop binds it to for a
    frame it walks alone (the unrolled loop binds the same load at each of
@@ -109,7 +131,7 @@ let function_params ctx name =
    whose arguments hold what those expressions read, and each call of the
    loop is checked to pass that. *)
 let loaded_ahead ctx ~record ~frames =
-  let standard = [ "buf"; "base"; "stop"; "current"; "invalid"; "valid" ] in
+  let standard = [ "buf"; "base"; "stop"; "current" ] in
   let ahead =
     List.filter_map
       (fun (p : Parsetree.function_param) ->
@@ -152,8 +174,9 @@ let loaded_ahead ctx ~record ~frames =
     ahead
 
 (* The precondition of the frame loop's body, as its calls state it (on
-   OxCaml over int64_u positions) and as its entry states it over ints: the
-   frame and the fields loaded ahead of it. *)
+   OxCaml over int64_u positions) and as its entry states it over int
+   positions: the frame and the fields loaded ahead of it, which the entry
+   takes as inputs of their own type. *)
 let frame_contract ~ox ~min_stride ahead =
   let holds = List.map (fun (x, e) -> Fmt.str " && %s = (%s)" x e) ahead in
   if not ox then
@@ -165,9 +188,7 @@ let frame_contract ~ox ~min_stride ahead =
         (frame_pre min_stride
         :: List.map
              (fun (x, e) ->
-               Fmt.str
-                 " && Int64.of_int %s = (let base = Int64.of_int base in %s)" x
-                 e)
+               Fmt.str " && %s = (let base = Int64.of_int base in %s)" x e)
              ahead)
     in
     (String.concat "" (frame_pre_ox min_stride :: holds), record_pre)
@@ -176,34 +197,25 @@ let valid_arguments =
   "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && len <= \
    Bytes.length buf - off"
 
-(* A scanner: its one-frame entry, the body of its frame loop for a stride
-   the loop walks without frame checks, from what the loop establishes
-   (with the fields the loop loads ahead of the body), and the
-   frame loop itself with valid and with any arguments, its calls to the
-   body checked against that. [step] names the step scanner's entries,
-   which answer through [Step.valid] and [Step.invalid]. *)
-let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
+(* The fold [fold_step], which answers through [Step.valid] and
+   [Step.invalid]: its one-frame entry, the body of its frame loop for a
+   stride the loop walks without frame checks, from what the loop
+   establishes (with the fields the loop loads ahead of the body, each an
+   input of 64 bits, any of which the load can give), and the frame loop
+   itself with valid and with any arguments, its calls to the body checked
+   against that. *)
+let scanner ~ox ~spec ~bound ~min_stride ctx =
   let at x = if ox then Fmt.str "~%s:(Int64.of_int %s)" x x else "~" ^ x in
-  let fold, fold_expr, record, record_args, frames, frames_expr =
-    if step then
-      ( "fold_step",
-        "fold_step buf off len ~init:0",
-        "frames_step_record",
-        "~current",
-        "fold_frames_step",
-        "fold_frames_step buf off len ~stride ~init:0" )
-    else
-      ( "fold",
-        "fold buf off len ~invalid ~valid",
-        "frames_record",
-        "~current ~invalid ~valid",
-        "fold_frames",
-        "fold_frames buf off len ~stride ~init:0 ~invalid ~valid" )
-  in
+  let fold = "fold_step"
+  and fold_expr = "fold_step buf off len ~init:0"
+  and record = "step_frames_record"
+  and record_args = "~current"
+  and frames = "fold_step_frames"
+  and frames_expr = "fold_step_frames buf off len ~stride ~init:0" in
   let ahead = loaded_ahead ctx ~record ~frames in
   let contract, record_pre = frame_contract ~ox ~min_stride ahead in
   let record_args =
-    String.concat " " (record_args :: List.map (fun (x, _) -> at x) ahead)
+    String.concat " " (record_args :: List.map (fun (x, _) -> "~" ^ x) ahead)
   in
   let contracts = [ (record, contract) ] in
   let framed = [ buf; Int_input "off"; Int_input "len"; Int_input "stride" ] in
@@ -224,7 +236,7 @@ let scanner ~step ~ox ~spec ~bound ~min_stride ctx =
       entry ~pre:record_pre ~spec ~bound
         ~inputs:
           ([ buf; Int_input "base"; Int_input "stop"; Int_input "current" ]
-          @ List.map (fun (x, _) -> Int_input x) ahead)
+          @ List.map (fun (x, _) -> I64_input x) ahead)
         ~window:("base", "stop") record
         (Fmt.str "%s ~buf %s %s %s" record (at "base") (at "stop") record_args);
     ]
@@ -332,7 +344,13 @@ let classify_target ~z3 o t =
   let classify (e : Check.entry) =
     let ctx = Symex.v ~file:t.file src in
     ignore (Check.walk ctx e);
-    let all = Symex.checks ctx in
+    (* An entry that takes any arguments answers its argument checks only:
+       the others are those of the entries it calls, classified there. *)
+    let all =
+      List.filter
+        (fun (c : Symex.check) -> (not e.misuse) || c.check_kind = Argument)
+        (Symex.checks ctx)
+    in
     Fmt.pr "%s: %s, %d checks: %s@." (Filename.basename t.file) e.name
       (List.length all)
       (String.concat ", " (List.map (fun (c : Symex.check) -> c.id) all));
@@ -345,53 +363,28 @@ let classify_target ~z3 o t =
             let walk () = Symex.v ~file:t.file src in
             let t0 = Unix.gettimeofday () in
             let cl =
-              Check.classify ~z3 ~timeout:o.timeout ~jobs:o.jobs ~walk e c.id
+              Check.classify ~z3 ~timeout:o.timeout ~jobs:o.jobs ~walk e c
             in
             Fmt.pr "  %-6s %-40s %a (%.0fs)@." c.id c.text pp_class cl
               (Unix.gettimeofday () -. t0);
             Some (class_name cl))
       all
   in
+  (* An entry with neither a specification nor any arguments has no answer
+     to compare: its argument checks are dead under its precondition, and
+     its other checks are those of the entries it calls. *)
+  let answers (e : Check.entry) = Option.is_some e.spec || e.misuse in
   List.concat_map
-    (fun e -> if selected o e then classify e else [])
+    (fun e -> if selected o e && answers e then classify e else [])
     (t.entries (Symex.v ~file:t.file src))
 
-module Astring_free = struct
-  let find sub s =
-    let n = String.length sub in
-    let rec go i =
-      if i + n > String.length s then None
-      else if String.equal (String.sub s i n) sub then Some i
-      else go (i + 1)
-    in
-    go 0
-end
-
 (* The entry's expression on the reference module: its first function
-   [Ref.]-qualified, and a step entry read as the plain one. *)
-let reference_expr (e : Check.entry) =
-  let replace ~sub ~by s =
-    match Astring_free.find sub s with
-    | None -> s
-    | Some i ->
-        String.sub s 0 i ^ by
-        ^ String.sub s
-            (i + String.length sub)
-            (String.length s - i - String.length sub)
-  in
-  let plain =
-    match e.name with
-    | "fold_step" -> "fold buf off len ~invalid ~valid"
-    | "frames_step_record" ->
-        replace ~sub:"frames_step_record" ~by:"frames_record" e.expr
-        ^ " ~invalid ~valid"
-    | _ -> e.expr
-  in
-  "Ref." ^ plain
+   [Ref.]-qualified. *)
+let reference_expr (e : Check.entry) = "Ref." ^ e.expr
 
 let target_of_arg arg =
-  (* FILE:KIND:SPEC:BOUND, KIND being record, or scanner/MIN_STRIDE or
-     scanner-ox/MIN_STRIDE for the OxCaml target. *)
+  (* FILE:KIND:SPEC:BOUND, KIND being record, or step/MIN_STRIDE or
+     step-ox/MIN_STRIDE for the OxCaml target. *)
   match String.split_on_char ':' arg with
   | [ file; "record"; spec; bound ] ->
       let three_d = List.hd (String.split_on_char '.' spec) ^ ".3d" in
@@ -399,19 +392,18 @@ let target_of_arg arg =
       { file; three_d; entries = record ~spec ~bound }
   | [ file; kind; spec; bound ] -> (
       match String.split_on_char '/' kind with
-      | [ (("scanner" | "scanner-ox" | "step" | "step-ox") as k); stride ] ->
+      | [ (("step" | "step-ox") as k); stride ] ->
           let ox = String.ends_with ~suffix:"-ox" k in
           let min_stride = int_of_string stride in
           let three_d = List.hd (String.split_on_char '.' spec) ^ ".3d" in
           let bound = int_of_string bound in
-          let step = String.starts_with ~prefix:"step" k in
-          let entries = scanner ~step ~ox ~spec ~bound ~min_stride in
+          let entries = scanner ~ox ~spec ~bound ~min_stride in
           { file; three_d; entries }
       | _ -> Fmt.invalid_arg "bad target %S" arg)
   | _ -> Fmt.invalid_arg "bad target %S" arg
 
-(* The first executable [name] in [PATH], then in [extra]. *)
-let locate name extra =
+(* The first executable [name] in [PATH]. *)
+let locate name =
   let path =
     match Sys.getenv_opt "PATH" with
     | Some p -> String.split_on_char ':' p
@@ -421,14 +413,14 @@ let locate name extra =
     (fun dir ->
       let f = Filename.concat dir name in
       if Sys.file_exists f then Some f else None)
-    (path @ extra)
+    path
 
 let usage () =
   prerr_endline
     "usage: main.exe [--keep] [--only ENTRY] [--jobs N] [--timeout SECONDS] \
      [--bounds-only] [--any-size] [--classify-checks [--check LINE:COL] \
-     [--expect CLASS]] [--expect-refuted PROPERTY] SPECS \
-     FILE:(record|scanner/N|scanner-ox/N):SPEC:BOUND...";
+     [--expect CLASS[,CLASS]...]] [--expect-refuted PROPERTY] SPECS \
+     FILE:(record|step/N|step-ox/N):SPEC:BOUND...";
   exit 2
 
 (* With [--expect-refuted P], the run succeeds when a property whose name
@@ -466,15 +458,15 @@ let () =
       }
       (List.tl (Array.to_list Sys.argv))
   in
-  let home = Option.value ~default:"." (Sys.getenv_opt "HOME") in
   let z3 =
-    match locate "z3" [] with
-    | Some z -> z
-    | None -> failwith "z3 is not in PATH"
+    match locate "z3" with Some z -> z | None -> failwith "z3 is not in PATH"
   and threed =
-    match locate "3d.exe" [ Filename.concat home ".local/everparse/bin" ] with
+    match Wire_3d.locate_3d_exe () with
     | Some t -> t
-    | None -> failwith "3d.exe is neither in PATH nor in ~/.local/everparse/bin"
+    | None ->
+        failwith
+          "EverParse's 3D compiler is neither in PATH nor in \
+           ~/.local/everparse/bin"
   in
   match args with
   | _ :: (_ :: _ as targets) when Option.is_some o.against ->
@@ -513,15 +505,21 @@ let () =
          once. *)
       let targets = List.map target_of_arg targets in
       let classes = List.concat_map (classify_target ~z3 o) targets in
-      (* With [--expect CLASS], every check classified must be of it. *)
+      (* With [--expect C1,C2], at least one check is classified and each
+         is of one of those classes. *)
       Option.iter
         (fun c ->
-          if
-            classes = []
-            || List.exists (fun c' -> not (String.equal c c')) classes
-          then (
-            Fmt.epr "a check is not %s@." c;
-            exit 1))
+          let expected = String.split_on_char ',' c in
+          if classes = [] then (
+            Fmt.epr "no check is classified@.";
+            exit 1);
+          match List.filter (fun c' -> not (List.mem c' expected)) classes with
+          | [] -> ()
+          | others ->
+              Fmt.epr "%d of %d checks are not %s: %s@." (List.length others)
+                (List.length classes) c
+                (String.concat ", " others);
+              exit 1)
         o.expect
   | specs :: (_ :: _ as targets) -> (
       let targets = List.map target_of_arg targets in

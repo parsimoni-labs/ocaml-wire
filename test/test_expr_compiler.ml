@@ -79,7 +79,10 @@ let test_arithmetic_overflow () =
   let check name e =
     match eval_int e with
     | n -> Alcotest.failf "%s: overflow produced %d" name n
-    | exception Types.Parse_error { kind = Types.Value_out_of_range _; _ } -> ()
+    | exception exn when Types.is_parse_error exn -> (
+        match Types.parse_error_of exn with
+        | { Wire.Error.kind = Types.Value_out_of_range _; _ } -> ()
+        | e -> Alcotest.failf "%s: %a" name Wire.Error.pp e)
   in
   (* These are not merely just past the native-int boundary: unchecked
      arithmetic wraps each mathematical result to zero or one, exactly the
@@ -110,7 +113,7 @@ let test_zero_divisor_is_parse_error () =
     let f = Expr_compiler.compile_int leaves e in
     match f zero i64s size pos with
     | n -> Alcotest.failf "%s by zero produced %d" name n
-    | exception Types.Parse_error _ -> ()
+    | exception exn when Types.is_parse_error exn -> ()
     | exception Division_by_zero ->
         Alcotest.failf "%s leaked Division_by_zero" name
   in
@@ -288,7 +291,10 @@ let test_wide_fields () =
   let out_of_range name e =
     match eval_int e with
     | n -> Alcotest.failf "%s: produced %d" name n
-    | exception Types.Parse_error { kind = Types.Value_out_of_range _; _ } -> ()
+    | exception exn when Types.is_parse_error exn -> (
+        match Types.parse_error_of exn with
+        | { Wire.Error.kind = Types.Value_out_of_range _; _ } -> ()
+        | e -> Alcotest.failf "%s: %a" name Wire.Error.pp e)
   in
   let w = Types.ref "wide" and neg = Types.ref "neg" in
   Alcotest.(check bool) "wide <= 5" false (eval_bool (Types.Le (w, int 5)));

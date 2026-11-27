@@ -1,0 +1,68 @@
+; The executables the rules of proofs/fstar-gen run: gen.exe writes each
+; proved codec's .3d and the F* modules Wire_ocaml.fstar writes for it;
+; vectors.exe prints WireGen.Vectors.fst, the OCaml primitives the F*
+; rendering calls on boundary and random operands; tables.exe prints
+; WireGen.Tables.fst, the rules of WireGen.OCaml at the literals the emitter
+; prints. None needs F*. prove.exe finds 3d.exe, runs F* and prunes the F*
+; cache for prove.sh; prune.t checks the pruning. Proved lists the codecs,
+; which test/fstar compares too.
+
+(library
+ (name proved)
+ (modules proved)
+ (libraries wire headers space bytesrw))
+
+(executable
+ (name gen)
+ (modules gen)
+ (libraries proved wire wire.ocaml headers space))
+
+(library
+ (name operands)
+ (modules operands)
+ (libraries fmt))
+
+(executable
+ (name vectors)
+ (modules vectors)
+ (libraries operands wire.runtime fmt))
+
+; vectors_ox.exe prints WireGen.VectorsOx.fst, the OxCaml primitives the F*
+; rendering of the OxCaml scanner calls, run on OxCaml: only an OxCaml
+; compiler builds it, so on any other it is a stub that prints a notice.
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (copy vectors_ox.ml.ox vectors_ox.ml)))
+
+(rule
+ (enabled_if
+  (<> %{ocaml-config:ox} true))
+ (action
+  (with-stdout-to
+   vectors_ox.ml
+   (echo "let () = print_endline \"vectors_ox: not an OxCaml compiler\"\n"))))
+
+(executable
+ (name vectors_ox)
+ (modules vectors_ox)
+ (libraries operands wire.runtime fmt))
+
+(executable
+ (name tables)
+ (modules tables)
+ (libraries fmt))
+
+(executable
+ (name prove)
+ (modules prove)
+ (foreign_stubs
+  (language c)
+  (names rusage_stubs))
+ (libraries wire.3d fmt unix))
+
+(cram
+ (applies_to prune)
+ (deps prove.exe))

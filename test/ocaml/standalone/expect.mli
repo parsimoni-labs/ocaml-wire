@@ -11,11 +11,11 @@ val parse_error :
   string ->
   ?field:string list ->
   at:int ->
-  Wire_runtime.Errors.error_kind ->
-  (unit -> 'a) ->
+  Wire_runtime.Error.kind ->
+  ('a, Wire_runtime.Error.t) result ->
   unit
-(** [parse_error what ?field ~at kind f] checks that [f ()] raises a parse error
-    of [kind] at [at], naming [field] (default none). *)
+(** [parse_error what ?field ~at kind r] checks that [r] is an error of [kind]
+    at [at], naming [field] (default none). *)
 
 val invalid : string -> (unit -> 'a) -> unit
 (** [invalid what f] checks that [f ()] raises [Invalid_argument]. *)
@@ -23,16 +23,13 @@ val invalid : string -> (unit -> 'a) -> unit
 val round_trip :
   string ->
   size:int ->
-  decode:(bytes -> int -> 'r) ->
+  decode:(bytes -> int -> ('r, Wire_runtime.Error.t) result) ->
   encode:('r -> bytes -> int -> unit) ->
-  big_decode:(Wire_runtime.Unchecked.Bigstring.t -> int -> 'b) ->
-  big_encode:('b -> Wire_runtime.Unchecked.Bigstring.t -> int -> unit) ->
   int list ->
   unit
-(** [round_trip what ~size ~decode ~encode ~big_decode ~big_encode good] checks
-    that the record [good] holds decodes and encodes back to [good] on bytes and
-    on a bigarray, and that a buffer one byte short or a negative offset is
-    refused. *)
+(** [round_trip what ~size ~decode ~encode good] checks that the record [good]
+    holds decodes and encodes back to [good], and that a buffer one byte short
+    or a negative offset is refused. *)
 
 val sources : unit -> unit
 (** [sources ()] checks that no generated source in the current directory

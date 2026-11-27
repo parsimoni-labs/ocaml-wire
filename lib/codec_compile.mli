@@ -77,3 +77,17 @@ val prepend_field_check :
 val compile_field : layout_ctx -> ('a, 'r) field -> ('a, 'r) compiled_field
 (** [compile_field ctx f] is the plan for appending [f] at [ctx]. Raises
     [Invalid_argument] on a field shape the codec cannot place there. *)
+
+val field_size_of_value :
+  ('a, 'r) field ->
+  ('a, 'r) compiled_field ->
+  value_ints:(string * ('r -> int option)) list ->
+  Types.eval_ctx ->
+  'r ->
+  int
+(** [field_size_of_value f cf ~value_ints ctx v] is the byte size of [f] in the
+    record [v], a size naming an earlier field read through [value_ints]. *)
+
+val field_value_int : ('a, 'r) field -> string * ('r -> int option)
+(** [field_value_int f] is [f]'s name and its integer in a record value, for a
+    later size naming it. *)

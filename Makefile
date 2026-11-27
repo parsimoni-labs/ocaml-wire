@@ -2,7 +2,7 @@
        fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
        bench-clcw bench-rust bench-flow bench-flow-swap bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
-       cppcheck clean
+       cppcheck prove verify clean
 
 build:
 	dune build
@@ -38,7 +38,7 @@ test-wasm:
 # interfaces state; the release one, which inlines across them; then the
 # paranoid one, which checks every unchecked load as well.
 OXCAML_LANES = @test/ocaml-ox/runtest @fuzz/diff/ocaml-ox/runtest \
-  @test/runtime-ox/runtest
+  @test/runtime-ox/runtest @proofs/fstar-gen/runtest
 test-oxcaml:
 	@test "$$(ocamlopt -config-var ox)" = true || \
 	  { echo "not an OxCaml compiler"; exit 1; }
@@ -79,6 +79,22 @@ fuzz-nightly:
 	  dune build @@fuzz/runtest --profile paranoid
 	WIRE_AFL_SECONDS=3600 $(MAKE) fuzz-afl
 	WIRE_AFL_SECONDS=7200 $(MAKE) fuzz-afl-diff
+
+# The scanners of the codecs proofs/fstar-gen/dune lists, proved by F* equal
+# to the parser 3d.exe writes for each, and the mutant that must not verify
+# (needs EverParse, whose F* and Z3 it runs, at most two at once).
+# WIRE_FSTAR_CACHE holds the checked modules (proofs/fstar-gen/README.md).
+prove:
+	BUILD_EVERPARSE=1 dune build -j 2 @proofs/fstar-gen/prove
+
+# The generated scanners, on OCaml and on OxCaml, and record modules
+# executed symbolically, their reads proved in bounds and the records'
+# answers equal to 3d.exe's specification by Z3, the planted mutants
+# refused and every check of the scanners classified (needs EverParse and
+# z3; verify/dune says what each rule proves). One rule at a time, as each
+# runs four Z3 processes.
+verify:
+	BUILD_EVERPARSE=1 dune build -j 1 @verify/runtest @verify/classify
 
 3d:
 	dune exec examples/validate_3d.exe
@@ -205,9 +221,9 @@ bench-flow: $(BENCH_FLOW_TRACE)
 	else echo "BUILD_EVERPARSE unset: skipping the EverParse C row"; fi
 	@_build/default/bench/rust/bench.exe report $(BENCH_FLOW)/*.txt
 
-# The swap rows of bench-flow alone: one flow counter written against
-# Wire.S (bench/rust/flow_swap.ml), its header modules from Wire.Codec.Make or
-# from the Global modules wire.ocaml generates, on OCaml and on each switch of
+# The swap rows of bench-flow alone: one flow counter (bench/rust/flow_swap.ml)
+# written against the header modules wire.ocaml generates or their
+# interpreted twins, on OCaml and on each switch of
 # BENCH_SWITCHES, with smoltcp making the same checks, each with the table
 # (corpus mawi swap) and without it (mawi swap parse). Each row is timed as
 # in bench-flow, into _build/bench-flow/swap/, then counted by bench/count.sh,

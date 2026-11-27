@@ -52,7 +52,7 @@ let packet kind body =
   }
 
 let encoded codec v =
-  let buf = Bytes.create (Codec.size_of_value codec v) in
+  let buf = Bytes.create (Codec.encoded_size codec v) in
   Codec.encode codec v buf 0;
   Bytes.to_string buf
 
@@ -75,7 +75,7 @@ let test_roundtrip () =
       Alcotest.(check string) "bytes" expected s;
       let r = decode_ok (Codec.decode packet_codec (Bytes.of_string s) 0) in
       Alcotest.(check bool) "value" true (r = p);
-      Codec.validate_exn packet_codec (Bytes.of_string s) 0)
+      decode_ok (Codec.validate packet_codec (Bytes.of_string s) 0))
     [
       (packet 1 (`Ping (UInt16.v 0x1234)), "\x01\xde\xad\xbe\xef\x12\x34\x7e");
       ( packet 2 (`Data (UInt32.of_int 7)),
@@ -117,15 +117,16 @@ let closed_codec =
 let test_unknown_tag () =
   let buf = Bytes.of_string "\x63\x00\x00" in
   (match Codec.decode closed_codec buf 0 with
-  | Error { kind = Invalid_tag n; field; at } ->
+  | Error { Error.kind = Invalid_tag n; field; at } ->
       Alcotest.(check int) "tag" 99 n;
       Alcotest.(check int) "at the tag field" 0 at;
       Alcotest.(check (list string)) "field" [ "V" ] field
-  | Error e -> Alcotest.failf "expected Invalid_tag, got %a" pp_parse_error e
+  | Error e -> Alcotest.failf "expected Invalid_tag, got %a" Error.pp e
   | Ok _ -> Alcotest.fail "decoded an unclaimed tag");
-  match Codec.validate_exn closed_codec buf 0 with
-  | exception Parse_error { kind = Invalid_tag 99; _ } -> ()
-  | () -> Alcotest.fail "validated an unclaimed tag"
+  match Codec.validate closed_codec buf 0 with
+  | Error { Error.kind = Invalid_tag 99; _ } -> ()
+  | Error e -> Alcotest.failf "expected Invalid_tag, got %a" Error.pp e
+  | Ok () -> Alcotest.fail "validated an unclaimed tag"
 
 let test_truncated () =
   expect_kind
@@ -166,7 +167,7 @@ let test_wide_tags () =
   in
   List.iter
     (fun (v, expected) ->
-      let buf = Bytes.create (Codec.size_of_value wide_codec v) in
+      let buf = Bytes.create (Codec.encoded_size wide_codec v) in
       Codec.encode wide_codec v buf 0;
       Alcotest.(check string) "bytes" expected (Bytes.to_string buf);
       let back = decode_ok (Codec.decode wide_codec buf 0) in
@@ -194,7 +195,7 @@ let test_bitfield_tag () =
         ]
   in
   let v = (5, 0xa, Either.Right (UInt8.v 0x42)) in
-  let buf = Bytes.create (Codec.size_of_value c v) in
+  let buf = Bytes.create (Codec.encoded_size c v) in
   Codec.encode c v buf 0;
   Alcotest.(check int) "size" 2 (Bytes.length buf);
   let back = decode_ok (Codec.decode c buf 0) in
@@ -221,10 +222,10 @@ let test_projection () =
 let test_validate_no_alloc () =
   skip_unless_gc_counters ();
   let buf = Bytes.of_string "\x02\xde\xad\xbe\xef\x00\x00\x01\x00\x7e" in
-  Codec.validate_exn packet_codec buf 0;
+  decode_ok (Codec.validate packet_codec buf 0);
   let before = Gc.minor_words () in
   for _ = 1 to 1000 do
-    Codec.validate_exn packet_codec buf 0
+    decode_ok (Codec.validate packet_codec buf 0)
   done;
   let after = Gc.minor_words () in
   Alcotest.(check (float 0.)) "words" 0. (after -. before)

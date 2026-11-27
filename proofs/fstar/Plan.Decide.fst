@@ -99,8 +99,8 @@ let rec walk (fuel:nat) (w:st) (lim:var) (disp:int) (fr:list around) (l:list nod
     ds @ gate :: walk_cases fuel w1 lim disp fr cs r @ rest
   | Join :: r -> walk fuel w lim disp fr r
   | Region n e s am b :: r ->
-    let (d, _, ends) = span_decision w lim s [] false in
-    let w1 = bind_span w false n e s ends in
+    let (d, implied, ends) = span_decision w lim s r (unread b) in
+    let w1 = bind_span w implied n e s ends in
     let a = { alim = lim; ap = w1.p; abounded = w1.bounded; adisp = disp } in
     ESpan (decide s d fr w.p) ::
     walk fuel ({ w1 with p = { pv = None; at = 0 }; known = fst (region_range w1 n); bounded = [] }) n

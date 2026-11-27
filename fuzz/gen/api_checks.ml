@@ -119,12 +119,20 @@ let check_string label expected actual =
   if not (String.equal expected actual) then
     Alcobar.failf "%s: expected %S, got %S" label expected actual
 
+(* [Codec.get] of [f] on bytes a positive holds. *)
+let getter codec f =
+  let read = Wire.Codec.get codec f in
+  fun buf off ->
+    match read buf off with
+    | Ok v -> v
+    | Error e -> Alcobar.failf "Codec.get: %a" Wire.Error.pp e
+
 let check_api_getters (codec : api_access Wire.Codec.t) bf_a bf_hi bf_lo
     bf_payload buf base a hi lo payload_s =
-  let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
-  let get_hi = Wire.Codec.get codec bf_hi |> Wire.Staged.unstage in
-  let get_lo = Wire.Codec.get codec bf_lo |> Wire.Staged.unstage in
-  let get_payload = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
+  let get_a = getter codec bf_a in
+  let get_hi = getter codec bf_hi in
+  let get_lo = getter codec bf_lo in
+  let get_payload = getter codec bf_payload in
   check_int "Codec.get scalar" a (Wire.UInt8.to_int (get_a buf base));
   check_int "Codec.get bitfield hi" hi (get_hi buf base);
   check_int "Codec.get bitfield lo" lo (get_lo buf base);
@@ -139,19 +147,22 @@ let check_api_getters (codec : api_access Wire.Codec.t) bf_a bf_hi bf_lo
     (string_of_slice
        (Wire.Codec.View.read (Wire.Codec.View.field V.codec bf_payload) b r))
 
-let check_api_bitfields codec bf_hi bf_lo buf base hi lo =
-  let bit_hi = Wire.Codec.bitfield codec bf_hi in
-  let bit_lo = Wire.Codec.bitfield codec bf_lo in
-  let load = Wire.Codec.load_word bit_hi |> Wire.Staged.unstage in
-  let word = load buf base in
-  check_int "Codec.extract hi" hi (Wire.Codec.extract bit_hi word);
-  check_int "Codec.extract lo" lo (Wire.Codec.extract bit_lo word)
+let check_api_bitfields (codec : api_access Wire.Codec.t) bf_hi bf_lo buf base
+    hi lo =
+  let module V = (val Wire.Codec.View.codec codec) in
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let k = Wire.Codec.View.check V.codec b (Wire.Buf.length b) base in
+  if not (Wire.Codec.View.ok k) then Alcobar.failf "Codec.View.check refused";
+  let r = Wire.Codec.View.get k in
+  let read f = Wire.Codec.View.read (Wire.Codec.View.field V.codec f) b r in
+  check_int "Codec.View.read hi" hi (read bf_hi);
+  check_int "Codec.View.read lo" lo (read bf_lo)
 
 (* [byte_slice] is the mutable zero-copy span: both staged access and record
    decode must retain an alias to the caller's buffer, in both directions. *)
 let check_api_slice_aliases codec bf_payload buf base =
   let module Slice = Bytesrw.Bytes.Slice in
-  let get = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
+  let get = getter codec bf_payload in
   let payload = get buf base in
   let first = Slice.first payload in
   let original = Bytes.get_uint8 buf first in
@@ -163,8 +174,7 @@ let check_api_slice_aliases codec bf_payload buf base =
     (Bytes.get_uint8 (Slice.bytes payload) first);
   match Wire.Codec.decode codec buf base with
   | Error e ->
-      Alcobar.failf "Codec.decode for slice alias failed: %a"
-        Wire.pp_parse_error e
+      Alcobar.failf "Codec.decode for slice alias failed: %a" Wire.Error.pp e
   | Ok decoded ->
       Bytes.set_uint8 buf first changed;
       check_int "buffer aliases decoded slice" changed
@@ -175,14 +185,14 @@ let check_api_slice_aliases codec bf_payload buf base =
 
 let check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
     next_lo next_payload_s =
-  let get_a = Wire.Codec.get codec bf_a |> Wire.Staged.unstage in
-  let get_hi = Wire.Codec.get codec bf_hi |> Wire.Staged.unstage in
-  let get_lo = Wire.Codec.get codec bf_lo |> Wire.Staged.unstage in
-  let get_payload = Wire.Codec.get codec bf_payload |> Wire.Staged.unstage in
-  let set_a = Wire.Codec.set codec bf_a |> Wire.Staged.unstage in
-  let set_hi = Wire.Codec.set codec bf_hi |> Wire.Staged.unstage in
-  let set_lo = Wire.Codec.set codec bf_lo |> Wire.Staged.unstage in
-  let set_payload = Wire.Codec.set codec bf_payload |> Wire.Staged.unstage in
+  let get_a = getter codec bf_a in
+  let get_hi = getter codec bf_hi in
+  let get_lo = getter codec bf_lo in
+  let get_payload = getter codec bf_payload in
+  let set_a = Wire.Codec.set codec bf_a in
+  let set_hi = Wire.Codec.set codec bf_hi in
+  let set_lo = Wire.Codec.set codec bf_lo in
+  let set_payload = Wire.Codec.set codec bf_payload in
   set_a buf base (Wire.UInt8.v next_a);
   set_hi buf base next_hi;
   set_lo buf base next_lo;
@@ -203,8 +213,7 @@ let check_api_decode_after_set codec buf base next_a next_hi next_lo
       check_int "Codec.decode after set lo" next_lo decoded.lo;
       check_string "Codec.decode after set slice" next_payload_s
         (string_of_slice decoded.payload)
-  | Error e ->
-      Alcobar.failf "Codec.decode after set failed: %a" Wire.pp_parse_error e
+  | Error e -> Alcobar.failf "Codec.decode after set failed: %a" Wire.Error.pp e
 
 let check_api_accessors a hi lo payload_s next_a next_hi next_lo next_payload_s
     =
@@ -214,7 +223,7 @@ let check_api_accessors a hi lo payload_s next_a next_hi next_lo next_payload_s
   let payload = slice_of_string payload_s in
   let value = { a = Wire.UInt8.v a; hi; lo; payload } in
   let base = 1 in
-  let sz = Wire.Codec.wire_size codec in
+  let sz = Wire.Codec.min_size codec in
   let buf = Bytes.make (sz + 2) '\xCC' in
   Wire.Codec.encode codec value buf base;
   check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo payload_s;
@@ -246,8 +255,7 @@ let check_custom_seq a b c d =
       if not (u8_array_equal decoded values) then
         Alcobar.failf "array_seq custom seq mismatch"
   | Error e ->
-      Alcobar.failf "array_seq custom seq decode failed: %a" Wire.pp_parse_error
-        e);
+      Alcobar.failf "array_seq custom seq decode failed: %a" Wire.Error.pp e);
   let f_len = Wire.Field.v "Len" Wire.uint8 in
   let f_items =
     Wire.Field.repeat_seq "Items" ~seq:custom_array_seq
@@ -269,8 +277,7 @@ let check_custom_seq a b c d =
       if not (u8_array_equal decoded values) then
         Alcobar.failf "repeat_seq custom seq mismatch"
   | Error e ->
-      Alcobar.failf "repeat_seq custom seq decode failed: %a"
-        Wire.pp_parse_error e
+      Alcobar.failf "repeat_seq custom seq decode failed: %a" Wire.Error.pp e
 
 let raw_len_field = Wire.Private.Types.field "Len" Wire.uint8
 let raw_data_field = Wire.Private.Types.field "Data" Wire.all_bytes
@@ -296,16 +303,16 @@ let check_struct_validator len data_s =
   | `Variable size_of ->
       check_int "Codec.wire_size_info_of_validator" (Bytes.length bytes)
         (size_of bytes 0));
-  (try Wire.Codec.validate_struct validator bytes 0 with
-  | Wire.Parse_error e ->
-      Alcobar.failf "validate_struct rejected positive: %a" Wire.pp_parse_error
-        e
-  | Invalid_argument e -> Alcobar.failf "validate_struct crashed: %s" e);
+  (match Wire.Codec.validate_struct validator bytes 0 with
+  | Ok () -> ()
+  | Error e ->
+      Alcobar.failf "validate_struct rejected positive: %a" Wire.Error.pp e
+  | exception Invalid_argument e ->
+      Alcobar.failf "validate_struct crashed: %s" e);
   match Wire.of_bytes (Wire.Private.Types.struct_typ raw_struct) bytes with
   | Ok () -> ()
   | Error e ->
-      Alcobar.failf "Raw.struct_typ direct decode failed: %a"
-        Wire.pp_parse_error e
+      Alcobar.failf "Raw.struct_typ direct decode failed: %a" Wire.Error.pp e
 
 (* [Field.action] reports the action attached via [Field.v]'s [?action] (none on
    a plain field, [Some] on an annotated one), and [Action.pp] renders the
@@ -378,7 +385,7 @@ let check_metadata_helpers () =
   let buf = bytes_of_octets [ 7; 1 ] in
   (match Wire.Codec.decode ~env codec buf 0 with
   | Ok _ -> check_int "Param.get output" 7 (UInt8.to_int (Param.get env p_out))
-  | Error e -> Alcobar.failf "param/action decode failed: %a" pp_parse_error e);
+  | Error e -> Alcobar.failf "param/action decode failed: %a" Error.pp e);
   check_string "Codec schema name" "ApiParam"
     (Wire.Everparse.project ~mode:`Ffi codec).Wire.Everparse.name;
   let renamed = Wire.Codec.rename "ApiParamRenamed" codec in
@@ -395,10 +402,11 @@ let check_metadata_helpers () =
       (fun src copy -> (src, copy))
       Wire.Codec.[ f_src $ fst; f_copy $ snd ]
   in
-  let pp_value = Fmt.str "%a" (pp_value pp_codec) (UInt8.v 7, UInt8.v 1) in
+  let pp_value =
+    Fmt.str "%a" (Codec.pp_value pp_codec) (UInt8.v 7, UInt8.v 1)
+  in
   if not (String.contains pp_value 'S') then
     Alcobar.failf "pp_value did not include field output: %S" pp_value;
-  let _ = Wire.Codec.field_ref Wire.Codec.(f_src $ fst) in
   check_int "Wire.size fixed" 1 (Option.get (size uint8));
   match size all_bytes with
   | None -> ()
@@ -426,12 +434,12 @@ let check_everparse_schema raw_struct =
   (match Wire.Everparse.entrypoint_struct schema with
   | Some _ -> ()
   | None -> Alcobar.failf "schema_of_struct has no entrypoint");
-  let plug_fields = Wire.Everparse.plug_fields schema in
-  assert_contains "Everparse.plug_fields"
-    (List.map (fun f -> f.Wire.Everparse.name) plug_fields)
+  let visitor_fields = Wire.Everparse.visitor_fields schema in
+  assert_contains "Everparse.visitor_fields"
+    (List.map (fun f -> f.Wire.Everparse.name) visitor_fields)
     [ "Len"; "Data" ];
-  if Wire.Everparse.plug_setters schema = [] then
-    Alcobar.failf "Everparse.plug_setters empty";
+  if Wire.Everparse.visitor_setters schema = [] then
+    Alcobar.failf "Everparse.visitor_setters empty";
   if Wire.Everparse.extern_fn_names schema = [] then
     Alcobar.failf "Everparse.extern_fn_names empty"
 

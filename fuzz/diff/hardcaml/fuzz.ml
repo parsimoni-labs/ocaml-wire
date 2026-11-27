@@ -136,7 +136,10 @@ let reference_consumed codec oracle buf off len =
       let frame = Bytes.sub buf off len in
       match Wire.Codec.decode codec frame 0 with
       | Error _ -> -1
-      | Ok _ -> Wire.Codec.wire_size_at codec frame 0)
+      | Ok _ -> (
+          match Wire.Codec.size_at codec frame 0 with
+          | Ok n -> n
+          | Error _ -> -1))
 
 let equal_evaluation (consumed, fields) (consumed', fields') =
   Int.equal consumed consumed'

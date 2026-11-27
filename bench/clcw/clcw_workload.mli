@@ -1,7 +1,7 @@
 (** CLCW polling: a COP-1 receiver counting the anomalies in a stream of CLCW
-    words, every field taken from one word load with Wire's
-    {!Wire.Codec.load_word} and {!Wire.Codec.extract}. The OCaml rows of
-    [bench/clcw] and [bench/apps] run it. *)
+    words, each word checked by Wire's {!Wire.Codec.Word.check} and its fields
+    taken with {!Wire.Codec.Word.read}. The OCaml rows of [bench/clcw] and
+    [bench/apps] run it. *)
 
 val word_size : int
 (** [word_size] is the size of a CLCW word, 4 bytes. *)
@@ -35,5 +35,5 @@ val report : out:bytes -> int -> unit
 (** [report ~out n] writes in [out] the [n] CLCW words a FARM reports, word [i]
     {!Space.clcw_default} with report value [i mod 256], lockout when the 12 low
     bits of [i] are all set, wait when its 6 low bits are, and retransmit bit 13
-    of [i], by Wire's staged {!Wire.Codec.writer} of the default and those four
-    fields. *)
+    of [i], each written by Wire's {!Wire.Codec.writer} of the default and those
+    four fields. *)

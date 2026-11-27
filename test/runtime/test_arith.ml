@@ -73,10 +73,11 @@ let one op a b =
       | exception Arith.Overflow -> ());
       match checked a b with
       | v -> Alcotest.failf "%s, checked: %d, not an overflow" what v
-      | exception
-          Errors.Parse_error
-            { at = 0; field = []; kind = Value_out_of_range { value } } ->
-          Alcotest.(check int64) (what ^ ", reported") (past op a b) value)
+      | exception exn when Errors.is_error exn -> (
+          match Errors.error_of exn with
+          | { at = 0; field = []; kind = Value_out_of_range { value } } ->
+              Alcotest.(check int64) (what ^ ", reported") (past op a b) value
+          | e -> Alcotest.failf "%s: %a" what Error.pp e))
 
 let edges_test () =
   List.iter

@@ -186,7 +186,8 @@ let generate_c_stubs ~schema_dir outdir schemas =
       let all_args =
         param_args @ [ "NULL"; name ^ "_ErrorHandler"; "base"; "len"; "0" ]
       in
-      pr "  uint64_t result = %sValidate%s(%s);\n" name name
+      pr "  uint64_t result = %s(%s);\n"
+        (Wire_3d.validator_name name)
         (String.concat ", " all_args);
       pr "  return EverParseIsSuccess(result);\n";
       pr "}\n\n")

@@ -115,14 +115,30 @@ val is_leaf : 'a T.typ -> bool
 (** [is_leaf typ] is [true] when [typ] is read at a constant offset, in a
     prefix. *)
 
+type sub = {
+  var : string;
+  path : string list option;
+  codec_id : int;
+  codec_name : string;
+  fixed_size : int option;
+  codec : T.struct_;
+}
+(** A record a field holds, in a plan that keeps records apart: the variable
+    that stands for its size, the field's path ([None] under an anonymous
+    field), the id and the name of the record's codec, its size when constant,
+    and its struct. *)
+
 type st = {
   maps : maps;
   mutable count : int;
   mutable outs : output list;
   mutable ranges : (int * int) Smap.t;
+  mutable subs : sub list option;
+  mutable spans : (string list * node) list;
 }
 (** The state of a plan under construction: the maps, a counter for fresh
-    variables, the outputs so far and the ranges of the variables bound. *)
+    variables, the outputs so far, the ranges of the variables bound and, in a
+    plan that keeps records apart, the records found so far. *)
 
 val fresh : st -> string -> string -> string
 (** [fresh st prefix name] is a variable for [name] no other call returns. *)
@@ -159,6 +175,14 @@ val record : st -> string list option -> T.struct_ -> node list
 val plan_of : ?maps:maps -> T.struct_ -> plan
 (** [plan_of ?maps s] is the plan of the struct [s]. Raises {!Unsupported} on a
     shape the generator does not handle. *)
+
+val plan_apart : T.struct_ -> plan * sub list * (string list * node) list
+(** [plan_apart s] is the plan of the struct [s] in which each record a field
+    holds is a {!Span} of the variable {!sub.var}, ranging over [[0, beyond]],
+    those records, in the order the plan reaches them, and the span of each
+    named field of bytes of variable size, with the field's path. Its outputs
+    are those of [s]'s own fields. Raises [Invalid_argument] as {!plan_of} does.
+*)
 
 val beyond : int
 (** [beyond] is [Sys.max_string_length + 1], the extent of any offset past the

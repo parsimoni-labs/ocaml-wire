@@ -115,9 +115,26 @@ let run_process ?(output = Inherit) ~cwd exe args =
       Option.iter Unix.close output_fd;
       snd (Unix.waitpid [] pid)
 
-(* Run one pool job: [true] when it returns, [false] (with the message on
-   stderr) when it raises, whatever it raises: a forked job that raises exits
-   with 1, so a job run in this process must fail the same way. *)
+let rm_rf dir =
+  (try Sys.readdir dir with Sys_error _ -> [||])
+  |> Array.iter (fun f ->
+      try Sys.remove (Filename.concat dir f) with Sys_error _ -> ());
+  try Sys.rmdir dir with Sys_error _ -> ()
+
+let read_file path =
+  try In_channel.with_open_bin path In_channel.input_all
+  with Sys_error _ -> ""
+
+let max_jobs () =
+  match Sys.getenv_opt "WIRE_3D_JOBS" with
+  | None | Some "" -> max 1 (min 4 (Domain.recommended_domain_count ()))
+  | Some s -> (
+      match int_of_string_opt s with
+      | Some k when k >= 1 -> k
+      | _ -> Fmt.failwith "WIRE_3D_JOBS=%S: expected a positive integer" s)
+
+(* [true] when [job] returns, [false] with the message on stderr when it
+   raises, whatever it raises. *)
 let job_ok job =
   match match job () with () -> Ok () | exception exn -> Error exn with
   | Ok () -> true
@@ -131,11 +148,42 @@ let job_ok job =
       Fmt.epr "%s\n%!" (Printexc.to_string exn);
       false
 
-(* Without [fork] (Windows) the jobs run one after the other in this process:
-   the same verdicts, without the overlap. *)
-let pool_in_process jobs = Array.map job_ok jobs
+let flush_output () =
+  Format.pp_print_flush Format.std_formatter ();
+  Format.pp_print_flush Format.err_formatter ();
+  flush_all ()
 
-let forked_pool ~max_jobs jobs =
+(* Run [f] with the standard output and error of this process, and so of
+   every program it starts, going to [log], then put them back. *)
+let with_output_to log f =
+  flush_output ();
+  let fd =
+    Unix.openfile log [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600
+  in
+  let out = Unix.dup Unix.stdout and err = Unix.dup Unix.stderr in
+  Unix.dup2 fd Unix.stdout;
+  Unix.dup2 fd Unix.stderr;
+  Unix.close fd;
+  Fun.protect
+    ~finally:(fun () ->
+      flush_output ();
+      Unix.dup2 out Unix.stdout;
+      Unix.dup2 err Unix.stderr;
+      Unix.close out;
+      Unix.close err)
+    f
+
+(* One pool job: [job dir] in a fresh directory, removed afterwards, its
+   output and any exception it raises written to [log]. *)
+let logged_in_dir ~log job () =
+  with_output_to log (fun () ->
+      job_ok (fun () ->
+          let dir = Filename.temp_dir "wire_3d_job" "" in
+          Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> job dir)))
+
+let in_process jobs = Array.map (fun job -> job ()) jobs
+
+let forked ~max_jobs jobs =
   let n = Array.length jobs in
   let ok = Array.make n false in
   let pid_idx = Hashtbl.create 64 in
@@ -151,20 +199,18 @@ let forked_pool ~max_jobs jobs =
   in
   (* Drain any buffered output before forking, so a child does not inherit and
      re-flush the parent's pending bytes. *)
-  Format.pp_print_flush Fmt.stderr ();
-  Format.pp_print_flush Fmt.stdout ();
+  flush_output ();
   while !next < n || !running > 0 do
     if !next < n && !running < max_jobs then begin
       let i = !next in
       incr next;
       match Unix.fork () with
       | 0 ->
-          (* The child must never return into the parent's loop. On success
-             [_exit 0] runs before [finally]; a failure reaches [finally] and
-             the child exits with 1. *)
+          (* The child must never return into the parent's loop: it exits 0
+             when the job succeeds and 1 otherwise, whatever escapes. *)
           Fun.protect
             ~finally:(fun () -> Unix._exit 1)
-            (fun () -> if job_ok jobs.(i) then Unix._exit 0)
+            (fun () -> if jobs.(i) () then Unix._exit 0)
       | pid ->
           Hashtbl.add pid_idx pid i;
           incr running
@@ -173,10 +219,31 @@ let forked_pool ~max_jobs jobs =
   done;
   ok
 
-(* A bounded fork pool: each job runs in its own process, so blocking EverParse
-   runs overlap across cores with full isolation. Returns each
-   job's success (exit 0 and no exception) in input order. EverParse runs must
-   be isolated because they race on shared intermediate files in a shared
-   directory, so jobs that invoke [3d.exe] should each use a private cwd. *)
-let fork_pool ~max_jobs jobs =
-  if Sys.win32 then pool_in_process jobs else forked_pool ~max_jobs jobs
+let pool_with run jobs =
+  let logs = Filename.temp_dir "wire_3d_logs" "" in
+  Fun.protect
+    ~finally:(fun () -> rm_rf logs)
+    (fun () ->
+      let log i = Filename.concat logs (string_of_int i ^ ".log") in
+      let ok =
+        run
+          (Array.of_list
+             (List.mapi (fun i (_, job) -> logged_in_dir ~log:(log i) job) jobs))
+      in
+      let results =
+        List.mapi (fun i (name, _) -> (name, ok.(i), read_file (log i))) jobs
+      in
+      match List.filter (fun (_, ok, _) -> not ok) results with
+      | [] -> Ok (List.map (fun (_, _, log) -> log) results)
+      | failed ->
+          Error
+            (String.concat "\n"
+               (List.map (fun (name, _, log) -> name ^ ":\n" ^ log) failed)))
+
+(* Without [fork] (Windows) the jobs run one after the other in this process:
+   the same verdicts and logs, without the overlap. *)
+let pool jobs =
+  if Sys.win32 then pool_with in_process jobs
+  else pool_with (forked ~max_jobs:(max_jobs ())) jobs
+
+let pool_in_process jobs = pool_with in_process jobs

@@ -6,74 +6,152 @@
 (executable
  (name gen)
  (modules gen)
- (libraries schemas wire.ocaml))
+ (libraries schemas net wire.ocaml fmt))
+
+; One rule per module under test, as Wire_ocaml.main reads its command line;
+; each fixed record of named scalars but under a map comes with its twin.
+
+(rule
+ (targets g_ipv4.ml g_ipv4.mli g_ipv4_codec.ml g_ipv4_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
 
 (rule
  (targets
-  g_ipv4.ml
-  g_ipv4.mli
-  g_ipv4_wire.ml
-  g_ipv4_wire.mli
   g_ipv4_record.ml
   g_ipv4_record.mli
-  g_ipv4_record_wire.ml
-  g_ipv4_record_wire.mli
-  g_checked.ml
-  g_checked.mli
-  g_checked_wire.ml
-  g_checked_wire.mli
-  g_mixed.ml
-  g_mixed.mli
-  g_mixed_wire.ml
-  g_mixed_wire.mli
-  g_small.ml
-  g_small.mli
-  g_small_wire.ml
-  g_small_wire.mli
-  g_eth.ml
-  g_eth.mli
-  g_eth_wire.ml
-  g_eth_wire.mli
-  g_wide.ml
-  g_wide.mli
-  g_wide_wire.ml
-  g_wide_wire.mli
-  g_mapped.ml
-  g_mapped.mli
-  g_mapped_wire.ml
-  g_mapped_wire.mli
-  g_signed.ml
-  g_signed.mli
-  g_signed_wire.ml
-  g_signed_wire.mli
-  g_packed.ml
-  g_packed.mli
-  g_packed_wire.ml
-  g_packed_wire.mli
-  g_refined.ml
-  g_refined.mli
-  g_refined_wire.ml
-  g_refined_wire.mli
+  g_ipv4_record_codec.ml
+  g_ipv4_record_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets
+  g_mixed_record.ml
+  g_mixed_record.mli
+  g_mixed_record_codec.ml
+  g_mixed_record_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets checked_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
+
+(rule
+ (targets g_checked.ml g_checked.mli g_checked_codec.ml g_checked_codec.mli)
+ (action
+  (run ./gen.exe %{targets} --visitor fold=%{dep:checked_step.ml})))
+
+(rule
+ (targets g_mixed.ml g_mixed.mli g_mixed_codec.ml g_mixed_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_small.ml g_small.mli g_small_codec.ml g_small_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_eth.ml g_eth.mli g_eth_codec.ml g_eth_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_wide.ml g_wide.mli g_wide_codec.ml g_wide_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_signed.ml g_signed.mli g_signed_codec.ml g_signed_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_packed.ml g_packed.mli g_packed_codec.ml g_packed_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_refined.ml g_refined.mli g_refined_codec.ml g_refined_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets
   g_overflow.ml
   g_overflow.mli
-  g_overflow_wire.ml
-  g_overflow_wire.mli
-  g_lanes.ml
-  g_lanes.mli
-  g_lanes_wire.ml
-  g_lanes_wire.mli
-  s_sized.ml
-  s_sized.mli
-  s_overflow.ml
-  s_overflow.mli
-  s_skipped.ml
-  s_skipped.mli
-  s_huge.ml
-  s_huge.mli
-  s_nested.ml
-  s_nested.mli)
+  g_overflow_codec.ml
+  g_overflow_codec.mli)
  (action
-  (run ./gen.exe)))
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_lanes.ml g_lanes.mli g_lanes_codec.ml g_lanes_codec.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets g_mapped.ml g_mapped.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets sized_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
+
+(rule
+ (targets s_sized.ml s_sized.mli)
+ (action
+  (run ./gen.exe %{targets} --visitor fold=%{dep:sized_step.ml})))
+
+(rule
+ (targets overflow_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
+
+(rule
+ (targets s_overflow.ml s_overflow.mli)
+ (action
+  (run ./gen.exe %{targets} --visitor fold=%{dep:overflow_step.ml})))
+
+(rule
+ (targets skipped_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
+
+(rule
+ (targets s_skipped.ml s_skipped.mli)
+ (action
+  (run ./gen.exe %{targets} --visitor fold=%{dep:skipped_step.ml})))
+
+(rule
+ (targets s_capture.ml s_capture.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
+ (targets huge_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
+
+(rule
+ (targets s_huge.ml s_huge.mli)
+ (action
+  (run ./gen.exe %{targets} --visitor fold=%{dep:huge_step.ml})))
+
+(rule
+ (targets nested_step.ml)
+ (action
+  (run ./gen.exe --step %{targets})))
+
+(rule
+ (targets s_nested.ml s_nested.mli)
+ (action
+  (run ./gen.exe %{targets} --visitor fold=%{dep:nested_step.ml})))
 
 ; Whether a 64-bit load of wire.runtime returns a boxed int64 to the code
 ; generated for OCaml: in the dev profile, which compiles wire.runtime with
@@ -93,43 +171,81 @@
  (action
   (write-file %{target} "let v = false\n")))
 
+(library
+ (name scan_step)
+ (modules scan_step)
+ (libraries fmt))
+
+(executable
+ (name gen_scan)
+ (modules gen_scan)
+ (libraries net scan_step wire.ocaml))
+
+(rule
+ (targets
+  s_capture_step.ml
+  s_capture_step.mli
+  s_capture_step_codec.ml
+  s_capture_step_codec.mli)
+ (action
+  (run
+   %{dep:gen_scan.exe}
+   %{targets}
+   --visitor
+   fold_step=%{dep:scan_step.ml})))
+
 (test
  (name test)
  (modules
   test
   test_wire_ocaml
+  test_get
+  test_view_module
+  test_writer
+  test_value_module
   test_same
+  test_scan
+  s_capture_step
+  s_capture_step_codec
   g_ipv4
-  g_ipv4_wire
+  g_ipv4_codec
   g_ipv4_record
-  g_ipv4_record_wire
+  g_ipv4_record_codec
+  g_mixed_record
+  g_mixed_record_codec
   g_checked
-  g_checked_wire
+  g_checked_codec
   g_mixed
-  g_mixed_wire
+  g_mixed_codec
   g_small
-  g_small_wire
+  g_small_codec
   g_eth
-  g_eth_wire
+  g_eth_codec
   g_wide
-  g_wide_wire
+  g_wide_codec
   g_mapped
-  g_mapped_wire
   g_signed
-  g_signed_wire
+  g_signed_codec
   g_packed
-  g_packed_wire
+  g_packed_codec
   g_refined
-  g_refined_wire
+  g_refined_codec
   g_overflow
-  g_overflow_wire
+  g_overflow_codec
   g_lanes
-  g_lanes_wire
+  g_lanes_codec
   s_sized
   s_overflow
   s_skipped
   s_huge
   s_nested
+  checked_step
+  sized_step
+  overflow_step
+  skipped_step
+  huge_step
+  nested_step
+  s_capture
   boxed_loads)
  (libraries
   schemas
@@ -141,6 +257,7 @@
   diff_ocaml
   diff_driver
   ocaml_index
+  scan_step
   bytesrw
   fmt
   alcotest))

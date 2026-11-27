@@ -15,6 +15,9 @@ type ctx
 val empty : ctx
 (** Empty context, no bindings. *)
 
+val bind : string -> int -> ctx -> ctx
+(** [bind name v ctx] extends [ctx] so that [Ref name] evaluates to [v]. *)
+
 val int_of : 'a Types.typ -> 'a -> int option
 (** {!Types.int_of}, re-exported: the conversion is a fold over the type
     description and is decided there. *)

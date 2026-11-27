@@ -64,6 +64,16 @@ let bits = function
       Some (Int64.of_string ("0u" ^ String.sub bv 2 (String.length bv - 2)))
   | _ -> None
 
+(* The width of a bit-vector literal. *)
+let width = function
+  | Atom a when String.starts_with ~prefix:"#x" a ->
+      Some (4 * (String.length a - 2))
+  | Atom a when String.starts_with ~prefix:"#b" a -> Some (String.length a - 2)
+  | List [ Atom "_"; Atom bv; Atom w ] when String.starts_with ~prefix:"bv" bv
+    ->
+      int_of_string_opt w
+  | _ -> None
+
 let rec pp_sexp ppf = function
   | Atom a -> Fmt.string ppf a
   | List l -> Fmt.pf ppf "(%a)" Fmt.(list ~sep:sp pp_sexp) l
@@ -85,12 +95,24 @@ let decisive = function Sat _ | Unsat -> true | Unknown _ -> false
 
 (* {1 A pool of Z3 processes} *)
 
+(* One way to answer a group's query: a script that answers it, or scripts
+   that prove it when each is unsat and say nothing otherwise. *)
+type alternative = Query of string | Proof of string list
+
 type process = {
   group : int;
   alt : int;
   file : string;
   out : string;
   started : float;
+}
+
+(* The parts of a proof still to answer unsat, whether one answered
+   otherwise, and the seconds its parts took. *)
+type proof = {
+  mutable left : int;
+  mutable failed : bool;
+  mutable seconds : float;
 }
 
 type pool = {
@@ -100,6 +122,7 @@ type pool = {
   keep : bool;
   results : (answer * string * float * int) array;
   decided : bool array;
+  proofs : (int * int, proof) Hashtbl.t;
   running : (int, process) Hashtbl.t;
   mutable pending : (int * int * string) list;
 }
@@ -118,6 +141,34 @@ let start pool (group, alt, script) =
   Hashtbl.replace pool.running pid
     { group; alt; file; out; started = Unix.gettimeofday () }
 
+(* Records the answer of [p] for its group: a query's answer, or a proof
+   that its last part completes or that one part fails. A failed proof
+   answers only a group no query has answered yet. *)
+let record pool p answer =
+  let g = p.group and seconds = Unix.gettimeofday () -. p.started in
+  match Hashtbl.find_opt pool.proofs (g, p.alt) with
+  | None ->
+      pool.results.(g) <- (answer, p.file, seconds, p.alt);
+      if decisive answer then pool.decided.(g) <- true
+  | Some proof -> (
+      proof.seconds <- proof.seconds +. seconds;
+      match answer with
+      | Unsat ->
+          proof.left <- proof.left - 1;
+          if proof.left = 0 then begin
+            pool.results.(g) <- (Unsat, "", proof.seconds, p.alt);
+            pool.decided.(g) <- true
+          end
+      | Sat _ | Unknown _ -> (
+          proof.failed <- true;
+          match pool.results.(g) with
+          | Unknown "not run", _, _, _ ->
+              let why =
+                match answer with Unknown why -> why | _ -> "a part is sat"
+              in
+              pool.results.(g) <- (Unknown why, p.file, proof.seconds, p.alt)
+          | _ -> ()))
+
 (* Records the answer of [p], unless it was stopped; an unknown answer keeps
    its script, for a look at it. *)
 let finish pool p ~stopped =
@@ -126,18 +177,14 @@ let finish pool p ~stopped =
     else parse (In_channel.with_open_bin p.out In_channel.input_all)
   in
   Sys.remove p.out;
-  if (not stopped) && not pool.decided.(p.group) then begin
-    pool.results.(p.group) <-
-      (answer, p.file, Unix.gettimeofday () -. p.started, p.alt);
-    if decisive answer then pool.decided.(p.group) <- true
-  end;
+  if (not stopped) && not pool.decided.(p.group) then record pool p answer;
   let unknown = (not stopped) && not (decisive answer) in
   if (not pool.keep) && not unknown then Sys.remove p.file
 
 let kill pool pred =
   Hashtbl.iter
     (fun pid p ->
-      if pred p.group then begin
+      if pred p then begin
         (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
         ignore (Unix.waitpid [] pid);
         Hashtbl.remove pool.running pid;
@@ -145,17 +192,46 @@ let kill pool pred =
       end)
     (Hashtbl.copy pool.running)
 
-(* [check_all ~z3 ~timeout ~jobs groups] runs Z3 on the scripts of each
+(* Whether the alternative [a] of the group [g] may still answer. *)
+let live pool g a =
+  (not pool.decided.(g))
+  &&
+  match Hashtbl.find_opt pool.proofs (g, a) with
+  | Some proof -> not proof.failed
+  | None -> true
+
+(* The scripts of [groups], each with its group and alternative, in order;
+   each proof is entered in [proofs]. *)
+let scripts proofs groups =
+  List.concat
+    (List.mapi
+       (fun g alts ->
+         List.concat
+           (List.mapi
+              (fun a -> function
+                | Query s -> [ (g, a, s) ]
+                | Proof parts ->
+                    Hashtbl.replace proofs (g, a)
+                      { left = List.length parts; failed = false; seconds = 0. };
+                    List.map (fun s -> (g, a, s)) parts)
+              alts))
+       groups)
+
+(* [check_all ~z3 ~timeout ~jobs groups] runs Z3 on the alternatives of each
    group, [jobs] processes at a time. Each script ends with one
-   [(check-sat)] and one [(get-value ...)]; the scripts of a group are
-   encodings of one query, so the first sat or unsat answers for the group,
-   and its other scripts are stopped. Each group gets that answer, or the
-   last unknown one, with its script's file, the seconds Z3 took and the
-   index of the script in its group. When
-   [stop g answer] holds of a decisive answer, the run ends there and the
-   groups left are not run. *)
+   [(check-sat)] and one [(get-value ...)]; the alternatives of a group
+   answer one query, so the first query to answer sat or unsat, or the
+   first proof whose every part answers unsat, answers for the group, and
+   its other scripts are stopped. The alternatives run side by side: a
+   proof does not wait for a query to run out of time. Each group gets that
+   answer, or the last unknown one, with its script's file (none for a
+   proof), the seconds Z3 took (over all the parts of a proof) and the index
+   of the alternative in its group. When [stop g answer] holds of a decisive
+   answer, the run ends there and the groups left are not run. *)
 let check_all ?(stop = fun _ _ -> false) ~z3 ~timeout ~jobs ~keep groups =
   let n = List.length groups in
+  let proofs = Hashtbl.create 16 in
+  let pending = scripts proofs groups in
   let pool =
     {
       z3;
@@ -164,17 +240,13 @@ let check_all ?(stop = fun _ _ -> false) ~z3 ~timeout ~jobs ~keep groups =
       keep;
       results = Array.make n (Unknown "not run", "", 0., 0);
       decided = Array.make n false;
+      proofs;
       running = Hashtbl.create jobs;
-      pending =
-        List.concat
-          (List.mapi
-             (fun g scripts -> List.mapi (fun a s -> (g, a, s)) scripts)
-             groups);
+      pending;
     }
   in
   let rec loop () =
-    pool.pending <-
-      List.filter (fun (g, _, _) -> not pool.decided.(g)) pool.pending;
+    pool.pending <- List.filter (fun (g, a, _) -> live pool g a) pool.pending;
     while Hashtbl.length pool.running < jobs && pool.pending <> [] do
       match pool.pending with
       | j :: rest ->
@@ -194,7 +266,7 @@ let check_all ?(stop = fun _ _ -> false) ~z3 ~timeout ~jobs ~keep groups =
             pool.pending <- [];
             kill pool (fun _ -> true)
           end
-          else if pool.decided.(g) then kill pool (Int.equal g)
+          else kill pool (fun p -> p.group = g && not (live pool g p.alt))
       | None -> ());
       loop ()
     end

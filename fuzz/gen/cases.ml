@@ -45,7 +45,7 @@ let check_rejection_names label kind ?env a g bs =
               "%s %s: rejection names undeclared field %S (declared: %s)" label
               kind name
               (String.concat ", " a.anames))
-        e.Wire.field
+        e.Wire.Error.field
 
 let check_safety_stream ~validate label a g kind ?env ~interloper ~noise bs =
   check_decode_safety label kind ?env g bs;
@@ -144,7 +144,7 @@ let test_cases ?(validate = true) label g =
    The size-source field is drawn from several int-valued field types -- in
    particular [optional_or], whose present-or-default value the size expression
    reads. Each source builds a two-field [(len, data)] codec round-tripped
-   through [test_cases], which checks decode, [size_of_value], and re-encode
+   through [test_cases], which checks decode, [encoded_size], and re-encode
    against canonical bytes assembled here (the length-field bytes followed by
    [len] data bytes). *)
 let u8_size_bytes n =
@@ -186,6 +186,40 @@ let sized_source ~of_len name make_len bytes_of_len =
     adversarial_value = None;
   }
 
+(* A region sized by the length field. Its size names a field of the record,
+   which [encoded_size] has to read from the value as decode reads it from the
+   buffer; the [byte_array] sources above measure the string instead, so they
+   never reach that path. *)
+let region_source name region ~min ?(count = 7) data =
+  let len_field = Wire.Field.v "Len" Wire.uint8 in
+  let data_field = Wire.Field.v "Data" (region (Wire.Field.ref len_field)) in
+  let codec =
+    Wire.Codec.v ("Region" ^ name)
+      (fun len data -> (len, data))
+      Wire.Codec.[ len_field $ fst; data_field $ snd ]
+  in
+  let positive =
+    Alcobar.map
+      Alcobar.[ Alcobar.range ~min count; Alcobar.uint8 ]
+      (fun len b ->
+        let value, bytes = data len b in
+        ((Wire.UInt8.v len, value), Bytes.cat (u8_size_bytes len) bytes))
+  in
+  {
+    codec;
+    typ = Wire.codec codec;
+    positive;
+    random = bytes_any;
+    adversarial = bytes_any;
+    equal = ( = );
+    env = None;
+    fields = pair_fields ("Len", len_field) ("Data", data_field);
+    adversarial_value = None;
+  }
+
+let padded len prefix =
+  Bytes.cat prefix (Bytes.make (len - Bytes.length prefix) '\000')
+
 let sized_cases group =
   (* The u8 sources carry their length in a [Wire.UInt8.t] and the u16be one in
      a [Wire.UInt16.t], so the sources cannot sit in one list; each is turned
@@ -218,10 +252,27 @@ let sized_cases group =
            (fun () ->
              Wire.Field.v "Len" (Wire.where Wire.Expr.true_ Wire.uint8))
            u8_size_bytes);
+      case "nested"
+        (region_source "Nested"
+           (fun size -> Wire.nested ~size Wire.uint8)
+           ~min:1 ~count:1
+           (fun _ b -> (Wire.UInt8.v b, u8_size_bytes b)));
+      case "nested_at_most"
+        (region_source "NestedAtMost"
+           (fun size -> Wire.nested_at_most ~size Wire.uint8)
+           ~min:1
+           (fun len b -> (Wire.UInt8.v b, padded len (u8_size_bytes b))));
+      case "zeroterm_at_most"
+        (region_source "ZerotermAtMost"
+           (fun size -> Wire.zeroterm_at_most ~size)
+           ~min:1
+           (fun len _ ->
+             let s = String.make (len - 1) 'a' in
+             (s, padded len (Bytes.of_string s))));
     ]
 
 (* Drive a freshly generated nested composition per sample: the positive case
-   asserts round-trip (and so [size_of_value] / [encode] consistency across the
+   asserts round-trip (and so [encoded_size] / [encode] consistency across the
    whole nesting), the other two assert the decoder never raises. Generated
    codecs never reference [Param.input], so no env is threaded. *)
 type nested_sample = NS : 'a t * string * ('a * bytes) * 'a -> nested_sample
@@ -387,7 +438,7 @@ let streaming_cases label g =
     in
     [ pos_case ]
 
-(* Exercises {!Wire.Codec.validate_exn}: validation-only path that should
+(* Exercises {!Wire.Codec.validate}: validation-only path that should
    accept positives and reject (without crashing) random/adversarial.
    When the codec references [Param.input], positives pull the env from
    [g.env.positive] and the safety streams fuzz the env. *)
@@ -446,3 +497,82 @@ let reject_cases label g =
         check_reject random random_env;
         check_reject adversarial adversarial_env);
   ]
+
+(* A field after a variable-size one sits where the input puts it, and a check
+   that refuses it names that offset. The offset properties compare one base
+   with another, which a failure reported at the record's base passes too, and
+   decode and validate are compared on the reason alone: neither sees a wrong
+   [at], so it is checked here against where the bytes put the field. Each
+   trailing field refuses a byte of 128 or more through a different check. *)
+type span_fault = Span_fault : string * 'a Wire.Field.t -> span_fault
+
+let span_faults =
+  let x = Wire.Field.v "X" Wire.uint8 in
+  let refused = Wire.(Expr.(Field.ref x >= int 128)) in
+  [
+    Span_fault
+      ( "constraint",
+        Wire.Field.v "X"
+          ~self_constraint:(fun s -> Wire.(Expr.(s < int 128)))
+          Wire.uint8 );
+    Span_fault
+      ( "enum",
+        Wire.Field.v "X"
+          (Wire.enum "E"
+             (List.init 128 (fun i -> (Fmt.str "V%d" i, i)))
+             Wire.uint8) );
+    Span_fault
+      ( "lookup",
+        Wire.Field.v "X" (Wire.lookup (List.init 128 Fun.id) Wire.uint8) );
+    Span_fault
+      ( "action",
+        Wire.Field.v "X"
+          ~action:
+            (Wire.Action.on_success
+               [ Wire.Action.if_ refused [ Wire.Action.abort ] None ])
+          Wire.uint8 );
+  ]
+
+let span_fault_case label (Span_fault (name, x)) =
+  let len = Wire.Field.v "Len" Wire.uint8 in
+  let codec =
+    Wire.Codec.v ("Span_" ^ name)
+      (fun l d x -> (l, d, x))
+      Wire.Codec.
+        [
+          (len $ fun (l, _, _) -> l);
+          ( Wire.Field.v "Data" (Wire.byte_slice ~size:(Wire.Field.ref len))
+          $ fun (_, d, _) -> d );
+          (x $ fun (_, _, x) -> x);
+        ]
+  in
+  let label = Fmt.str "%s %s" label name in
+  let check what pad data byte = function
+    | Ok _ when byte < 128 -> ()
+    | Ok _ -> Alcobar.failf "%s: %s accepted the byte %d" label what byte
+    | Error (e : Wire.Error.t) when byte < 128 ->
+        Alcobar.failf "%s: %s refused the byte %d: %a" label what byte
+          Wire.Error.pp e
+    | Error e ->
+        let at = pad + 1 + String.length data in
+        if e.at <> at || e.field <> [ "X" ] then
+          Alcobar.failf "%s: %s reported %a, but X is at %d" label what
+            Wire.Error.pp e at
+  in
+  Alcobar.test_case (label ^ " offset")
+    Alcobar.[ range 4; bytes; uint8 ]
+    (fun pad data byte ->
+      let data = String.sub data 0 (min 255 (String.length data)) in
+      let buf =
+        Bytes.concat Bytes.empty
+          [
+            Bytes.make pad '\xff';
+            Bytes.make 1 (Char.chr (String.length data));
+            Bytes.of_string data;
+            Bytes.make 1 (Char.chr byte);
+          ]
+      in
+      check "decode" pad data byte (Wire.Codec.decode codec buf pad);
+      check "validate" pad data byte (Wire.Codec.validate codec buf pad))
+
+let span_fault_cases label = List.map (span_fault_case label) span_faults

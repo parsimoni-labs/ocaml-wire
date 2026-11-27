@@ -47,6 +47,11 @@ val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
 val escape_3d : string -> string
 (** [escape_3d name] appends [_] if [name] is a 3D or C reserved word. *)
 
+val struct_tag_name : string -> string
+(** [struct_tag_name name] is the tag of the 3D struct [name]: [Wire] then
+    [escape_3d name]. EverParse names the struct's validator and its wrapper
+    after the tag. *)
+
 val inner_wire_size : 'a typ -> int option
 (** [inner_wire_size t] is the fixed byte width of a scalar, bitfield base, unit
     or fixed-size sub-codec, seen through [Map] / [Enum] / [Where]; [None] for

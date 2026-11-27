@@ -109,19 +109,24 @@ let multi_record_codec =
 
 let decode_ok = function
   | Ok v -> v
-  | Error e -> Alcotest.failf "unexpected parse error: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "unexpected parse error: %a" Error.pp e
+
+let ok = function Ok v -> v | Error e -> Wire_runtime.Errors.fail e
+
+let reader ?env c f =
+  let read = Codec.get ?env c f in
+  fun buf off -> decode_ok (read buf off)
 
 let expect_constraint_fail = function
   | Ok _ -> Alcotest.fail "expected a Constraint_failed parse error"
-  | Error { kind = Constraint_failed _; _ } -> ()
-  | Error e ->
-      Alcotest.failf "expected Constraint_failed, got %a" pp_parse_error e
+  | Error { Error.kind = Constraint_failed _; _ } -> ()
+  | Error e -> Alcotest.failf "expected Constraint_failed, got %a" Error.pp e
 
 (* Assert a decode failed with a [kind] satisfying [pred]. *)
 let expect_kind pred = function
   | Ok _ -> Alcotest.fail "expected a parse error"
-  | Error { kind; _ } when pred kind -> ()
-  | Error e -> Alcotest.failf "unexpected parse error: %a" pp_parse_error e
+  | Error { Error.kind; _ } when pred kind -> ()
+  | Error e -> Alcotest.failf "unexpected parse error: %a" Error.pp e
 
 let roundtrip name typ testable v =
   Alcotest.check testable name v (decode_ok (of_string typ (to_string typ v)))
@@ -151,11 +156,11 @@ let encode_record codec v = Ok (Codec.to_string codec v)
 
 (* Helper: decode record from string using Codec API *)
 let decode_record codec s =
-  let ws = Codec.wire_size codec in
+  let ws = Codec.min_size codec in
   if String.length s < ws then
     Error
       {
-        at = 0;
+        Error.at = 0;
         field = [];
         kind = Unexpected_eof { expected = ws; got = String.length s };
       }

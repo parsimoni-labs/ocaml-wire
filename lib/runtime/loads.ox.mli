@@ -75,37 +75,4 @@ module Local : sig
 
   val[@zero_alloc] blit_string : string -> bytes @ local -> int -> unit @@ portable
   (** [blit_string s b off] copies [s] to [b] at [off]. *)
-
-  (** The same on a bigarray of bytes. *)
-  module Bigstring : sig
-    type t =
-      (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
-
-    val[@zero_alloc] length : t @ local -> int @@ portable
-    val[@zero_alloc] u8 : t @ local -> int -> int @@ portable
-    val[@zero_alloc] u16be : t @ local -> int -> int @@ portable
-    val[@zero_alloc] u16le : t @ local -> int -> int @@ portable
-    val[@zero_alloc] i32be : t @ local -> int -> int32_u @@ portable
-    val[@zero_alloc] i32le : t @ local -> int -> int32_u @@ portable
-    val[@zero_alloc] i64be : t @ local -> int -> int64_u @@ portable
-    val[@zero_alloc] i64le : t @ local -> int -> int64_u @@ portable
-    val[@zero_alloc] set_u8 : t @ local -> int -> int -> unit @@ portable
-    val[@zero_alloc] set_u16be : t @ local -> int -> int -> unit @@ portable
-    val[@zero_alloc] set_u16le : t @ local -> int -> int -> unit @@ portable
-    val[@zero_alloc] set_i32be : t @ local -> int -> int32_u -> unit @@ portable
-    val[@zero_alloc] set_i32le : t @ local -> int -> int32_u -> unit @@ portable
-    val[@zero_alloc] set_u32be : t @ local -> int -> int64_u -> unit @@ portable
-    val[@zero_alloc] set_u32le : t @ local -> int -> int64_u -> unit @@ portable
-    val[@zero_alloc] set_i64be : t @ local -> int -> int64_u -> unit @@ portable
-    val[@zero_alloc] set_i64le : t @ local -> int -> int64_u -> unit @@ portable
-    val[@zero_alloc] get_uint8 : t @ local -> int -> int @@ portable
-    val[@zero_alloc] get_uint16_be : t @ local -> int -> int @@ portable
-    val[@zero_alloc] get_uint16_le : t @ local -> int -> int @@ portable
-    val[@zero_alloc] get_int32_be : t @ local -> int -> int32_u @@ portable
-    val[@zero_alloc] get_int32_le : t @ local -> int -> int32_u @@ portable
-    val sub_string : t @ local -> int -> int -> string @@ portable
-
-    val[@zero_alloc] unsafe_blit_string :
-      string -> int -> t @ local -> int -> int -> unit @@ portable
-  end
 end

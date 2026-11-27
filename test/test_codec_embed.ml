@@ -62,8 +62,8 @@ let test_codec_embed_roundtrip () =
     (UInt8.to_int original.trailer)
     (UInt8.to_int decoded.trailer)
 
-let test_codec_embed_wire_size () =
-  Alcotest.(check int) "wire_size" 5 (Codec.wire_size outer_codec)
+let test_codec_embed_size () =
+  Alcotest.(check int) "size" 5 (Codec.min_size outer_codec)
 
 (* Nested codec with bitfields *)
 
@@ -209,19 +209,21 @@ let test_codec_embed_tail () =
   let answer f =
     match f () with
     | v -> "ok " ^ v
-    | exception Parse_error e -> Fmt.str "error %a" pp_parse_error e
+    | exception exn when Wire.Private.Types.is_parse_error exn ->
+        let e = Wire.Private.Types.parse_error_of exn in
+        Fmt.str "error %a" Error.pp e
   in
   let show (a, r) = Fmt.str "%d %S" (UInt8.to_int a) r in
   let answers n =
     let b = Bytes.init n (fun i -> Char.chr (i + 1)) in
     [
-      answer (fun () -> show (Codec.decode_exn framed_tail b 0));
-      answer (fun () -> Codec.validate_exn framed_tail b 0 |> fun () -> "");
+      answer (fun () -> show (ok (Codec.decode framed_tail b 0)));
+      answer (fun () -> ok (Codec.validate framed_tail b 0) |> fun () -> "");
       answer (fun () ->
-          match Codec.decode_exn gated_tail b 0 with
+          match ok (Codec.decode gated_tail b 0) with
           | _, Some t -> show t
           | _, None -> "none");
-      answer (fun () -> Codec.validate_exn gated_tail b 0 |> fun () -> "");
+      answer (fun () -> ok (Codec.validate gated_tail b 0) |> fun () -> "");
     ]
   in
   let check n want =
@@ -302,7 +304,7 @@ let suite =
       Alcotest.test_case "embed: decode" `Quick test_codec_embed_decode;
       Alcotest.test_case "embed: encode" `Quick test_codec_embed_encode;
       Alcotest.test_case "embed: roundtrip" `Quick test_codec_embed_roundtrip;
-      Alcotest.test_case "embed: wire_size" `Quick test_codec_embed_wire_size;
+      Alcotest.test_case "embed: size" `Quick test_codec_embed_size;
       Alcotest.test_case "embed: bitfield" `Quick test_codec_embed_bitfield;
       Alcotest.test_case "embed: nested" `Quick test_codec_embed_nested;
       Alcotest.test_case "embed: nested roundtrip" `Quick

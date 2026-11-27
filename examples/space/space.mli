@@ -161,7 +161,7 @@ val bf_cmd_seq : (Wire.UInt16.t, inner_cmd) Wire.Codec.field
 val outer_hdr_codec : outer_hdr Wire.Codec.t
 (** [outer_hdr_codec] is the variable-size outer header codec with dependent
     payload length. The Payload field size comes from the runtime value of the
-    Length field via [Codec.field_ref]. *)
+    Length field via [Field.ref]. *)
 
 val outer_hdr_size : int
 (** Total size of an OuterHdr with an InnerCmd payload (4 + 4 = 8 bytes). Since

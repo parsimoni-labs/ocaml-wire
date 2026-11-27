@@ -23,15 +23,16 @@ val guarded_populate :
 
 val field_validators :
   field_idx:int ->
-  validator_off:int ->
-  populate:(slots -> 'a -> 'b -> 'c -> int -> unit) ->
+  access:field_access ->
+  populate:(slots -> runtime -> Input_end.t -> bytes -> int -> unit) ->
   check:(slots -> bool) option ->
   act:(slots -> unit) option ->
-  (slots -> 'a -> 'b -> 'c -> int -> unit)
-  * (slots -> 'a -> 'b -> 'c -> int -> unit)
-(** [field_validators ~field_idx ~validator_off ~populate ~check ~act] is the
-    pair [(check_only, full)]: populate the field's slot and test its
-    constraint, then for [full] also run its action. *)
+  (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+  * (slots -> runtime -> Input_end.t -> bytes -> int -> unit)
+(** [field_validators ~field_idx ~access ~populate ~check ~act] is the pair
+    [(check_only, full)]: populate the field's slot and test its constraint,
+    then for [full] also run its action. A failure is reported at the offset
+    [access] locates the field at. *)
 
 val add_field : ('a -> 'f, 'r) record -> ('a, 'r) field -> ('f, 'r) record
 (** [add_field r f] appends [f] to [r]. *)

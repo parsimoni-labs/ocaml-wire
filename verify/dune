@@ -2,18 +2,28 @@
 ; generated module, executes it symbolically to bit-vector formulas, and has
 ; Z3 prove its reads in bounds and its answers equal to those of the EverParse
 ; 3D specification of the same codec (main.ml says what each check states).
-; It needs EverParse (3d.exe, for the specification's SMT encoding) and z3,
-; so it runs only with BUILD_EVERPARSE=1, as the other EverParse lanes do.
+; It needs EverParse's 3D compiler, found as Wire_3d.locate_3d_exe finds it,
+; for the specification's SMT encoding, and z3, so it runs only with
+; BUILD_EVERPARSE=1, as the other EverParse lanes do.
 
 (executable
  (name gen)
  (modules gen)
  (libraries wire wire.ocaml space net demo))
 
-(executable
- (name main)
- (modules main check linear spec symex smt z3)
- (libraries compiler-libs.common fmt unix))
+(executables
+ (names main test_symex)
+ (modules main test_symex check linear spec symex smt z3)
+ (libraries compiler-libs.common fmt unix wire.3d))
+
+; The primitives the walk models, each proved equal to the definition it
+; models: it needs z3 alone.
+
+(rule
+ (alias runtest)
+ (enabled_if %{bin-available:z3})
+ (action
+  (run ./test_symex.exe %{bin:z3})))
 
 (rule
  (targets
@@ -21,7 +31,8 @@
   Stack.3d
   BfConstrained.3d
   ReservedFields.3d
-  stack_ox.gen
+  stack_step.gen
+  stack_step_ox.gen
   bf_constrained.gen
   reserved_fields.gen)
  (enabled_if
@@ -29,7 +40,7 @@
  (action
   (run ./gen.exe .)))
 
-; The record modules: is_valid, View.check and the accessors behind it, each
+; The record modules: is_valid, check and the accessors behind it, each
 ; window of up to 16 bytes compared with the specification.
 
 (rule
@@ -53,9 +64,10 @@
    bf_constrained.gen:record:BfConstrained.WireBfConstrained:16
    reserved_fields.gen:record:ReservedFields.WireReservedFields:16)))
 
-; The packet-stack scanner, on OCaml and on OxCaml: every read of fold,
-; frames_record and fold_frames in bounds, the fields fold_frames loads ahead
-; of frames_record included, and no input raising.
+; The packet stack's fold, on OCaml and on OxCaml: every read of fold_step,
+; step_frames_record and fold_step_frames in bounds, the fields
+; fold_step_frames loads ahead of step_frames_record included, and no input
+; raising.
 
 (rule
  (alias runtest)
@@ -63,16 +75,29 @@
   (and
    (= %{env:BUILD_EVERPARSE=} "1")
    %{bin-available:z3}))
- (deps %{project_root}/examples/generated/stack.ml Stack.3d stack_ox.gen)
+ (deps Stack.3d stack_step.gen)
  (action
   (run
    ./main.exe
    --bounds-only
    .
-   %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128
-   stack_ox.gen:scanner-ox/34:Stack.WireEthernetStack:128)))
+   stack_step.gen:step/34:Stack.WireEthernetStack:128)))
 
-; The scanner's answers against the specification, on every window of up to
+(rule
+ (alias runtest)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   %{bin-available:z3}))
+ (deps Stack.3d stack_step_ox.gen)
+ (action
+  (run
+   ./main.exe
+   --bounds-only
+   .
+   stack_step_ox.gen:step-ox/34:Stack.WireEthernetStack:128)))
+
+; The fold's answers against the specification, on every window of up to
 ; 128 bytes: one query per path, the longest of which take minutes, so they
 ; run on their own: BUILD_EVERPARSE=1 dune build @verify/equivalence.
 
@@ -82,7 +107,7 @@
   (and
    (= %{env:BUILD_EVERPARSE=} "1")
    %{bin-available:z3}))
- (deps %{project_root}/examples/generated/stack.ml Stack.3d stack_ox.gen)
+ (deps Stack.3d stack_step.gen stack_step_ox.gen)
  (action
   (run
    ./main.exe
@@ -91,19 +116,19 @@
    --timeout
    1800
    .
-   %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128
-   stack_ox.gen:scanner-ox/34:Stack.WireEthernetStack:128)))
+   stack_step.gen:step/34:Stack.WireEthernetStack:128
+   stack_step_ox.gen:step-ox/34:Stack.WireEthernetStack:128)))
 
-; The checker finds defects planted in the generated scanner: the header
-; check of fold_ipv4 removed (reads past the frame), the payload check off by
-; one (rejects a frame whose payload ends the window, which the
-; specification accepts), and fold_frames taking the
-; walk without frame checks for strides too short for it, which hands
-; frames_record a frame shorter than its precondition, the protocol loaded
-; ahead for the third frame read from the second, which hands frames_record a
-; protocol its frame does not hold, and the unrolled loop run while only three
-; frames are left, whose loads ahead read past the window. On OxCaml, the same
-; three defects of fold_frames.
+; The checker finds defects planted in the fold: the header check of
+; fold_step removed (reads past the frame), the payload check off by one
+; (rejects a frame whose payload ends the window, which the specification
+; accepts), and fold_step_frames taking the walk without frame checks for
+; strides too short for it, which hands step_frames_record a frame shorter
+; than its precondition, the protocol loaded ahead for the third frame read
+; from the second, which hands step_frames_record a protocol its frame does
+; not hold, and the unrolled loop run while only three frames are left,
+; whose loads ahead read past the window. On OxCaml, the same three defects
+; of fold_step_frames.
 
 (rule
  (enabled_if
@@ -113,8 +138,8 @@
    no_header_check.mutant
    (run
     sed
-    "s/if (stop : int) < 34 then invalid ()/if false then invalid ()/"
-    %{dep:../examples/generated/stack.ml}))))
+    "s/if ((stop : int) < 34) then Step.invalid init/if false then Step.invalid init/"
+    %{dep:stack_step.gen}))))
 
 (rule
  (enabled_if
@@ -124,8 +149,8 @@
    payload_off_by_one.mutant
    (run
     sed
-    "s/if (f9_ipv4_total_length : int) > stop - 14 then invalid ()/if (f9_ipv4_total_length : int) >= stop - 14 then invalid ()/"
-    %{dep:../examples/generated/stack.ml}))))
+    "s/if ((f9_ipv4_total_length : int64) > (Int64.sub (Int64.of_int stop) 14L)) then Step.invalid init/if ((f9_ipv4_total_length : int64) >= (Int64.sub (Int64.of_int stop) 14L)) then Step.invalid init/"
+    %{dep:stack_step.gen}))))
 
 (rule
  (enabled_if
@@ -136,7 +161,7 @@
    (run
     sed
     "s/if stride < 34 then/if stride < 30 then/"
-    %{dep:../examples/generated/stack.ml}))))
+    %{dep:stack_step.gen}))))
 
 (rule
  (enabled_if
@@ -146,8 +171,8 @@
    ahead_wrong_frame.mutant
    (run
     sed
-    "s/Wire_runtime.Unchecked.u8 buf (base_2 + 23)/Wire_runtime.Unchecked.u8 buf (base_1 + 23)/"
-    %{dep:../examples/generated/stack.ml}))))
+    "s/let f14_ipv4_protocol_2 = (Int64.of_int (Wire_runtime.Unchecked.u8 buf (base_2 + 23)))/let f14_ipv4_protocol_2 = (Int64.of_int (Wire_runtime.Unchecked.u8 buf (base_1 + 23)))/"
+    %{dep:stack_step.gen}))))
 
 (rule
  (enabled_if
@@ -158,7 +183,7 @@
    (run
     sed
     "s/let last_4 = off + len - (4 \\* stride) in/let last_4 = off + len - (3 * stride) in/"
-    %{dep:../examples/generated/stack.ml}))))
+    %{dep:stack_step.gen}))))
 
 (rule
  (enabled_if
@@ -169,7 +194,7 @@
    (run
     sed
     "s/if stride < 34 then (/if stride < 30 then (/"
-    %{dep:stack_ox.gen}))))
+    %{dep:stack_step_ox.gen}))))
 
 (rule
  (enabled_if
@@ -179,8 +204,8 @@
    ahead_wrong_frame_ox.mutant
    (run
     sed
-    "s/(L.u16le_at buf (U.add base_2 #22L))/(L.u16le_at buf (U.add base_1 #22L))/"
-    %{dep:stack_ox.gen}))))
+    "s/let f14_ipv4_protocol_2 = (U.shift_right_logical (U.of_int (L.u16le_at buf (U.add base_2 #22L)))/let f14_ipv4_protocol_2 = (U.shift_right_logical (U.of_int (L.u16le_at buf (U.add base_1 #22L)))/"
+    %{dep:stack_step_ox.gen}))))
 
 (rule
  (enabled_if
@@ -191,7 +216,7 @@
    (run
     sed
     "s/let last_4 = U.of_int (off + len - (4 \\* stride)) in/let last_4 = U.of_int (off + len - (3 * stride)) in/"
-    %{dep:stack_ox.gen}))))
+    %{dep:stack_step_ox.gen}))))
 
 (rule
  (alias runtest)
@@ -215,80 +240,85 @@
     ./main.exe
     --bounds-only
     --only
-    fold
+    fold_step
     --expect-refuted
     "reads 8 bytes inside the buffer"
     .
-    no_header_check.mutant:scanner/34:Stack.WireEthernetStack:64)
+    no_header_check.mutant:step/34:Stack.WireEthernetStack:64)
    (run
     ./main.exe
     --only
-    fold
+    fold_step
     --expect-refuted
     "answers as"
     .
-    payload_off_by_one.mutant:scanner/34:Stack.WireEthernetStack:64)
+    payload_off_by_one.mutant:step/34:Stack.WireEthernetStack:64)
    (run
     ./main.exe
     --bounds-only
     --only
-    fold_frames
+    fold_step_frames
     --expect-refuted
     "frames_record meets its precondition"
     .
-    stride_threshold.mutant:scanner/34:Stack.WireEthernetStack:64)
+    stride_threshold.mutant:step/34:Stack.WireEthernetStack:64)
    (run
     ./main.exe
     --bounds-only
     --only
-    fold_frames
+    fold_step_frames
     --expect-refuted
     "frames_record meets its precondition"
     .
-    ahead_wrong_frame.mutant:scanner/34:Stack.WireEthernetStack:64)
+    ahead_wrong_frame.mutant:step/34:Stack.WireEthernetStack:64)
    (run
     ./main.exe
     --bounds-only
     --only
-    fold_frames
+    fold_step_frames
     --expect-refuted
     "inside the window"
     .
-    ahead_past_window.mutant:scanner/34:Stack.WireEthernetStack:64)
+    ahead_past_window.mutant:step/34:Stack.WireEthernetStack:64)
    (run
     ./main.exe
     --bounds-only
     --only
-    fold_frames
+    fold_step_frames
     --expect-refuted
     "frames_record meets its precondition"
     .
-    stride_threshold_ox.mutant:scanner-ox/34:Stack.WireEthernetStack:64)
+    stride_threshold_ox.mutant:step-ox/34:Stack.WireEthernetStack:64)
    (run
     ./main.exe
     --bounds-only
     --only
-    fold_frames
+    fold_step_frames
     --expect-refuted
     "frames_record meets its precondition"
     .
-    ahead_wrong_frame_ox.mutant:scanner-ox/34:Stack.WireEthernetStack:64)
+    ahead_wrong_frame_ox.mutant:step-ox/34:Stack.WireEthernetStack:64)
    (run
     ./main.exe
     --bounds-only
     --only
-    fold_frames
+    fold_step_frames
     --expect-refuted
     "inside the window"
     .
-    ahead_past_window_ox.mutant:scanner-ox/34:Stack.WireEthernetStack:64))))
+    ahead_past_window_ox.mutant:step-ox/34:Stack.WireEthernetStack:64))))
 
 ; Checks that no input needs: each check of a generated function is taken
-; out in turn, and the code without it must read in bounds (or the check is
-; needed for safety) and answer as the code with it, which the equivalence
-; lane proves equal to the specification (or the check is needed for
-; semantics). The first check of fold, off < 0, and the IPv4 header check
-; are needed for safety.
+; out in turn. The code without it must read in bounds and raise nothing, or
+; the check is needed for safety, and must answer as the code with it on
+; every input, or the check is needed for semantics; otherwise it is
+; redundant. fold_step and step_frames_record answer accept or reject,
+; which the equivalence lane proves equal to the specification;
+; fold_step_frames with any arguments answers whether it raises
+; Invalid_argument, for its argument checks (its other checks are those of
+; fold_step and step_frames_record). Every check of the three on OCaml is
+; classified, and the run fails if one is redundant or undecided, or if it
+; finds none.
 
 (rule
  (alias runtest)
@@ -296,28 +326,46 @@
   (and
    (= %{env:BUILD_EVERPARSE=} "1")
    %{bin-available:z3}))
- (deps %{project_root}/examples/generated/stack.ml Stack.3d)
+ (deps Stack.3d stack_step.gen)
+ (action
+  (run
+   ./main.exe
+   --classify-checks
+   --expect
+   safety,semantics
+   .
+   stack_step.gen:step/34:Stack.WireEthernetStack:128)))
+
+; The same on OxCaml for fold_step and step_frames_record, which take
+; minutes more: BUILD_EVERPARSE=1 dune build @verify/classify. The argument
+; checks of the OxCaml frame loop are not classified: walking its unrolled
+; loop without stride <= 0 takes over an hour; they are the checks of the
+; OCaml frame loop, written by the same code.
+
+(rule
+ (alias classify)
+ (enabled_if
+  (and
+   (= %{env:BUILD_EVERPARSE=} "1")
+   %{bin-available:z3}))
+ (deps Stack.3d stack_step_ox.gen)
  (action
   (progn
    (run
     ./main.exe
     --classify-checks
     --only
-    fold
-    --check
-    "off < 0"
+    fold_step
     --expect
-    safety
+    safety,semantics
     .
-    %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128)
+    stack_step_ox.gen:step-ox/34:Stack.WireEthernetStack:128)
    (run
     ./main.exe
     --classify-checks
     --only
-    fold
-    --check
-    "(stop : int) < 34"
+    step_frames_record
     --expect
-    safety
+    safety,semantics
     .
-    %{project_root}/examples/generated/stack.ml:scanner/34:Stack.WireEthernetStack:128))))
+    stack_step_ox.gen:step-ox/34:Stack.WireEthernetStack:128))))

@@ -363,15 +363,17 @@ let show_stack (p : Packet_stack.t) =
 let stack_answer show f =
   match f () with
   | v -> "ok " ^ show v
-  | exception Parse_error e -> Fmt.str "error %a" pp_parse_error e
+  | exception exn when Wire.Private.Types.is_parse_error exn ->
+      let e = Wire.Private.Types.parse_error_of exn in
+      Fmt.str "error %a" Error.pp e
 
 let stack_slot = Param.input "stack_slot" uint8
 
-let stack_frame size name =
+let stack_frame span name =
   Codec.v name Fun.id
     Codec.
       [
-        Field.v "packet" (nested_at_most ~size (codec Packet_stack.codec))
+        Field.v "packet" (nested_at_most ~size:span (codec Packet_stack.codec))
         $ Fun.id;
       ]
 
@@ -385,8 +387,8 @@ let stack_answers =
   let unit () = "" in
   fun input ->
     let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
-    let decode c b off () = Codec.decode_exn c b off in
-    let validate c b off () = Codec.validate_exn c b off in
+    let decode c b off () = Test_helpers.ok (Codec.decode c b off) in
+    let validate c b off () = Test_helpers.ok (Codec.validate c b off) in
     [
       stack_answer show_stack (decode Packet_stack.codec input 0);
       stack_answer show_stack (decode Packet_stack.codec shifted 2);
@@ -395,9 +397,9 @@ let stack_answers =
       stack_answer show_stack (decode frame input 0);
       stack_answer unit (validate frame input 0);
       stack_answer show_stack (fun () ->
-          Codec.decode_exn ~env:(env ()) param_frame input 0);
+          Test_helpers.ok (Codec.decode ~env:(env ()) param_frame input 0));
       stack_answer unit (fun () ->
-          Codec.validate_exn ~env:(env ()) param_frame input 0);
+          Test_helpers.ok (Codec.validate ~env:(env ()) param_frame input 0));
       stack_answer show_ipv4 (decode Packet_stack.ipv4 input 14);
       stack_answer unit (validate Packet_stack.ipv4 input 14);
     ]
@@ -479,17 +481,17 @@ let test_stack_views () =
   and ip_ttl = V.field Ip.codec P.ipv4_ttl
   and ip_proto = V.field Ip.codec P.ipv4_protocol
   and ip_src = V.field Ip.codec P.ipv4_src
-  and ip_options = V.field Ip.codec P.ipv4_options
+  and ip_options = V.checked_field Ip.codec P.ipv4_options
   and tcp_sp = V.field Tcp.codec P.tcp_src_port
   and tcp_dp = V.field Tcp.codec P.tcp_dst_port
   and tcp_seq = V.field Tcp.codec P.tcp_seq
   and tcp_ack = V.field Tcp.codec P.tcp_ack
   and tcp_off = V.field Tcp.codec P.tcp_data_offset
   and tcp_flags = V.field Tcp.codec P.tcp_flags
-  and tcp_options = V.field Tcp.codec P.tcp_options
+  and tcp_options = V.checked_field Tcp.codec P.tcp_options
   and udp_sp = V.field Udp.codec P.udp_src_port
   and udp_len = V.field Udp.codec P.udp_length_f
-  and udp_payload = V.field Udp.codec P.udp_payload in
+  and udp_payload = V.checked_field Udp.codec P.udp_payload in
   let view input off ~framed =
     let (Buf.Any b) = Buf.v input in
     let len = Buf.length b in
@@ -500,13 +502,13 @@ let test_stack_views () =
         (UInt16.to_int (V.read tcp_dp b t))
         u32 (V.read tcp_seq b t) u32 (V.read tcp_ack b t) (V.read tcp_off b t)
         (V.read tcp_flags b t)
-        (hex_slice (V.read tcp_options b t))
+        (hex_slice (Result.get_ok (V.read tcp_options b t)))
     in
     let udp_of u =
       Fmt.str "udp %d %d %s"
         (UInt16.to_int (V.read udp_sp b u))
         (UInt16.to_int (V.read udp_len b u))
-        (hex_slice (V.read udp_payload b u))
+        (hex_slice (Result.get_ok (V.read udp_payload b u)))
     in
     let ipv4_of r =
       Fmt.str "ipv4 %d %d %d %a %s [%s] [%s]"
@@ -514,7 +516,7 @@ let test_stack_views () =
         (UInt8.to_int (V.read ip_ttl b r))
         (UInt8.to_int (V.read ip_proto b r))
         u32 (V.read ip_src b r)
-        (hex_slice (V.read ip_options b r))
+        (hex_slice (Result.get_ok (V.read ip_options b r)))
         (layer (V.enter tcp b len r) tcp_of)
         (layer (V.enter udp b len r) udp_of)
     in
@@ -584,7 +586,7 @@ let test_walk_trailer () =
   let general = Private.Testing.general c in
   let show = function
     | Ok (l, s, t) -> Fmt.str "ok %d %S %S" (UInt8.to_int l) s t
-    | Error e -> Fmt.str "error %a" pp_parse_error e
+    | Error e -> Fmt.str "error %a" Error.pp e
   in
   List.iter
     (fun s ->
@@ -642,7 +644,7 @@ let test_walk_shared_gates () =
           | Some (f, a, b) ->
               Fmt.str "%d %s %s" (UInt8.to_int f) (opt a) (opt b))
           (opt y)
-    | Error e -> Fmt.str "error %a" pp_parse_error e
+    | Error e -> Fmt.str "error %a" Error.pp e
   in
   List.iter
     (fun k ->
@@ -667,8 +669,8 @@ let test_walk_shared_gates () =
 let test_region_bounds_nested () =
   let trailer = Bytes.concat Bytes.empty stack_seeds in
   let answer frame buf =
-    let decode () = Codec.decode_exn frame buf 0 in
-    let validate () = Codec.validate_exn frame buf 0 in
+    let decode () = Test_helpers.ok (Codec.decode frame buf 0) in
+    let validate () = Test_helpers.ok (Codec.validate frame buf 0) in
     [ stack_answer show_stack decode; stack_answer (fun () -> "") validate ]
     |> String.concat " / "
   in
@@ -686,8 +688,12 @@ let test_region_bounds_nested () =
   let short = Bytes.copy (List.nth stack_seeds 4) in
   Bytes.set_uint16_be short 16 30;
   let expected =
-    Fmt.str "error %a" pp_parse_error
-      (eof ~at:34 ~field:[ "packet"; "ipv4"; "tcp" ] ~expected:20 ~got:10 ())
+    Fmt.str "error %a" Error.pp
+      {
+        Error.at = 34;
+        field = [ "packet"; "ipv4"; "tcp" ];
+        kind = Unexpected_eof { expected = 20; got = 10 };
+      }
   in
   Alcotest.(check string)
     "short TCP region"
@@ -790,9 +796,34 @@ let test_enter_past_regions () =
       (Fmt.str "input %d" i) (decoded input) (viewed input)
   done
 
+(* A field after a span is read with a check, which a field of a view does
+   not make: [View.field] refuses it, rather than raise on bytes written after
+   the check that move it out of the buffer. *)
+let test_view_field_after_a_span () =
+  let len = Field.v "len" uint8 in
+  let tail = Codec.(Field.v "tail" uint8 $ fun (_, _, t) -> t) in
+  let c =
+    Codec.v "AfterSpan"
+      (fun len body tail -> (len, body, tail))
+      Codec.
+        [
+          (len $ fun (l, _, _) -> l);
+          ( Field.v "body" (byte_array ~size:(Field.ref len)) $ fun (_, b, _) ->
+            b );
+          tail;
+        ]
+  in
+  let module V = Codec.View in
+  let module C = (val V.codec c) in
+  match V.field C.codec tail with
+  | _ -> Alcotest.fail "View.field takes a field read with a check"
+  | exception Invalid_argument _ -> ()
+
 let suite =
   ( "codec_stack",
     [
+      Alcotest.test_case "view: a field after a span is read with a check"
+        `Quick test_view_field_after_a_span;
       Alcotest.test_case "walk: gates that reuse an earlier gate" `Quick
         test_walk_shared_gates;
       Alcotest.test_case "walk: a fixed field after a span" `Quick

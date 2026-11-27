@@ -1,8 +1,9 @@
 //! Reads the fields of every Ethernet/IPv4/TCP-or-UDP header in a corpus of
 //! packets: through the Rust that `Wire_rust` generates, from the fixed
 //! header codecs of `bench/rust/headers.ml` with the layers linked here, and
-//! from `Packet_stack.codec` as one scanner, with every output or only the
-//! ones the checksum reads; through `etherparse`, through `smoltcp::wire`
+//! from `Packet_stack.codec` as one module whose fold hands every output, or
+//! only the ones the checksum reads, to the checksum visitor of
+//! `stack_step.rs` or `selected_step.rs`; through `etherparse`, through `smoltcp::wire`
 //! and through `pnet_packet`. Each does the work `etherparse::SlicedPacket` does, as
 //! `bench/rust/bench.ml` describes: the IPv4 payload bounded by the total
 //! length, no transport header read from a fragment, the TCP header length or
@@ -46,6 +47,8 @@ mod stack;
 mod stack_selected;
 #[path = "gen/flow.rs"]
 mod flow_scan;
+mod selected_step;
+mod stack_step;
 
 // This binary runs `flow::main` only.
 #[allow(dead_code)]
@@ -74,16 +77,16 @@ fn udp_fields(acc: u64, sp: u16, dp: u16, len: u16) -> u64 {
 fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
     let mut acc = 0u64;
     for p in corpus.chunks_exact(slot) {
-        let Ok(e) = eth::Valid::new(p) else { continue };
+        let Some(e) = eth::check(p, 0).get() else { continue };
         let ty = e.ether_type();
         if ty != IPV4 {
             acc = acc.wrapping_add(ty as u64);
             continue;
         }
-        let Ok(ip) = ipv4::Valid::at(p, eth::SIZE) else { continue };
+        let Some(ip) = ipv4::check(p, eth::MIN_SIZE).get() else { continue };
         let hlen = ip.ihl() as usize * 4;
         let len = ip.total_length() as usize;
-        if len < hlen || len > p.len() - eth::SIZE {
+        if len < hlen || len > p.len() - eth::MIN_SIZE {
             continue;
         }
         let a = ip_fields(acc.wrapping_add(ty as u64), ip.src_addr(), ip.dst_addr(), ip.ttl(), ip.protocol(), ip.total_length());
@@ -91,18 +94,18 @@ fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
             acc = a;
             continue;
         }
-        let off = eth::SIZE + hlen;
+        let off = eth::MIN_SIZE + hlen;
         let payload = len - hlen;
         match ip.protocol() {
             6 => {
-                let Ok(t) = tcp::Valid::at(p, off) else { continue };
+                let Some(t) = tcp::check(p, off).get() else { continue };
                 if t.data_offset() as usize * 4 > payload {
                     continue;
                 }
                 acc = tcp_fields(a, t.src_port(), t.dst_port(), t.seq(), t.ack(), t.window(), t.flags(), t.data_offset() as u8);
             }
             17 => {
-                let Ok(u) = udp::Valid::at(p, off) else { continue };
+                let Some(u) = udp::check(p, off).get() else { continue };
                 if u.length() as usize > payload {
                     continue;
                 }
@@ -114,34 +117,20 @@ fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
     acc
 }
 
-// The scanner of `Packet_stack.codec` makes every check the linked headers
-// make, so the harness only folds the fields of an accepted frame.
-macro_rules! stack_fold {
-    ($name:ident, $scanner:ident) => {
-        fn $name(corpus: &[u8], slot: usize) -> u64 {
-            let mut acc = 0u64;
-            for p in corpus.chunks_exact(slot) {
-                let Some(f) = $scanner::scan(p) else { continue };
-                acc = acc.wrapping_add(f.ether_type as u64);
-                if !f.ipv4_present {
-                    continue;
-                }
-                let a = ip_fields(acc, f.ipv4_src as u32, f.ipv4_dst as u32, f.ipv4_ttl as u8, f.ipv4_protocol as u8, f.ipv4_total_length as u16);
-                acc = if f.ipv4_tcp_present {
-                    tcp_fields(a, f.ipv4_tcp_src_port as u16, f.ipv4_tcp_dst_port as u16, f.ipv4_tcp_seq as u32, f.ipv4_tcp_ack as u32, f.ipv4_tcp_window as u16, f.ipv4_tcp_flags as u16, f.ipv4_tcp_data_offset as u8)
-                } else if f.ipv4_udp_present {
-                    udp_fields(a, f.ipv4_udp_src_port as u16, f.ipv4_udp_dst_port as u16, f.ipv4_udp_length as u16)
-                } else {
-                    a
-                };
-            }
-            acc
-        }
-    };
+// The fold of `Packet_stack.codec` makes every check the linked headers
+// make, and hands the fields of each accepted frame to the checksum visitor,
+// over the frames of a stride, as the OCaml rows fold them.
+fn wire_rust_stack(corpus: &[u8], slot: usize) -> u64 {
+    let mut v = stack_step::StackStep(0);
+    stack::checksum_frames(&mut v, corpus, 0, corpus.len(), slot);
+    v.0
 }
 
-stack_fold!(wire_rust_stack, stack);
-stack_fold!(wire_rust_selected, stack_selected);
+fn wire_rust_selected(corpus: &[u8], slot: usize) -> u64 {
+    let mut v = selected_step::SelectedStep(0);
+    stack_selected::checksum_frames(&mut v, corpus, 0, corpus.len(), slot);
+    v.0
+}
 
 fn etherparse(corpus: &[u8], slot: usize) -> u64 {
     use etherparse::{LinkSlice, NetSlice, SlicedPacket, TransportSlice};

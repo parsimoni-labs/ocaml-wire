@@ -1,4 +1,5 @@
 (library
  (name wire_rust)
  (public_name wire.rust)
+ (private_modules walk rust_module)
  (libraries wire wire.ocaml fmt))

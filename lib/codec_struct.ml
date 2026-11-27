@@ -88,10 +88,10 @@ let acc_prev_end (acc : validator_acc) :
    [validate] at the right offset. *)
 (* Build the [full] / [check_only] per-field validator functions and
    return the action var count. Takes only the non-existential fields
-   of [compiled_field] ([populate], [validator_off]) so the caller can
+   of [compiled_field] ([populate], [field_access]) so the caller can
    open the [Types.Field] existential, call [compile_field], and pass
    the relevant pieces here without leaking the field's ['a]. *)
-let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
+let build_field_checks acc ~populate ~access ~name ~action ~constraint_ =
   let action_vanames =
     match action with
     | None -> []
@@ -113,8 +113,7 @@ let build_field_checks acc ~populate ~validator_off ~name ~action ~constraint_ =
   let check = Option.map (compile_bool_arr cc) constraint_ in
   let act = compile_action cc action in
   let check_only, full =
-    field_validators ~field_idx:acc.n_fields ~validator_off ~populate ~check
-      ~act
+    field_validators ~field_idx:acc.n_fields ~access ~populate ~check ~act
   in
   (full, check_only, List.length action_vanames)
 
@@ -180,7 +179,7 @@ and apply_field_to_validator_acc acc (Types.Field f) =
       let full, check_only, n_extra_vars =
         build_field_checks acc
           ~populate:(guarded_populate cf f.field_typ)
-          ~validator_off:cf.validator_off ~name ~action:f.action
+          ~access:cf.field_access ~name ~action:f.action
           ~constraint_:f.constraint_
       in
       let new_field_readers =

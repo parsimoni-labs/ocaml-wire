@@ -26,31 +26,3 @@ val length : 'b t -> 'b length
 
 val pp : Format.formatter -> 'b t -> unit
 (** [pp] prints a buffer's length, not its bytes. *)
-
-(** The same for a bigarray of bytes. *)
-module Bigstring : sig
-  type bigstring =
-    (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
-  (** A bigarray of bytes. *)
-
-  type 'b t = private bigstring
-  (** The type of a bigarray named ['b]. *)
-
-  type 'b length = private int
-  (** The length of the bigarray named ['b], read once. *)
-
-  (** A bigarray under a fresh name. *)
-  type any = Any : 'b t -> any [@@unboxed]
-
-  val v : bigstring -> any
-  (** [v buf] is [buf] under a name of its own. *)
-
-  val local : bigstring -> any
-  (** [local] is {!v}: on OxCaml it names a bigarray held [local]. *)
-
-  val length : 'b t -> 'b length
-  (** [length b] is the length of [b]. *)
-
-  val pp : Format.formatter -> 'b t -> unit
-  (** [pp] prints a bigarray's length, not its bytes. *)
-end

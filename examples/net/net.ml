@@ -41,7 +41,7 @@ let ethernet_codec =
       ]
 
 let ethernet_struct = Everparse.Raw.struct_of_codec ethernet_codec
-let ethernet_size = Codec.wire_size ethernet_codec
+let ethernet_size = Codec.min_size ethernet_codec
 
 (* -- IPv4 header: 20 bytes fixed (no options) + payload -- *)
 
@@ -173,7 +173,7 @@ let ipv4_codec =
       ]
 
 let ipv4_struct = Everparse.Raw.struct_of_codec ipv4_codec
-let ipv4_size = Codec.wire_size ipv4_codec
+let ipv4_size = Codec.min_size ipv4_codec
 
 (* -- TCP header: 20 bytes fixed (no options) -- *)
 
@@ -256,7 +256,7 @@ let tcp_codec =
       ]
 
 let tcp_struct = Everparse.Raw.struct_of_codec tcp_codec
-let tcp_size = Codec.wire_size tcp_codec
+let tcp_size = Codec.min_size tcp_codec
 
 (* -- UDP header: 8 bytes -- *)
 
@@ -290,7 +290,7 @@ let udp_codec =
       ]
 
 let udp_struct = Everparse.Raw.struct_of_codec udp_codec
-let udp_size = Codec.wire_size udp_codec
+let udp_size = Codec.min_size udp_codec
 
 (* -- Utilities -- *)
 
@@ -396,11 +396,11 @@ type 'a schema = {
   codec : 'a Codec.t;
   struct_ : Wire.Everparse.Raw.struct_;
   size : int;
-  decode : bytes -> int -> 'a;
+  decode : bytes -> int -> ('a, Wire.Error.t) result;
 }
 
 let schema name codec struct_ size =
-  { name; codec; struct_; size; decode = Codec.decode_exn codec }
+  { name; codec; struct_; size; decode = Codec.decode codec }
 
 type any_schema = Any : 'a schema -> any_schema
 

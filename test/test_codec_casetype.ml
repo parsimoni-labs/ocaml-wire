@@ -76,7 +76,7 @@ let test_casetype_no_match_invalid_tag () =
   in
   let c = Codec.v "ClosedCt" Fun.id Codec.[ Field.v "d" typ $ Fun.id ] in
   match Codec.decode c (Bytes.of_string "\x63\x00") 0 with
-  | Error { kind = Invalid_tag n; _ } ->
+  | Error { Error.kind = Invalid_tag n; _ } ->
       Alcotest.(check int) "unmatched tag" 99 n
   | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
   | Error _ -> Alcotest.fail "wrong error for an unmatched casetype tag"
@@ -99,7 +99,7 @@ let test_casetype_no_match_names_field () =
   in
   let c = Codec.v "Tagged" Fun.id Codec.[ Field.v "body" typ $ Fun.id ] in
   match Codec.decode c (Bytes.of_string "\x63\x00\x00") 0 with
-  | Error { kind = Invalid_tag n; field; at } ->
+  | Error { Error.kind = Invalid_tag n; field; at } ->
       Alcotest.(check int) "unmatched tag" 99 n;
       Alcotest.(check int) "at the casetype field" 0 at;
       Alcotest.(check (list string)) "names the field" [ "body" ] field
@@ -127,7 +127,7 @@ let tlv_codec =
 
 let test_casetype_default_recovers_tag () =
   let v = Unknown (UInt8.v 0x42, "ab") in
-  let buf = Bytes.create (Codec.size_of_value tlv_codec v) in
+  let buf = Bytes.create (Codec.encoded_size tlv_codec v) in
   Codec.encode tlv_codec v buf 0;
   Alcotest.(check int)
     "encode writes the captured tag" 0x42 (Bytes.get_uint8 buf 0);
@@ -136,7 +136,7 @@ let test_casetype_default_recovers_tag () =
       Alcotest.(check int) "decode recovers the tag" 0x42 (UInt8.to_int t);
       Alcotest.(check string) "decode body" "ab" b
   | Ok _ -> Alcotest.fail "expected Unknown"
-  | Error e -> Alcotest.failf "decode: %a" pp_parse_error e
+  | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
 let test_casetype_field_roundtrip () =
   let buf = Bytes.create 11 in
@@ -146,12 +146,12 @@ let test_casetype_field_roundtrip () =
   Alcotest.(check int64) "ts roundtrip" original.ts decoded.ts;
   Alcotest.(check bool) "data roundtrip" true (original.data = decoded.data)
 
-(* [Codec.size_of_value] counts a casetype field's tag plus its matched-case
+(* [Codec.encoded_size] counts a casetype field's tag plus its matched-case
    body, so a buffer sized from it holds the whole encoding. *)
 let test_casetype_size_of_value () =
   let original = { ts = 123L; data = `Login (UInt16.v 0xabcd) } in
   (* ts (8) + tag (1) + Login body uint16be (2) = 11 *)
-  let n = Codec.size_of_value casetype_field_codec original in
+  let n = Codec.encoded_size casetype_field_codec original in
   Alcotest.(check int) "size_of_value" 11 n;
   let buf = Bytes.create n in
   Codec.encode casetype_field_codec original buf 0;
@@ -301,7 +301,7 @@ let zt_codec =
 
 let test_repeat_casetype_zeroterm_at_most () =
   let v = [ Str "hi"; Num (UInt8.v 7); Str "" ] in
-  let buf = Bytes.create (Codec.size_of_value zt_codec v) in
+  let buf = Bytes.create (Codec.encoded_size zt_codec v) in
   Codec.encode zt_codec v buf 0;
   Alcotest.(check bool)
     "roundtrip" true
@@ -341,7 +341,7 @@ let bf_codec =
 
 let test_repeat_casetype_bits_case () =
   let v = [ Bf 5; Raw (UInt8.v 9); Bf 0 ] in
-  let buf = Bytes.create (Codec.size_of_value bf_codec v) in
+  let buf = Bytes.create (Codec.encoded_size bf_codec v) in
   Codec.encode bf_codec v buf 0;
   Alcotest.(check bool)
     "roundtrip" true

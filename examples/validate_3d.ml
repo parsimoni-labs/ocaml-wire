@@ -128,34 +128,39 @@ let emit ~outdir = function
       Wire.Everparse.write ~mode:`Standalone ~outdir ~name ts;
       String.capitalize_ascii name ^ ".3d"
 
-let validate_one case =
-  let outdir = Filename.temp_dir "wire_validate_3d" "" in
-  let cleanup () =
-    Array.iter
-      (fun f ->
-        try Sys.remove (Filename.concat outdir f) with Sys_error _ -> ())
-      (try Sys.readdir outdir with Sys_error _ -> [||]);
-    try Unix.rmdir outdir with Unix.Unix_error _ -> ()
-  in
-  Fun.protect ~finally:cleanup @@ fun () ->
-  let file = emit ~outdir case in
-  match Wire_3d.parse_3d ~outdir file with
+(* A {!Wire_3d.pool} job: 3d.exe parses the case's [.3d], written in [dir], or
+   the job fails with EverParse's diagnostic and the [.3d]. *)
+let validate case dir =
+  let file = emit ~outdir:dir case in
+  match Wire_3d.parse_3d ~outdir:dir file with
   | Ok () -> ()
   | Error err ->
-      let path = Filename.concat outdir file in
       let content =
-        try In_channel.with_open_text path In_channel.input_all
+        try
+          In_channel.with_open_text (Filename.concat dir file)
+            In_channel.input_all
         with Sys_error _ -> "(could not read .3d)"
       in
-      Alcotest.failf "@[<v>EverParse rejected %s:@,%s@,---@,%s@]"
-        (case_name case) err content
+      Fmt.failwith "@[<v>%s@,---@,%s@]" err content
 
-let test_case case =
-  Alcotest.test_case (case_name case) `Quick (fun () -> validate_one case)
+let test_schemas () =
+  match
+    Wire_3d.pool (List.map (fun case -> (case_name case, validate case)) cases)
+  with
+  | Ok _ -> ()
+  | Error failed -> Alcotest.failf "EverParse rejected:\n%s" failed
 
 let () =
-  if not (Wire_3d.has_3d_exe ()) then begin
+  if Option.is_none (Wire_3d.locate_3d_exe ()) then begin
     Fmt.pr "everparse-3d.exe (or 3d.exe) not found, skipping validation\n";
     exit 0
   end;
-  Alcotest.run "validate_3d" [ ("schemas", List.map test_case cases) ]
+  Alcotest.run "validate_3d"
+    [
+      ( "schemas",
+        [
+          Alcotest.test_case
+            (Fmt.str "%d schemas" (List.length cases))
+            `Quick test_schemas;
+        ] );
+    ]

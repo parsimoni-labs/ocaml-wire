@@ -1,5 +1,5 @@
 (** Records of at most 7 bytes as the [int] of their bytes, big-endian: the
-    writes of {!Codec.writer} and the reads of {!Codec.word_reader}. Internal to
+    writes of {!Codec.writer} and the reads of {!Codec.Word}. Internal to
     {!Codec}. *)
 
 (** {1 Writes} *)
@@ -60,27 +60,45 @@ val set_writer :
 
 (** {1 Reads} *)
 
-type 'r word = int
-(** The bytes of a record of a ['r] codec, big-endian. *)
+(** The reads of {!Codec.Word}. *)
+module Word : sig
+  type 'r t = int
+  (** The bytes of a record of a ['r] codec, big-endian. *)
 
-type ('a, 'r) part
-(** A field of a record word. *)
+  type ('a, 'r) field
+  (** A field of a record's word. *)
 
-val part :
-  ('a, int) Type.eq -> pos:int -> width:int -> signed:bool -> ('a, 'r) part
-(** [part eq ~pos ~width ~signed] is the field of [width] bits above bit [pos]
-    of a word, sign-extended when [signed]. *)
+  val field :
+    ('a, int) Type.eq -> pos:int -> width:int -> signed:bool -> ('a, 'r) field
+  (** [field eq ~pos ~width ~signed] is the field of [width] bits above bit
+      [pos] of a word, sign-extended when [signed]. *)
 
-type 'r reader
-(** A reader of the records of a ['r] codec. *)
+  type 'r reader
+  (** A reader of the records of a ['r] codec. *)
 
-val reader : int -> 'r reader
-(** [reader n] reads records of [n] bytes. *)
+  val reader : int -> fields:(string * int * int) list -> 'r reader
+  (** [reader n ~fields] reads records of [n] bytes whose fields, in order, are
+      [fields]: each one's name, offset in the record and width. *)
 
-val read_word : 'r reader -> bytes -> int -> 'r word
-(** [read_word r buf off] is the record at [off], in one 8-byte load where [buf]
-    has 8 bytes from [off] on. Raises [Invalid_argument] when [buf] does not
-    hold the record at [off]. *)
+  type 'r check = int
+  (** The record's word, or [-1] for a record that does not lie in the buffer.
+  *)
 
-val of_word : ('a, 'r) part -> 'r word -> 'a
-(** [of_word p w] is the field [p] of [w]. *)
+  val check : 'r reader -> bytes -> int -> 'r check
+  (** [check r buf off] is the record at [off], in one 8-byte load where [buf]
+      has 8 bytes from [off] on. Never raises. *)
+
+  val ok : 'r check -> bool
+  (** [ok k] is [true] iff [k] is a record's word. *)
+
+  val get : 'r check -> 'r t
+  (** [get k] is the word of [k]. Raises [Invalid_argument] unless [ok k]. *)
+
+  val error : 'r reader -> bytes -> int -> Types.parse_error
+  (** [error r buf off] is the error {!Codec.get} answers for the first field
+      [buf] cuts. Raises [Invalid_argument] for a negative [off] or a record
+      [check] accepts. *)
+
+  val read : ('a, 'r) field -> 'r t -> 'a
+  (** [read p w] is the field [p] of [w]. *)
+end

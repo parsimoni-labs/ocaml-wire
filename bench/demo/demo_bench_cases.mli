@@ -33,7 +33,7 @@ type 'a read_case =
       dataset : dataset;
       struct_ : Wire.Everparse.struct_;
       codec : 'r Wire.Codec.t;
-      get : bytes -> int -> 'a;
+      get : bytes -> int -> ('a, Wire.Error.t) result;
       set : bytes -> int -> 'a -> unit;
       write_template : bytes;
       write_offset : int;

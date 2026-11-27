@@ -13,6 +13,7 @@
   codec_repr
   codec_elem
   codec_compile
+  codec_access
   codec_intervals
   codec_sets
   codec_view
@@ -21,7 +22,8 @@
   codec_fault
   codec_seal
   codec_struct
-  codec_words)
+  codec_words
+  scan_outputs)
  (flags
   (:standard -open Wire_runtime))
  (libraries bytesrw fmt optint wire.runtime))
