@@ -28,7 +28,9 @@ let equal ~z3 a b =
        64))@.(assert (not (= %a %a)))@.(check-sat)@.(get-value (x y))@."
       Smt.pp a Smt.pp b
   in
-  match Z3.check_all ~z3 ~timeout:60 ~jobs:1 ~keep:false [ [ script ] ] with
+  match
+    Z3.check_all ~z3 ~timeout:60 ~jobs:1 ~keep:false [ [ Z3.Query script ] ]
+  with
   | [ (Z3.Unsat, _, _, _) ] -> Ok ()
   | [ (Z3.Sat values, _, _, _) ] ->
       err "differ at %a"

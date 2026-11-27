@@ -67,10 +67,8 @@
 ; The packet stack's fold, on OCaml and on OxCaml: every read of fold_step,
 ; step_frames_record and fold_step_frames in bounds, the fields
 ; fold_step_frames loads ahead of step_frames_record included, and no input
-; raising. The OxCaml half takes Z3 about two thirds of the time every other
-; rule of verify takes, the reads of its unrolled loop running past the
-; bit-vector query's time limit before linear arithmetic proves them, so it
-; runs on its own: BUILD_EVERPARSE=1 dune build @verify/bounds-ox.
+; raising. The OxCaml half runs on its own, in make verify:
+; BUILD_EVERPARSE=1 dune build @verify/bounds-ox.
 
 (rule
  (alias runtest)

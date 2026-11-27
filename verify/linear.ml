@@ -9,8 +9,8 @@
    integers. Any other term is a leaf,
    an integer in the range of its width. A hypothesis that does not read
    this way is dropped, which only weakens the query. So when the side
-   conditions hold under the path condition and the integer query is
-   unsat, the obligation holds. *)
+   conditions hold under the path condition, or under a part of it, and the
+   integer query is unsat, the obligation holds. *)
 
 open Smt
 
@@ -128,26 +128,48 @@ let rec conjuncts = function
   | App ("and", args, _) -> List.concat_map conjuncts args
   | t -> [ t ]
 
+(* The side conditions [l] holds, each under [premise], after [acc]; [l]
+   then holds none. *)
+let take_sides l premise acc =
+  let sides = List.rev_map (fun s -> (premise, s)) l.sides in
+  l.sides <- [];
+  acc @ sides
+
 (* [query ~defs ~pc ~cond] is the integer script whose unsat answer, with
-   the side conditions (a bit-vector formula to prove under [pc]), proves
-   [pc => cond]; [None] when [cond] does not read as linear arithmetic. *)
+   the side conditions, proves [pc => cond]; [None] when [cond] does not read
+   as linear arithmetic. Each side condition is a bit-vector formula with
+   the premise to prove it under: the conjuncts of [pc] up to the first that
+   reads its term, or all of [pc] for a term only [cond] reads. A part of
+   [pc] is a weaker premise, so the proof still holds; it leaves out the
+   conditions the path takes later, which have Z3 stall on a side condition
+   they do not bear on. *)
 let query ~defs ~pc ~cond =
   let l = v defs in
   match formula l cond with
   | exception Exit -> None
   | goal ->
-      let hyps =
-        List.filter_map
-          (fun c ->
-            let saved = (l.leaves, l.sides) in
+      let of_goal = take_sides l pc [] in
+      let _, of_hyps, hyps =
+        List.fold_left
+          (fun (seen, sides, hyps) c ->
+            let seen = c :: seen in
+            let saved = l.leaves in
             match formula l c with
-            | f -> Some f
+            | f -> (seen, take_sides l (and_ (List.rev seen)) sides, f :: hyps)
             | exception Exit ->
-                l.leaves <- fst saved;
-                l.sides <- snd saved;
-                None)
-          (conjuncts pc)
+                l.leaves <- saved;
+                l.sides <- [];
+                (seen, sides, hyps))
+          ([], [], []) (conjuncts pc)
       in
+      let sides =
+        List.fold_left
+          (fun acc (p, s) ->
+            if List.exists (fun (_, s') -> Smt.equal s s') acc then acc
+            else (p, s) :: acc)
+          [] (of_hyps @ of_goal)
+      in
+      let hyps = List.rev hyps in
       let b = Buffer.create 4096 in
       let ppf = Format.formatter_of_buffer b in
       List.iter
@@ -163,4 +185,4 @@ let query ~defs ~pc ~cond =
       List.iter (fun h -> Fmt.pf ppf "(assert %s)@." h) hyps;
       Fmt.pf ppf "(assert (not %s))@.(check-sat)@." goal;
       Format.pp_print_flush ppf ();
-      Some (Buffer.contents b, and_ l.sides)
+      Some (Buffer.contents b, List.rev sides)

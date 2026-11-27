@@ -129,47 +129,71 @@ let show_values ~bound values =
 
 type job = {
   property : string;
-  scripts : string list; (* encodings of one query; the first answer wins *)
-  names : string list; (* the encodings' names, when there are several *)
+  scripts : Z3.alternative list;
+      (* the ways to answer one query; the first answer wins *)
+  names : string list;
+      (* what the property adds for each alternative that answers, "" for
+         nothing *)
   confirm : string option;
       (* the query on the bytes, when [scripts] abstract the loads *)
   bound : int;
   witness : bool; (* the job shows the goal satisfiable, not unsat *)
-  linear : (string * string) option;
-      (* the query in linear integer arithmetic, and its side conditions on
-         bit-vectors, tried when [scripts] give no answer (see [Linear]) *)
 }
 
+(* A bounds obligation: a query on bit-vectors and, when the obligation
+   reads as linear arithmetic, beside it a proof by the integer query and
+   each of its side conditions under its premise (see [Linear]), each a
+   script of its own. Z3 stalls on positions a multiple of the stride apart
+   in bit-vectors, and on side conditions taken together, but not on one
+   alone. *)
 let bounds_job q ?(witness = false) ?linear ~property ?(extra = []) goal =
   let linear =
     Option.bind linear (fun (pc, cond) ->
         Option.map
           (fun (ints, sides) ->
-            ( ints,
-              script q ~abstract:true
-                (Smt.and_ [ pc; Smt.not_ sides ])
-                ~extra:[] ))
+            Z3.Proof
+              (ints
+              :: List.map
+                   (fun (premise, side) ->
+                     script q ~abstract:true
+                       (Smt.and_ [ premise; Smt.not_ side ])
+                       ~extra:[])
+                   sides))
           (Linear.query ~defs:(Symex.defs q.ctx) ~pc ~cond))
   in
   {
     property;
-    scripts = [ script q ~abstract:true goal ~extra ];
-    names = [];
+    scripts =
+      Z3.Query (script q ~abstract:true goal ~extra) :: Option.to_list linear;
+    names = [ ""; "in linear arithmetic" ];
     confirm = Some (script q goal ~extra);
     bound = q.entry.bound;
     witness;
-    linear;
   }
 
 let spec_job q ~property ~extra goals =
   {
     property;
-    scripts = List.map (fun (e, goal) -> script q ~spec:e goal ~extra) goals;
-    names = List.map (fun ((e : Spec.encoding), _) -> e.name) goals;
+    scripts =
+      List.map (fun (e, goal) -> Z3.Query (script q ~spec:e goal ~extra)) goals;
+    names =
+      (match goals with
+      | [ _ ] -> []
+      | _ -> List.map (fun ((e : Spec.encoding), _) -> "on " ^ e.name) goals);
     confirm = None;
     bound = q.entry.bound;
     witness = false;
-    linear = None;
+  }
+
+(* A job of one query on the bytes. *)
+let query_job q ~property ~extra goal =
+  {
+    property;
+    scripts = [ Z3.Query (script q goal ~extra) ];
+    names = [];
+    confirm = None;
+    bound = q.entry.bound;
+    witness = false;
   }
 
 let verdict j (answer, file, _, _) =
@@ -182,42 +206,44 @@ let verdict j (answer, file, _, _) =
   | Z3.Unknown out ->
       Fmt.kstr (fun s -> Unknown s) "%s (script %s)" (String.trim out) file
 
-(* A query with no answer is tried again in linear arithmetic: proved when
-   the integer query and its side conditions are both unsat. *)
-let retry_linear check verdicts =
-  let retry =
-    List.filter_map
-      (fun (j, (r : result)) ->
-        match (r.verdict, j.linear) with
-        | Unknown _, Some (ints, sides) -> Some (j, ints, sides)
-        | _ -> None)
-      verdicts
-  in
-  let answers =
-    check
-      (List.concat_map (fun (_, ints, sides) -> [ [ ints ]; [ sides ] ]) retry)
-  in
-  let rec pair = function
-    | (j, _, _) :: rest, (a, _, s1, _) :: (b, _, s2, _) :: answers ->
-        (j, (a, b, s1 +. s2)) :: pair (rest, answers)
-    | _ -> []
-  in
-  let linear = pair (retry, answers) in
-  List.map
-    (fun (j, (r : result)) ->
-      match List.assq_opt j linear with
-      | Some (Z3.Unsat, Z3.Unsat, s) ->
-          {
-            property = r.property ^ ", in linear arithmetic";
-            verdict = Proved;
-            seconds = r.seconds +. s;
-          }
-      | _ -> r)
-    verdicts
+(* The property of [j] as the alternative [alt] answers it. *)
+let named j alt =
+  match List.nth_opt j.names alt with
+  | Some n when n <> "" -> Fmt.str "%s, %s" j.property n
+  | _ -> j.property
+
+(* The proofs of [j], each with its index. *)
+let proofs j =
+  List.concat
+    (List.mapi
+       (fun i -> function Z3.Proof _ as a -> [ (i, a) ] | Z3.Query _ -> [])
+       j.scripts)
+
+(* The result of [j] from its first answer, the answer of its query on the
+   bytes when that one refuted it, and the answer of its proofs run alone. *)
+let result j ((answer, _, seconds, alt) as a) ~proved ~confirmed =
+  match (proved, confirmed) with
+  | Some (Z3.Unsat, _, s, k), _ ->
+      {
+        property = named j (fst (List.nth (proofs j) k));
+        verdict = Proved;
+        seconds = seconds +. s;
+      }
+  | _, Some (Z3.Unsat, _, _, _) ->
+      {
+        property = j.property;
+        verdict = Unknown "refuted only where two loads of one byte disagree";
+        seconds;
+      }
+  | _, Some c -> { property = j.property; verdict = verdict j c; seconds }
+  | _ ->
+      let property = if Z3.decisive answer then named j alt else j.property in
+      { property; verdict = verdict j a; seconds }
 
 (* A refutation found with abstract loads is searched again on the bytes,
    which gives coherent bytes to show, or says that it needs two loads of
-   one byte to disagree. *)
+   one byte to disagree: the proofs that refutation stopped then run on
+   their own. *)
 let solve_all ?(stop = fun _ _ -> false) ~z3 ~timeout ~jobs ~keep js =
   let check = Z3.check_all ~z3 ~timeout ~jobs ~keep in
   let js_a = Array.of_list js in
@@ -232,33 +258,28 @@ let solve_all ?(stop = fun _ _ -> false) ~z3 ~timeout ~jobs ~keep js =
     List.filter_map
       (fun (j, a) ->
         match (verdict j a, j.confirm) with
-        | Refuted _, Some s when not j.witness -> Some (j, [ s ])
+        | Refuted _, Some s when not j.witness -> Some (j, [ Z3.Query s ])
         | _ -> None)
       (List.combine js first)
   in
   let confirmed =
     List.combine (List.map fst again) (check (List.map snd again))
   in
-  let verdicts =
-    List.map2
-      (fun j ((answer, _, seconds, alt) as a) ->
-        let verdict =
-          match List.assq_opt j confirmed with
-          | Some (Z3.Unsat, _, _, _) ->
-              Unknown "refuted only where two loads of one byte disagree"
-          | Some c -> verdict j c
-          | None -> verdict j a
-        in
-        let property =
-          match (answer, List.nth_opt j.names alt) with
-          | (Z3.Sat _ | Z3.Unsat), Some name when List.length j.names > 1 ->
-              Fmt.str "%s, on %s" j.property name
-          | _ -> j.property
-        in
-        (j, { property; verdict; seconds }))
-      js first
+  let spurious j =
+    match List.assq_opt j confirmed with
+    | Some (Z3.Unsat, _, _, _) -> true
+    | _ -> false
   in
-  retry_linear check verdicts
+  let retry = List.filter (fun j -> spurious j && proofs j <> []) js in
+  let proved =
+    List.combine retry
+      (check (List.map (fun j -> List.map snd (proofs j)) retry))
+  in
+  List.map2
+    (fun j a ->
+      result j a ~proved:(List.assq_opt j proved)
+        ~confirmed:(List.assq_opt j confirmed))
+    js first
 
 (* {1 Properties} *)
 
@@ -450,20 +471,11 @@ let same_answers ?stop ~answer ~z3 ~timeout ~jobs ctx (entry : entry) id =
       (fun i (pc, o) ->
         let after = answer entry o in
         let goal = Smt.and_ [ pc; Smt.not_ (Smt.eq after before) ] in
-        {
-          property =
-            Fmt.str "path %d of the code without it answers as the code" i;
-          scripts =
-            [
-              script q goal
-                ~extra:[ ("with_check", before); ("without_check", after) ];
-            ];
-          names = [];
-          confirm = None;
-          bound = q.entry.bound;
-          witness = false;
-          linear = None;
-        })
+        query_job q
+          ~property:
+            (Fmt.str "path %d of the code without it answers as the code" i)
+          ~extra:[ ("with_check", before); ("without_check", after) ]
+          goal)
       modified
   in
   solve_all ?stop ~z3 ~timeout ~jobs ~keep:false jobs_
@@ -539,18 +551,8 @@ let same_as ~z3 ~timeout ~jobs ctx (entry : entry) reference =
     (List.mapi
        (fun i (pc, o) ->
          let after = answer_of entry o in
-         {
-           property = Fmt.str "path %d answers as the reference" i;
-           scripts =
-             [
-               script q
-                 (Smt.and_ [ pc; Smt.not_ (Smt.eq after before) ])
-                 ~extra:[ ("reference", before); ("this", after) ];
-             ];
-           names = [];
-           confirm = None;
-           bound = q.entry.bound;
-           witness = false;
-           linear = None;
-         })
+         query_job q
+           ~property:(Fmt.str "path %d answers as the reference" i)
+           ~extra:[ ("reference", before); ("this", after) ]
+           (Smt.and_ [ pc; Smt.not_ (Smt.eq after before) ]))
        mine)
