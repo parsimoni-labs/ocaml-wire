@@ -1,0 +1,4 @@
+(library
+ (name wire_asn1)
+ (public_name wire.asn1)
+ (libraries wire fmt))
