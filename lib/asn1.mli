@@ -241,7 +241,10 @@ val fold :
   f:('acc -> 'a -> 'acc) ->
   'acc
 (** [fold c l b v ~init ~f] folds [f] over the elements of the SEQUENCE OF or
-    SET OF component [l] of the view [v], in encoding order. *)
+    SET OF component [l] of the view [v], in encoding order. An element of bytes
+    written after the check that no longer holds ends the fold. Raises
+    [Invalid_argument] unless [l] is a mandatory component of the SEQUENCE or
+    SET [c] names whose type, under its tags, is a SEQUENCE OF or SET OF. *)
 
 (** {1:projection Projection to everparse-asn1} *)
 

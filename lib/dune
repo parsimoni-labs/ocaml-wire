@@ -23,7 +23,8 @@
   codec_seal
   codec_struct
   codec_words
-  scan_outputs)
+  scan_outputs
+  der)
  (flags
   (:standard -open Wire_runtime))
  (libraries bytesrw fmt optint wire.runtime))

@@ -240,8 +240,58 @@ let reject_der_fields name fields =
           (Option.value ~default:"<anon>" f.field_name))
     fields
 
+(* A DER codec is the codec [Asn1.codec] makes: its one field is the root of
+   an ASN.1 type. *)
+let is_der_struct (s : Types.struct_) =
+  List.exists
+    (fun (Types.Field f) ->
+      match f.field_typ with Types.Der _ -> true | _ -> false)
+    s.fields
+
+(* Whether a type holds a DER codec anywhere but as the whole of a [nested]
+   region, under the wrappers a value passes through. *)
+let rec der_outside_nested : type a. nested:bool -> a Types.typ -> bool =
+ fun ~nested -> function
+  | Types.Codec { codec_struct; _ } ->
+      (not nested) && is_der_struct codec_struct
+  | Types.Single_elem { elem; at_most; _ } ->
+      der_outside_nested ~nested:(not at_most) elem
+  | Types.Map { inner; _ } -> der_outside_nested ~nested inner
+  | Types.Where { inner; _ } -> der_outside_nested ~nested inner
+  | Types.Optional { inner; _ } -> der_outside_nested ~nested:false inner
+  | Types.Optional_or { inner; _ } -> der_outside_nested ~nested:false inner
+  | Types.Apply { typ; _ } -> der_outside_nested ~nested:false typ
+  | Types.Array { elem; _ } -> der_outside_nested ~nested:false elem
+  | Types.Repeat { elem; _ } -> der_outside_nested ~nested:false elem
+  | Types.Casetype { cases; _ } -> cases_der_outside_nested cases
+  | Types.Union { cases; _ } -> cases_der_outside_nested cases
+  | _ -> false
+
+and cases_der_outside_nested : type a k. (a, k) Types.case_branch list -> bool =
+ fun cases ->
+  List.exists
+    (fun (Types.Case_branch { cb_inner; _ }) ->
+      der_outside_nested ~nested:false cb_inner)
+    cases
+
+(* A DER value has a length of its own, which 3D cannot read: a binary record
+   hands it the region [nested ~size] bounds, and the DER validator must
+   consume all of it (docs/asn1.md, Backend selection). *)
+let reject_der_outside_nested name fields =
+  List.iter
+    (fun (Types.Field f) ->
+      if der_outside_nested ~nested:false f.field_typ then
+        Fmt.invalid_arg
+          "Codec.v %s: field %s holds a DER codec outside nested ~size; a DER \
+           value enters a binary record as nested ~size (codec (Asn1.codec \
+           t)), which hands its validator exactly the region it must consume"
+          name
+          (Option.value ~default:"<anon>" f.field_name))
+    fields
+
 let reject_invalid_codec_shape ?where name fields =
   reject_der_fields name fields;
+  reject_der_outside_nested name fields;
   reject_duplicate_field_names name fields;
   reject_greedy_not_last name fields;
   reject_zeroterm_with_sibling name fields;
