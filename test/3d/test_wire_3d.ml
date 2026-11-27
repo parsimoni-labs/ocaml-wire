@@ -1047,8 +1047,9 @@ let test_wrapper_hardening_refuses_unknown_shape () =
   | _ -> Alcotest.fail "expected an unrecognized wrapper shape to be refused"
   | exception Failure _ -> ()
 
-(* End-to-end compile+run. Generates C for a schema, invokes the same
-   cc command [generate_dune] emits, runs the resulting binary. This is
+(* End-to-end compile+run, a pool job. Generates C for a schema in [dir],
+   invokes the same cc command [generate_dune] emits, runs the resulting
+   binary. This is
    the one test that catches every kind of name mismatch between what
    wire.3d emits and what EverParse actually produces: filenames in
    [dune.inc], validator function names in [test.c], setter names in
@@ -1056,36 +1057,37 @@ let test_wrapper_hardening_refuses_unknown_shape () =
    cc/ld fails and the test fails with the actual compiler error.
    Parameterised over the schema so tricky names (underscores, all-
    caps prefixes, mixed case) each exercise the pipeline end-to-end. *)
-let compile_generated ?(run = true) ~name codec =
-  needs_3d_exe ();
-  begin
-    let tmpdir = Filename.temp_dir ("wire_3d_e2e_" ^ name) "" in
-    let schema = Everparse.project ~mode:`Ffi codec in
-    Wire_3d.generate_3d ~outdir:tmpdir [ schema ];
-    Wire_3d.generate_c ~outdir:tmpdir [ schema ];
-    let base = String.capitalize_ascii schema.Everparse.name in
-    let cmd =
-      (* Compile with the exact strict-C11 flags the generated dune emits, so
-         the e2e checks the validators under the same standard a downstream
-         caller would. *)
-      Fmt.str "cd %s && cc %s -o test_bin test.c %s.c %s_Fields.c 2>&1%s" tmpdir
-        Wire_3d.strict_cc_flags base base
-        (if run then " && ./test_bin" else "")
-    in
-    let ic = Unix.open_process_in cmd in
-    let output = In_channel.input_all ic in
-    let status = Unix.close_process_in ic in
-    ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
-    match status with
-    | Unix.WEXITED 0 -> ()
-    | Unix.WEXITED n ->
-        Alcotest.failf "%s: compile/run failed with exit %d:\n%s" name n output
-    | _ ->
-        Alcotest.failf "%s: compile/run terminated abnormally:\n%s" name output
-  end
+let compile_generated ?(run = true) codec dir =
+  let schema = Everparse.project ~mode:`Ffi codec in
+  Wire_3d.generate_3d ~outdir:dir [ schema ];
+  Wire_3d.generate_c ~outdir:dir [ schema ];
+  let base = String.capitalize_ascii schema.Everparse.name in
+  let cmd =
+    (* Compile with the exact strict-C11 flags the generated dune emits, so
+       the e2e checks the validators under the same standard a downstream
+       caller would. *)
+    Fmt.str "cd %s && cc %s -o test_bin test.c %s.c %s_Fields.c 2>&1%s"
+      (Filename.quote dir) Wire_3d.strict_cc_flags base base
+      (if run then " && ./test_bin" else "")
+  in
+  let ic = Unix.open_process_in cmd in
+  let output = In_channel.input_all ic in
+  match Unix.close_process_in ic with
+  | Unix.WEXITED 0 -> ()
+  | Unix.WEXITED n ->
+      Fmt.failwith "compile/run failed with exit %d:\n%s" n output
+  | _ -> Fmt.failwith "compile/run terminated abnormally:\n%s" output
 
-let compile_and_run = compile_generated
-let compile_only = compile_generated ~run:false
+let compile_and_run name codec = (name, compile_generated codec)
+let compile_only name codec = (name, compile_generated ~run:false codec)
+
+(* Each scenario in a {!Wire_3d.pool} job; a failure names every scenario that
+   failed, with its EverParse or compiler diagnostic. *)
+let check_scenarios scenarios =
+  needs_3d_exe ();
+  match Wire_3d.pool scenarios with
+  | Ok _ -> ()
+  | Error failed -> Alcotest.failf "%s" failed
 
 (* Schemas exercising every name-normalization edge case we know about. *)
 let e2e_simple_codec =
@@ -1431,30 +1433,37 @@ let e2e_vname_codec =
   v "VeritySuperblock" (fun s v -> (s, v)) [ f_sig $ fst; f_version $ snd ]
 
 let test_e2e_compile_run () =
-  compile_and_run ~name:"Demo" e2e_simple_codec;
-  compile_and_run ~name:"VeritySuperblock" e2e_vname_codec;
-  compile_and_run ~name:"ZtRep" e2e_repeat_zeroterm_codec;
-  compile_and_run ~name:"RepChunks" e2e_repeat_byte_chunks_codec;
-  compile_and_run ~name:"ArrChunks" e2e_array_byte_chunks_codec;
-  compile_and_run ~name:"Disconnect" e2e_embedded_var_codec;
-  compile_and_run ~name:"OptVarRec" e2e_optional_var_codec;
-  compile_and_run ~name:"DhcpOpts" e2e_repeat_casetype_codec;
-  compile_and_run ~name:"ZtRec" e2e_zeroterm_codec;
-  (* The bounded terminator is a value constraint, so arbitrary random bytes
-     are not all valid. Compiling still exercises the extraction path. *)
-  compile_only ~name:"ZtAtMostRec" e2e_zeroterm_at_most_codec;
-  compile_and_run ~name:"CLCW" e2e_allcaps_codec;
-  compile_and_run ~name:"TMFrame" e2e_tm_codec;
-  compile_and_run ~name:"Ctt" e2e_casetype_codec;
-  compile_and_run ~name:"Sshauth" e2e_ssh_casetype_codec;
-  compile_and_run ~name:"ChannelOpen" e2e_codec_in_casetype;
-  compile_and_run ~name:"Exts" e2e_repeat_var_elem;
-  compile_and_run ~name:"rpmsg_endpoint_info" e2e_snake_codec;
-  compile_and_run ~name:"EP_Header" e2e_mixed_codec
+  check_scenarios
+    [
+      compile_and_run "Demo" e2e_simple_codec;
+      compile_and_run "VeritySuperblock" e2e_vname_codec;
+      compile_and_run "ZtRep" e2e_repeat_zeroterm_codec;
+      compile_and_run "RepChunks" e2e_repeat_byte_chunks_codec;
+      compile_and_run "ArrChunks" e2e_array_byte_chunks_codec;
+      compile_and_run "Disconnect" e2e_embedded_var_codec;
+      compile_and_run "OptVarRec" e2e_optional_var_codec;
+      compile_and_run "DhcpOpts" e2e_repeat_casetype_codec;
+      compile_and_run "ZtRec" e2e_zeroterm_codec;
+      (* The bounded terminator is a value constraint, so arbitrary random
+         bytes are not all valid. Compiling still exercises the extraction
+         path. *)
+      compile_only "ZtAtMostRec" e2e_zeroterm_at_most_codec;
+      compile_and_run "CLCW" e2e_allcaps_codec;
+      compile_and_run "TMFrame" e2e_tm_codec;
+      compile_and_run "Ctt" e2e_casetype_codec;
+      compile_and_run "Sshauth" e2e_ssh_casetype_codec;
+      compile_and_run "ChannelOpen" e2e_codec_in_casetype;
+      compile_and_run "Exts" e2e_repeat_var_elem;
+      compile_and_run "rpmsg_endpoint_info" e2e_snake_codec;
+      compile_and_run "EP_Header" e2e_mixed_codec;
+    ]
 
 let test_byte_span_subtraction () =
-  compile_and_run ~name:"UnderflowCheck" e2e_underflow_codec;
-  compile_and_run ~name:"UnderflowPadded" e2e_underflow_padded_codec
+  check_scenarios
+    [
+      compile_and_run "UnderflowCheck" e2e_underflow_codec;
+      compile_and_run "UnderflowPadded" e2e_underflow_padded_codec;
+    ]
 
 let test_uses_wire_ctx () =
   let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
