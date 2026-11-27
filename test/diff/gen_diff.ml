@@ -11,10 +11,8 @@
     check) into the current directory. Run by the code generation rule in
     [fuzz/diff/].
 
-    EverParse spends ~9s verifying each module, so the codecs are generated in a
-    bounded fork pool, each run in a private directory (EverParse's shared
-    intermediate files would otherwise race), with one serial seed run to lay
-    down the shared headers. [WIRE_DIFF_JOBS] caps the concurrency. *)
+    EverParse spends ~9s verifying each module; {!Wire_3d.run} overlaps the
+    modules in {!Wire_3d.pool}, whose concurrency [WIRE_3D_JOBS] caps. *)
 
 let module_name g =
   Wire_stubs.module_name
@@ -22,107 +20,18 @@ let module_name g =
        (Wire.Everparse.entrypoint_struct
           (Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g))))
 
-let copy_file ~src ~dst =
-  In_channel.with_open_bin src (fun ic ->
-      Out_channel.with_open_bin dst (fun oc ->
-          Out_channel.output_string oc (In_channel.input_all ic)))
-
-(* Publish an isolated run's per-codec artifacts into the shared [schema_dir].
-   Only files whose name starts with this codec's module [base] are copied: the
-   shared ones a run also emits ([EverParse.h], [EverParseEndianness.h],
-   [test.c], [dune.inc]) come once from the serial seed run, so concurrent runs
-   neither race to rewrite them nor leave nondeterministic copies behind. Each
-   run holds only its own module's files, so the prefix is unambiguous and the
-   per-codec names never collide across runs. *)
-let publish_outputs ~base ~src ~dst =
-  Array.iter
-    (fun f ->
-      if String.starts_with ~prefix:base f then
-        copy_file ~src:(Filename.concat src f) ~dst:(Filename.concat dst f))
-    (Sys.readdir src)
-
-let redirect_to file =
-  let fd =
-    Unix.openfile file [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644
-  in
-  Unix.dup2 fd Unix.stdout;
-  Unix.dup2 fd Unix.stderr;
-  Unix.close fd
-
-(* Run one codec's EverParse codegen in a private directory so concurrent runs
-   cannot race on EverParse's shared intermediate files, then publish its
-   per-codec artifacts. Runs inside a fork-pool child: stdout/stderr are
-   captured to a per-codec [<base>.faillog] so a failure's F* diagnostics are
-   attributable rather than interleaved; the log is dropped on success. *)
-let gen_isolated ~schema_dir ~base schema =
-  redirect_to (Filename.concat schema_dir (base ^ ".faillog"));
-  let tmp = Filename.temp_dir "wire_diffgen" "" in
-  Fun.protect
-    ~finally:(fun () -> Wire_3d.rm_rf tmp)
-    (fun () ->
-      Wire_3d.run ~quiet:false ~outdir:tmp [ schema ];
-      publish_outputs ~base ~src:tmp ~dst:schema_dir);
-  try Sys.remove (Filename.concat schema_dir (base ^ ".faillog"))
-  with Sys_error _ -> ()
-
-(* Conservative default: F* peaks near 1GB per module, so cap concurrency to
-   keep memory in check on CI; override with WIRE_DIFF_JOBS. *)
-let job_count () =
-  match Sys.getenv_opt "WIRE_DIFF_JOBS" with
-  | Some s -> (
-      match int_of_string_opt s with Some k when k >= 1 -> k | _ -> 4)
-  | None -> max 1 (min 4 (Domain.recommended_domain_count ()))
-
 let schema_of (_, Fuzz_gen.Pack g) =
   Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g)
 
-let read_log path =
-  try In_channel.with_open_text path In_channel.input_all
-  with Sys_error _ -> ""
-
-(* Generate every included codec's EverParse C. The first runs serially into
-   [schema_dir] to seed the shared headers; the rest run in the fork pool, each
-   in a private directory. Returns the codecs EverParse rejected. *)
-let generate_schemas schema_dir included =
-  let included = Array.of_list included in
-  let n = Array.length included in
-  if n = 0 then []
-  else begin
-    let max_jobs = job_count () in
-    Fmt.epr "diff-gen: generating %d validators, up to %d in parallel\n%!" n
-      max_jobs;
-    let seed_fail =
-      match Wire_3d.run ~outdir:schema_dir [ snd included.(0) ] with
-      | () -> []
-      | exception (Failure msg | Invalid_argument msg) ->
-          [ (fst included.(0), msg) ]
-    in
-    let jobs =
-      Array.init (n - 1) (fun k ->
-          let item = included.(k + 1) in
-          let schema = snd item in
-          let base =
-            Filename.remove_extension (Wire.Everparse.filename schema)
-          in
-          fun () -> gen_isolated ~schema_dir ~base schema)
-    in
-    let rest_fail =
-      Wire_3d.fork_pool ~max_jobs jobs
-      |> Array.to_list
-      |> List.mapi (fun k ok ->
-          if ok then None
-          else
-            let item = included.(k + 1) in
-            let log =
-              Filename.concat schema_dir
-                (Filename.remove_extension (Wire.Everparse.filename (snd item))
-                ^ ".faillog")
-            in
-            Some (fst item, read_log log))
-      |> List.filter_map Fun.id
-    in
-    seed_fail @ rest_fail
-  end
+(* Generate the EverParse C of [schemas] into [schema_dir]. Is [None], or
+   EverParse's diagnostics for the schemas it rejected, each named by its
+   [.3d] file. *)
+let generate_schemas schema_dir schemas =
+  Fmt.epr "diff-gen: generating %d validators, up to %d in parallel\n%!"
+    (List.length schemas) (Wire_3d.max_jobs ());
+  match Wire_3d.run ~outdir:schema_dir schemas with
+  | () -> None
+  | exception (Failure msg | Invalid_argument msg) -> Some msg
 
 (* The generated OCaml that reads one codec's field values back out of the C
    visitor. [parse_k] applies its continuation to one argument per named
@@ -188,24 +97,17 @@ let pp_stubs ppf i (label, (Fuzz_gen.Pack g as p)) =
 
 let fixed schema_dir =
   Fmt.epr "diff-gen: %s\n" Diff_codecs.summary;
-  let failures =
-    generate_schemas schema_dir
-      (List.map (fun item -> (fst item, schema_of item)) Diff_codecs.included)
-  in
-  (match failures with
-  | [] -> ()
-  | _ :: _ ->
-      List.iter
-        (fun (label, msg) ->
-          Fmt.epr
-            "diff-gen: FATAL %s is included but EverParse rejected it: %s\n"
-            label msg)
-        failures;
+  (match
+     generate_schemas schema_dir (List.map schema_of Diff_codecs.included)
+   with
+  | None -> ()
+  | Some msg ->
       Fmt.epr
-        "diff-gen: %d included codec(s) failed to project; differential \
-         coverage would shrink silently. Project the shape, or give it an \
-         explicit exclusion reason in diff_codecs.\n"
-        (List.length failures);
+        "diff-gen: FATAL included codecs EverParse rejected:\n\
+         %s\n\
+         diff-gen: differential coverage would shrink silently. Project the \
+         shape, or give it an explicit exclusion reason in diff_codecs.\n"
+        msg;
       exit 1);
   Wire_stubs.generate ~schema_dir ~outdir:"."
     (List.map
@@ -379,11 +281,11 @@ let scanners schema_dir =
   in
   fatal unprojected;
   let all = structured @ sampled in
-  fatal
+  Option.iter
+    (fun msg -> fatal [ ("EverParse", msg) ])
     (generate_schemas schema_dir
        (List.concat_map
-          (fun (label, ffi, standalone, _) ->
-            [ (label, ffi); (label ^ " (standalone)", standalone) ])
+          (fun (_, ffi, standalone, _) -> [ ffi; standalone ])
           all));
   Wire_stubs.build_codec_archive ~schema_dir ~archive:"libscanvalidators.a" ();
   let b = Buffer.create 2048 in

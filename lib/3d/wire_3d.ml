@@ -624,6 +624,36 @@ let run_3d ?output ~outdir exe flags file =
   if Sys.win32 then run_3d_spawned ?output ~outdir exe flags file
   else run_process ?output ~cwd:outdir exe (flags @ [ file ])
 
+let copy_file ~src ~dst =
+  let contents = In_channel.with_open_bin src In_channel.input_all in
+  Out_channel.with_open_bin dst (fun oc ->
+      Out_channel.output_string oc contents)
+
+(* The headers every 3d.exe run writes, the same for every module. *)
+let everparse_headers = [ "EverParse.h"; "EverParseEndianness.h" ]
+
+(* Copy into [outdir] what a 3d.exe run on [three_d] wrote in [dir], the only
+   module there: its files, all named after it, and EverParse's headers. Each
+   file lands under a temporary name and is renamed into place, so a header
+   two concurrent runs publish is never seen half written. *)
+let publish ~dir ~outdir three_d =
+  let base = Filename.remove_extension three_d in
+  Array.iter
+    (fun f ->
+      if
+        f <> three_d
+        && (String.starts_with ~prefix:base f || List.mem f everparse_headers)
+      then begin
+        let tmp = Filename.temp_file ~temp_dir:outdir f ".part" in
+        copy_file ~src:(Filename.concat dir f) ~dst:tmp;
+        Sys.rename tmp (Filename.concat outdir f)
+      end)
+    (Sys.readdir dir)
+
+(* Each file runs through 3d.exe in a {!Proc.pool} job, in a directory of its
+   own, since concurrent runs race on the intermediate files EverParse writes
+   beside its output; the job then publishes the module's files into
+   [outdir]. *)
 let run_everparse_files ?(quiet = true) ~outdir files =
   let exe =
     match locate_3d_exe () with
@@ -631,18 +661,25 @@ let run_everparse_files ?(quiet = true) ~outdir files =
     | None -> failwith not_found_3d_exe
   in
   let version = everparse_version exe in
-  List.iter
-    (fun f ->
-      let output = if quiet then Dev_null else Inherit in
-      let ret =
-        run_3d ~output ~outdir exe [ "--batch" ] f |> process_status_code
-      in
-      if ret <> 0 then Fmt.failwith "EverParse failed on %s with code %d" f ret;
-      harden_wrapper ~outdir (Filename.remove_extension (Filename.basename f));
-      write_provenance ~outdir ~version f)
-    files;
-  (* Last, because every 3d.exe run above rewrites this header. *)
-  patch_everparse_endianness ~outdir
+  (* Asked once here, so the jobs inherit the answer. *)
+  ignore (fstar_flags exe : string list);
+  let job f dir =
+    let three_d = Filename.basename f in
+    copy_file ~src:(Filename.concat outdir f) ~dst:(Filename.concat dir three_d);
+    let ret = run_3d ~outdir:dir exe [ "--batch" ] three_d in
+    if process_status_code ret <> 0 then
+      Fmt.failwith "EverParse failed on %s with code %d" f
+        (process_status_code ret);
+    harden_wrapper ~outdir:dir (Filename.remove_extension three_d);
+    write_provenance ~outdir:dir ~version three_d;
+    publish ~dir ~outdir three_d
+  in
+  match pool (List.map (fun f -> (f, job f)) files) with
+  | Ok logs ->
+      if not quiet then List.iter print_string logs;
+      (* Last, because every 3d.exe run above writes this header. *)
+      patch_everparse_endianness ~outdir
+  | Error failed -> failwith failed
 
 let run_everparse ?(quiet = true) ~outdir schemas =
   run_everparse_files ~quiet ~outdir (List.map Wire.Everparse.filename schemas)
@@ -814,16 +851,7 @@ let generate_3d ~outdir schemas =
   ensure_dir outdir;
   write_3d ~outdir schemas
 
-let copy_file ~src ~dst =
-  let contents = In_channel.with_open_bin src In_channel.input_all in
-  Out_channel.with_open_bin dst (fun oc ->
-      Out_channel.output_string oc contents)
-
-let rm_rf dir =
-  (try Sys.readdir dir with Sys_error _ -> [||])
-  |> Array.iter (fun f ->
-      try Sys.remove (Filename.concat dir f) with Sys_error _ -> ());
-  try Sys.rmdir dir with Sys_error _ -> ()
+let rm_rf = rm_rf
 
 (* Regenerate into a scratch directory through the same writer the committed
    [.3d] came from, so the drift check compares against the real generator
@@ -843,64 +871,29 @@ let generate_3d_check ~outdir schemas =
             ~dst:(Filename.concat outdir (file ^ ".gen")))
         schemas)
 
-let default_job_count () = max 1 (min 4 (Domain.recommended_domain_count ()))
-let fork_pool = fork_pool
+let max_jobs = max_jobs
+let pool = pool
 
-(* Verify every schema through EverParse, the way its own corpus is tested (one
-   schema per .3d module, each accepted iff F* verifies it). The cost is
-   dominated by per-module F* verification (CPU-bound, several seconds each);
-   per-invocation startup is negligible, so a single [3d.exe --batch] over
-   everything just verifies serially on one core. The schemas are instead
-   verified concurrently in a {!fork_pool} (at most [max_jobs] at once), each
-   [3d.exe] run in its own directory (concurrent runs race on EverParse's shared
-   intermediate files). The pool overlaps the per-module work across cores and
-   load-balances as runs finish, the only lever for this cost. [Ok ()] iff
-   EverParse accepts every schema, else [Error] naming the offending schema(s)
-   with their captured diagnostics. The caller provides schemas with distinct
-   names (each becomes its own .3d module). *)
-let batch_check ?max_jobs ~outdir schemas =
+(* Verify every schema through EverParse, the way its own corpus is tested: one
+   schema per .3d module, each accepted iff F* verifies it, in a {!pool} job of
+   its own. *)
+let batch_check schemas =
   check_name_collisions schemas;
-  match (locate_3d_exe (), schemas) with
-  | None, _ -> Error not_found_3d_exe
-  | Some _, [] -> Ok ()
-  | Some exe, _ -> (
-      ensure_dir outdir;
-      let arr : t array = Array.of_list schemas in
-      let log_of i = Filename.concat outdir (arr.(i).name ^ ".batchlog") in
-      let jobs =
-        Array.mapi
-          (fun i schema () ->
-            let work = Filename.temp_dir "wire_batchchk" "" in
-            Fun.protect
-              ~finally:(fun () -> rm_rf work)
-              (fun () ->
-                generate_3d ~outdir:work [ schema ];
-                let status =
-                  run_3d
-                    ~output:(File (log_of i))
-                    ~outdir:work exe
-                    [ "--batch"; "--no_copy_everparse_h" ]
-                    (Wire.Everparse.filename schema)
-                in
-                if process_status_code status <> 0 then
-                  failwith "EverParse rejected"))
-          arr
+  match locate_3d_exe () with
+  | None -> Error not_found_3d_exe
+  | Some exe ->
+      ignore (fstar_flags exe : string list);
+      let job schema dir =
+        generate_3d ~outdir:dir [ schema ];
+        let status =
+          run_3d ~outdir:dir exe
+            [ "--batch"; "--no_copy_everparse_h" ]
+            (Wire.Everparse.filename schema)
+        in
+        if process_status_code status <> 0 then failwith "EverParse rejected"
       in
-      let max_jobs = Option.value max_jobs ~default:(default_job_count ()) in
-      let ok = fork_pool ~max_jobs jobs in
-      let errors =
-        Array.to_list ok
-        |> List.mapi (fun i passed ->
-            if passed then None
-            else
-              let msg =
-                try In_channel.with_open_text (log_of i) In_channel.input_all
-                with Sys_error _ -> ""
-              in
-              Fmt.kstr (fun s -> Some s) "%s:\n%s" arr.(i).name msg)
-        |> List.filter_map Fun.id
-      in
-      match errors with [] -> Ok () | _ -> Error (String.concat "\n" errors))
+      pool (List.map (fun (s : t) -> (s.name, job s)) schemas)
+      |> Result.map ignore
 
 let generate_c ?(quiet = true) ~outdir schemas =
   check_name_collisions schemas;

@@ -44,6 +44,15 @@
   EverParse's 3D compiler, or `None` where `has_3d_exe ()` was `false`
   (#570, @samoht)
 
+- `Wire_3d.fork_pool` is `Wire_3d.pool`, which gives each job a directory of
+  its own and answers each job's log (#575, @samoht)
+
+- `Wire_3d.batch_check` takes only the schemas: `WIRE_3D_JOBS` replaces
+  `?max_jobs`, and `~outdir` held only the logs (#575, @samoht)
+
+- `WIRE_DIFF_JOBS` is `WIRE_3D_JOBS`, which caps every EverParse pool and is
+  refused when it is not a positive integer (#575, @samoht)
+
 - The decode error is `Wire.Error.t`, with its constructors, `pp`, `pp_kind`,
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
   `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)
@@ -298,6 +307,10 @@
   @samoht)
 
 ### Changed
+
+- `Wire_3d.run_everparse`, and so `generate_c` and `run`, verify the modules
+  up to `WIRE_3D_JOBS` (default 4) at once, each in a directory of its own, and
+  fail naming every module EverParse rejected with its output (#575, @samoht)
 
 - A `byte_array_where` per-byte condition is compiled once per type: a
   nested refined span and `Wire.of_string` compiled it on every call, and

@@ -93,58 +93,18 @@ let sweep_schemas ~mode ~tag keep =
    FFI writer already, so [`Ffi] uses it and [`Standalone] gets the same
    one-module-per-schema treatment over [Everparse.write ~mode:`Standalone],
    which is what [Wire_3d.generate_3d_standalone] calls. *)
-let ffi_check schemas =
-  let outdir = Filename.temp_dir "wire_fuzz3d_ffi" "" in
-  Fun.protect
-    ~finally:(fun () -> Wire_3d.rm_rf outdir)
-    (fun () -> Wire_3d.batch_check ~outdir schemas)
-
 let standalone_check schemas =
-  let outdir = Filename.temp_dir "wire_fuzz3d_std" "" in
-  Fun.protect
-    ~finally:(fun () -> Wire_3d.rm_rf outdir)
-    (fun () ->
-      let arr = Array.of_list schemas in
-      let log_of i = Filename.concat outdir (string_of_int i ^ ".log") in
-      let jobs =
-        Array.mapi
-          (fun i (s : Wire.Everparse.t) () ->
-            (* Concurrent [3d.exe] runs race on EverParse's shared intermediate
-               files, so each job gets a directory of its own. *)
-            let work = Filename.temp_dir "wire_fuzz3d_stdjob" "" in
-            Fun.protect
-              ~finally:(fun () -> Wire_3d.rm_rf work)
-              (fun () ->
-                Wire.Everparse.write ~mode:`Standalone ~outdir:work ~name:s.name
-                  [ s ];
-                match
-                  Wire_3d.parse_3d ~batch:true ~outdir:work
-                    (Wire.Everparse.filename s)
-                with
-                | Ok () -> ()
-                | Error m ->
-                    Out_channel.with_open_text (log_of i) (fun oc ->
-                        Out_channel.output_string oc m);
-                    failwith "EverParse rejected"))
-          arr
-      in
-      let max_jobs = max 1 (min 4 (Domain.recommended_domain_count ())) in
-      let errors =
-        Wire_3d.fork_pool ~max_jobs jobs
-        |> Array.to_list
-        |> List.mapi (fun i passed ->
-            if passed then None
-            else
-              let msg =
-                try In_channel.with_open_text (log_of i) In_channel.input_all
-                with Sys_error _ -> ""
-              in
-              Fmt.kstr
-                (fun s -> Some s)
-                "%s:\n%s" arr.(i).Wire.Everparse.name msg)
-        |> List.filter_map Fun.id
-      in
-      match errors with [] -> Ok () | _ -> Error (String.concat "\n" errors))
+  let job (s : Wire.Everparse.t) dir =
+    Wire.Everparse.write ~mode:`Standalone ~outdir:dir ~name:s.name [ s ];
+    match
+      Wire_3d.parse_3d ~batch:true ~outdir:dir (Wire.Everparse.filename s)
+    with
+    | Ok () -> ()
+    | Error m -> failwith m
+  in
+  Wire_3d.pool
+    (List.map (fun (s : Wire.Everparse.t) -> (s.name, job s)) schemas)
+  |> Result.map ignore
 
 let run check = function [] -> None | schemas -> Some (check schemas)
 
@@ -158,7 +118,8 @@ let sweeps =
   [
     sweep ~mode:`Standalone ~tag:"S" ~check:standalone_check ~name:"standalone"
       (fun name -> not (List.mem name no_3d_standalone));
-    sweep ~mode:`Ffi ~tag:"F" ~check:ffi_check ~name:"ffi" (Fun.const true);
+    sweep ~mode:`Ffi ~tag:"F" ~check:Wire_3d.batch_check ~name:"ffi"
+      (Fun.const true);
   ]
 
 let refused_sweeps =

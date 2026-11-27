@@ -240,25 +240,70 @@ let test_locate_3d_exe_names () =
       Alcotest.(check (option string))
         "everparse-3d.exe alone" (Some renamed) (locate ()))
 
-(* A job that raises fails alone, whatever it raises, in both pools. *)
+(* A job that raises fails alone, whatever it raises, in both pools, and the
+   failure names it with its output and the message of what it raised. Each
+   job runs in a directory of its own, empty when it starts and gone when it
+   ends, and its output is its log. *)
 let test_pools_agree () =
-  let jobs =
-    [|
-      ignore;
-      (fun () -> failwith "refused");
-      ignore;
-      (fun () -> raise Not_found);
-      (fun () -> invalid_arg "bad");
-      ignore;
-    |]
+  let failing =
+    [
+      ("out", fun _ -> print_string "out");
+      ("refused", fun _ -> failwith "refused");
+      ("not found", fun _ -> raise Not_found);
+      ( "bad",
+        fun _ ->
+          Fmt.epr "err@.";
+          invalid_arg "bad" );
+      ("quiet", ignore);
+    ]
   in
-  let verdicts = [| true; false; true; false; false; true |] in
-  Alcotest.(check (array bool))
-    "in process" verdicts
-    (Wire_3d.Private.pool_in_process jobs);
-  Alcotest.(check (array bool))
-    "forked" verdicts
-    (Wire_3d.fork_pool ~max_jobs:2 jobs)
+  let in_own_dir dir =
+    if Sys.readdir dir <> [||] then failwith "the directory is not empty";
+    Out_channel.with_open_bin (Filename.concat dir "f") ignore;
+    print_string dir
+  in
+  let check name pool =
+    Alcotest.(check (result (list string) string))
+      (name ^ ": failures")
+      (Error "refused:\nrefused\n\nnot found:\nNot_found\n\nbad:\nerr\nbad\n")
+      (pool failing);
+    match pool [ ("a", in_own_dir); ("b", in_own_dir) ] with
+    | Error e -> Alcotest.failf "%s: %s" name e
+    | Ok logs ->
+        Alcotest.(check int) (name ^ ": logs") 2 (List.length logs);
+        List.iter
+          (fun dir ->
+            Alcotest.(check bool)
+              (name ^ ": directory removed")
+              false (Sys.file_exists dir))
+          logs
+  in
+  check "in process" Wire_3d.Private.pool_in_process;
+  check "forked" Wire_3d.pool
+
+(* [WIRE_3D_JOBS] sets how many jobs run at once, and a value that is not a
+   positive integer is refused rather than replaced. *)
+let test_max_jobs () =
+  let old = Sys.getenv_opt "WIRE_3D_JOBS" in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "WIRE_3D_JOBS" (Option.value ~default:"" old))
+    (fun () ->
+      Unix.putenv "WIRE_3D_JOBS" "1";
+      Alcotest.(check int) "WIRE_3D_JOBS=1" 1 (Wire_3d.max_jobs ());
+      Unix.putenv "WIRE_3D_JOBS" "7";
+      Alcotest.(check int) "WIRE_3D_JOBS=7" 7 (Wire_3d.max_jobs ());
+      Unix.putenv "WIRE_3D_JOBS" "";
+      Alcotest.(check bool)
+        "unset: at most 4" true
+        (Wire_3d.max_jobs () >= 1 && Wire_3d.max_jobs () <= 4);
+      List.iter
+        (fun v ->
+          Unix.putenv "WIRE_3D_JOBS" v;
+          match Wire_3d.max_jobs () with
+          | n -> Alcotest.failf "WIRE_3D_JOBS=%S: got %d" v n
+          | exception Failure _ -> ())
+        [ "0"; "-2"; "four" ])
 
 (* The real 3d.exe writes the same C spawned from here with [--odir] as it
    does started in its output directory. *)
@@ -323,7 +368,8 @@ let suite =
       Alcotest.test_case "locate 3d.exe" `Quick test_locate_3d_exe;
       Alcotest.test_case "locate each name of the 3D compiler" `Quick
         test_locate_3d_exe_names;
-      Alcotest.test_case "pools give the same verdicts" `Quick test_pools_agree;
+      Alcotest.test_case "pools give the same results" `Quick test_pools_agree;
+      Alcotest.test_case "WIRE_3D_JOBS" `Quick test_max_jobs;
       Alcotest.test_case "a larger Custard budget from v2026.10" `Quick
         test_has_custard;
       Alcotest.test_case "spawned 3d.exe writes the same C (needs 3d.exe)"

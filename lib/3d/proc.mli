@@ -1,6 +1,6 @@
 (** Processes for the EverParse pipeline.
 
-    Running a program without a shell, and a bounded pool of forked jobs.
+    Running a program without a shell, and a bounded pool of isolated jobs.
     Internal to {!Wire_3d}. *)
 
 val absolute_path : string -> string
@@ -52,11 +52,21 @@ val spawn :
 (** [spawn ?output exe args] runs [exe] with [args] in the current directory,
     without a shell and without [Unix.fork], and waits for it. *)
 
-val fork_pool : max_jobs:int -> (unit -> unit) array -> bool array
-(** [fork_pool ~max_jobs jobs] runs each of [jobs] in a process of its own, at
-    most [max_jobs] at once, and is each job's success, exit 0 and no exception,
-    in input order. A job that raises fails alone: the others still run. *)
+val rm_rf : string -> unit
+(** [rm_rf dir] removes [dir] and the files in it, ignoring errors. *)
 
-val pool_in_process : (unit -> unit) array -> bool array
-(** [pool_in_process jobs] is {!fork_pool} where there is no [fork]: the jobs
-    run one after the other in this process, with the same verdicts. *)
+val max_jobs : unit -> int
+(** [max_jobs ()] is how many jobs {!pool} runs at once: [WIRE_3D_JOBS] when it
+    is set, else the smaller of 4 and the number of cores. Raises [Failure] when
+    [WIRE_3D_JOBS] is not a positive integer. *)
+
+val pool : (string * (string -> unit)) list -> (string list, string) result
+(** [pool jobs] runs each named job of [jobs] in a process of its own and a
+    fresh directory of its own, at most {!max_jobs} at once. It is [Ok] of the
+    jobs' logs when every job returned, else [Error] naming each job that did
+    not, with its log. *)
+
+val pool_in_process :
+  (string * (string -> unit)) list -> (string list, string) result
+(** [pool_in_process jobs] is {!pool} where there is no [fork]: the jobs run one
+    after the other in this process, with the same results. *)

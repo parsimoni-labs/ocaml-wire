@@ -178,6 +178,14 @@ the same entrypoint name collide and are separated with `Codec.rename`.
 headers share a translation unit is benign: it is only an opaque pointer
 cast back in each validator's own translation unit.
 
+Every EverParse run goes through `Wire_3d.pool`: one `.3d` module per job,
+each in a directory of its own (concurrent runs race on the intermediate
+files EverParse writes beside its output), with its output captured in a
+log of its own, which a failure reports under the module's name.
+`run_everparse` then copies the module's files into the output directory.
+`WIRE_3D_JOBS` sets how many jobs run at once, by default the smaller of 4
+and the number of cores, since F* can approach 1 GB per process.
+
 ## Narrow-int targets
 
 js_of_ocaml (32-bit ints) and wasm_of_ocaml (31-bit) are supported

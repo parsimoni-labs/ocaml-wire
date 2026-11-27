@@ -113,7 +113,7 @@ jobs:
       WIRE_FUZZ_SEED: ${{ github.run_id }}
       WIRE_FUZZ_REPEAT: 1000
       WIRE_FUZZ_BUDGET: 0
-      WIRE_DIFF_JOBS: 1
+      WIRE_3D_JOBS: 1
     steps:
       - uses: actions/checkout@v7
       - uses: ocaml/setup-ocaml@v3

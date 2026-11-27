@@ -735,7 +735,7 @@ libraries share and what tests, fuzzers and benchmarks reach into:
 `visitor_setters`, `uses_wire_ctx`, `entrypoint_struct`, ...),
 `Codec.field_readers` and the struct validators, `Wire_ocaml.Plan` (shared
 with `Wire_rust` and `Wire_hardcaml`), `Wire_ocaml.views`, the steps of
-`Wire_3d` (`generate_*`, `run_everparse`, `write_fields`, `fork_pool`, ...)
+`Wire_3d` (`generate_*`, `run_everparse`, `write_fields`, `pool`, ...)
 and of `Wire_stubs` (`to_c_stubs`, `to_ml_stubs`, ...). Its name is an
 implementation choice.
 
@@ -808,7 +808,7 @@ rests on its own grep, given with it.
 | `Wire_rust` | `digest` 1 | none: no reader of `DIGEST` (as `Wire_ocaml`'s `digest`, 8e20a5bf) |
 | `Wire_rust` | `scanner` 9 | `Wire_rust.v ~folds`, `to_rs`, `main` |
 | `Wire_rust` | `rs` 7 | `Wire_rust.v`, `to_rs`, `main` |
-| `Wire_3d` | `everparse_name` 6, `pascal_case` 3, `generate_3d` 7, `generate_dune` 1, `run_everparse` 4, `check_provenance` 1, `fork_pool` 3, `rm_rf` 5, `batch_check` 1, `write_external_typedefs` 3, `write_fields` 5, `generate_c` 4, `harden_wrapper_source` 1, `generate_standalone` 3, `generate_dune_standalone` 2, `wrapper_symbols` 1, `archive_link_steps` 1, `generate_corpus` 5, `generate_agree` 1, `ensure_dir` 1, `strict_cc_flags` 5, `everparse_type_defines` 3, `Private` (module) 2 | the internal library (§ Internal) |
+| `Wire_3d` | `everparse_name` 6, `pascal_case` 3, `generate_3d` 7, `generate_dune` 1, `run_everparse` 4, `check_provenance` 1, `max_jobs` 2, `pool` 2, `rm_rf` 5, `batch_check` 1, `write_external_typedefs` 3, `write_fields` 5, `generate_c` 4, `harden_wrapper_source` 1, `generate_standalone` 3, `generate_dune_standalone` 2, `wrapper_symbols` 1, `archive_link_steps` 1, `generate_corpus` 5, `generate_agree` 1, `ensure_dir` 1, `strict_cc_flags` 5, `everparse_type_defines` 3, `Private` (module) 2 | the internal library (§ Internal) |
 | `Wire_3d` | `check_plug_names` 4 | the internal library (§ Internal), as `check_visitor_names` |
 | `Wire_3d` | `has_3d_exe` 7 | `Wire_3d.locate_3d_exe () <> None` |
 | `Wire_3d.Private` | `run_3d_spawned` 1, `pool_in_process` 1, `locate_3d_exe` (the parameterised one) 2, `has_custard` 1 | the internal library (§ Internal) |
