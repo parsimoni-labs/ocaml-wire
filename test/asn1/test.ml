@@ -94,7 +94,11 @@ Strings ::= SEQUENCE {
   utc UTCTime,
   generalized GeneralizedTime,
   sized UTF8String (SIZE (1..16)),
-  octets OCTET STRING (SIZE (4..4))
+  octets OCTET STRING (SIZE (4..4)),
+  videotex VideotexString,
+  graphic GraphicString,
+  general GeneralString,
+  descriptor ObjectDescriptor
 }
 
 Tags ::= SEQUENCE {

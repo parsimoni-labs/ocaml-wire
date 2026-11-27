@@ -105,6 +105,10 @@ type chars =
   | Numeric
   | Visible
   | Teletex
+  | Videotex
+  | Graphic
+  | General
+  | Object_descriptor
   | Bmp
   | Universal_chars
 
@@ -266,6 +270,18 @@ val visible_string : string t
 
 val teletex_string : string t
 (** [teletex_string] is TeletexString, content unchecked. *)
+
+val videotex_string : string t
+(** [videotex_string] is VideotexString, content unchecked. *)
+
+val graphic_string : string t
+(** [graphic_string] is GraphicString, content unchecked. *)
+
+val general_string : string t
+(** [general_string] is GeneralString, content unchecked. *)
+
+val object_descriptor : string t
+(** [object_descriptor] is ObjectDescriptor, content unchecked. *)
 
 val bmp_string : string t
 (** [bmp_string] is BMPString as its UTF-16BE content octets. *)

@@ -830,10 +830,6 @@ let smoke =
   let c = Asn1.required "c" Asn1.octet_string in
   Asn1.sequence "Smoke" mk3 (tuple3 a b c)
 
-(* The universal types X.680 defines as a tag on another, with no content
-   rule of their own (spec/ASN1.Spec.Interpreter.fst:120-125). *)
-let universal_octets n = Asn1.implicit ~cls:`Universal n Asn1.octet_string
-
 (* EXTERNAL, EMBEDDED PDV and CHARACTER STRING as spec/ASN1.UniversalTypes.fst
    writes them. *)
 type encoding =
@@ -860,7 +856,9 @@ let external_ =
   in
   let direct = Asn1.optional "direct-reference" Asn1.oid in
   let indirect = Asn1.optional "indirect-reference" Asn1.integer in
-  let descriptor = Asn1.optional "data-value-descriptor" (universal_octets 7) in
+  let descriptor =
+    Asn1.optional "data-value-descriptor" Asn1.object_descriptor
+  in
   let encoding = Asn1.required "encoding" encoding in
   Asn1.implicit ~cls:`Universal 8
     (Asn1.sequence "EXTERNAL" mk4 (tuple4 direct indirect descriptor encoding))
@@ -925,7 +923,7 @@ let runners =
     ("DiffPrim.Octets", c Asn1.octet_string);
     ("DiffPrim.Null", c Asn1.null);
     ("DiffPrim.Oid", c Asn1.oid);
-    ("DiffDesc.Desc", c (universal_octets 7));
+    ("DiffDesc.Desc", c Asn1.object_descriptor);
     ("DiffConstraints.Sized", c (Asn1.size ~min:2 ~max:3 Asn1.octet_string));
     ("DiffConstraints.Byte", c (Asn1.bounded_integer ~min:0L ~max:255L));
     ( "DiffConstraints.NonEmptySeqOf",
@@ -958,9 +956,9 @@ let runners =
     ("DiffStrings.Bmp", c Asn1.bmp_string);
     ("DiffStrings.Universal", c Asn1.universal_string);
     ("DiffStrings.Teletex", c Asn1.teletex_string);
-    ("DiffVideotex.Videotex", c (universal_octets 21));
-    ("DiffStrings2.Graphic", c (universal_octets 25));
-    ("DiffStrings2.General", c (universal_octets 27));
+    ("DiffVideotex.Videotex", c Asn1.videotex_string);
+    ("DiffStrings2.Graphic", c Asn1.graphic_string);
+    ("DiffStrings2.General", c Asn1.general_string);
     ("DiffTime.Utc", c Asn1.utc_time);
     ("DiffTime.Gen", c Asn1.generalized_time);
     ("DiffRelOid.RelOid", c Asn1.relative_oid);

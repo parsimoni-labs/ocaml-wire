@@ -101,6 +101,10 @@ let strings =
   let numeric = s "numeric" Asn1.numeric_string in
   let visible = s "visible" Asn1.visible_string in
   let teletex = s "teletex" Asn1.teletex_string in
+  let videotex = s "videotex" Asn1.videotex_string in
+  let graphic = s "graphic" Asn1.graphic_string in
+  let general = s "general" Asn1.general_string in
+  let descriptor = s "descriptor" Asn1.object_descriptor in
   let bmp = s "bmp" Asn1.bmp_string in
   let universal = s "universal" Asn1.universal_string in
   let utc = s "utc" Asn1.utc_time in
@@ -109,7 +113,8 @@ let strings =
   let octets = s "octets" (Asn1.size ~min:4 ~max:4 Asn1.octet_string) in
   let nth i l = List.nth l i in
   Asn1.sequence "Strings"
-    (fun a b c d e f g h i j k l -> [ a; b; c; d; e; f; g; h; i; j; k; l ])
+    (fun a b c d e f g h i j k l m n o p ->
+      [ a; b; c; d; e; f; g; h; i; j; k; l; m; n; o; p ])
     Codec.
       [
         utf8 $ nth 0;
@@ -124,6 +129,10 @@ let strings =
         generalized $ nth 9;
         sized $ nth 10;
         octets $ nth 11;
+        videotex $ nth 12;
+        graphic $ nth 13;
+        general $ nth 14;
+        descriptor $ nth 15;
       ]
 
 let tags =

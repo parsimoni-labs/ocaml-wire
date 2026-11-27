@@ -166,6 +166,10 @@ type chars =
   | Numeric
   | Visible
   | Teletex
+  | Videotex
+  | Graphic
+  | General
+  | Object_descriptor
   | Bmp
   | Universal_chars
 
@@ -279,6 +283,10 @@ let prim_number : type a. a prim -> int = function
   | Chars Numeric -> 18
   | Chars Printable -> 19
   | Chars Teletex -> 20
+  | Chars Videotex -> 21
+  | Chars Graphic -> 25
+  | Chars General -> 27
+  | Chars Object_descriptor -> 7
   | Chars Ia5 -> 22
   | Time Utc -> 23
   | Time Generalized -> 24
@@ -386,6 +394,10 @@ let ia5_string = Prim (Chars Ia5)
 let numeric_string = Prim (Chars Numeric)
 let visible_string = Prim (Chars Visible)
 let teletex_string = Prim (Chars Teletex)
+let videotex_string = Prim (Chars Videotex)
+let graphic_string = Prim (Chars Graphic)
+let general_string = Prim (Chars General)
+let object_descriptor = Prim (Chars Object_descriptor)
 let bmp_string = Prim (Chars Bmp)
 let universal_string = Prim (Chars Universal_chars)
 let utc_time = Prim (Time Utc)
@@ -593,6 +605,10 @@ let chars_literal k s =
   | Numeric -> printable_ascii "NumericString" s
   | Visible -> printable_ascii "VisibleString" s
   | Teletex -> printable_ascii "TeletexString" s
+  | Videotex -> printable_ascii "VideotexString" s
+  | Graphic -> printable_ascii "GraphicString" s
+  | General -> printable_ascii "GeneralString" s
+  | Object_descriptor -> printable_ascii "ObjectDescriptor" s
   | Bmp -> code_points ~width:2 "BMPString" s
   | Universal_chars -> code_points ~width:4 "UniversalString" s
 
@@ -742,7 +758,10 @@ let char_count k s =
         0 s
   | Some Bmp -> String.length s / 2
   | Some Universal_chars -> String.length s / 4
-  | Some (Printable | Ia5 | Numeric | Visible | Teletex) | None ->
+  | Some
+      ( Printable | Ia5 | Numeric | Visible | Teletex | Videotex | Graphic
+      | General | Object_descriptor )
+  | None ->
       String.length s
 
 let in_size ~min ~max (inner : string t) v =

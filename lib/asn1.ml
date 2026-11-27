@@ -51,7 +51,7 @@ let chars_ok k s =
   | Ia5 -> String.for_all (fun c -> Char.code c < 128) s
   | Numeric -> String.for_all numeric_char s
   | Visible -> String.for_all visible_char s
-  | Teletex -> true
+  | Teletex | Videotex | Graphic | General | Object_descriptor -> true
   | Bmp -> bmp_ok s
   | Universal_chars -> universal_ok s
 
@@ -1280,6 +1280,10 @@ let prim_type : type a. a prim -> string = function
   | Chars Numeric -> "NumericString"
   | Chars Visible -> "VisibleString"
   | Chars Teletex -> "TeletexString"
+  | Chars Videotex -> "VideotexString"
+  | Chars Graphic -> "GraphicString"
+  | Chars General -> "GeneralString"
+  | Chars Object_descriptor -> "ObjectDescriptor"
   | Chars Bmp -> "BMPString"
   | Chars Universal_chars -> "UniversalString"
   | Relative_oid -> "RELATIVE-OID"
