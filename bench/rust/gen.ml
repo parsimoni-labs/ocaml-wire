@@ -3,84 +3,71 @@
 
    With [--rust DIR], in [DIR]: the Wire_rust modules of the fixed header
    codecs, eth.rs, ipv4.rs, ipv6.rs, tcp.rs and udp.rs; that of
-   [Packet_stack.codec], stack.rs, whose fold [checksum] hands out every
-   output, and stack_selected.rs, whose fold hands out only the fields the
-   checksum reads, each visited by the checksum visitor of the harness,
-   cargo/src/stack_step.rs and cargo/src/selected_step.rs; and that of
-   [Packet_stack.capture], flow.rs, whose fold [classify] hands out the flow
-   classifier's fields to the visitor of flow.rs in the harness.
+   [Packet_stack.codec], stack_selected.rs, whose fold hands out the fields
+   the checksum reads; and that of [Packet_stack.capture], flow.rs, whose
+   fold hands out the flow classifier's fields.
 
    Otherwise the modules Wire_ocaml writes, as {!Wire_ocaml.main} reads its
-   command line: g_stack and g_selected, the modules of [Packet_stack.codec]
-   with every output and with those the checksum reads; g_flow, that of
-   [Packet_stack.capture] with the flow classifier's; g_capture, that of
-   [Packet_stack.capture] with every output, whose views the check/view row
-   reads; and g_eth, g_ipv4, g_ipv6, g_tcp and g_udp, those of [Headers],
-   and their interpreted twins, g_eth_codec and so on, which the swap rows
-   read. *)
+   command line: g_selected, the module of [Packet_stack.codec] whose fold
+   hands out the fields the checksum reads; g_flow, that of
+   [Packet_stack.capture] whose fold hands out the flow classifier's;
+   g_capture, that of [Packet_stack.capture] with no fold, whose views the
+   check/view row reads; and g_eth, g_ipv4, g_ipv6, g_tcp and g_udp, those
+   of [Headers]. *)
 
 let write file s =
   let oc = open_out_bin file in
   output_string oc s;
   close_out oc
 
-let checksum_fields =
+(* The fields of the checksum and of the flow classifier as the fold of a
+   generated module names them, by their paths: a field under a layer is an
+   option, [None] where the layer is absent, which stands for the presences
+   of the outputs above. *)
+let checksum_paths =
   [
     "ether_type";
-    "ipv4_present";
-    "ipv4_src";
-    "ipv4_dst";
-    "ipv4_ttl";
-    "ipv4_protocol";
-    "ipv4_total_length";
-    "ipv4_tcp_present";
-    "ipv4_tcp_src_port";
-    "ipv4_tcp_dst_port";
-    "ipv4_tcp_seq";
-    "ipv4_tcp_ack";
-    "ipv4_tcp_window";
-    "ipv4_tcp_flags";
-    "ipv4_tcp_data_offset";
-    "ipv4_udp_present";
-    "ipv4_udp_src_port";
-    "ipv4_udp_dst_port";
-    "ipv4_udp_length";
+    "ipv4.src";
+    "ipv4.dst";
+    "ipv4.ttl";
+    "ipv4.protocol";
+    "ipv4.total_length";
+    "ipv4.tcp.src_port";
+    "ipv4.tcp.dst_port";
+    "ipv4.tcp.seq";
+    "ipv4.tcp.ack";
+    "ipv4.tcp.window";
+    "ipv4.tcp.flags";
+    "ipv4.tcp.data_offset";
+    "ipv4.udp.src_port";
+    "ipv4.udp.dst_port";
+    "ipv4.udp.length";
   ]
 
-(* {1 The flow classifier}
-
-   The outputs of the scanner of [Packet_stack.capture] the classifier reads:
-   the addresses, the protocol, the ports and the IP length of each packet. *)
-let flow_fields =
+let flow_paths =
   [
-    "ipv4_present";
-    "ipv4_total_length";
-    "ipv4_protocol";
-    "ipv4_src";
-    "ipv4_dst";
-    "ipv4_tcp_present";
-    "ipv4_tcp_src_port";
-    "ipv4_tcp_dst_port";
-    "ipv4_udp_present";
-    "ipv4_udp_src_port";
-    "ipv4_udp_dst_port";
-    "ipv6_present";
-    "ipv6_payload_length";
-    "ipv6_next_header";
-    "ipv6_src0";
-    "ipv6_src1";
-    "ipv6_src2";
-    "ipv6_src3";
-    "ipv6_dst0";
-    "ipv6_dst1";
-    "ipv6_dst2";
-    "ipv6_dst3";
-    "ipv6_tcp_present";
-    "ipv6_tcp_src_port";
-    "ipv6_tcp_dst_port";
-    "ipv6_udp_present";
-    "ipv6_udp_src_port";
-    "ipv6_udp_dst_port";
+    "ipv4.total_length";
+    "ipv4.protocol";
+    "ipv4.src";
+    "ipv4.dst";
+    "ipv4.tcp.src_port";
+    "ipv4.tcp.dst_port";
+    "ipv4.udp.src_port";
+    "ipv4.udp.dst_port";
+    "ipv6.payload_length";
+    "ipv6.next_header";
+    "ipv6.src0";
+    "ipv6.src1";
+    "ipv6.src2";
+    "ipv6.src3";
+    "ipv6.dst0";
+    "ipv6.dst1";
+    "ipv6.dst2";
+    "ipv6.dst3";
+    "ipv6.tcp.src_port";
+    "ipv6.tcp.dst_port";
+    "ipv6.udp.src_port";
+    "ipv6.udp.dst_port";
   ]
 
 (* The fixed header codecs, each written by [g name codec]. *)
@@ -96,44 +83,20 @@ let headers { g } =
 let () =
   match Array.to_list Sys.argv with
   | [ _; "--rust"; dir ] ->
-      let rs ?visitors name m =
-        write (Filename.concat dir (name ^ ".rs")) (Wire_rust.to_rs ?visitors m)
+      let rs name m =
+        write (Filename.concat dir (name ^ ".rs")) (Wire_rust.to_rs m)
       in
-      let checksum ~name ~step outputs =
-        rs name
-          ~visitors:[ ("checksum", step ^ ".rs") ]
-          (Wire_rust.v ~name
-             ~folds:[ Wire_rust.fold ?outputs "checksum" ]
-             Packet_stack.codec)
-      in
-      checksum ~name:"stack" ~step:"stack_step" None;
-      checksum ~name:"stack_selected" ~step:"selected_step"
-        (Some checksum_fields);
-      rs "flow"
-        ~visitors:
-          [ ("classify", "crate::flow::Classify<'static, crate::flow::Table>") ]
-        Wire_rust.(
-          v ~name:"flow"
-            ~folds:[ fold ~outputs:flow_fields "classify" ]
-            Packet_stack.capture);
+      rs "stack_selected"
+        (Wire_rust.v ~name:"stack_selected" ~fold:checksum_paths
+           Packet_stack.codec);
+      rs "flow" (Wire_rust.v ~name:"flow" ~fold:flow_paths Packet_stack.capture);
       headers { g = (fun name c -> rs name (Wire_rust.v ~name c)) }
   | _ ->
-      let checksum o = Wire_ocaml.[ fold ?outputs:o "checksum" ]
-      and flow =
-        Wire_ocaml.
-          [
-            fold ~outputs:flow_fields "classify";
-            fold ~outputs:flow_fields "parse";
-          ]
-      in
       Wire_ocaml.(
         main
           [
-            v ~name:"g_stack" ~folds:(checksum None) Packet_stack.codec;
-            v ~name:"g_selected"
-              ~folds:(checksum (Some checksum_fields))
-              Packet_stack.codec;
-            v ~name:"g_flow" ~folds:flow Packet_stack.capture;
+            v ~name:"g_selected" ~fold:checksum_paths Packet_stack.codec;
+            v ~name:"g_flow" ~fold:flow_paths Packet_stack.capture;
             v ~name:"g_capture" Packet_stack.capture;
             v ~name:"g_eth" Headers.eth;
             v ~name:"g_ipv4" Headers.ipv4;

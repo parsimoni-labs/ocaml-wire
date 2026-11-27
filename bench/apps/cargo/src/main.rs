@@ -116,7 +116,11 @@ fn output(len: usize) -> Rc<RefCell<Vec<u8>>> {
 // unsegmented, of these values at `off`.
 
 fn sp_wire_rust(buf: &[u8], off: usize) -> Option<(u16, u16)> {
-    let v = space_packet::check(buf, off).get()?;
+    let c = space_packet::check(buf, off);
+    if !c.is_ok() {
+        return None;
+    }
+    let v = c.get();
     Some((v.apid(), v.datalength()))
 }
 
@@ -267,7 +271,11 @@ fn gateway(buf: &[u8], frame: impl Fn(&[u8], usize) -> Option<(u8, u16)>, packet
 }
 
 fn frame_wire_rust(buf: &[u8], base: usize) -> Option<(u8, u16)> {
-    let f = tm_frame::check(buf, base).get()?;
+    let c = tm_frame::check(buf, base);
+    if !c.is_ok() {
+        return None;
+    }
+    let f = c.get();
     Some((f.vcid(), f.firsthdrptr()))
 }
 
@@ -277,7 +285,11 @@ fn frame_chronus(buf: &[u8], base: usize) -> Option<(u8, u16)> {
 }
 
 fn packet_wire_rust(buf: &[u8], off: usize) -> Option<(u16, u16)> {
-    let p = space_packet::check(buf, off).get()?;
+    let c = space_packet::check(buf, off);
+    if !c.is_ok() {
+        return None;
+    }
+    let p = c.get();
     Some((p.apid(), p.seqcount()))
 }
 
@@ -371,7 +383,11 @@ fn clcw(buf: &[u8]) -> u64 {
     let mut anomalies = 0u64;
     let mut expected = 0u32;
     for i in 0..buf.len() / clcw::MIN_SIZE {
-        let Some(w) = clcw::check(buf, i * clcw::MIN_SIZE).get() else { break };
+        let c = clcw::check(buf, i * clcw::MIN_SIZE);
+        if !c.is_ok() {
+            break;
+        }
+        let w = c.get();
         let report = w.reportvalue() as u32;
         if w.lockout() != 0 || w.wait() != 0 || w.retransmit() != 0 || report != expected & 0xFF {
             anomalies += 1;

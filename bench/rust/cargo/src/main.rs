@@ -1,9 +1,8 @@
 //! Reads the fields of every Ethernet/IPv4/TCP-or-UDP header in a corpus of
 //! packets: through the Rust that `Wire_rust` generates, from the fixed
 //! header codecs of `bench/rust/headers.ml` with the layers linked here, and
-//! from `Packet_stack.codec` as one module whose fold hands every output, or
-//! only the ones the checksum reads, to the checksum visitor of
-//! `stack_step.rs` or `selected_step.rs`; through `etherparse`, through `smoltcp::wire`
+//! from `Packet_stack.codec` as one module whose fold hands the fields the
+//! checksum reads to a closure; through `etherparse`, through `smoltcp::wire`
 //! and through `pnet_packet`. Each does the work `etherparse::SlicedPacket` does, as
 //! `bench/rust/bench.ml` describes: the IPv4 payload bounded by the total
 //! length, no transport header read from a fragment, the TCP header length or
@@ -41,14 +40,10 @@ mod ipv6;
 mod tcp;
 #[path = "gen/udp.rs"]
 mod udp;
-#[path = "gen/stack.rs"]
-mod stack;
 #[path = "gen/stack_selected.rs"]
 mod stack_selected;
 #[path = "gen/flow.rs"]
 mod flow_scan;
-mod selected_step;
-mod stack_step;
 
 // This binary runs `flow::main` only.
 #[allow(dead_code)]
@@ -77,13 +72,21 @@ fn udp_fields(acc: u64, sp: u16, dp: u16, len: u16) -> u64 {
 fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
     let mut acc = 0u64;
     for p in corpus.chunks_exact(slot) {
-        let Some(e) = eth::check(p, 0).get() else { continue };
+        let c = eth::check(p, 0);
+        if !c.is_ok() {
+            continue;
+        }
+        let e = c.get();
         let ty = e.ether_type();
         if ty != IPV4 {
             acc = acc.wrapping_add(ty as u64);
             continue;
         }
-        let Some(ip) = ipv4::check(p, eth::MIN_SIZE).get() else { continue };
+        let c = ipv4::check(p, eth::MIN_SIZE);
+        if !c.is_ok() {
+            continue;
+        }
+        let ip = c.get();
         let hlen = ip.ihl() as usize * 4;
         let len = ip.total_length() as usize;
         if len < hlen || len > p.len() - eth::MIN_SIZE {
@@ -98,14 +101,22 @@ fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
         let payload = len - hlen;
         match ip.protocol() {
             6 => {
-                let Some(t) = tcp::check(p, off).get() else { continue };
+                let c = tcp::check(p, off);
+                if !c.is_ok() {
+                    continue;
+                }
+                let t = c.get();
                 if t.data_offset() as usize * 4 > payload {
                     continue;
                 }
                 acc = tcp_fields(a, t.src_port(), t.dst_port(), t.seq(), t.ack(), t.window(), t.flags(), t.data_offset() as u8);
             }
             17 => {
-                let Some(u) = udp::check(p, off).get() else { continue };
+                let c = udp::check(p, off);
+                if !c.is_ok() {
+                    continue;
+                }
+                let u = c.get();
                 if u.length() as usize > payload {
                     continue;
                 }
@@ -118,18 +129,35 @@ fn wire_rust(corpus: &[u8], slot: usize) -> u64 {
 }
 
 // The fold of `Packet_stack.codec` makes every check the linked headers
-// make, and hands the fields of each accepted frame to the checksum visitor,
-// over the frames of a stride, as the OCaml rows fold them.
-fn wire_rust_stack(corpus: &[u8], slot: usize) -> u64 {
-    let mut v = stack_step::StackStep(0);
-    stack::checksum_frames(&mut v, corpus, 0, corpus.len(), slot);
-    v.0
-}
-
+// make, and hands the fields the checksum reads of each accepted frame to a
+// closure, over the slots of the corpus, as the OCaml rows fold them: a
+// field under a layer is `None` where the layer is absent.
 fn wire_rust_selected(corpus: &[u8], slot: usize) -> u64 {
-    let mut v = selected_step::SelectedStep(0);
-    stack_selected::checksum_frames(&mut v, corpus, 0, corpus.len(), slot);
-    v.0
+    let r = stack_selected::fold(
+        corpus,
+        stack_selected::Records::Slots(slot),
+        0u64,
+        Some(&mut |acc| acc),
+        |acc, ty, src, dst, ttl, proto, len, tsp, tdp, seq, ack, win, flags, off, usp, udp, ulen| {
+            let acc = acc.wrapping_add(ty as u64);
+            let (Some(src), Some(dst), Some(ttl), Some(proto), Some(len)) = (src, dst, ttl, proto, len) else {
+                return acc;
+            };
+            let a = ip_fields(acc, src, dst, ttl, proto, len);
+            match (tsp, tdp, seq, ack, win, flags, off) {
+                (Some(sp), Some(dp), Some(seq), Some(ack), Some(win), Some(flags), Some(off)) => {
+                    tcp_fields(a, sp, dp, seq, ack, win, flags, off)
+                }
+                _ => match (usp, udp, ulen) {
+                    (Some(sp), Some(dp), Some(len)) => udp_fields(a, sp, dp, len),
+                    _ => a,
+                },
+            }
+        },
+    );
+    match r {
+        Ok(acc) | Err((_, acc)) => acc,
+    }
 }
 
 fn etherparse(corpus: &[u8], slot: usize) -> u64 {
@@ -297,7 +325,6 @@ fn main() {
     let c = path.file_stem().and_then(|s| s.to_str()).expect("corpus name");
     let f = &filter;
     measure(c, "wire.rust, linked headers", f, &corpus, slot, runs, wire_rust);
-    measure(c, "wire.rust fused stack", f, &corpus, slot, runs, wire_rust_stack);
     measure(c, "wire.rust selected outputs", f, &corpus, slot, runs, wire_rust_selected);
     measure(c, "etherparse 0.21", f, &corpus, slot, runs, etherparse);
     measure(c, "smoltcp 0.14", f, &corpus, slot, runs, smoltcp);
