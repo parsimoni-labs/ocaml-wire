@@ -542,14 +542,13 @@ jobs:
   # their answers equal to those of 3d.exe's specification, refuse the
   # defects planted in mutants (stride_threshold_ox among them, the
   # positive control of the OxCaml frame loop) and classify every check of
-  # the scanners as needed for safety or for semantics. These rules took
-  # 2.7 hours of CPU, and 88 minutes two at a time on an 18-core machine
-  # under a load of 100 to 200, against 3 to 7 minutes for prove here; the
-  # job runs beside everparse-3d, which takes 80 to 130 minutes, so it
-  # should not lengthen the run. The OxCaml frame loop's bounds
-  # (@verify/bounds-ox, in make verify) took 1.7 hours of CPU more and are
-  # not run here. One rule at a time: each runs four Z3 processes, one per
-  # core of the runner.
+  # the scanners as needed for safety or for semantics, the OxCaml frame
+  # loop's bounds included. These rules took 6.3 minutes of CPU and 2.1
+  # minutes one at a time (@verify/runtest 334 s of CPU in 108 s,
+  # @verify/classify 45 s in 18 s) on an 18-core machine under a load of 19
+  # to 35; the job runs beside everparse-3d, which takes 80 to 130 minutes,
+  # so it should not lengthen the run. One rule at a time: each runs four
+  # Z3 processes, one per core of the runner.
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 150

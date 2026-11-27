@@ -67,8 +67,7 @@
 ; The packet stack's fold, on OCaml and on OxCaml: every read of fold_step,
 ; step_frames_record and fold_step_frames in bounds, the fields
 ; fold_step_frames loads ahead of step_frames_record included, and no input
-; raising. The OxCaml half runs on its own, in make verify:
-; BUILD_EVERPARSE=1 dune build @verify/bounds-ox.
+; raising.
 
 (rule
  (alias runtest)
@@ -85,7 +84,7 @@
    stack_step.gen:step/34:Stack.WireEthernetStack:128)))
 
 (rule
- (alias bounds-ox)
+ (alias runtest)
  (enabled_if
   (and
    (= %{env:BUILD_EVERPARSE=} "1")

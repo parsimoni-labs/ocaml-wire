@@ -87,14 +87,14 @@ fuzz-nightly:
 prove:
 	BUILD_EVERPARSE=1 dune build -j 2 @proofs/fstar-gen/prove
 
-# The generated scanners and record modules executed symbolically, their
-# reads proved in bounds and their answers equal to 3d.exe's specification
-# by Z3, the planted mutants refused and every check of the scanners
-# classified (needs EverParse and z3; verify/dune says what each rule
-# proves). One rule at a time, as each runs four Z3 processes.
+# The generated scanners, on OCaml and on OxCaml, and record modules
+# executed symbolically, their reads proved in bounds and the records'
+# answers equal to 3d.exe's specification by Z3, the planted mutants
+# refused and every check of the scanners classified (needs EverParse and
+# z3; verify/dune says what each rule proves). One rule at a time, as each
+# runs four Z3 processes.
 verify:
-	BUILD_EVERPARSE=1 dune build -j 1 @verify/runtest @verify/classify \
-	  @verify/bounds-ox
+	BUILD_EVERPARSE=1 dune build -j 1 @verify/runtest @verify/classify
 
 3d:
 	dune exec examples/validate_3d.exe
