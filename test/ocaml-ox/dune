@@ -8,12 +8,6 @@
  (files ../ocaml/test_wire_ocaml.{ml,mli}))
 
 (copy_files
- (files ../ocaml/test_get.{ml,mli}))
-
-(copy_files
- (files ../ocaml/test_same.{ml,mli}))
-
-(copy_files
  (files ../ocaml/test_view_module.{ml,mli}))
 
 (copy_files
@@ -24,21 +18,6 @@
 
 (copy_files
  (files ../ocaml/test_value_module.{ml,mli}))
-
-(rule
- (enabled_if
-  (= %{ocaml-config:ox} true))
- (targets
-  s_capture_step.ml
-  s_capture_step.mli
-  s_capture_step_codec.ml
-  s_capture_step_codec.mli)
- (action
-  (run
-   %{dep:../ocaml/gen_scan.exe}
-   %{targets}
-   --visitor
-   fold_step=%{dep:../ocaml/scan_step.ml})))
 
 (rule
  (copy ../ocaml/test.ml test.ox.ml))
@@ -55,132 +34,84 @@
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets g_ipv4.ml g_ipv4.mli g_ipv4_codec.ml g_ipv4_codec.mli)
+ (targets g_ipv4.ml g_ipv4.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets
-  g_ipv4_record.ml
-  g_ipv4_record.mli
-  g_ipv4_record_codec.ml
-  g_ipv4_record_codec.mli)
+ (targets g_ipv4_record.ml g_ipv4_record.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets
-  g_mixed_record.ml
-  g_mixed_record.mli
-  g_mixed_record_codec.ml
-  g_mixed_record_codec.mli)
+ (targets g_mixed_record.ml g_mixed_record.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets checked_step.ml)
- (action
-  (run %{dep:../ocaml/gen.exe} --step %{targets})))
-
-(rule
- (enabled_if
-  (= %{ocaml-config:ox} true))
- (targets g_checked.ml g_checked.mli g_checked_codec.ml g_checked_codec.mli)
- (action
-  (run
-   %{dep:../ocaml/gen.exe}
-   %{targets}
-   --visitor
-   fold=%{dep:checked_step.ml})))
-
-(rule
- (enabled_if
-  (= %{ocaml-config:ox} true))
- (targets g_mixed.ml g_mixed.mli g_mixed_codec.ml g_mixed_codec.mli)
+ (targets g_checked.ml g_checked.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets g_small.ml g_small.mli g_small_codec.ml g_small_codec.mli)
+ (targets g_mixed.ml g_mixed.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets g_eth.ml g_eth.mli g_eth_codec.ml g_eth_codec.mli)
+ (targets g_small.ml g_small.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets g_wide.ml g_wide.mli g_wide_codec.ml g_wide_codec.mli)
+ (targets g_eth.ml g_eth.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets g_signed.ml g_signed.mli g_signed_codec.ml g_signed_codec.mli)
+ (targets g_wide.ml g_wide.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets g_packed.ml g_packed.mli g_packed_codec.ml g_packed_codec.mli)
+ (targets g_signed.ml g_signed.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets g_refined.ml g_refined.mli g_refined_codec.ml g_refined_codec.mli)
+ (targets g_packed.ml g_packed.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets
-  g_overflow.ml
-  g_overflow.mli
-  g_overflow_codec.ml
-  g_overflow_codec.mli)
+ (targets g_refined.ml g_refined.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
-  (and
-   (= %{ocaml-config:ox} true)
-   (or
-    (= %{architecture} arm64)
-    (= %{architecture} amd64))))
- (targets g_lanes.ml g_lanes.mli g_lanes_codec.ml g_lanes_codec.mli)
- (action
-  (setenv
-   WIRE_SIMD
-   1
-   (run %{dep:../ocaml/gen.exe} %{targets}))))
-
-(rule
- (enabled_if
-  (and
-   (= %{ocaml-config:ox} true)
-   (and
-    (<> %{architecture} arm64)
-    (<> %{architecture} amd64))))
- (targets g_lanes.ml g_lanes.mli g_lanes_codec.ml g_lanes_codec.mli)
+  (= %{ocaml-config:ox} true))
+ (targets g_overflow.ml g_overflow.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
 
@@ -194,56 +125,23 @@
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets sized_step.ml)
- (action
-  (run %{dep:../ocaml/gen.exe} --step %{targets})))
-
-(rule
- (enabled_if
-  (= %{ocaml-config:ox} true))
  (targets s_sized.ml s_sized.mli)
  (action
-  (run
-   %{dep:../ocaml/gen.exe}
-   %{targets}
-   --visitor
-   fold=%{dep:sized_step.ml})))
-
-(rule
- (enabled_if
-  (= %{ocaml-config:ox} true))
- (targets overflow_step.ml)
- (action
-  (run %{dep:../ocaml/gen.exe} --step %{targets})))
+  (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
  (targets s_overflow.ml s_overflow.mli)
  (action
-  (run
-   %{dep:../ocaml/gen.exe}
-   %{targets}
-   --visitor
-   fold=%{dep:overflow_step.ml})))
-
-(rule
- (enabled_if
-  (= %{ocaml-config:ox} true))
- (targets skipped_step.ml)
- (action
-  (run %{dep:../ocaml/gen.exe} --step %{targets})))
+  (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
  (targets s_skipped.ml s_skipped.mli)
  (action
-  (run
-   %{dep:../ocaml/gen.exe}
-   %{targets}
-   --visitor
-   fold=%{dep:skipped_step.ml})))
+  (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
@@ -255,55 +153,55 @@
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
- (targets huge_step.ml)
+ (targets s_capture_step.ml s_capture_step.mli)
  (action
-  (run %{dep:../ocaml/gen.exe} --step %{targets})))
+  (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
  (targets s_huge.ml s_huge.mli)
  (action
-  (run %{dep:../ocaml/gen.exe} %{targets} --visitor fold=%{dep:huge_step.ml})))
-
-(rule
- (enabled_if
-  (= %{ocaml-config:ox} true))
- (targets nested_step.ml)
- (action
-  (run %{dep:../ocaml/gen.exe} --step %{targets})))
+  (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
  (targets s_nested.ml s_nested.mli)
  (action
-  (run
-   %{dep:../ocaml/gen.exe}
-   %{targets}
-   --visitor
-   fold=%{dep:nested_step.ml})))
-
-; Whether the fold of s_nested boxes the int64 values it hands its visitor:
-; in the dev profile, which compiles this library -opaque, the visitor
-; nested_step.ml is a unit of its own the fold calls rather than inlines. A
-; load of wire.runtime gives an int64_u on OxCaml in any profile.
+  (run %{dep:../ocaml/gen.exe} %{targets})))
 
 (rule
- (target boxed_loads.ml)
  (enabled_if
   (and
    (= %{ocaml-config:ox} true)
-   (= %{profile} dev)))
+   (or
+    (= %{architecture} arm64)
+    (= %{architecture} amd64))))
+ (targets g_lanes.ml g_lanes.mli)
  (action
-  (write-file %{target} "let v = true\n")))
+  (setenv
+   WIRE_SIMD
+   1
+   (run %{dep:../ocaml/gen.exe} %{targets}))))
+
+(rule
+ (enabled_if
+  (and
+   (= %{ocaml-config:ox} true)
+   (<> %{architecture} arm64)
+   (<> %{architecture} amd64)))
+ (targets g_lanes.ml g_lanes.mli)
+ (action
+  (run %{dep:../ocaml/gen.exe} %{targets})))
+
+; Whether a 64-bit load of wire.runtime returns a boxed int64 to the code
+; generated: on OxCaml a load gives an int64_u in any profile.
 
 (rule
  (target boxed_loads.ml)
  (enabled_if
-  (and
-   (= %{ocaml-config:ox} true)
-   (<> %{profile} dev)))
+  (= %{ocaml-config:ox} true))
  (action
   (write-file %{target} "let v = false\n")))
 
@@ -314,68 +212,33 @@
   (= %{ocaml-config:ox} true))
  (modules
   test_wire_ocaml
-  test_get
   test_view_module
   test_writer
   test_value_module
-  test_same
   test_scan
-  s_capture_step
-  s_capture_step_codec
   g_ipv4
-  g_ipv4_codec
   g_ipv4_record
-  g_ipv4_record_codec
   g_mixed_record
-  g_mixed_record_codec
   g_checked
-  g_checked_codec
   g_mixed
-  g_mixed_codec
   g_small
-  g_small_codec
   g_eth
-  g_eth_codec
   g_wide
-  g_wide_codec
-  g_mapped
   g_signed
-  g_signed_codec
   g_packed
-  g_packed_codec
   g_refined
-  g_refined_codec
   g_overflow
-  g_overflow_codec
-  g_lanes
-  g_lanes_codec
+  g_mapped
   s_sized
   s_overflow
   s_skipped
+  s_capture
+  s_capture_step
   s_huge
   s_nested
-  checked_step
-  sized_step
-  overflow_step
-  skipped_step
-  huge_step
-  nested_step
-  s_capture
+  g_lanes
   boxed_loads)
- (libraries
-  schemas
-  wire
-  wire.runtime
-  wire.ocaml
-  diff_codecs
-  net
-  diff_driver
-  diff_ocaml
-  ocaml_index_ox
-  scan_step
-  bytesrw
-  fmt
-  alcotest))
+ (libraries schemas wire wire.runtime wire.ocaml net bytesrw fmt alcotest))
 
 (executable
  (name test)

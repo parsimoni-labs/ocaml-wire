@@ -12,8 +12,8 @@ let size = String.length packet
 (* What the accessors read of the header in [b], folded into one [int]. *)
 let[@inline] fields (b @ local) =
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
-  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
-  if G_ipv4.ok c then
+  let c = G_ipv4.check n ~off:0 in
+  if G_ipv4.is_ok c then
     let v = G_ipv4.get c in
     (G_ipv4.versionihl n v :> int)
     + (G_ipv4.ttl n v :> int)
@@ -41,14 +41,14 @@ let stack_view () =
   let b = Bytes.create__stack size in
   Bytes.unsafe_blit_string packet 0 b 0 size;
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
-  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
-  if G_ipv4.ok c then
+  let c = G_ipv4.check n ~off:0 in
+  if G_ipv4.is_ok c then
     let v = G_ipv4.get c in
     Wire_runtime.UInt8.to_int (G_ipv4.ttl n v)
     + Wire_runtime.SInt32.to_int (G_ipv4.src n v)
   else -1
 
-let decoded () = Result.get_ok (G_ipv4_record.decode (Bytes.of_string packet) 0)
+let decoded () = Result.get_ok (G_ipv4_record.decode (Bytes.of_string packet) ~off:0)
 
 let test_stack_view () =
   let r = decoded () in
@@ -67,8 +67,8 @@ let[@inline] record (r : G_ipv4_record.t @ local) =
 let[@inline] folded (b @ local) =
   let module G = G_ipv4_record in
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
-  let c = G.check n (Wire_runtime.Buf.length n) 0 in
-  if G.ok c then
+  let c = G.check n ~off:0 in
+  if G.is_ok c then
     let v = G.get c in
     (G.versionihl n v :> int)
     + (G.length n v :> int)
@@ -84,14 +84,14 @@ let stack_decode () =
   Bytes.unsafe_blit_string packet 0 b 0 size;
   let local_ bias = ref 1 in
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.local b in
-  let c = G_ipv4.check n (Wire_runtime.Buf.length n) 0 in
+  let c = G_ipv4.check n ~off:0 in
   let read v =
     !bias
     + (G_ipv4.versionihl n v :> int)
     + (G_ipv4.length n v :> int)
     + (G_ipv4.ttl n v :> int)
   in
-  let with_ = if G_ipv4.ok c then read (G_ipv4.get c) else -1 in
+  let with_ = if G_ipv4.is_ok c then read (G_ipv4.get c) else -1 in
   with_ + folded b
 
 let test_stack_decode () =
@@ -106,7 +106,7 @@ let test_stack_decode () =
 let stack_write () =
   let r = decoded () in
   let b = Bytes.create__stack size in
-  G_ipv4_record.encode r b 0;
+  G_ipv4_record.encode r b ~off:0;
   let back = folded b in
   back >= 0 && back = record r
 
@@ -115,7 +115,7 @@ let test_stack_write () = Alcotest.(check bool) "written" true (stack_write ())
 (* A portable function may call the generated code, as a parallel task does. *)
 let (portable_read @ portable) =
  fun buf ->
-  match G_ipv4.decode buf 0 with
+  match G_ipv4.decode buf ~off:0 with
   | Ok r -> Wire_runtime.SInt32.to_int r.G_ipv4.src + (r.ttl :> int)
   | Error _ -> -1
 

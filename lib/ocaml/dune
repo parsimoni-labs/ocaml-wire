@@ -14,6 +14,5 @@
   scan_module
   view_module
   fstar_module
-  interface
-  twin_module)
+  interface)
  (libraries wire fmt))

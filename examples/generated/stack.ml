@@ -21,183 +21,216 @@ let uint32_eq : (Wire_runtime.UInt32.t, int) Type.eq =
   | Some eq -> eq
   | None -> invalid_arg "EthernetStack: no 32-bit int"
 
-let[@inline always] count_tcp_opaque ~init =
-  Count_tcp.valid init ~ipv4_tcp_present:false
+let[@inline always] step_opaque ~init ~f ~f14_ipv4_protocol =
+  f init
+    (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+    None
 
-let[@inline always] count_tcp_tcp ~buf ~base ~init ~f6_ipv4_ihl
-    ~f9_ipv4_total_length =
+let[@inline always] step_tcp ~buf ~base ~init ~f ~invalid ~f6_ipv4_ihl
+    ~f9_ipv4_total_length ~f14_ipv4_protocol =
   let n11 = Int64.sub f9_ipv4_total_length (Int64.shift_left f6_ipv4_ihl 2) in
   let b13 = base + Int64.to_int (Int64.shift_left f6_ipv4_ihl 2) in
-  if (n11 : int64) < 20L then Count_tcp.invalid init
+  if (n11 : int64) < 20L then invalid init
   else
     let bw14 = Int64.of_int (Wire_runtime.Unchecked.u16be buf (b13 + 26)) in
+    let f20_ipv4_tcp_dst_port =
+      Int64.of_int (Wire_runtime.Unchecked.u16be buf (b13 + 16))
+    in
     let f23_ipv4_tcp_data_offset = Int64.shift_right_logical bw14 12 in
-    if not ((f23_ipv4_tcp_data_offset : int64) >= 5L) then
-      Count_tcp.invalid init
+    if not ((f23_ipv4_tcp_data_offset : int64) >= 5L) then invalid init
     else if (Int64.shift_left f23_ipv4_tcp_data_offset 2 : int64) > n11 then
-      Count_tcp.invalid init
-    else Count_tcp.valid init ~ipv4_tcp_present:true
+      invalid init
+    else
+      f init
+        (Some
+           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        (Some
+           (Wire_runtime.UInt16.unsafe_of_int
+              (Int64.to_int f20_ipv4_tcp_dst_port)))
 
-let[@inline always] count_tcp_udp ~buf ~base ~init ~f6_ipv4_ihl
-    ~f9_ipv4_total_length =
+let[@inline always] step_udp ~buf ~base ~init ~f ~invalid ~f6_ipv4_ihl
+    ~f9_ipv4_total_length ~f14_ipv4_protocol =
   let n17 = Int64.sub f9_ipv4_total_length (Int64.shift_left f6_ipv4_ihl 2) in
   let b19 = base + Int64.to_int (Int64.shift_left f6_ipv4_ihl 2) in
-  if (n17 : int64) < 8L then Count_tcp.invalid init
+  if (n17 : int64) < 8L then invalid init
   else
     let f32_ipv4_udp_length =
       Int64.of_int (Wire_runtime.Unchecked.u16be buf (b19 + 18))
     in
-    if not ((f32_ipv4_udp_length : int64) >= 8L) then Count_tcp.invalid init
-    else if (f32_ipv4_udp_length : int64) > n17 then Count_tcp.invalid init
-    else Count_tcp.valid init ~ipv4_tcp_present:false
+    if not ((f32_ipv4_udp_length : int64) >= 8L) then invalid init
+    else if (f32_ipv4_udp_length : int64) > n17 then invalid init
+    else
+      f init
+        (Some
+           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        None
 
-let[@inline always] count_tcp_tcp_cases ~buf ~base ~init ~bw3 ~f6_ipv4_ihl
-    ~f9_ipv4_total_length ~f14_ipv4_protocol =
-  let[@local] c2_j8 () = count_tcp_opaque ~init in
+let[@inline always] step_tcp_cases ~buf ~base ~init ~f ~invalid ~bw3
+    ~f6_ipv4_ihl ~f9_ipv4_total_length ~f14_ipv4_protocol =
+  let[@local] c2_j8 () = step_opaque ~init ~f ~f14_ipv4_protocol in
   if (Int64.logand bw3 16383L : int64) = 0L then
     if (f14_ipv4_protocol : int64) = 6L then
-      count_tcp_tcp ~buf ~base ~init ~f6_ipv4_ihl ~f9_ipv4_total_length
+      step_tcp ~buf ~base ~init ~f ~invalid ~f6_ipv4_ihl ~f9_ipv4_total_length
+        ~f14_ipv4_protocol
     else if (f14_ipv4_protocol : int64) = 17L then
-      count_tcp_udp ~buf ~base ~init ~f6_ipv4_ihl ~f9_ipv4_total_length
+      step_udp ~buf ~base ~init ~f ~invalid ~f6_ipv4_ihl ~f9_ipv4_total_length
+        ~f14_ipv4_protocol
     else c2_j8 ()
   else c2_j8 ()
 
-let[@inline always] count_tcp_ipv4 ~buf ~base ~stop ~init =
-  if (stop : int) < 34 then Count_tcp.invalid init
+let[@inline always] step_ipv4 ~buf ~base ~stop ~init ~f ~invalid =
+  if (stop : int) < 34 then invalid init
   else
     let w14 = Wire_runtime.Unchecked.i64be buf (base + 14) in
     let bw2 = Int64.shift_right_logical w14 56 in
     let bw3 = Int64.logand w14 65535L in
     let f6_ipv4_ihl = Int64.logand bw2 15L in
-    if (bw2 : int64) < 69L || (bw2 : int64) > 79L then Count_tcp.invalid init
+    if (bw2 : int64) < 69L || (bw2 : int64) > 79L then invalid init
     else
       let f9_ipv4_total_length =
         Int64.logand (Int64.shift_right_logical w14 32) 65535L
       in
       if not ((f9_ipv4_total_length : int64) >= Int64.shift_left f6_ipv4_ihl 2)
-      then Count_tcp.invalid init
+      then invalid init
       else
         let f14_ipv4_protocol =
           Int64.of_int (Wire_runtime.Unchecked.u8 buf (base + 23))
         in
         if (f9_ipv4_total_length : int64) > Int64.sub (Int64.of_int stop) 14L
-        then Count_tcp.invalid init
+        then invalid init
         else
-          count_tcp_tcp_cases ~buf ~base ~init ~bw3 ~f6_ipv4_ihl
+          step_tcp_cases ~buf ~base ~init ~f ~invalid ~bw3 ~f6_ipv4_ihl
             ~f9_ipv4_total_length ~f14_ipv4_protocol
 
-let[@inline always] count_tcp_record ~buf ~base ~stop ~init =
-  if (stop : int) < 14 then Count_tcp.invalid init
+let[@inline always] step_record ~buf ~base ~stop ~init ~f ~invalid =
+  if (stop : int) < 14 then invalid init
   else
     let f3_ether_type =
       Int64.of_int (Wire_runtime.Unchecked.u16be buf (base + 12))
     in
     if (f3_ether_type : int64) = 2048L then
-      count_tcp_ipv4 ~buf ~base ~stop ~init
-    else Count_tcp.valid init ~ipv4_tcp_present:false
+      step_ipv4 ~buf ~base ~stop ~init ~f ~invalid
+    else f init None None
 
-let[@inline always] count_tcp_within buf ~length off len ~init =
-  if off < 0 || len > length - off then Count_tcp.invalid init
+let[@inline always] fold_step_within buf ~length off len ~init ~f ~invalid =
+  if off < 0 || len > length - off then invalid init
   else
     let base = off in
     let stop = len in
-    count_tcp_record ~buf ~base ~stop ~init
+    step_record ~buf ~base ~stop ~init ~f ~invalid
 
-let[@inline always] count_tcp buf off len ~init =
-  count_tcp_within buf ~length:(Bytes.length buf) off len ~init
+let[@inline always] fold_step buf off len ~init ~f ~invalid =
+  fold_step_within buf ~length:(Bytes.length buf) off len ~init ~f ~invalid
 
-let[@inline always] count_tcp_index_opaque ~current =
-  Count_tcp.valid current ~ipv4_tcp_present:false
+let[@inline always] step_index_opaque ~current ~f ~f14_ipv4_protocol =
+  f current
+    (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+    None
 
-let[@inline always] count_tcp_index_tcp ~buf ~base ~current ~f6_ipv4_ihl
-    ~f9_ipv4_total_length =
+let[@inline always] step_index_tcp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
+    ~f9_ipv4_total_length ~f14_ipv4_protocol =
   let n11 = Int64.sub f9_ipv4_total_length (Int64.shift_left f6_ipv4_ihl 2) in
   let b13 = base + Int64.to_int (Int64.shift_left f6_ipv4_ihl 2) in
-  if (n11 : int64) < 20L then Count_tcp.invalid current
+  if (n11 : int64) < 20L then invalid current
   else
     let bw14 = Int64.of_int (Wire_runtime.Unchecked.u16be buf (b13 + 26)) in
+    let f20_ipv4_tcp_dst_port =
+      Int64.of_int (Wire_runtime.Unchecked.u16be buf (b13 + 16))
+    in
     let f23_ipv4_tcp_data_offset = Int64.shift_right_logical bw14 12 in
-    if not ((f23_ipv4_tcp_data_offset : int64) >= 5L) then
-      Count_tcp.invalid current
+    if not ((f23_ipv4_tcp_data_offset : int64) >= 5L) then invalid current
     else if (Int64.shift_left f23_ipv4_tcp_data_offset 2 : int64) > n11 then
-      Count_tcp.invalid current
-    else Count_tcp.valid current ~ipv4_tcp_present:true
+      invalid current
+    else
+      f current
+        (Some
+           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        (Some
+           (Wire_runtime.UInt16.unsafe_of_int
+              (Int64.to_int f20_ipv4_tcp_dst_port)))
 
-let[@inline always] count_tcp_index_udp ~buf ~base ~current ~f6_ipv4_ihl
-    ~f9_ipv4_total_length =
+let[@inline always] step_index_udp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
+    ~f9_ipv4_total_length ~f14_ipv4_protocol =
   let n17 = Int64.sub f9_ipv4_total_length (Int64.shift_left f6_ipv4_ihl 2) in
   let b19 = base + Int64.to_int (Int64.shift_left f6_ipv4_ihl 2) in
-  if (n17 : int64) < 8L then Count_tcp.invalid current
+  if (n17 : int64) < 8L then invalid current
   else
     let f32_ipv4_udp_length =
       Int64.of_int (Wire_runtime.Unchecked.u16be buf (b19 + 18))
     in
-    if not ((f32_ipv4_udp_length : int64) >= 8L) then Count_tcp.invalid current
-    else if (f32_ipv4_udp_length : int64) > n17 then Count_tcp.invalid current
-    else Count_tcp.valid current ~ipv4_tcp_present:false
+    if not ((f32_ipv4_udp_length : int64) >= 8L) then invalid current
+    else if (f32_ipv4_udp_length : int64) > n17 then invalid current
+    else
+      f current
+        (Some
+           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        None
 
-let[@inline always] count_tcp_index_tcp_cases ~buf ~base ~current ~bw3
+let[@inline always] step_index_tcp_cases ~buf ~base ~current ~f ~invalid ~bw3
     ~f6_ipv4_ihl ~f9_ipv4_total_length ~f14_ipv4_protocol =
-  let[@local] c2_j8 () = count_tcp_index_opaque ~current in
+  let[@local] c2_j8 () = step_index_opaque ~current ~f ~f14_ipv4_protocol in
   if (Int64.logand bw3 16383L : int64) = 0L then
     if (f14_ipv4_protocol : int64) = 6L then
-      count_tcp_index_tcp ~buf ~base ~current ~f6_ipv4_ihl ~f9_ipv4_total_length
+      step_index_tcp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
+        ~f9_ipv4_total_length ~f14_ipv4_protocol
     else if (f14_ipv4_protocol : int64) = 17L then
-      count_tcp_index_udp ~buf ~base ~current ~f6_ipv4_ihl ~f9_ipv4_total_length
+      step_index_udp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
+        ~f9_ipv4_total_length ~f14_ipv4_protocol
     else c2_j8 ()
   else c2_j8 ()
 
-let[@inline always] count_tcp_index_ipv4 ~buf ~base ~stop ~current
-    ~f14_ipv4_protocol ~w12 =
+let[@inline always] step_index_ipv4 ~buf ~base ~stop ~current ~f14_ipv4_protocol
+    ~f ~invalid ~w12 =
   let w20 = Wire_runtime.Unchecked.i64be buf (base + 20) in
   let bw2 = Int64.logand (Int64.shift_right_logical w12 40) 255L in
   let bw3 = Int64.shift_right_logical w20 48 in
   let f6_ipv4_ihl = Int64.logand bw2 15L in
-  if (bw2 : int64) < 69L || (bw2 : int64) > 79L then Count_tcp.invalid current
+  if (bw2 : int64) < 69L || (bw2 : int64) > 79L then invalid current
   else
     let f9_ipv4_total_length =
       Int64.logand (Int64.shift_right_logical w12 16) 65535L
     in
     if not ((f9_ipv4_total_length : int64) >= Int64.shift_left f6_ipv4_ihl 2)
-    then Count_tcp.invalid current
+    then invalid current
     else if (f9_ipv4_total_length : int64) > Int64.sub (Int64.of_int stop) 14L
-    then Count_tcp.invalid current
+    then invalid current
     else
-      count_tcp_index_tcp_cases ~buf ~base ~current ~bw3 ~f6_ipv4_ihl
+      step_index_tcp_cases ~buf ~base ~current ~f ~invalid ~bw3 ~f6_ipv4_ihl
         ~f9_ipv4_total_length ~f14_ipv4_protocol
 
-let[@inline always] count_tcp_index_record ~buf ~base ~stop ~current
-    ~f14_ipv4_protocol =
+let[@inline always] step_index_record ~buf ~base ~stop ~current
+    ~f14_ipv4_protocol ~f ~invalid =
   let w12 = Wire_runtime.Unchecked.i64be buf (base + 12) in
   let f3_ether_type = Int64.shift_right_logical w12 48 in
   if (f3_ether_type : int64) = 2048L then
-    count_tcp_index_ipv4 ~buf ~base ~stop ~current ~f14_ipv4_protocol ~w12
-  else Count_tcp.valid current ~ipv4_tcp_present:false
+    step_index_ipv4 ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f ~invalid
+      ~w12
+  else f current None None
 
-let[@inline always] count_tcp_index_known ~length base stop =
+let[@inline always] fold_step_index_known ~length base stop =
   base >= 0 && stop >= 34 && stop <= length - base
 
-let[@inline always] count_tcp_index_ahead buf ~known base =
+let[@inline always] fold_step_index_ahead buf ~known base =
   if known then Int64.of_int (Wire_runtime.Unchecked.u8 buf (base + 23)) else 0L
 
-let[@inline always] count_tcp_index_frame buf ~length ~known ~base ~stop
-    ~current ~f14_ipv4_protocol =
+let[@inline always] fold_step_index_frame buf ~length ~known ~base ~stop
+    ~current ~f14_ipv4_protocol ~f ~invalid =
   if known then
-    count_tcp_index_record ~buf ~base ~stop ~current ~f14_ipv4_protocol
-  else count_tcp_within buf ~length base stop ~init:current
+    step_index_record ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f ~invalid
+  else fold_step_within buf ~length base stop ~init:current ~f ~invalid
 
-let[@inline always] count_tcp_index buf ~(offs : int array) ~(lens : int array)
-    ~init =
+let[@inline always] fold_step_index buf ~(offs : int array) ~(lens : int array)
+    ~init ~f ~invalid =
   let n = Array.length offs in
   if Array.length lens <> n then
-    invalid_arg "count_tcp_index: offs and lens differ in length";
+    invalid_arg "fold_step_index: offs and lens differ in length";
   let length = Bytes.length buf in
   let acc = ref init in
   if n > 0 then begin
     let base_0 = Array.unsafe_get offs 0 in
     let stop_0 = Array.unsafe_get lens 0 in
-    let known_0 = count_tcp_index_known ~length base_0 stop_0 in
-    let f14_ipv4_protocol_0 = count_tcp_index_ahead buf ~known:known_0 base_0 in
+    let known_0 = fold_step_index_known ~length base_0 stop_0 in
+    let f14_ipv4_protocol_0 = fold_step_index_ahead buf ~known:known_0 base_0 in
     let base_c = ref base_0 in
     let stop_c = ref stop_0 in
     let known_c = ref known_0 in
@@ -206,22 +239,24 @@ let[@inline always] count_tcp_index buf ~(offs : int array) ~(lens : int array)
     while !i < n - 1 do
       let base_1 = Array.unsafe_get offs !i in
       let stop_1 = Array.unsafe_get lens !i in
-      let known_1 = count_tcp_index_known ~length base_1 stop_1 in
+      let known_1 = fold_step_index_known ~length base_1 stop_1 in
       let f14_ipv4_protocol_1 =
-        count_tcp_index_ahead buf ~known:known_1 base_1
+        fold_step_index_ahead buf ~known:known_1 base_1
       in
       acc :=
-        count_tcp_index_frame buf ~length ~known:!known_c ~base:!base_c
-          ~stop:!stop_c ~current:!acc ~f14_ipv4_protocol:!f14_ipv4_protocol_c;
+        fold_step_index_frame buf ~length ~known:!known_c ~base:!base_c
+          ~stop:!stop_c ~current:!acc ~f14_ipv4_protocol:!f14_ipv4_protocol_c ~f
+          ~invalid;
       let base_2 = Array.unsafe_get offs (!i + 1) in
       let stop_2 = Array.unsafe_get lens (!i + 1) in
-      let known_2 = count_tcp_index_known ~length base_2 stop_2 in
+      let known_2 = fold_step_index_known ~length base_2 stop_2 in
       let f14_ipv4_protocol_2 =
-        count_tcp_index_ahead buf ~known:known_2 base_2
+        fold_step_index_ahead buf ~known:known_2 base_2
       in
       acc :=
-        count_tcp_index_frame buf ~length ~known:known_1 ~base:base_1
-          ~stop:stop_1 ~current:!acc ~f14_ipv4_protocol:f14_ipv4_protocol_1;
+        fold_step_index_frame buf ~length ~known:known_1 ~base:base_1
+          ~stop:stop_1 ~current:!acc ~f14_ipv4_protocol:f14_ipv4_protocol_1 ~f
+          ~invalid;
       base_c := base_2;
       stop_c := stop_2;
       known_c := known_2;
@@ -231,113 +266,132 @@ let[@inline always] count_tcp_index buf ~(offs : int array) ~(lens : int array)
     if !i < n then begin
       let base_1 = Array.unsafe_get offs !i in
       let stop_1 = Array.unsafe_get lens !i in
-      let known_1 = count_tcp_index_known ~length base_1 stop_1 in
+      let known_1 = fold_step_index_known ~length base_1 stop_1 in
       let f14_ipv4_protocol_1 =
-        count_tcp_index_ahead buf ~known:known_1 base_1
+        fold_step_index_ahead buf ~known:known_1 base_1
       in
       acc :=
-        count_tcp_index_frame buf ~length ~known:!known_c ~base:!base_c
-          ~stop:!stop_c ~current:!acc ~f14_ipv4_protocol:!f14_ipv4_protocol_c;
+        fold_step_index_frame buf ~length ~known:!known_c ~base:!base_c
+          ~stop:!stop_c ~current:!acc ~f14_ipv4_protocol:!f14_ipv4_protocol_c ~f
+          ~invalid;
       acc :=
-        count_tcp_index_frame buf ~length ~known:known_1 ~base:base_1
-          ~stop:stop_1 ~current:!acc ~f14_ipv4_protocol:f14_ipv4_protocol_1
+        fold_step_index_frame buf ~length ~known:known_1 ~base:base_1
+          ~stop:stop_1 ~current:!acc ~f14_ipv4_protocol:f14_ipv4_protocol_1 ~f
+          ~invalid
     end
     else
       acc :=
-        count_tcp_index_frame buf ~length ~known:!known_c ~base:!base_c
-          ~stop:!stop_c ~current:!acc ~f14_ipv4_protocol:!f14_ipv4_protocol_c
+        fold_step_index_frame buf ~length ~known:!known_c ~base:!base_c
+          ~stop:!stop_c ~current:!acc ~f14_ipv4_protocol:!f14_ipv4_protocol_c ~f
+          ~invalid
   end;
   !acc
 
-let[@inline never] count_tcp_frames_short buf ~stride ~last ~off ~init =
+let[@inline never] fold_step_frames_short buf ~stride ~last ~off ~init ~f
+    ~invalid =
   let acc = ref init in
   let cursor = ref off in
   while !cursor <= last do
     let base = !cursor in
     let current = !acc in
-    acc := count_tcp buf base stride ~init:current;
+    acc := fold_step buf base stride ~init:current ~f ~invalid;
     cursor := base + stride
   done;
   !acc
 
-let[@inline always] count_tcp_frames_opaque ~current =
-  Count_tcp.valid current ~ipv4_tcp_present:false
+let[@inline always] step_frames_opaque ~current ~f ~f14_ipv4_protocol =
+  f current
+    (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+    None
 
-let[@inline always] count_tcp_frames_tcp ~buf ~base ~current ~f6_ipv4_ihl
-    ~f9_ipv4_total_length =
+let[@inline always] step_frames_tcp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
+    ~f9_ipv4_total_length ~f14_ipv4_protocol =
   let n11 = Int64.sub f9_ipv4_total_length (Int64.shift_left f6_ipv4_ihl 2) in
   let b13 = base + Int64.to_int (Int64.shift_left f6_ipv4_ihl 2) in
-  if (n11 : int64) < 20L then Count_tcp.invalid current
+  if (n11 : int64) < 20L then invalid current
   else
     let bw14 = Int64.of_int (Wire_runtime.Unchecked.u16be buf (b13 + 26)) in
+    let f20_ipv4_tcp_dst_port =
+      Int64.of_int (Wire_runtime.Unchecked.u16be buf (b13 + 16))
+    in
     let f23_ipv4_tcp_data_offset = Int64.shift_right_logical bw14 12 in
-    if not ((f23_ipv4_tcp_data_offset : int64) >= 5L) then
-      Count_tcp.invalid current
+    if not ((f23_ipv4_tcp_data_offset : int64) >= 5L) then invalid current
     else if (Int64.shift_left f23_ipv4_tcp_data_offset 2 : int64) > n11 then
-      Count_tcp.invalid current
-    else Count_tcp.valid current ~ipv4_tcp_present:true
+      invalid current
+    else
+      f current
+        (Some
+           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        (Some
+           (Wire_runtime.UInt16.unsafe_of_int
+              (Int64.to_int f20_ipv4_tcp_dst_port)))
 
-let[@inline always] count_tcp_frames_udp ~buf ~base ~current ~f6_ipv4_ihl
-    ~f9_ipv4_total_length =
+let[@inline always] step_frames_udp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
+    ~f9_ipv4_total_length ~f14_ipv4_protocol =
   let n17 = Int64.sub f9_ipv4_total_length (Int64.shift_left f6_ipv4_ihl 2) in
   let b19 = base + Int64.to_int (Int64.shift_left f6_ipv4_ihl 2) in
-  if (n17 : int64) < 8L then Count_tcp.invalid current
+  if (n17 : int64) < 8L then invalid current
   else
     let f32_ipv4_udp_length =
       Int64.of_int (Wire_runtime.Unchecked.u16be buf (b19 + 18))
     in
-    if not ((f32_ipv4_udp_length : int64) >= 8L) then Count_tcp.invalid current
-    else if (f32_ipv4_udp_length : int64) > n17 then Count_tcp.invalid current
-    else Count_tcp.valid current ~ipv4_tcp_present:false
+    if not ((f32_ipv4_udp_length : int64) >= 8L) then invalid current
+    else if (f32_ipv4_udp_length : int64) > n17 then invalid current
+    else
+      f current
+        (Some
+           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        None
 
-let[@inline always] count_tcp_frames_tcp_cases ~buf ~base ~current ~bw3
+let[@inline always] step_frames_tcp_cases ~buf ~base ~current ~f ~invalid ~bw3
     ~f6_ipv4_ihl ~f9_ipv4_total_length ~f14_ipv4_protocol =
-  let[@local] c2_j8 () = count_tcp_frames_opaque ~current in
+  let[@local] c2_j8 () = step_frames_opaque ~current ~f ~f14_ipv4_protocol in
   if (Int64.logand bw3 16383L : int64) = 0L then
     if (f14_ipv4_protocol : int64) = 6L then
-      count_tcp_frames_tcp ~buf ~base ~current ~f6_ipv4_ihl
-        ~f9_ipv4_total_length
+      step_frames_tcp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
+        ~f9_ipv4_total_length ~f14_ipv4_protocol
     else if (f14_ipv4_protocol : int64) = 17L then
-      count_tcp_frames_udp ~buf ~base ~current ~f6_ipv4_ihl
-        ~f9_ipv4_total_length
+      step_frames_udp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
+        ~f9_ipv4_total_length ~f14_ipv4_protocol
     else c2_j8 ()
   else c2_j8 ()
 
-let[@inline always] count_tcp_frames_ipv4 ~buf ~base ~stop ~current
-    ~f14_ipv4_protocol ~w12 =
+let[@inline always] step_frames_ipv4 ~buf ~base ~stop ~current
+    ~f14_ipv4_protocol ~f ~invalid ~w12 =
   let w20 = Wire_runtime.Unchecked.i64be buf (base + 20) in
   let bw2 = Int64.logand (Int64.shift_right_logical w12 40) 255L in
   let bw3 = Int64.shift_right_logical w20 48 in
   let f6_ipv4_ihl = Int64.logand bw2 15L in
-  if (bw2 : int64) < 69L || (bw2 : int64) > 79L then Count_tcp.invalid current
+  if (bw2 : int64) < 69L || (bw2 : int64) > 79L then invalid current
   else
     let f9_ipv4_total_length =
       Int64.logand (Int64.shift_right_logical w12 16) 65535L
     in
     if not ((f9_ipv4_total_length : int64) >= Int64.shift_left f6_ipv4_ihl 2)
-    then Count_tcp.invalid current
+    then invalid current
     else if (f9_ipv4_total_length : int64) > Int64.sub (Int64.of_int stop) 14L
-    then Count_tcp.invalid current
+    then invalid current
     else
-      count_tcp_frames_tcp_cases ~buf ~base ~current ~bw3 ~f6_ipv4_ihl
+      step_frames_tcp_cases ~buf ~base ~current ~f ~invalid ~bw3 ~f6_ipv4_ihl
         ~f9_ipv4_total_length ~f14_ipv4_protocol
 
-let[@inline always] count_tcp_frames_record ~buf ~base ~stop ~current
-    ~f14_ipv4_protocol =
+let[@inline always] step_frames_record ~buf ~base ~stop ~current
+    ~f14_ipv4_protocol ~f ~invalid =
   let w12 = Wire_runtime.Unchecked.i64be buf (base + 12) in
   let f3_ether_type = Int64.shift_right_logical w12 48 in
   if (f3_ether_type : int64) = 2048L then
-    count_tcp_frames_ipv4 ~buf ~base ~stop ~current ~f14_ipv4_protocol ~w12
-  else Count_tcp.valid current ~ipv4_tcp_present:false
+    step_frames_ipv4 ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f ~invalid
+      ~w12
+  else f current None None
 
-let[@inline always] count_tcp_frames buf off len ~stride ~init =
+let[@inline always] fold_step_frames buf off len ~stride ~init ~f ~invalid =
   if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then
-    invalid_arg "count_tcp_frames: invalid frame bounds or stride";
+    invalid_arg "fold_step_frames: invalid frame bounds or stride";
   let acc = ref init in
   let cursor = ref off in
   let last = off + len - stride in
   if stride < 34 then
-    acc := count_tcp_frames_short buf ~stride ~last ~off ~init:!acc
+    acc := fold_step_frames_short buf ~stride ~last ~off ~init:!acc ~f ~invalid
   else (
     (if stride <= len / 4 then
        let last_4 = off + len - (4 * stride) in
@@ -365,7 +419,8 @@ let[@inline always] count_tcp_frames buf off len ~stride ~init =
          let current = !acc in
          let next =
            let stop = stride in
-           count_tcp_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol
+           step_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f
+             ~invalid
          in
          acc := next;
          let base = base_1 in
@@ -373,7 +428,8 @@ let[@inline always] count_tcp_frames buf off len ~stride ~init =
          let current = !acc in
          let next =
            let stop = stride in
-           count_tcp_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol
+           step_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f
+             ~invalid
          in
          acc := next;
          let base = base_2 in
@@ -381,7 +437,8 @@ let[@inline always] count_tcp_frames buf off len ~stride ~init =
          let current = !acc in
          let next =
            let stop = stride in
-           count_tcp_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol
+           step_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f
+             ~invalid
          in
          acc := next;
          let base = base_3 in
@@ -389,7 +446,8 @@ let[@inline always] count_tcp_frames buf off len ~stride ~init =
          let current = !acc in
          let next =
            let stop = stride in
-           count_tcp_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol
+           step_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f
+             ~invalid
          in
          acc := next;
          cursor := !cursor + stride_4
@@ -402,7 +460,8 @@ let[@inline always] count_tcp_frames buf off len ~stride ~init =
       let current = !acc in
       let next =
         let stop = stride in
-        count_tcp_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol
+        step_frames_record ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f
+          ~invalid
       in
       acc := next;
       cursor := !cursor + stride
@@ -475,10 +534,9 @@ let[@inline always] check_record ~buf ~base ~stop ~off =
     if (f3_ether_type : int) = 2048 then check_ipv4 ~buf ~base ~stop ~off
     else off
 
-let[@inline always] check (b : 'b Wire_runtime.Buf.t)
-    (length : 'b Wire_runtime.Buf.length) ~off ~len : 'b check =
+let[@inline always] check (b : 'b Wire_runtime.Buf.t) ~off ~len : 'b check =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-  let length = (length : _ Wire_runtime.Buf.length :> int) in
+  let length = Bytes.length buf in
   if off < 0 || off > length - len then -1
   else
     let base = off in
@@ -519,7 +577,7 @@ module Stack_tcp = struct
   type 'b check = int
 
   let failed = Invalid_argument "Stack_tcp.get: the check failed"
-  let[@inline always] ok (c : 'b check) = c >= 0
+  let[@inline always] is_ok (c : 'b check) = c >= 0
 
   let[@inline always] get (c : 'b check) : 'b view =
     if c >= 0 then c else raise failed
@@ -677,8 +735,7 @@ module Stack_tcp = struct
     Format.pp_print_string ppf " }";
     Format.pp_close_box ppf ()
 
-  let of_view (b' : 'b Wire_runtime.Buf.t) (_ : 'b Wire_runtime.Buf.length)
-      (v' : 'b view) : t =
+  let of_view (b' : 'b Wire_runtime.Buf.t) (v' : 'b view) : t =
     {
       src_port = src_port b' v';
       dst_port = dst_port b' v';
@@ -779,7 +836,7 @@ module Stack_udp = struct
   type 'b check = int
 
   let failed = Invalid_argument "Stack_udp.get: the check failed"
-  let[@inline always] ok (c : 'b check) = c >= 0
+  let[@inline always] is_ok (c : 'b check) = c >= 0
 
   let[@inline always] get (c : 'b check) : 'b view =
     if c >= 0 then c else raise failed
@@ -864,8 +921,7 @@ module Stack_udp = struct
     Format.pp_print_string ppf " }";
     Format.pp_close_box ppf ()
 
-  let of_view (b' : 'b Wire_runtime.Buf.t) (_ : 'b Wire_runtime.Buf.length)
-      (v' : 'b view) : t =
+  let of_view (b' : 'b Wire_runtime.Buf.t) (v' : 'b view) : t =
     {
       src_port = src_port b' v';
       dst_port = dst_port b' v';
@@ -937,10 +993,63 @@ module Stack_ipv4 = struct
   type 'b check = int
 
   let failed = Invalid_argument "Stack_ipv4.get: the check failed"
-  let[@inline always] ok (c : 'b check) = c >= 0
+  let[@inline always] is_ok (c : 'b check) = c >= 0
 
   let[@inline always] get (c : 'b check) : 'b view =
     if c >= 0 then c else raise failed
+
+  let[@inline never] end_at (buf : bytes) (len : int) (v : int) =
+    if v > len - 10 then -1
+    else
+      let w0 = Wire_runtime.Unchecked.i64be buf v in
+      let w2 = Wire_runtime.Unchecked.i64be buf (v + 2) in
+      let bw1 = Int64.to_int (Int64.shift_right_logical w0 56) in
+      let f2_ihl = bw1 land 0xf in
+      let f5_total_length =
+        Int64.to_int (Int64.shift_right_logical w0 32) land 0xffff
+      in
+      let bw2 = Int64.to_int w0 land 0xffff in
+      let f10_protocol = Int64.to_int w2 land 0xff in
+      let s3 = (f2_ihl lsl 2) - 20 in
+      if s3 < 0 || s3 > len - (v + 20) then -1
+      else
+        let p4 = v + 20 + s3 in
+        let p5 =
+          if (bw2 land 16383 : int) = 0 && (f10_protocol : int) = 6 then
+            let s6 = f5_total_length - (f2_ihl lsl 2) in
+            if s6 < 0 || s6 > len - p4 then -1
+            else
+              let p7 = p4 + s6 in
+              p7
+          else p4
+        in
+        if p5 < 0 then -1
+        else
+          let p8 =
+            if (bw2 land 16383 : int) = 0 && (f10_protocol : int) = 17 then
+              let s9 = f5_total_length - (f2_ihl lsl 2) in
+              if s9 < 0 || s9 > len - p5 then -1
+              else
+                let p10 = p5 + s9 in
+                p10
+            else p5
+          in
+          if p8 < 0 then -1
+          else
+            let p11 =
+              if
+                not
+                  (((bw2 land 16383 : int) = 0 && (f10_protocol : int) = 6)
+                  || ((bw2 land 16383 : int) = 0 && (f10_protocol : int) = 17))
+              then
+                let s12 = f5_total_length - (f2_ihl lsl 2) in
+                if s12 < 0 || s12 > len - p8 then -1
+                else
+                  let p13 = p8 + s12 in
+                  p13
+              else p8
+            in
+            if p11 < 0 then -1 else p11
 
   let[@inline always] version (b : 'b Wire_runtime.Buf.t) (v : 'b view) : int =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
@@ -1017,10 +1126,10 @@ module Stack_ipv4 = struct
       let p3 = v + 20 + s2 in
       Bytesrw.Bytes.Slice.make_or_eod buf ~first:(v + 20) ~length:(p3 - (v + 20))
 
-  let[@inline always] tcp (b : 'b Wire_runtime.Buf.t)
-      (len : 'b Wire_runtime.Buf.length) (v : 'b view) : 'b Stack_tcp.check =
+  let[@inline always] tcp (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
+      'b Stack_tcp.check =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    let len = (len : _ Wire_runtime.Buf.length :> int) in
+    let len = Bytes.length buf in
     let w0 = Wire_runtime.Unchecked.i64be buf v in
     let bw1 = Int64.to_int (Int64.shift_right_logical w0 56) in
     let f2_ihl = bw1 land 0xf in
@@ -1034,10 +1143,10 @@ module Stack_ipv4 = struct
         let p4 = v + 20 + s3 in
         p4
 
-  let[@inline always] udp (b : 'b Wire_runtime.Buf.t)
-      (len : 'b Wire_runtime.Buf.length) (v : 'b view) : 'b Stack_udp.check =
+  let[@inline always] udp (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
+      'b Stack_udp.check =
     let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-    let len = (len : _ Wire_runtime.Buf.length :> int) in
+    let len = Bytes.length buf in
     let w0 = Wire_runtime.Unchecked.i64be buf v in
     let bw1 = Int64.to_int (Int64.shift_right_logical w0 56) in
     let f2_ihl = bw1 land 0xf in
@@ -1225,8 +1334,7 @@ module Stack_ipv4 = struct
     Format.pp_print_string ppf " }";
     Format.pp_close_box ppf ()
 
-  let of_view (b' : 'b Wire_runtime.Buf.t) (len' : 'b Wire_runtime.Buf.length)
-      (v' : 'b view) : t =
+  let of_view (b' : 'b Wire_runtime.Buf.t) (v' : 'b view) : t =
     {
       version = version b' v';
       ihl = ihl b' v';
@@ -1243,14 +1351,12 @@ module Stack_ipv4 = struct
       dst = dst b' v';
       options = options b' v';
       tcp =
-        (let c = tcp b' len' v' in
-         if Stack_tcp.ok c then
-           Some (Stack_tcp.of_view b' len' (Stack_tcp.get c))
+        (let c = tcp b' v' in
+         if Stack_tcp.is_ok c then Some (Stack_tcp.of_view b' (Stack_tcp.get c))
          else None);
       udp =
-        (let c = udp b' len' v' in
-         if Stack_udp.ok c then
-           Some (Stack_udp.of_view b' len' (Stack_udp.get c))
+        (let c = udp b' v' in
+         if Stack_udp.is_ok c then Some (Stack_udp.of_view b' (Stack_udp.get c))
          else None);
       opaque = (if opaque_present b' v' then Some (opaque b' v') else None);
     }
@@ -1544,10 +1650,22 @@ module Stack_ipv4 = struct
 end
 
 let failed = Invalid_argument "EthernetStack.get: the check failed"
-let[@inline always] ok (c : 'b check) = c >= 0
+let[@inline always] is_ok (c : 'b check) = c >= 0
 
 let[@inline always] get (c : 'b check) : 'b view =
   if c >= 0 then c else raise failed
+
+let[@inline never] end_at (buf : bytes) (len : int) (v : int) =
+  if v > len - 14 then -1
+  else
+    let f3_ether_type = Wire_runtime.Unchecked.u16be buf (v + 12) in
+    let p1 =
+      if (f3_ether_type : int) = 2048 then
+        let p2 = Stack_ipv4.end_at buf len (v + 14) in
+        if p2 < 0 then -1 else p2
+      else v + 14
+    in
+    if p1 < 0 then -1 else p1
 
 let[@inline always] dst (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
     Bytesrw.Bytes.Slice.t =
@@ -1564,10 +1682,10 @@ let[@inline always] ether_type (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
   let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
   Wire_runtime.UInt16.unsafe_of_int (Wire_runtime.Unchecked.u16be buf (v + 12))
 
-let[@inline always] ipv4 (b : 'b Wire_runtime.Buf.t)
-    (len : 'b Wire_runtime.Buf.length) (v : 'b view) : 'b Stack_ipv4.check =
+let[@inline always] ipv4 (b : 'b Wire_runtime.Buf.t) (v : 'b view) :
+    'b Stack_ipv4.check =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-  let len = (len : _ Wire_runtime.Buf.length :> int) in
+  let len = Bytes.length buf in
   let f3_ether_type = Wire_runtime.Unchecked.u16be buf (v + 12) in
   if not ((f3_ether_type : int) = 2048) then -1
   else if v + 14 > len - 20 then -1
@@ -1616,16 +1734,15 @@ let pp ppf (r : t) =
   Format.pp_print_string ppf " }";
   Format.pp_close_box ppf ()
 
-let of_view (b' : 'b Wire_runtime.Buf.t) (len' : 'b Wire_runtime.Buf.length)
-    (v' : 'b view) : t =
+let of_view (b' : 'b Wire_runtime.Buf.t) (v' : 'b view) : t =
   {
     dst = dst b' v';
     src = src b' v';
     ether_type = ether_type b' v';
     ipv4 =
-      (let c = ipv4 b' len' v' in
-       if Stack_ipv4.ok c then
-         Some (Stack_ipv4.of_view b' len' (Stack_ipv4.get c))
+      (let c = ipv4 b' v' in
+       if Stack_ipv4.is_ok c then
+         Some (Stack_ipv4.of_view b' (Stack_ipv4.get c))
        else None);
   }
 
@@ -1707,26 +1824,103 @@ let is_valid buf off =
   off >= 0
   &&
   match Wire_runtime.Buf.v buf with
-  | Wire_runtime.Buf.Any b ->
-      ok
-        (check b (Wire_runtime.Buf.length b) ~off ~len:(Bytes.length buf - off))
+  | Wire_runtime.Buf.Any b -> is_ok (check b ~off ~len:(Bytes.length buf - off))
 
-let decode buf off =
+let decode buf ~off =
   if off < 0 then Wire_runtime.Errors.negative_offset off;
   match Wire_runtime.Buf.v buf with
   | Wire_runtime.Buf.Any b ->
-      let len = Wire_runtime.Buf.length b in
-      let c = check b len ~off ~len:(Bytes.length buf - off) in
-      if ok c then Ok (of_view b len (get c)) else first_error buf off
+      let c = check b ~off ~len:(Bytes.length buf - off) in
+      if is_ok c then Ok (of_view b (get c)) else first_error buf off
 
-let validate buf off =
+let validate buf ~off =
   if off < 0 then Wire_runtime.Errors.negative_offset off;
   if is_valid buf off then Ok () else first_error buf off
 
-let encode (r : t) buf off =
+let encode (r : t) buf ~off =
   if off < 0 then Wire_runtime.Errors.negative_offset off;
   let stop = encode_at ~write:true r buf off in
   match Wire_runtime.Buf.v buf with
   | Wire_runtime.Buf.Any b ->
-      if not (ok (check b (Wire_runtime.Buf.length b) ~off ~len:(stop - off)))
-      then invalid_arg (codec_name ^ ": the record does not pass its own checks")
+      if not (is_ok (check b ~off ~len:(stop - off))) then
+        invalid_arg (codec_name ^ ": the record does not pass its own checks")
+
+let[@inline never] window_error buf off len =
+  let length = Bytes.length buf in
+  let first = if off < 0 then 0 else if off > length then length else off in
+  let stop =
+    if len < 0 then first
+    else if len > length - first then length
+    else first + len
+  in
+  match validate (Bytes.sub buf first (stop - first)) ~off:0 with
+  | Ok () -> no_error ()
+  | Error e ->
+      { e with Wire_runtime.Error.at = e.Wire_runtime.Error.at + first }
+
+let window_ok buf off len =
+  off >= 0 && len >= 0
+  && len <= Bytes.length buf - off
+  &&
+  match Wire_runtime.Buf.v buf with
+  | Wire_runtime.Buf.Any b -> is_ok (check b ~off ~len)
+
+let[@inline never] slot_error buf ~stride =
+  let n = Bytes.length buf / stride in
+  let rec go i =
+    if i >= n then no_error ()
+    else if window_ok buf (i * stride) stride then go (i + 1)
+    else window_error buf (i * stride) stride
+  in
+  go 0
+
+let[@inline never] frame_error buf ~offs ~lens =
+  let rec go i =
+    if i >= Array.length offs then no_error ()
+    else if window_ok buf offs.(i) lens.(i) then go (i + 1)
+    else window_error buf offs.(i) lens.(i)
+  in
+  go 0
+
+let[@inline] fold (type a) ?stride ?offs ?lens ?invalid buf ~(init : a) ~f :
+    (a, Wire_runtime.Error.t * a) result =
+  let exception Refused of a in
+  let stop acc = raise_notrace (Refused acc) in
+  match (stride, offs, lens) with
+  | None, None, None ->
+      if Option.is_some invalid then
+        invalid_arg "EthernetStack.fold: ~invalid with records back to back";
+      let length = Bytes.length buf in
+      let rec go off acc =
+        if off >= length then Ok acc
+        else
+          match fold_step buf off (length - off) ~init:acc ~f ~invalid:stop with
+          | exception Refused acc ->
+              Error (window_error buf off (length - off), acc)
+          | acc ->
+              let next = end_at buf length off in
+              if next <= off then Ok acc else go next acc
+      in
+      go 0 init
+  | Some stride, None, None -> (
+      if stride <= 0 then
+        invalid_arg "EthernetStack.fold: ~stride is not positive";
+      let len = Bytes.length buf / stride * stride in
+      match invalid with
+      | Some invalid ->
+          Ok (fold_step_frames buf 0 len ~stride ~init ~f ~invalid)
+      | None -> (
+          match fold_step_frames buf 0 len ~stride ~init ~f ~invalid:stop with
+          | acc -> Ok acc
+          | exception Refused acc -> Error (slot_error buf ~stride, acc)))
+  | None, Some offs, Some lens -> (
+      match invalid with
+      | Some invalid -> Ok (fold_step_index buf ~offs ~lens ~init ~f ~invalid)
+      | None -> (
+          match fold_step_index buf ~offs ~lens ~init ~f ~invalid:stop with
+          | acc -> Ok acc
+          | exception Refused acc -> Error (frame_error buf ~offs ~lens, acc)))
+  | Some _, Some _, _ | Some _, _, Some _ ->
+      invalid_arg "EthernetStack.fold: ~stride with ~offs and ~lens"
+  | None, Some _, None | None, None, Some _ ->
+      invalid_arg "EthernetStack.fold: ~offs without ~lens"

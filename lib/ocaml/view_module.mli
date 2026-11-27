@@ -60,11 +60,27 @@ val of_codec : ?reserved:string list -> 'r Wire.Codec.t -> t
     {!root_names} or of [reserved], as a keyword is. Raises
     {!Planner.Unsupported} on a shape the scanner does not handle. *)
 
-val ml : ?values:(record -> string) -> target:target -> t -> string * bool
-(** [ml ?values ~target t] is the views of [t] but the root's [check], which the
-    walks write, and whether they read [mask32]. They read [Int32_u] and
-    [Int64_u] unbound. [values r] is written after the members of [r], in its
-    module. *)
+val ml :
+  ?values:(record -> string) ->
+  ?ends:bool ->
+  target:target ->
+  t ->
+  string * bool
+(** [ml ?values ~ends ~target t] is the views of [t] but the root's [check],
+    which the walks write, and whether they read [mask32]. They read [Int32_u]
+    and [Int64_u] unbound. [values r] is written after the members of [r], in
+    its module. With [ends] (defaults to [false]), the root has
+    [end_at buf len off], where the record at [off] ends, which a fold of
+    records back to back reads. *)
+
+val typed : field -> string -> string
+(** [typed f x] is the text of the [int] [x] in the carrier of [f]'s value. *)
+
+val carrier_type : field -> string
+(** [carrier_type f] is the type of [f]'s value: its carrier's [t], or [int]. *)
+
+val record_of_sub : t -> sub -> record
+(** [record_of_sub t sub] is the record of [t] the field [sub] holds. *)
 
 val slice_of : Wire.Private.Types.struct_ -> string -> bool option
 (** [slice_of s label] is whether the named field of bytes [label] of [s] is a

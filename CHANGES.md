@@ -48,6 +48,28 @@
   `Target` and each carrier's `le`, `be`, `get`, `set`, `set_*`,
   `check_encode` and `int_eq` are hidden, since only generated code calls
   them; `UInt8`, `UInt16`, `SInt8` and `SInt16` gain `compare` (#PR, @samoht)
+- A module `Wire_ocaml` writes meets `Wire_ocaml.FIXED` or
+  `Wire_ocaml.VARIABLE`, each submodule `Wire_ocaml.RECORD`: `check b ~off`
+  (or `check b ~off ~len`) reads the buffer's length itself, `is_ok` (was
+  `ok`), the accessor of a field holding a record is `field b v`, and
+  `validate`, `decode`, `encode`, `write` and the `X4` functions take `~off`
+  (#PR, @samoht)
+
+- A generated module has at most one fold, `fold ?stride ?offs ?lens ?invalid
+  buf ~init ~f`, declared by `Wire_ocaml.v ~fold:[ "ipv4.tcp.dst_port"; ... ]`
+  with the paths of its fields, which `f` takes in order, each in its carrier
+  and an option under a layer; it answers `('acc, Wire.Error.t * 'acc)
+  result` (#PR, @samoht)
+
+- `Wire_ocaml.fold`, `?folds`, the visitor modules, `--visitor` and the
+  interpreted twin `<name>_codec` are removed, as are `Get` and the
+  `<field>_word`/`<field>_of_word` reads of a module with no walk, which has
+  the views of any other (#PR, @samoht)
+
+- `Wire_rust.v ?name ?fold` and `Wire_rust.to_rs t`: the Rust module has the
+  OCaml module's names, `Check::is_ok`, `Check::get` and one closure fold,
+  `fold(buf, records, init, invalid, f)`; `Wire_rust.fold`, `?folds`,
+  `?visitors` and `--visitor` are removed (#PR, @samoht)
 
 - `Wire.Staged` and `Wire_runtime.Staged` are removed: `Codec.get c f`,
   `Codec.set c f` and `Codec.writer c template fields`, applied once, are the

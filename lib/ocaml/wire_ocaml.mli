@@ -79,9 +79,11 @@ val v :
 
     [fold] names the fields the module's [fold] hands its visitor, in that
     order, each by its path: the accessor names from the codec down, joined with
-    ['.'], as ["ipv4.tcp.dst_port"]. A field under an optional layer reaches the
-    visitor as an option. Without [fold] the module has no fold; two field sets
-    over one codec are two modules, each with its own [name].
+    ['.'], as ["ipv4.tcp.dst_port"]. Each is an integer field, of the type its
+    accessor answers, an option where the field is optional; a field under a
+    layer is one option more, as {!Wire.Codec.( / )} types it, [None] where an
+    optional layer of its path is absent. Without [fold] the module has no fold;
+    two field sets over one codec are two modules, each with its own [name].
 
     A field under a {!Wire.map} is specialised when [maps] names the map: the
     record holds the map's OCaml type, and the module calls the map's functions
@@ -138,7 +140,12 @@ val main : t list -> unit
       the record of these field values.
 
     An accessor named as a value the module defines ([size], [check], [decode],
-    ...) takes a trailing ['_'], as a keyword does. *)
+    ...) takes a trailing ['_'], as a keyword does.
+
+    The signatures are those of the [`OCaml] target. A module for [`OxCaml]
+    takes the buffers it does not keep [local], and a function of a [local]
+    buffer and an offset is no function of a global one, so it meets them with
+    each such buffer argument [local]. *)
 
 (* Open question 1: a view does not carry its buffer unless a view that does
    counts within noise on OCaml 5.4.1 and OxCaml. *)

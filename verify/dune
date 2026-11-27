@@ -64,7 +64,8 @@
    bf_constrained.gen:record:BfConstrained.WireBfConstrained:16
    reserved_fields.gen:record:ReservedFields.WireReservedFields:16)))
 
-; The packet stack's fold, on OCaml and on OxCaml: every read of fold_step,
+; The packet stack's fold, on OCaml and on OxCaml, its [f] and [invalid]
+; continuations: every read of fold_step,
 ; step_frames_record and fold_step_frames in bounds, the fields
 ; fold_step_frames loads ahead of step_frames_record included, and no input
 ; raising.
@@ -138,7 +139,7 @@
    no_header_check.mutant
    (run
     sed
-    "s/if ((stop : int) < 34) then Step.invalid init/if false then Step.invalid init/"
+    "s/if ((stop : int) < 34) then invalid init/if false then invalid init/"
     %{dep:stack_step.gen}))))
 
 (rule
@@ -149,7 +150,7 @@
    payload_off_by_one.mutant
    (run
     sed
-    "s/if ((f9_ipv4_total_length : int64) > (Int64.sub (Int64.of_int stop) 14L)) then Step.invalid init/if ((f9_ipv4_total_length : int64) >= (Int64.sub (Int64.of_int stop) 14L)) then Step.invalid init/"
+    "s/if ((f9_ipv4_total_length : int64) > (Int64.sub (Int64.of_int stop) 14L)) then invalid init/if ((f9_ipv4_total_length : int64) >= (Int64.sub (Int64.of_int stop) 14L)) then invalid init/"
     %{dep:stack_step.gen}))))
 
 (rule

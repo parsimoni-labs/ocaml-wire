@@ -38,17 +38,30 @@ let test_fixed () =
   for _ = 1 to 2000 do
     let buf, off = input () in
     let len = Bytes.length buf - off in
-    let valid = Result.is_ok (Codec.validate Schemas.checked buf off) in
+    let valid = Result.is_ok (Codec.validate Schemas.checked buf ~off) in
     let folded =
-      match G_checked.fold buf off len ~init:[] with
-      | [ outputs ] -> Option.map (List.map snd) outputs
+      match
+        G_checked.fold buf ~offs:[| off |] ~lens:[| len |]
+          ~invalid:(fun acc -> None :: acc)
+          ~init:[]
+          ~f:(fun acc version ihl length ttl proto ->
+            Some
+              [
+                version;
+                ihl;
+                UInt16.to_int length;
+                UInt8.to_int ttl;
+                UInt8.to_int proto;
+              ]
+            :: acc)
+      with
+      | Ok [ outputs ] -> outputs
       | _ -> Alcotest.fail "fold: one answer for one record"
     in
     match Buf.v buf with
     | Buf.Any b ->
-        let length = Buf.length b in
-        let c = G_checked.check b length off in
-        Alcotest.(check bool) "check" valid (G_checked.ok c);
+        let c = G_checked.check b ~off in
+        Alcotest.(check bool) "check" valid (G_checked.is_ok c);
         Alcotest.(check bool) "fold" valid (Option.is_some folded);
         if valid then begin
           let v = G_checked.get c in
@@ -61,7 +74,7 @@ let test_fixed () =
               UInt8.to_int (G_checked.proto b v);
             ]
           and get =
-            let r = ok (G_checked.decode buf off) in
+            let r = ok (G_checked.decode buf ~off) in
             [
               r.version;
               r.ihl;
@@ -92,10 +105,10 @@ let fix_checked buf off =
   Bytes.set_uint8 buf (off + 4)
     (List.nth [ 1; 6; 17 ] (Random.State.int rand 3))
 
-(* The accessors of a record checked at offset 0 read what [Codec.get]
-   reads, where [Codec.validate] accepts the record; [read buf] raises
-   the codec's error otherwise. *)
-let viewed ?(fix = fun _ _ -> ()) codec ~read ~gets =
+(* The accessors of a record checked at offset 0 read what [Codec.decode]
+   reads, where [Codec.validate] accepts the record; [read buf] raises the
+   codec's error otherwise. *)
+let viewed ?(fix = fun _ _ -> ()) codec ~read ~get =
   let size = Codec.min_size codec in
   for _ = 1 to 2000 do
     let len = size + Random.State.int rand 4 - 1 in
@@ -103,76 +116,50 @@ let viewed ?(fix = fun _ _ -> ()) codec ~read ~gets =
     if Random.State.bool rand && len >= size then fix buf 0;
     let expected =
       outcome (fun () ->
-          ok (Codec.validate codec buf 0);
-          String.concat "," (List.map (fun get -> get buf) gets))
+          String.concat "," (get (ok (Codec.decode codec buf ~off:0))))
     in
     let got = outcome (fun () -> String.concat "," (read buf)) in
     Alcotest.(check string) "view" expected got
   done
 
 let test_accessors () =
-  let get codec field show =
-    let read = Codec.get codec field in
-    fun buf -> show (ok (read buf 0))
-  in
   let i32 v = string_of_int (SInt32.to_int v) in
   let u32 v = string_of_int (UInt32.to_int v) in
+  let u16 v = string_of_int (UInt16.to_int v) in
   viewed Schemas.ipv4
-    ~gets:
-      [
-        get Schemas.ipv4 Schemas.ipv4_frag (fun v ->
-            string_of_int (UInt16.to_int v));
-        get Schemas.ipv4 Schemas.ipv4_src i32;
-        get Schemas.ipv4 Schemas.ipv4_dst u32;
-      ]
+    ~get:(fun (_, _, _, _, frag, _, _, _, src, dst) ->
+      [ u16 frag; i32 src; u32 dst ])
     ~read:(fun buf ->
-      ok (G_ipv4.validate buf 0);
+      ok (G_ipv4.validate buf ~off:0);
       let (Buf.Any b) = Buf.v buf in
-      let v = G_ipv4.get (G_ipv4.check b (Buf.length b) 0) in
-      [
-        string_of_int (UInt16.to_int (G_ipv4.frag b v));
-        i32 (G_ipv4.src b v);
-        u32 (G_ipv4.dst b v);
-      ]);
+      let v = G_ipv4.get (G_ipv4.check b ~off:0) in
+      [ u16 (G_ipv4.frag b v); i32 (G_ipv4.src b v); u32 (G_ipv4.dst b v) ]);
   viewed ~fix:fix_checked Schemas.checked
-    ~gets:
-      [
-        get Schemas.checked Schemas.checked_proto (fun v ->
-            string_of_int (UInt8.to_int v));
-      ]
+    ~get:(fun (_, _, _, _, proto) -> [ string_of_int (UInt8.to_int proto) ])
     ~read:(fun buf ->
-      ok (G_checked.validate buf 0);
+      ok (G_checked.validate buf ~off:0);
       let (Buf.Any b) = Buf.v buf in
-      let v = G_checked.get (G_checked.check b (Buf.length b) 0) in
+      let v = G_checked.get (G_checked.check b ~off:0) in
       [ string_of_int (UInt8.to_int (G_checked.proto b v)) ]);
   viewed Schemas.mixed
-    ~gets:
-      [
-        get Schemas.mixed Schemas.mixed_f i32;
-        get Schemas.mixed Schemas.mixed_h string_of_int;
-      ]
+    ~get:(fun (_, _, _, _, _, f, _, h) -> [ i32 f; string_of_int h ])
     ~read:(fun buf ->
-      ok (G_mixed.validate buf 0);
+      ok (G_mixed.validate buf ~off:0);
       let (Buf.Any b) = Buf.v buf in
-      let v = G_mixed.get (G_mixed.check b (Buf.length b) 0) in
+      let v = G_mixed.get (G_mixed.check b ~off:0) in
       [ i32 (G_mixed.f b v); string_of_int (G_mixed.h b v) ]);
   viewed Schemas.eth
-    ~gets:[ get Schemas.eth Schemas.eth_src Fun.id ]
+    ~get:(fun (_, src, _) -> [ src ])
     ~read:(fun buf ->
-      ok (G_eth.validate buf 0);
+      ok (G_eth.validate buf ~off:0);
       let (Buf.Any b) = Buf.v buf in
-      let v = G_eth.get (G_eth.check b (Buf.length b) 0) in
+      let v = G_eth.get (G_eth.check b ~off:0) in
       [ G_eth.src b v ])
 
-(* The module of [c] for the OCaml target, with no fold ([ml]) or with the
-   fold [fold], whose visitor is [Step] ([scanner]). *)
+(* The module of [c] for the OCaml target, with no fold ([ml]) or with a
+   fold of the fields [fold] ([scanner]). *)
 let ml c = Wire_ocaml.(to_ml (v ~target:`OCaml c))
-
-let scanner c =
-  Wire_ocaml.(
-    to_ml
-      ~visitors:[ ("fold", "step.ml") ]
-      (v ~target:`OCaml ~folds:[ fold "fold" ] c))
+let scanner ~fold c = Wire_ocaml.(to_ml (v ~target:`OCaml ~fold c))
 
 let pair n1 n2 =
   Codec.v "Pair"
@@ -180,22 +167,22 @@ let pair n1 n2 =
     Codec.[ Field.v n1 uint8 $ fst; Field.v n2 uint8 $ snd ]
 
 (* A field named as a value the module defines takes a trailing ['_'] as its
-   accessor, as a keyword does; its fold label keeps its name. *)
+   accessor, as a keyword does, and a fold names it by its accessor. *)
 let test_escaped () =
-  let src = scanner (pair "size" "size_") in
+  let src = scanner ~fold:[ "size_"; "size__" ] (pair "size" "size_") in
   List.iter
     (fun name ->
       Alcotest.(check bool)
         name true
         (contains src ("let[@inline always] " ^ name ^ " ")))
     [ "size_"; "size__" ];
-  let src = scanner (pair "ok" "b") in
-  Alcotest.(check bool) "ok_" true (contains src "let[@inline always] ok_ ");
-  Alcotest.(check bool) "~ok" true (contains src "~ok");
-  Alcotest.(check (list (pair string bool)))
-    "outputs"
-    [ ("ok", false); ("b", false) ]
-    (Wire_ocaml.outputs (pair "ok" "b"))
+  let src = scanner ~fold:[ "is_ok_"; "b" ] (pair "is_ok" "b") in
+  Alcotest.(check bool)
+    "is_ok_" true
+    (contains src "let[@inline always] is_ok_ ");
+  match scanner ~fold:[ "is_ok" ] (pair "is_ok" "b") with
+  | _ -> Alcotest.fail "a fold of the field is_ok named as such"
+  | exception Invalid_argument _ -> ()
 
 (* A record with views has no getters, so a field named as a getter's helper
    defines nothing twice. *)
@@ -223,8 +210,8 @@ let test_setters () =
     let buf, off = input () in
     match Buf.v buf with
     | Buf.Any b ->
-        let c = G_checked.check b (Buf.length b) off in
-        if G_checked.ok c then begin
+        let c = G_checked.check b ~off in
+        if G_checked.is_ok c then begin
           let v = G_checked.get c in
           let before = fields b v in
           let i = Random.State.int rand 5 in

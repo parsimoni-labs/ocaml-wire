@@ -119,8 +119,8 @@ let rec value : type a. V.t -> V.record -> string -> a T.typ -> string =
       | Some (V.Sub { name; sub; _ }) ->
           let m = sub_module t sub.codec_id in
           Fmt.str
-            "(let c = %s b' len' v' in if %s.ok c then Some (%s.of_view b' \
-             len' (%s.get c)) else None)"
+            "(let c = %s b' v' in if %s.is_ok c then Some (%s.of_view b' \
+             (%s.get c)) else None)"
             name m m m
       | _ -> (
           match present r l with
@@ -136,7 +136,7 @@ let rec value : type a. V.t -> V.record -> string -> a T.typ -> string =
       match sub r l with
       | Some m ->
           let md = sub_module t codec_id in
-          Fmt.str "(%s.of_view b' len' (%s.get (%s b' len' v')))" md md (name m)
+          Fmt.str "(%s.of_view b' (%s.get (%s b' v')))" md md (name m)
       | None -> missing ())
   | T.Byte_slice _ | T.Byte_array _ -> (
       match bytes r l with
@@ -197,7 +197,7 @@ let pp_printer ppf t (r : V.record) =
       Fmt.pf ppf
         "Format.pp_print_string ppf \" }\";@\nFormat.pp_close_box ppf ()@\n@\n"
 
-(* [of_view b len v] is the record at the view [v], read through the
+(* [of_view b v] is the record at the view [v], read through the
    accessors: only after a check that passed. *)
 let pp_of_view ppf t (r : V.record) =
   let fields = named r.struct_ in
@@ -214,12 +214,8 @@ let pp_of_view ppf t (r : V.record) =
   (* Primed, the parameters are named apart from every accessor. *)
   let uses x = Record_module.uses body x in
   Fmt.pf ppf
-    "let of_view (%s : 'b Wire_runtime.Buf.t) (%s : 'b \
-     Wire_runtime.Buf.length) (%s : 'b view) : t =@\n\
-     %s@\n\
-     @\n"
+    "let of_view (%s : 'b Wire_runtime.Buf.t) (%s : 'b view) : t =@\n%s@\n@\n"
     (if uses "b'" then "b'" else "_")
-    (if uses "len'" then "len'" else "_")
     (if uses "v'" then "v'" else "_")
     body
 
@@ -891,28 +887,28 @@ let ml_record ppf t r =
 
 (* The check over the bytes from [off] to [stop], or over the record's own
    bytes for a codec of constant size. *)
-let root_check t ?(len = "(Wire_runtime.Buf.length b)") ~stop () =
+let root_check t ~stop =
   match t.V.size with
-  | Some _ -> Fmt.str "check b %s off" len
-  | None -> Fmt.str "check b %s ~off ~len:(%s - off)" len stop
+  | Some _ -> "check b ~off"
+  | None -> Fmt.str "check b ~off ~len:(%s - off)" stop
 
 (* [encode], which checks what it wrote: to its end, or over the record's
    own bytes for a codec of constant size, whose end is not bound. *)
 let pp_root_encode ppf t =
   Fmt.pf ppf
-    "let encode (r : t) buf off =@\n\
+    "let encode (r : t) buf ~off =@\n\
      if off < 0 then %s.negative_offset off;@\n\
      %s@\n\
      match Wire_runtime.Buf.v buf with@\n\
      | Wire_runtime.Buf.Any b ->@\n\
-     if not (ok (%s)) then@\n\
+     if not (is_ok (%s)) then@\n\
      invalid_arg (codec_name ^ \": the record does not pass its own checks\")@\n\
      @\n"
     errors
     (if Option.is_some t.V.size then
        "ignore (encode_at ~write:true r buf off : int);"
      else "let stop = encode_at ~write:true r buf off in")
-    (root_check t ~stop:"stop" ())
+    (root_check t ~stop:"stop")
 
 (* The codec's own: its record, then [decode], [validate] and [encode] over
    a buffer, from its offset to its end. *)
@@ -929,24 +925,23 @@ let ml_root ppf t (r : V.record) =
      let is_valid buf off =@\n\
      off >= 0 &&@\n\
      match Wire_runtime.Buf.v buf with@\n\
-     | Wire_runtime.Buf.Any b -> ok (%s)@\n\
+     | Wire_runtime.Buf.Any b -> is_ok (%s)@\n\
      @\n\
-     let decode buf off =@\n\
+     let decode buf ~off =@\n\
      if off < 0 then %s.negative_offset off;@\n\
      match Wire_runtime.Buf.v buf with@\n\
      | Wire_runtime.Buf.Any b ->@\n\
-     let len = Wire_runtime.Buf.length b in@\n\
      let c = %s in@\n\
-     if ok c then Ok (of_view b len (get c)) else first_error buf off@\n\
+     if is_ok c then Ok (of_view b (get c)) else first_error buf off@\n\
      @\n\
-     let validate buf off =@\n\
+     let validate buf ~off =@\n\
      if off < 0 then %s.negative_offset off;@\n\
      if is_valid buf off then Ok () else first_error buf off@\n\
      @\n"
     (min_size r) errors errors
-    (root_check t ~stop:"Bytes.length buf" ())
+    (root_check t ~stop:"Bytes.length buf")
     errors
-    (root_check t ~len:"len" ~stop:"Bytes.length buf" ())
+    (root_check t ~stop:"Bytes.length buf")
     errors;
   pp_root_encode ppf t
 
@@ -987,18 +982,18 @@ let mli_root ppf ~target t (r : V.record) =
   mli_record ppf ~target t r;
   pp_val ~target ppf "min_size" "int"
     (Fmt.str "[min_size] is the fewest bytes a record takes, [%d]." (min_size r));
+  pp_val ~target ppf "validate"
+    (Fmt.str "bytes -> off:int -> (unit, %s) result" parse_error)
+    "[validate buf ~off] is [Ok ()] if the record at [off] in [buf] passes the \
+     codec's checks, and the codec's error otherwise. Raises \
+     [Invalid_argument] if [off] is negative.";
   pp_val ~target ppf "decode"
-    (Fmt.str "bytes -> int -> (t, %s) result" parse_error)
-    "[decode buf off] is the record at [off] in [buf], checked to the end of \
+    (Fmt.str "bytes -> off:int -> (t, %s) result" parse_error)
+    "[decode buf ~off] is the record at [off] in [buf], checked to the end of \
      [buf] as {!val-check} checks it, or the codec's error. Raises \
      [Invalid_argument] if [off] is negative.";
-  pp_val ~target ppf "validate"
-    (Fmt.str "bytes -> int -> (unit, %s) result" parse_error)
-    "[validate buf off] is [Ok ()] if the record at [off] in [buf] passes its \
-     checks and the codec's error otherwise. Raises [Invalid_argument] if \
-     [off] is negative.";
-  pp_val ~target ppf "encode" "t -> bytes -> int -> unit"
-    "[encode r buf off] writes [r] at [off] in [buf]. Raises \
+  pp_val ~target ppf "encode" "t -> bytes -> off:int -> unit"
+    "[encode r buf ~off] writes [r] at [off] in [buf]. Raises \
      [Invalid_argument] if [r] does not fit, or if its values break a size, a \
      presence or a check of the record, as the codec's encoder does; the bytes \
      it wrote are then scrap."

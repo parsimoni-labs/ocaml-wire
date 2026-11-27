@@ -27,7 +27,6 @@ let bytes_buf target =
 let local_mode local = if local then " @ local" else ""
 let buf b = b.typ ^ local_mode b.local
 let named b = Fmt.str "'b %s.t%s" b.brand (local_mode b.local)
-let length b = Fmt.str "'b %s.length" b.brand
 let arrows ts = String.concat " -> " ts
 
 (* [val name : typ], with its doc, and on OxCaml the allocation check and the
@@ -71,8 +70,6 @@ let where f =
         (shift + width - 1)
         (word base) f.offset
   | Bytes n -> Fmt.str "%d bytes at offset %d" n f.offset
-
-let bits_text = function 1 -> "1 bit" | n -> Fmt.str "%d bits" n
 
 (* An expression of the codec in OCaml syntax, each variable under the name
    [name] gives it. *)
@@ -228,14 +225,14 @@ let pp_checks ppf r b =
   let target = r.target in
   let t = decoded r in
   pp_val target ppf "validate"
-    (arrows [ buf b; "int"; Fmt.str "(unit, %s) result" parse_error ])
-    "[validate buf off] is [Ok ()] if the record at [off] in [buf] fits and \
-     passes its checks, and the codec's error otherwise. Raises \
+    (arrows [ buf b; "off:int"; Fmt.str "(unit, %s) result" parse_error ])
+    "[validate buf ~off] is [Ok ()] if the record at [off] in [buf] passes the \
+     codec's checks, and the codec's error otherwise. Raises \
      [Invalid_argument] if [off] is negative.";
   let portable = no_map r.fields in
   pp_val ~portable target ppf "decode"
-    (arrows [ buf b; "int"; Fmt.str "(%s, %s) result" t parse_error ])
-    "[decode buf off] is the record at [off] in [buf], or the codec's error. \
+    (arrows [ buf b; "off:int"; Fmt.str "(%s, %s) result" t parse_error ])
+    "[decode buf ~off] is the record at [off] in [buf], or the codec's error. \
      Raises [Invalid_argument] if [off] is negative."
 
 let pp_writes ppf r b =
@@ -259,77 +256,49 @@ let pp_writes ppf r b =
     if has_checks r.plan then ", or if the record breaks a constraint" else ""
   in
   pp_val ~portable:checked target ppf "encode"
-    (arrows [ "t"; buf b; "int"; "unit" ])
-    "[encode r buf off] writes the record [r] at [off] in [buf]. Raises as \
+    (arrows [ "t"; buf b; "off:int"; "unit" ])
+    "[encode r buf ~off] writes the record [r] at [off] in [buf]. Raises as \
      {!write} does.";
   pp_val ~zero_alloc:checked ~portable:checked target ppf "write"
-    (arrows ([ buf b; "int" ] @ typed @ [ "unit" ]))
+    (arrows ([ buf b; "off:int" ] @ typed @ [ "unit" ]))
     (Fmt.str
-       "[write buf off%s] writes the record of these fields at [off] in [buf]. \
-        Raises [Invalid_argument] if it does not fit%s%s."
+       "[write buf ~off%s] writes the record of these fields at [off] in \
+        [buf]. Raises [Invalid_argument] if it does not fit%s%s."
        a ranged rejected)
 
-let pp_get ppf r b =
+(* The views of a module with no walk: [check], [is_ok], [get] and the
+   accessor [accessor f] of each field [f]. *)
+let pp_views ppf r ~accessor =
   let target = r.target in
-  let enums = List.exists (fun f -> Option.is_some f.enum) r.fields in
-  let result t = Fmt.str "(%s, %s) result" t parse_error in
-  pp_doc ppf
+  let b = bytes_buf target in
+  Fmt.pf ppf
+    "type 'b check = private int@\n\
+     (** The type for checks of a record of [%s] in the buffer named ['b]. *)@\n\
+     @\n\
+     type 'b view = private int@\n\
+     (** The type for records of [%s] that passed their check in the buffer \
+     named ['b]. *)@\n\
+     @\n"
+    r.codec r.codec;
+  pp_val target ppf "check"
+    (arrows [ named b; "off:int"; "'b check" ])
     (Fmt.str
-       "Reads of one field of the record at [off] in [buf], as \
-        [Wire.Codec.get] reads it. A read answers the error of a field the \
-        buffer cuts%s, at the field's offset and under its name, and raises \
-        [Invalid_argument] on a negative [off]. It checks none of the record's \
-        constraints."
-       (if enums then " and of a value that is no case of its closed enum"
-        else ""));
-  Fmt.pf ppf "module Get : sig@\n";
+       "[check b ~off] is the check of the record at [off], whose %d bytes \
+        must lie in [b]. It never raises and allocates nothing: a negative \
+        [off] or a record [b] does not hold is refused."
+       r.size);
+  pp_val target ppf "is_ok" "'b check -> bool"
+    "[is_ok k] is [true] iff the check [k] passed.";
+  pp_val target ppf "get" "'b check -> 'b view"
+    "[get k] is the view of the record the check [k] passed. Raises \
+     [Invalid_argument] if [is_ok k] is [false]: a refused record is input, \
+     test {!is_ok} first.";
   List.iter
     (fun f ->
-      let l = f.label in
-      let portable = Option.is_none f.map in
-      pp_val ~zero_alloc:false ~portable target ppf l
-        (arrows [ buf b; "int"; result (typed ~maps:r.maps f) ])
-        (Fmt.str "[%s buf off] is %s of the record at [off]." l (read_what f));
-      match f.store with
-      | Int { width = 32; _ } ->
-          pp_val ~zero_alloc:false target ppf (l ^ "_int")
-            (arrows [ buf b; "int"; result "int" ])
-            (Fmt.str
-               "[%s_int buf off] is %s of the record at [off], as an [int]." l
-               (where f))
-      | _ -> ())
-    r.fields;
-  List.iter
-    (fun f ->
-      let l = f.label in
-      match f.store with
-      | Bits { base; _ } ->
-          pp_val ~zero_alloc:false target ppf (l ^ "_word")
-            (arrows [ buf b; "int"; result "int" ])
-            (Fmt.str
-               "[%s_word buf off] is %s at offset %d of the record at [off], \
-                for {!%s_of_word}, or the error {!%s} answers where [buf] cuts \
-                it."
-               l (word base) f.offset l l)
-      | _ -> ())
-    r.fields;
-  Fmt.pf ppf "end@\n@\n"
-
-let pp_of_words ppf r =
-  let target = r.target in
-  List.iter
-    (fun f ->
-      let l = f.label in
-      match f.store with
-      | Bits { shift; width; _ } ->
-          pp_val ~zero_alloc:true target ppf (l ^ "_of_word")
-            (arrows [ "int"; "int" ])
-            (Fmt.str "[%s_of_word w] is %s of [w], a word {!Get.%s_word} reads."
-               l
-               (if width = 1 then Fmt.str "bit %d" shift
-                else Fmt.str "bits %d to %d" shift (shift + width - 1))
-               l)
-      | _ -> ())
+      let l = accessor f in
+      pp_val ~portable:(Option.is_none f.map) target ppf l
+        (arrows [ named b; "'b view"; typed ~maps:r.maps f ])
+        (Fmt.str "[%s b v] is %s of the record [v]." l (read_what f)))
     r.fields
 
 let pp_x4_writes ppf r lanes =
@@ -337,27 +306,19 @@ let pp_x4_writes ppf r lanes =
   let b = bytes_buf r.target in
   let v = rt ^ ".Vec.t" in
   pp_val target ppf "store"
-    (arrows [ named b; length b; "int"; "part"; "unit" ])
-    "[store b len off p] writes the four records of [p] at [off] in [b]. \
-     Raises [Invalid_argument] for the first record that does not fit, once \
-     the ones before it are written.";
+    (arrows [ named b; "off:int"; "part"; "unit" ])
+    "[store b ~off p] writes the four records of [p] at [off] in [b]. Raises \
+     [Invalid_argument] for the first record that does not fit, once the ones \
+     before it are written.";
   pp_val target ppf "fill"
     (arrows
-       [
-         named b;
-         length b;
-         "int";
-         "count:int";
-         "f:(int -> part) @ local";
-         "unit";
-       ])
-    "[fill b len off ~count ~f] stores [f k] at [off + (16 * k)] for each [k] \
+       [ named b; "off:int"; "count:int"; "f:(int -> part) @ local"; "unit" ])
+    "[fill b ~off ~count ~f] stores [f k] at [off + (16 * k)] for each [k] \
      from [0] to [count - 1].";
   pp_val target ppf "write_int_at"
-    (arrows
-       ([ named b; length b; "int" ] @ List.map (fun _ -> v) lanes @ [ "unit" ]))
+    (arrows ([ named b; "off:int" ] @ List.map (fun _ -> v) lanes @ [ "unit" ]))
     (Fmt.str
-       "[write_int_at b len off%s] writes the four records whose fields are in \
+       "[write_int_at b ~off%s] writes the four records whose fields are in \
         the lanes of these, in field order. Raises [Invalid_argument] for the \
         first record that is out of range or does not fit."
        (args (List.map fst lanes)))
@@ -378,14 +339,13 @@ let pp_x4 ppf r lanes =
     (arrows
        [
          named b;
-         length b;
-         "int";
+         "off:int";
          "ok:(" ^ v ^ " -> 'a) @ local";
          "fail:(unit -> 'a) @ local";
          "'a";
        ])
-    "[with_ b len off ~ok ~fail] is [ok w] for the 16 bytes [w] at [off] in \
-     [b] if they fit, and [fail ()] otherwise.";
+    "[with_ b ~off ~ok ~fail] is [ok w] for the 16 bytes [w] at [off] in [b] \
+     if they fit, and [fail ()] otherwise.";
   List.iter
     (fun (f, _) ->
       let l = f.label in
@@ -408,16 +368,16 @@ let pp_x4 ppf r lanes =
   pp_x4_writes ppf r lanes;
   Fmt.pf ppf "end@\n@\n"
 
-let pp_buffer ?(views = false) ppf r b =
+let pp_buffer ?accessor ppf r b =
   pp_section ppf "checks" "Validating and decoding";
   pp_checks ppf r b;
   pp_section ppf "writes" "Writing";
   pp_writes ppf r b;
-  if not views then begin
-    pp_section ppf "reads" "Reading fields";
-    pp_get ppf r b;
-    pp_of_words ppf r
-  end
+  Option.iter
+    (fun accessor ->
+      pp_section ppf "views" "Views";
+      pp_views ppf r ~accessor)
+    accessor
 
 let pp_preamble ppf r =
   let bits =
@@ -458,14 +418,14 @@ let pp_preamble ppf r =
     parse_error
 
 (* The members of a fixed record: its size, record, checks, decoders,
-   writes, and without views its reads. *)
-let pp_record ?(views = false) ppf r =
+   writes, and with [accessor] its views. *)
+let pp_record ?accessor ppf r =
   pp_val r.target ppf "min_size" "int"
     (Fmt.str "[min_size] is the size of a record in bytes, [%d]." r.size);
   pp_record_type ppf r;
   pp_val r.target ppf "size" "t -> int"
     (Fmt.str "[size r] is {!min_size}: every record takes %d bytes." r.size);
-  pp_buffer ~views ppf r (bytes_buf r.target);
+  pp_buffer ?accessor ppf r (bytes_buf r.target);
   if r.simd then
     match lanes r.plan ~size:r.size with Some l -> pp_x4 ppf r l | None -> ()
 
@@ -485,23 +445,10 @@ let record ~target ~simd ~maps ~codec ~plan ~size =
 let record_preamble ppf ~target ~simd ~maps ~codec ~plan ~size =
   pp_preamble ppf (record ~target ~simd ~maps ~codec ~plan ~size)
 
-let record_members ?views ppf ~target ~simd ~maps ~codec ~plan ~size =
-  pp_record ?views ppf (record ~target ~simd ~maps ~codec ~plan ~size)
+let record_members ?accessor ppf ~target ~simd ~maps ~codec ~plan ~size =
+  pp_record ?accessor ppf (record ~target ~simd ~maps ~codec ~plan ~size)
 
-(* {2 The scanner} *)
-
-let describe_output (o : output) =
-  if o.is_bool then
-    let suffix = "_present" in
-    let field =
-      String.sub o.name 0 (String.length o.name - String.length suffix)
-    in
-    Fmt.str "{- [%s], [true] iff the optional field [%s] is present.}" o.name
-      field
-  else
-    Fmt.str "{- [%s], %s %s.}" o.name
-      (if o.signed then "a signed integer of" else "an integer of")
-      (bits_text o.wire_width)
+(* {2 The module of any codec} *)
 
 let scan_preamble ppf ~codec ~(plan : plan) =
   Fmt.pf ppf
@@ -510,70 +457,52 @@ let scan_preamble ppf ~codec ~(plan : plan) =
      @\n"
     codec;
   Fmt.pf ppf
-    "(** %s scans.@\n\
+    "(** %s records.@\n\
      @\n\
-     A scan checks a record of [%s] in a frame of bytes, as \
-     [Wire.Codec.decode] does on those bytes alone, by code that links \
-     [wire.runtime] only, and hands out its scalar fields with no value built \
-     and no byte copied. "
-    plan.record codec;
-  (match plan.outputs with
-  | [] -> Fmt.pf ppf "It hands out no field: it only checks."
-  | os ->
-      Fmt.pf ppf
-        "Its outputs, in declaration order, each an [int] or a [bool]:@\n\
-         {ul@\n\
-         %s}@\n\
-         An absent field is [0]."
-        (String.concat "\n" (List.map describe_output os)));
-  Fmt.pf ppf
-    " A scan never raises on bad input: it calls [invalid] instead. *)@\n@\n"
+     The records of [%s], checked, decoded and encoded as the codec does, with \
+     its errors, by code that links [wire.runtime] only: a check, its view and \
+     the accessor of each field, which read a record in place, and the decoder \
+     and encoder of whole records. A check, a decoder or an accessor never \
+     raises on bad input: a check refuses it, a decoder answers the codec's \
+     error. *)@\n\
+     @\n"
+    plan.record codec
 
-(* What a fold hands out, when it is not every output. *)
-let handed ~(plan : plan) selected =
-  if List.length selected = List.length plan.outputs then ""
-  else
-    match selected with
-    | [] -> " It hands out no output."
-    | os ->
-        Fmt.str " It hands out %s."
-          (String.concat ", "
-             (List.map (fun (o : output) -> "[" ^ o.name ^ "]") os))
-
-(* The fold [n] calling the visitor [m] by name: one frame, the frames of a
-   stride and those of an index. *)
-let pp_visitor_fold ppf ~target ~plan b n m selected =
-  let t = m ^ ".t" in
-  (* The visitor takes the integers as [int64]. *)
-  let outputs = ", each integer output an [int64]" in
-  pp_val ~portable:false target ppf n
-    (arrows [ b; "int"; "int"; "init:" ^ t; t ])
+(* The fold, its [f] taking the fields [paths], of types [types]. *)
+let pp_fold ppf ~target ~paths ~types =
+  pp_section ppf "folds" "Folds";
+  let f = arrows (("'acc" :: types) @ [ "'acc" ]) in
+  pp_val ~portable:false target ppf "fold"
+    (arrows
+       [
+         "?stride:int";
+         "?offs:int array";
+         "?lens:int array";
+         "?invalid:('acc -> 'acc)";
+         "bytes";
+         "init:'acc";
+         Fmt.str "f:(%s)" f;
+         Fmt.str "('acc, %s * 'acc) result" parse_error;
+       ])
     (Fmt.str
-       "[%s buf off len ~init] is [%s.valid init] applied to the outputs of \
-        the record at [off] in the [len] bytes there%s, or [%s.invalid init] \
-        if the record or the bounds are bad, with no closure built.%s"
-       n m outputs m (handed ~plan selected));
-  pp_val ~portable:false target ppf (n ^ "_index")
-    (arrows [ b; "offs:int array"; "lens:int array"; "init:" ^ t; t ])
-    (Fmt.str
-       "[%s_index buf ~offs ~lens ~init] folds {!val-%s} over the frames of \
-        [lens.(i)] bytes at [offs.(i)], in order, from [init]: a frame whose \
-        bounds are bad gives [%s.invalid]. The length of [buf] is read once. \
-        Raises [Invalid_argument] if [offs] and [lens] differ in length."
-       n n m);
-  pp_val ~portable:false target ppf (n ^ "_frames")
-    (arrows [ b; "int"; "int"; "stride:int"; "init:" ^ t; t ])
-    (Fmt.str
-       "[%s_frames buf off len ~stride ~init] folds {!val-%s} over the [len / \
-        stride] frames of [stride] bytes at [off], each checked on its own, \
-        from [init]. Raises [Invalid_argument] if [stride] is not positive or \
-        the bounds are bad."
-       n n)
-
-let scan_members ppf ~target ~(plan : plan) ~(folds : Scan_module.fold list) =
-  let b = buf (bytes_buf target) in
-  if folds <> [] then pp_section ppf "scans" "Scans";
-  List.iter
-    (fun (f : Scan_module.fold) ->
-      pp_visitor_fold ppf ~target ~plan b f.name f.visitor f.selected)
-    folds
+       "[fold buf ~init ~f] checks each record of [buf], as {!val-check} does, \
+        and folds [f] over those that pass, from [init]: [f acc%s], the fields \
+        %s of the record, read during its check, a field under an optional \
+        layer [None] where the layer is absent. The records lie back to back \
+        from offset [0], each where the one before ends, up to the end of \
+        [buf]; in slots of [stride] bytes, the [i]-th at [i * stride], over \
+        the whole slots of [buf]; or in the frames of [lens.(i)] bytes at \
+        [offs.(i)]. A record in a slot or a frame is checked in its window \
+        alone.@\n\
+        @\n\
+        A refused record stops the fold with [Error (e, acc)], [e] the error \
+        {!validate} answers on its window and [acc] the fold of the records \
+        before it; in slots or frames, [invalid acc] is the accumulator after \
+        a refused record and the fold goes on. Raises [Invalid_argument] if \
+        [stride] is not positive, if [offs] and [lens] are not given together \
+        or differ in length, if [stride] is given with [offs], and if \
+        [invalid] is given with records back to back."
+       (String.concat "" (List.mapi (fun i _ -> Fmt.str " x%d" (i + 1)) paths))
+       (match paths with
+       | [] -> "(none)"
+       | ps -> String.concat ", " (List.map (fun p -> "[" ^ p ^ "]") ps)))

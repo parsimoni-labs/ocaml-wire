@@ -1,8 +1,8 @@
 (** The members of the module generated for a fixed record of named scalars.
 
-    The record type, its decoder, encoder and getters, which {!Writer} writes
-    into the module of such a codec, and the bridge that checks the module
-    against its codec. Internal to {!Wire_ocaml}. *)
+    The record type, its decoder and encoder, which {!Writer} writes into the
+    module of such a codec, and the bridge that checks the module against its
+    codec. Internal to {!Wire_ocaml}. *)
 
 open Planner
 open Emitter
@@ -63,27 +63,28 @@ val record_plan : maps:(string * typ) list -> 'a Wire.Codec.t -> plan * int
 val own_names : string list
 (** [own_names] is the names the record's members define. *)
 
-val field_names : field list -> string list * (string * string list) list
-(** [field_names fields] is the names [Get]'s reads call, and each field's name
-    with the names it defines, those in [Get] qualified. *)
+val accessors : reserved:string list -> field list -> (string * string) list
+(** [accessors ~reserved fields] is the label of each of [fields] with the name
+    of its accessor in a module with no walk: the label, suffixed with ['_']
+    where it is one of {!own_names} or [reserved]. *)
 
 val pp_maps : Format.formatter -> field list -> unit
 (** [pp_maps ppf fields] binds each map of [fields] once. *)
 
 val pp_body :
   ?simd:bool ->
-  ?accessor:(field -> string) ->
+  ?views:string * (field -> string) ->
   maps:(string * string) list ->
   Format.formatter ->
   target:[ `OCaml | `OxCaml ] ->
   plan:plan ->
   size:int ->
   unit
-(** [pp_body ?simd ?accessor ~maps ppf ~target ~plan ~size] writes the record's
+(** [pp_body ?simd ?views ~maps ppf ~target ~plan ~size] writes the record's
     members for a record of [size] bytes; see {!Wire_ocaml.v}. A field under a
-    map holds the OCaml type [maps] gives its path. With [accessor], the name of
-    each field's accessor in the module's views, it writes no [Get]: the views
-    read the fields. *)
+    map holds the OCaml type [maps] gives its path. With [views], a module that
+    has no walk, named [fst views], it writes the views: [check], [is_ok],
+    [get], and the accessor [snd views f] of each field [f]. *)
 
 val ident : string -> string
 (** [ident name] is the OCaml label of the field [name]. *)

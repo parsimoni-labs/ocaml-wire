@@ -395,9 +395,10 @@ let continuation name answer =
   let run _ctx path _loc _args k = k path (Answer answer) in
   { pname = name; arity = None; run }
 
-(* A fold calls its visitor by name, as [Step]. *)
-let step_continuations =
-  [ continuation "Step.valid" true; continuation "Step.invalid" false ]
+(* A fold answers through the functions it is given, [f] where a record
+   passes and [invalid] where it does not: the entries pass them by these
+   names. *)
+let step_continuations = [ continuation "f" true; continuation "invalid" false ]
 
 let compare64 loc a b =
   let a = i64 loc a and b = i64 loc b in
@@ -851,7 +852,7 @@ let is_rejection e =
   | Pexp_construct ({ txt = Lident "false"; _ }, None) -> true
   | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
       match Longident.flatten txt with
-      | [ ("invalid_arg" | "fail") ] | [ "Step"; "invalid" ] -> true
+      | [ ("invalid_arg" | "fail" | "invalid") ] -> true
       | _ -> false)
   | _ -> false
 
@@ -953,6 +954,10 @@ and eval ctx env path e k =
   | Pexp_constraint (e, _) | Pexp_coerce (e, _, _) | Pexp_newtype (_, e) ->
       eval ctx env path e k
   | Pexp_construct ({ txt; _ }, None) when is_type_equal txt -> k path Equal
+  | Pexp_construct ({ txt = Lident "None"; _ }, None) -> k path Opaque
+  | Pexp_construct ({ txt = Lident "Some"; _ }, Some arg) ->
+      (* An option a fold hands its [f], which only passes it on. *)
+      eval ctx env path arg (fun path _ -> k path Opaque)
   | Pexp_construct
       ({ txt = Lident (("Invalid_argument" | "Failure") as c); _ }, Some arg) ->
       eval ctx env path arg (fun path v ->

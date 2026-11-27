@@ -1,8 +1,9 @@
 (* Writes what the checker reads besides the committed generated modules:
    the 3D specifications of the codecs, projected as EverParse compiles them,
    the modules Wire_ocaml writes for codecs with no committed copy, and the
-   module of the packet stack with the fold [fold_step], whose visitor is
-   [Step], on OCaml and on OxCaml. *)
+   module of the packet stack with a fold of every integer field, whose walks
+   are [fold_step], [fold_step_frames] and [fold_step_index], on OCaml and on
+   OxCaml. *)
 
 let write dir file contents =
   Out_channel.with_open_bin (Filename.concat dir file) (fun oc ->
@@ -18,12 +19,16 @@ let () =
   spec dir "Stack" Packet_stack.codec;
   spec dir "BfConstrained" Demo.bf_constrained_codec;
   spec dir "ReservedFields" Demo.reserved_fields_codec;
-  let stack target =
-    Wire_ocaml.(
-      to_ml
-        ~visitors:[ ("fold_step", "step.ml") ]
-        (v ~target ~folds:[ fold "fold_step" ] Packet_stack.codec))
+  let rec paths prefix (view : Wire_ocaml.view) =
+    List.concat_map
+      (function
+        | Wire_ocaml.Int { name; _ } -> [ prefix ^ name ]
+        | Record { name; view; _ } -> paths (prefix ^ name ^ ".") view
+        | Bool _ | Bytes _ -> [])
+      view.members
   in
+  let fold = paths "" (Wire_ocaml.views Packet_stack.codec) in
+  let stack target = Wire_ocaml.(to_ml (v ~target ~fold Packet_stack.codec)) in
   write dir "stack_step.gen" (stack `OCaml);
   write dir "stack_step_ox.gen" (stack `OxCaml);
   write dir "bf_constrained.gen"

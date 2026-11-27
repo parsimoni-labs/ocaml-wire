@@ -32,6 +32,21 @@ type scan = {
   m : mode;
   ppf : Format.formatter;
   taken : (string, unit) Hashtbl.t;
+  args : arg list option;
+      (** The arguments the fold hands [f], which it takes with [invalid] as
+          arguments; [None] for a fold that calls a visitor by name. *)
+}
+
+(* A field a fold hands its [f]: its output, the text of its value in its
+   carrier from an [int], the presence of the field itself when it is
+   optional, and through a layer one option more, [None] where the innermost
+   optional layer of [layer] is absent. *)
+and arg = {
+  value : output;
+  typed : string -> string;
+  own : output option;
+  layered : bool;
+  layer : output option;
 }
 
 (* The outputs among [selected] that are slots. *)
@@ -83,12 +98,62 @@ let to_int64 (w : w) (o : output) =
     | None -> Fmt.str "(%s.to_int64 %s)" u (output_text w o)
   else output_text w o
 
+(* An integer output as an [f] that takes [int]s takes it. *)
+let to_int (w : w) (o : output) =
+  if o.is_bool then output_text w o
+  else
+    match List.assoc_opt o.id w.settled with
+    | Some _ -> "0"
+    | None ->
+        let u = if rep w.m.num = Unboxed then "U" else "Int64" in
+        Fmt.str "(%s.to_int %s)" u (output_text w o)
+
+(* [v] as an option, [None] where the presence [p] is false. *)
+let opt w p v =
+  match p with
+  | None -> Fmt.str "(Some %s)" v
+  | Some p -> (
+      match output_text w p with
+      | "false" -> "None"
+      | "true" -> Fmt.str "(Some %s)" v
+      | p -> Fmt.str "(if %s then Some %s else None)" p v)
+
+(* The value of [a] as [f] takes it. *)
+let arg_text w a =
+  let v = a.typed (to_int w a.value) in
+  let v = if Option.is_some a.own then opt w a.own v else v in
+  if a.layered then opt w a.layer v else v
+
 (* The call of the visitor's [valid], applied to [acc], with the outputs,
-   where the walk [w] ends. *)
+   where the walk [w] ends; or of [f], with its arguments in order. *)
 let call s valid (w : w) =
-  pf w "%s %a@\n" valid
-    (pp_args ~fstar:(is_fstar w.m.num) ~conv:(to_int64 w))
-    s.selected
+  match s.args with
+  | None ->
+      pf w "%s %a@\n" valid
+        (pp_args ~fstar:(is_fstar w.m.num) ~conv:(to_int64 w))
+        s.selected
+  | Some [] -> pf w "%s@\n" valid
+  | Some args -> pf w "%s %a@\n" valid pp_list (List.map (arg_text w) args)
+
+(* The rejection of a record by the visitor [m] from [acc]: a call of the
+   argument [invalid] in a fold that takes its consumer as arguments. *)
+let reject s m acc =
+  if Option.is_some s.args then "invalid " ^ acc
+  else Fmt.str "%s.invalid %s" m acc
+
+(* The acceptance of a record by the visitor [m] from [acc], with the outputs
+   positional to the argument [f] in a fold that takes its consumer as
+   arguments. *)
+let accept s m acc =
+  if Option.is_some s.args then call s ("f " ^ acc)
+  else call s (Fmt.str "%s.valid %s" m acc)
+
+(* The consumer a fold that takes it as arguments passes on to each function
+   it calls. *)
+let consumer s = if Option.is_some s.args then " ~f ~invalid" else ""
+
+(* The fold a module writes, as the F* rendering names it. *)
+let step = "fold_step"
 
 (* The functions cut out of [name] are named after it, without [fold_]. *)
 let cut_prefix name =
@@ -138,7 +203,10 @@ let scope s names =
     | Fstar_u -> (Some "P.int64", Some "P.buf")
     | Tagged | Boxed -> (None, None)
   in
-  List.rev ([ ("buf", buf); ("base", num); ("stop", num) ] @ names)
+  let consumer =
+    if Option.is_some s.args then [ ("f", None); ("invalid", None) ] else []
+  in
+  List.rev ([ ("buf", buf); ("base", num); ("stop", num) ] @ names @ consumer)
 
 (* The walk over the [stop] bytes at [base], which starts by binding its
    slots: each rejection is the text [reject] and each acceptance what
@@ -328,8 +396,8 @@ let frames_body ?cuts ~ahead s ~visitor ~name ~known =
   let typ = if s.m.num = Unboxed then Some "int64_u" else None in
   let names = ("current", None) :: List.map (fun (v, _) -> (v, typ)) ahead in
   pp_scan ?cuts ~known ~name ~scope:(scope s names) { s with ppf = bppf; m }
-    ~reject:(visitor ^ ".invalid current")
-    ~accept:(call s (visitor ^ ".valid current"));
+    ~reject:(reject s visitor "current")
+    ~accept:(accept s visitor "current");
   Format.pp_print_flush bppf ();
   Buffer.contents body
 
@@ -410,7 +478,7 @@ let pp_frames_loop ?cuts ?(ahead = []) s ~visitor ~name ~known ~unrolled =
 let pp_frames_short s =
   let read, assign, stride = frames_vars s in
   let at = if s.m.num = Unboxed then "(U.to_int base)" else "base" in
-  let one = Fmt.str "%s buf %s stride ~init:current" s.fold at in
+  let one = Fmt.str "%s buf %s stride ~init:current%s" s.fold at (consumer s) in
   Fmt.pf s.ppf
     "while %s do@\n\
      let base = %scursor in@\n\
@@ -428,13 +496,13 @@ let pp_frames_apart s name =
   let short = name ^ "_short" in
   Hashtbl.replace s.taken short ();
   Fmt.pf s.ppf
-    "let[@inline never] %s buf ~stride ~last ~off ~init =@\n\
+    "let[@inline never] %s buf ~stride ~last ~off ~init%s =@\n\
      let acc = ref init in@\n\
      let cursor = ref off in@\n"
-    short;
+    short (consumer s);
   pp_frames_short s;
   Fmt.pf s.ppf ";@\n!acc@\n@\n";
-  Fmt.str "acc := %s buf ~stride ~last ~off ~init:!acc" short
+  Fmt.str "acc := %s buf ~stride ~last ~off ~init:!acc%s" short (consumer s)
 
 (* The start of the frame loop [name]: its parameters, the check of its
    bounds and stride, and its accumulator, cursor and last offset. With
@@ -442,8 +510,8 @@ let pp_frames_apart s name =
    the buffer. *)
 let pp_frames_head s ~name =
   let ppf = s.ppf and native = s.m.num = Unboxed in
-  Fmt.pf ppf "let[@inline always] %s %s off len ~stride ~init =@\n" name
-    s.m.src.buf;
+  Fmt.pf ppf "let[@inline always] %s %s off len ~stride ~init%s =@\n" name
+    s.m.src.buf (consumer s);
   Fmt.pf ppf
     "if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then@\n\
      invalid_arg \"%s: invalid frame bounds or stride\";@\n"
@@ -534,6 +602,7 @@ type index_loop = {
   used : (string * (string -> string)) list;
   body : string;
   within : string;
+  consumer : string;
 }
 
 (* On OCaml the variables the loop carries are [ref]s, which the compiler
@@ -604,15 +673,15 @@ let pp_index_functions l ~buf =
       l.used;
   let int v = if l.unboxed then Fmt.str "(U.to_int %s)" v else v in
   Fmt.pf ppf
-    "let[@inline always] %s_frame %s ~%s ~known ~%s ~%s ~current%s =@\n\
+    "let[@inline always] %s_frame %s ~%s ~known ~%s ~%s ~current%s%s =@\n\
      if known then (@\n\
-     %s) else %s buf ~length %s %s ~init:current@\n\
+     %s) else %s buf ~length %s %s ~init:current%s@\n\
      @\n"
     index buf
     (if l.unboxed then "(length : int64_u)" else "length")
     (pos "base") (pos "stop")
     (String.concat "" (List.map (fun (v, _) -> " ~" ^ pos v) l.used))
-    l.body l.within (int "base") (int "stop")
+    l.consumer l.body l.within (int "base") (int "stop") l.consumer
 
 (* The frame at index [i] as the variables suffixed [x]: its start, its
    length, [known] when it lies in the buffer and holds [need] bytes, and
@@ -646,10 +715,11 @@ let pp_index_walk ?(carried = false) l x =
   let read = index_read l in
   let v name = if carried then read (name ^ x) else name ^ x in
   Fmt.pf l.out
-    "acc %s %s_frame buf ~length ~known:%s ~base:%s ~stop:%s ~current:%s%s"
+    "acc %s %s_frame buf ~length ~known:%s ~base:%s ~stop:%s ~current:%s%s%s"
     (index_assign l) l.index (v "known") (v "base") (v "stop") (read "acc")
     (String.concat ""
        (List.map (fun (n, _) -> Fmt.str " ~%s:%s" n (v n)) l.used))
+    l.consumer
 
 (* The frames of the index, two an iteration, so the loop polls and tests
    its bound once per two frames, the next frame read before the current
@@ -703,6 +773,7 @@ let pp_fold_index_ahead s ~within ~m ~need ~ahead =
           used;
           body;
           within;
+          consumer = consumer s;
         }
       in
       List.iter
@@ -712,14 +783,14 @@ let pp_fold_index_ahead s ~within ~m ~need ~ahead =
       pp_index_functions l ~buf:s.m.src.buf;
       Fmt.pf s.ppf
         "let[@inline always] %s %s ~(offs : int array) ~(lens : int array) \
-         ~init =@\n\
+         ~init%s =@\n\
          let n = Array.length offs in@\n\
          if Array.length lens <> n then@\n\
          invalid_arg \"%s: offs and lens differ in length\";@\n\
          let length = %s in@\n\
          %s@\n\
          if n > 0 then begin@\n"
-        index s.m.src.buf index (length_of s)
+        index s.m.src.buf (consumer s) index (length_of s)
         (index_mutable l "acc" "init");
       pp_index_frames l;
       Fmt.pf s.ppf "@\nend;@\n%s@\n@\n" (index_read l "acc"))
@@ -741,16 +812,17 @@ let pp_fold_step_index_plain s ~within ~buf =
   let frame ?(acc = "acc") i =
     Fmt.str
       "%s buf ~length (Array.unsafe_get offs %s) (Array.unsafe_get lens %s) \
-       ~init:%s"
-      within i i acc
+       ~init:%s%s"
+      within i i acc (consumer s)
   in
   Fmt.pf s.ppf
-    "let[@inline always] %s %s ~(offs : int array) ~(lens : int array) ~init =@\n\
+    "let[@inline always] %s %s ~(offs : int array) ~(lens : int array) ~init%s \
+     =@\n\
      let n = Array.length offs in@\n\
      if Array.length lens <> n then@\n\
      invalid_arg \"%s: offs and lens differ in length\";@\n\
      let length = %s in@\n"
-    index buf index (length_of s);
+    index buf (consumer s) index (length_of s);
   if s.m.num = Unboxed then begin
     (* The accumulator may have any layout, which a [ref] cannot hold. *)
     Fmt.pf s.ppf "let mutable acc = init in@\nlet mutable i = 0 in@\n";
@@ -816,8 +888,7 @@ let pp_step_within ?trace s m =
       let ppf = Format.formatter_of_buffer body in
       pp_entry ?cuts ~length:"length" ~unboxed_length:true ~name:s.fold
         ~scope:(scope s [ ("init", None) ])
-        { s with ppf } ~reject:(m ^ ".invalid init")
-        ~accept:(call s (m ^ ".valid init"));
+        { s with ppf } ~reject:(reject s m "init") ~accept:(accept s m "init");
       Format.pp_print_flush ppf ();
       let body = Buffer.contents body in
       (* A walk that reads no byte takes [buf] for its type alone. *)
@@ -837,10 +908,10 @@ let pp_step_within ?trace s m =
           (if unboxed then "P.int64" else "P.int")
           (fstar_length_of s param) m m body
       else
-        Fmt.pf s.ppf "let[@inline always] %s %s ~%s off len ~init =@\n%s@\n"
+        Fmt.pf s.ppf "let[@inline always] %s %s ~%s off len ~init%s =@\n%s@\n"
           within param
           (if unboxed then "(length : int64_u)" else "length")
-          body);
+          (consumer s) body);
   if is_fstar s.m.num then
     Fmt.pf s.ppf
       "let %s (buf:P.buf) (off:P.int) (len:P.int) (init:%s.t) : %s.t =@\n\
@@ -849,10 +920,10 @@ let pp_step_within ?trace s m =
       s.fold m m within (fstar_length_of s "buf")
   else
     Fmt.pf s.ppf
-      "let[@inline always] %s %s off len ~init =@\n\
-       %s buf ~length:(%s) off len ~init@\n\
+      "let[@inline always] %s %s off len ~init%s =@\n\
+       %s buf ~length:(%s) off len ~init%s@\n\
        @\n"
-      s.fold buf within (length_of s)
+      s.fold buf (consumer s) within (length_of s) (consumer s)
 
 (* A visitor's fold, which calls the module [m]'s functions by name, and its
    [_index], which folds it over the frames of an index. Both go through its
@@ -862,10 +933,11 @@ let pp_fold_step s m =
   pp_step_within s m;
   pp_fold_step_index s ~within:(within s) ~m
 
-(* [check b length ~off ~len], the walk of [fold] with no output, which
-   answers [off] for a record it accepts and [-1] otherwise. A codec of
-   constant [size] takes no window: [check b length off] walks the record
-   over its [size] bytes, which the bounds fold into one test. *)
+(* [check b ~off ~len], the walk of [fold] with no output, which answers
+   [off] for a record it accepts and [-1] otherwise, in the length of [b] it
+   reads once. A codec of constant [size] takes no window: [check b ~off]
+   walks the record over its [size] bytes, which the bounds fold into one
+   test. *)
 let pp_check ?size s =
   let unboxed = s.m.num = Unboxed in
   let s =
@@ -886,17 +958,17 @@ let pp_check ?size s =
       ~accept:(fun w -> pf w "off@\n");
     Format.pp_print_flush ppf ();
     let body = Buffer.contents body in
-    let b = if mentions "buf" body then "b" else "_b" in
+    let reads = mentions "buf" body || mentions "length" body in
+    let b = if reads then "b" else "_b" in
     Fmt.pf s.ppf
-      "let[@inline always] check (%s : 'b Wire_runtime.Buf.t%s) (length : 'b \
-       Wire_runtime.Buf.length) %s : 'b check =@\n"
+      "let[@inline always] check (%s : 'b Wire_runtime.Buf.t%s) %s : 'b check =@\n"
       b
       (if unboxed then " @ local" else "")
-      (if Option.is_some size then "off" else "~off ~len");
-    if b = "b" then
-      Fmt.pf s.ppf "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n";
-    Fmt.pf s.ppf
-      "let length = (length : _ Wire_runtime.Buf.length :> int) in@\n";
+      (if Option.is_some size then "~off" else "~off ~len");
+    if reads then
+      Fmt.pf s.ppf
+        "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n\
+         let length = Bytes.length buf in@\n";
     Option.iter (Fmt.pf s.ppf "let len = %d in@\n") size;
     Fmt.pf s.ppf "%s@\n" body
   in
@@ -924,11 +996,13 @@ let selected (plan : plan) = function
 let without_dead_bindings text =
   String.concat "\n" (Lines.prune (String.split_on_char '\n' text))
 
-type fold = { name : string; selected : output list; visitor : string }
+type fold = { selected : output list; args : arg list }
 
-(* The walks of a module: each of its [folds], which calls its visitor by
-   name, on OCaml holding values as [int64], then [check]. *)
-let pp_body ~folds ?size s =
+(* The walks of a module: its [fold], which takes its consumer as arguments,
+   on OCaml holding values as [int64], then [check]. The fold's functions are
+   those of the visitor folds of the F* rendering, named [fold_step], with the
+   arguments [f] and [invalid] where those call the visitor by name. *)
+let pp_body ?fold ?size s =
   let unboxed = s.m.num = Unboxed in
   if unboxed then
     Fmt.pf s.ppf
@@ -936,34 +1010,154 @@ let pp_body ~folds ?size s =
        module B = Wire_runtime.Target@\n\
        module L = Wire_runtime.Target.Local@\n\
        @\n";
-  List.iter
+  Option.iter
     (fun f ->
-      let mode num = scan_mode ~decide:s.m.decide s.plan ~num f.selected in
       let num = if unboxed then Unboxed else Boxed in
-      let s = { s with fold = f.name; selected = f.selected; m = mode num } in
-      pp_fold_step s f.visitor;
-      pp_frames s ~visitor:f.visitor)
-    folds;
+      let s =
+        {
+          s with
+          fold = step;
+          selected = f.selected;
+          m = scan_mode ~decide:s.m.decide s.plan ~num f.selected;
+          args = Some f.args;
+        }
+      in
+      pp_fold_step s "";
+      pp_frames s ~visitor:"")
+    fold;
   Fmt.pf s.ppf "type 'b view = int@\ntype 'b check = int@\n@\n";
   pp_check ?size s
 
-let walks ?decide ~target ~folds ?size ~taken plan =
+let walks ?decide ~target ?fold ?size ~taken plan =
   let num = if target = `OxCaml then Unboxed else Tagged in
   let b = Buffer.create 4096 in
   let ppf = Format.formatter_of_buffer b in
   let s =
     {
       plan;
-      fold = "fold";
+      fold = step;
       selected = [];
       m = scan_mode ?decide plan ~num [];
       ppf;
       taken;
+      args = None;
     }
   in
-  pp_body ~folds ?size s;
+  pp_body ?fold ?size s;
   Format.pp_print_flush ppf ();
   without_dead_bindings (Buffer.contents b)
+
+(* {2 The fold}
+
+   [fold] places the records as its arguments say and calls the walks above:
+   back to back, a record of constant size through the frame loop over slots
+   of that size, any other one record at a time, from where the one before
+   ends. Without [invalid], a refused record stops the fold through a local
+   exception, and the error of the first refused record is found again, off
+   the hot path, by [check] and [validate] on its window alone. *)
+
+let pp_fold ppf ~name ~size =
+  Fmt.pf ppf
+    "let[@inline never] window_error buf off len =@\n\
+     let length = Bytes.length buf in@\n\
+     let first = if off < 0 then 0 else if off > length then length else off in@\n\
+     let stop =@\n\
+     if len < 0 then first else if len > length - first then length else first \
+     + len@\n\
+     in@\n\
+     match validate (Bytes.sub buf first (stop - first)) ~off:0 with@\n\
+     | Ok () -> no_error ()@\n\
+     | Error e -> { e with Wire_runtime.Error.at = e.Wire_runtime.Error.at + \
+     first }@\n\
+     @\n\
+     let window_ok buf off len =@\n\
+     off >= 0 && len >= 0 && len <= Bytes.length buf - off@\n\
+     &&@\n\
+     match Wire_runtime.Buf.v buf with@\n\
+     | Wire_runtime.Buf.Any b -> %s@\n\
+     @\n\
+     let[@inline never] slot_error buf ~stride =@\n\
+     let n = Bytes.length buf / stride in@\n\
+     let rec go i =@\n\
+     if i >= n then no_error ()@\n\
+     else if window_ok buf (i * stride) stride then go (i + 1)@\n\
+     else window_error buf (i * stride) stride@\n\
+     in@\n\
+     go 0@\n\
+     @\n\
+     let[@inline never] frame_error buf ~offs ~lens =@\n\
+     let rec go i =@\n\
+     if i >= Array.length offs then no_error ()@\n\
+     else if window_ok buf offs.(i) lens.(i) then go (i + 1)@\n\
+     else window_error buf offs.(i) lens.(i)@\n\
+     in@\n\
+     go 0@\n\
+     @\n"
+    (match size with
+    | Some n -> Fmt.str "len >= %d && is_ok (check b ~off)" n
+    | None -> "is_ok (check b ~off ~len)");
+  let back =
+    match size with
+    | Some 0 ->
+        Fmt.str "invalid_arg \"%s.fold: records of no bytes back to back\"" name
+    | Some n ->
+        Fmt.str
+          "let length = Bytes.length buf in@\n\
+           let whole = length / %d * %d in@\n\
+           match %s_frames buf 0 whole ~stride:%d ~init ~f ~invalid:stop with@\n\
+           | acc ->@\n\
+           if whole = length then Ok acc@\n\
+           else Error (window_error buf whole (length - whole), acc)@\n\
+           | exception Refused acc -> Error (slot_error buf ~stride:%d, acc)"
+          n n step n n
+    | None ->
+        Fmt.str
+          "let length = Bytes.length buf in@\n\
+           let rec go off acc =@\n\
+           if off >= length then Ok acc@\n\
+           else@\n\
+           match %s buf off (length - off) ~init:acc ~f ~invalid:stop with@\n\
+           | exception Refused acc ->@\n\
+           Error (window_error buf off (length - off), acc)@\n\
+           | acc ->@\n\
+           let next = end_at buf length off in@\n\
+           if next <= off then Ok acc else go next acc@\n\
+           in@\n\
+           go 0 init"
+          step
+  in
+  Fmt.pf ppf
+    "let[@inline] fold (type a) ?stride ?offs ?lens ?invalid buf ~(init : a) \
+     ~f : (a, Wire_runtime.Error.t * a) result =@\n\
+     let exception Refused of a in@\n\
+     let stop acc = raise_notrace (Refused acc) in@\n\
+     match (stride, offs, lens) with@\n\
+     | None, None, None -> (@\n\
+     if Option.is_some invalid then@\n\
+     invalid_arg \"%s.fold: ~invalid with records back to back\";@\n\
+     %s)@\n\
+     | Some stride, None, None -> (@\n\
+     if stride <= 0 then invalid_arg \"%s.fold: ~stride is not positive\";@\n\
+     let len = Bytes.length buf / stride * stride in@\n\
+     match invalid with@\n\
+     | Some invalid -> Ok (%s_frames buf 0 len ~stride ~init ~f ~invalid)@\n\
+     | None -> (@\n\
+     match %s_frames buf 0 len ~stride ~init ~f ~invalid:stop with@\n\
+     | acc -> Ok acc@\n\
+     | exception Refused acc -> Error (slot_error buf ~stride, acc)))@\n\
+     | None, Some offs, Some lens -> (@\n\
+     match invalid with@\n\
+     | Some invalid -> Ok (%s_index buf ~offs ~lens ~init ~f ~invalid)@\n\
+     | None -> (@\n\
+     match %s_index buf ~offs ~lens ~init ~f ~invalid:stop with@\n\
+     | acc -> Ok acc@\n\
+     | exception Refused acc -> Error (frame_error buf ~offs ~lens, acc)))@\n\
+     | Some _, Some _, _ | Some _, _, Some _ ->@\n\
+     invalid_arg \"%s.fold: ~stride with ~offs and ~lens\"@\n\
+     | None, Some _, None | None, None, Some _ ->@\n\
+     invalid_arg \"%s.fold: ~offs without ~lens\"@\n\
+     @\n"
+    name back name step step step step name name
 
 (* {1 The F* rendering} *)
 
@@ -1061,6 +1255,7 @@ let rendered ?fields c ~num write =
         m = scan_mode ~note plan ~num selected;
         ppf;
         taken = Hashtbl.create 16;
+        args = None;
       }
     in
     let frame = ref None in

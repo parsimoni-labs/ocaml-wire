@@ -36,8 +36,8 @@ let slice = Bytesrw.Bytes.Slice.to_string
    answers the codec's error on every prefix of the frame. *)
 let test_values () =
   let frame = capture_frame () in
-  let p = Result.get_ok (Codec.decode Packet_stack.capture frame 0) in
-  let r = Result.get_ok (S_capture.decode frame 0) in
+  let p = Result.get_ok (Codec.decode Packet_stack.capture frame ~off:0) in
+  let r = Result.get_ok (S_capture.decode frame ~off:0) in
   Alcotest.(check string) "dst" (slice p.dst) (slice r.dst);
   Alcotest.(check int)
     "ether_type"
@@ -50,7 +50,7 @@ let test_values () =
   Alcotest.(check bool) "no ipv6" true (Option.is_none r.ipv6);
   Alcotest.(check int) "size" 54 (S_capture.size r);
   let out = Bytes.make 54 '\255' in
-  S_capture.encode r out 0;
+  S_capture.encode r out ~off:0;
   Alcotest.(check bytes) "encode" frame out;
   for n = 0 to 53 do
     let short = Bytes.sub frame 0 n in
@@ -60,13 +60,13 @@ let test_values () =
       (Result.equal
          ~ok:(fun () () -> true)
          ~error:Error.equal
-         (Codec.validate Packet_stack.capture short 0)
-         (S_capture.validate short 0))
+         (Codec.validate Packet_stack.capture short ~off:0)
+         (S_capture.validate short ~off:0))
   done;
   (* A record whose values break its sizes is refused, as the codec's
      encoder refuses it. *)
   let bad = { r with ipv4 = Some { ip with ihl = 4 } } in
-  match S_capture.encode bad (Bytes.create 54) 0 with
+  match S_capture.encode bad (Bytes.create 54) ~off:0 with
   | () -> Alcotest.fail "encode: an IHL of 4"
   | exception Invalid_argument _ -> ()
 
@@ -79,8 +79,8 @@ let test_bad_input () =
     if n > 14 && Random.State.bool rand then Bytes.set_uint16_be b 12 0x0800;
     if n > 15 && Random.State.bool rand then Bytes.set_uint8 b 14 0x45;
     let off = Random.State.int rand (n + 2) in
-    let want = Codec.decode Packet_stack.capture b off in
-    match S_capture.decode b off with
+    let want = Codec.decode Packet_stack.capture b ~off in
+    match S_capture.decode b ~off with
     | Ok _ when Result.is_ok want -> ()
     | Error e
       when Result.equal ~ok:(fun _ _ -> false) ~error:Error.equal want (Error e)
@@ -99,7 +99,7 @@ let test_bad_input () =
 (* The printer shows the record as the codec decodes it, its slices by their
    bytes. *)
 let test_pp () =
-  let r = Result.get_ok (S_capture.decode (capture_frame ()) 0) in
+  let r = Result.get_ok (S_capture.decode (capture_frame ()) ~off:0) in
   let s = Fmt.str "%a" S_capture.pp r in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains s sub))

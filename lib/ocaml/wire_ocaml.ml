@@ -89,53 +89,22 @@ type t =
       name : string;
       target : target;
       simd : bool;
-      folds : Writer.fold list;
+      fold : string list option;
       maps : map list option;
       codec : 'r Wire.Codec.t;
     }
       -> t
 
-(* The module of a visitor's source file: [flow_step.ml] is [Flow_step]. *)
-let visitor_module file =
-  let base = Filename.basename file in
-  let stem =
-    match String.index_opt base '.' with
-    | Some i -> String.sub base 0 i
-    | None -> base
-  in
-  String.capitalize_ascii stem
-
 let writer (T t) =
   let require =
     if t.simd || Option.is_some t.maps then `Record
-    else match t.folds with _ :: _ -> `Walk | [] -> `Any
+    else if Option.is_some t.fold then `Walk
+    else `Any
   in
-  Writer.v ~target:t.target ~simd:t.simd ?maps:(named t.maps) ~folds:t.folds
+  Writer.v ~target:t.target ~simd:t.simd ?maps:(named t.maps) ?fold:t.fold
     ~require ~codec:(Gen.to_struct t.codec).name t.codec
 
-(* The module each fold of [t] calls by name, from [visitors], its source
-   file by fold: each names a fold [t] declares, and each fold has one. *)
-let visitor_modules (T t) visitors =
-  List.iter
-    (fun (n, _) ->
-      if not (List.exists (fun (f : Writer.fold) -> f.name = n) t.folds) then
-        Fmt.invalid_arg "Wire_ocaml: %s declares no fold %S" t.name n)
-    visitors;
-  List.map
-    (fun (f : Writer.fold) ->
-      match List.assoc_opt f.name visitors with
-      | Some file -> (f.name, visitor_module file)
-      | None ->
-          Fmt.invalid_arg
-            "Wire_ocaml: %s declares the fold %S, which no visitor names" t.name
-            f.name)
-    t.folds
-
-(* A fold over fields named by their paths raises [Failure "unimplemented"]. *)
-let unimplemented () = failwith "unimplemented"
-
-let declared ?name ?(target = building) ?(simd = false) ?(folds = []) ?maps
-    codec =
+let v ?name ?(target = building) ?(simd = false) ?fold ?maps codec =
   let name =
     match name with
     | Some n -> n
@@ -143,19 +112,15 @@ let declared ?name ?(target = building) ?(simd = false) ?(folds = []) ?maps
         String.lowercase_ascii
           (View_module.module_of_codec (Gen.to_struct codec).name)
   in
-  let t = T { name; target; simd; folds; maps; codec } in
+  let t = T { name; target; simd; fold; maps; codec } in
   (* Refused when declared, not when printed. *)
   ignore (writer t : Writer.t);
   t
 
-let v ?name ?target ?simd ?fold ?maps codec =
-  match fold with
-  | Some _ -> unimplemented ()
-  | None -> declared ?name ?target ?simd ?maps codec
-
+let declared = v
 let name (T t) = t.name
-let to_ml t = Writer.ml ~visitors:(visitor_modules t []) (writer t)
-let to_mli t = Writer.mli ~visitors:(visitor_modules t []) (writer t)
+let to_ml t = Writer.ml (writer t)
+let to_mli t = Writer.mli (writer t)
 
 (* {2 The generator's command line} *)
 
@@ -370,10 +335,7 @@ module Plan = struct
   let decisions ?(target = `OCaml) ?fold c =
     let acc = ref [] in
     let decide d = acc := d :: !acc in
-    let t =
-      match fold with Some _ -> unimplemented () | None -> declared ~target c
-    in
-    ignore (Writer.ml ~decide ~visitors:(visitor_modules t []) (writer t));
+    ignore (Writer.ml ~decide (writer (declared ~target ?fold c)));
     List.rev !acc
 
   let select t names =

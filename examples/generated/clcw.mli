@@ -55,24 +55,24 @@ val size : t -> int
 
 (** {1:checks Validating and decoding} *)
 
-val validate : bytes -> int -> (unit, Wire_runtime.Error.t) result
-(** [validate buf off] is [Ok ()] if the record at [off] in [buf] fits and
-    passes its checks, and the codec's error otherwise. Raises
-    [Invalid_argument] if [off] is negative. *)
+val validate : bytes -> off:int -> (unit, Wire_runtime.Error.t) result
+(** [validate buf ~off] is [Ok ()] if the record at [off] in [buf] passes the
+    codec's checks, and the codec's error otherwise. Raises [Invalid_argument]
+    if [off] is negative. *)
 
-val decode : bytes -> int -> (t, Wire_runtime.Error.t) result
-(** [decode buf off] is the record at [off] in [buf], or the codec's error.
+val decode : bytes -> off:int -> (t, Wire_runtime.Error.t) result
+(** [decode buf ~off] is the record at [off] in [buf], or the codec's error.
     Raises [Invalid_argument] if [off] is negative. *)
 
 (** {1:writes Writing} *)
 
-val encode : t -> bytes -> int -> unit
-(** [encode r buf off] writes the record [r] at [off] in [buf]. Raises as
+val encode : t -> bytes -> off:int -> unit
+(** [encode r buf ~off] writes the record [r] at [off] in [buf]. Raises as
     {!write} does. *)
 
 val write :
   bytes ->
-  int ->
+  off:int ->
   controlwordtype:int ->
   clcwversion:int ->
   statusfield:int ->
@@ -88,10 +88,11 @@ val write :
   spare2:int ->
   reportvalue:int ->
   unit
-(** [write buf off ~controlwordtype ~clcwversion ~statusfield ~copineffect ~vcid
-     ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit ~farmbcounter ~spare2
-     ~reportvalue] writes the record of these fields at [off] in [buf]. Raises
-    [Invalid_argument] if it does not fit, if a value does not fit its field. *)
+(** [write buf ~off ~controlwordtype ~clcwversion ~statusfield ~copineffect
+     ~vcid ~spare ~norf ~nobitlock ~lockout ~wait ~retransmit ~farmbcounter
+     ~spare2 ~reportvalue] writes the record of these fields at [off] in [buf].
+    Raises [Invalid_argument] if it does not fit, if a value does not fit its
+    field. *)
 
 (** {1:views Views} *)
 
@@ -103,19 +104,18 @@ type 'b check = private int
 (** The type for the answers of a check of a record of [CLCW] in the buffer
     named ['b]. *)
 
-val check :
-  'b Wire_runtime.Buf.t -> 'b Wire_runtime.Buf.length -> int -> 'b check
-(** [check b length off] is the answer of the checks {!val-fold} makes on the
-    record at [off], whose 4 bytes must lie in [b] of length [length], as
-    [Wire.Codec.View.check] takes them. It never raises: bad bounds or a bad
-    record give an answer {!ok} refuses. *)
+val check : 'b Wire_runtime.Buf.t -> off:int -> 'b check
+(** [check b ~off] is the check of the record at [off], whose 4 bytes must lie
+    in [b], as [Wire.Codec.View.check] makes it. It never raises and allocates
+    nothing: a negative [off] or a record [b] does not hold is refused. *)
 
-val ok : 'b check -> bool
-(** [ok c] is [true] iff the check [c] passed. *)
+val is_ok : 'b check -> bool
+(** [is_ok k] is [true] iff the check [k] passed. *)
 
 val get : 'b check -> 'b view
-(** [get c] is the record of the check [c]. Raises [Invalid_argument] if [ok c]
-    is [false]: test {!ok} first, a refused record is input, not misuse. *)
+(** [get k] is the view of the record the check [k] passed. Raises
+    [Invalid_argument] if [is_ok k] is [false]: a refused record is input, test
+    {!is_ok} first. *)
 
 val controlwordtype : 'b Wire_runtime.Buf.t -> 'b view -> int
 (** [controlwordtype b v] is the field [controlwordtype] of the record [v]. *)
