@@ -30,6 +30,10 @@ val x509lite : packed
 (** [x509lite] describes EverParse's
     [share/everparse/tests/asn1/tool/X509Lite.asn]. *)
 
+val times : packed
+(** [times] holds DATE, TIME-OF-DAY, DATE-TIME, OID-IRI and RELATIVE-OID-IRI
+    DEFAULTs and a RELATIVE-OID. *)
+
 val types : (string * packed) list
 (** [types] is each type with the name of its module. *)
 

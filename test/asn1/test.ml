@@ -270,6 +270,21 @@ Cert ::= SEQUENCE {
 END
 |}
 
+let times_asn =
+  {|Times DEFINITIONS EXPLICIT TAGS ::= BEGIN
+
+Times ::= SEQUENCE {
+  day DATE DEFAULT "2024-02-29",
+  clock TIME-OF-DAY DEFAULT "23:59:60",
+  stamp DATE-TIME DEFAULT "1582-10-15T00:00:00",
+  iri OID-IRI DEFAULT "/ISO/Registration_Authority/19785",
+  relIri RELATIVE-OID-IRI DEFAULT "a-b/1",
+  rel RELATIVE-OID
+}
+
+END
+|}
+
 let check_module name t ~roots expected () =
   let s = projected name t in
   Alcotest.(check string) "text" expected (printed s);
@@ -367,6 +382,8 @@ let suite =
       Alcotest.test_case "EverParse's X509Lite" `Quick
         (check_module "X509Lite" Asn1_modules.x509lite ~roots:[ "Cert" ]
            x509lite_asn);
+      Alcotest.test_case "times, IRIs and RELATIVE-OID" `Quick
+        (check_module "Times" Asn1_modules.times ~roots:[ "Times" ] times_asn);
       Alcotest.test_case "deterministic" `Quick test_deterministic;
       Alcotest.test_case "contained" `Quick test_contained;
       Alcotest.test_case "contained once" `Quick test_contained_once;

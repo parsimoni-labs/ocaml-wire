@@ -644,6 +644,20 @@ let test_key_without_literal () =
   rejects ~msg:"control character" (fun () ->
       Asn1.defined_by "d" ~on:k [ case_int "a\tb" ])
 
+(* A time or IRI key is written as everparse-asn1 reads its literal
+   (README:431-434), which a value that is not DER does not have. *)
+let test_key_time_not_der () =
+  let k = Asn1.required "k" Asn1.date in
+  builds (fun () -> Asn1.defined_by "d" ~on:k [ case_int "20240229" ]);
+  rejects ~msg:"\"20230229\", which is not a DER DATE" (fun () ->
+      Asn1.defined_by "d" ~on:k [ case_int "20230229" ]);
+  let k = Asn1.required "k" Asn1.date_time in
+  rejects ~msg:"which is not a DER DATE-TIME" (fun () ->
+      Asn1.defined_by "d" ~on:k [ case_int "2024022912000" ]);
+  let k = Asn1.required "k" Asn1.oid_iri in
+  rejects ~msg:"\"a/b\", which is not a DER OID-IRI" (fun () ->
+      Asn1.defined_by "d" ~on:k [ case_int "a/b" ])
+
 let test_sequence_foreign_field () =
   let f = Field.v "x" uint8 in
   rejects ~msg:"field \"x\" is not an ASN.1 component" (fun () ->
@@ -771,6 +785,8 @@ let suite =
       Alcotest.test_case "reject: defined_by empty" `Quick test_defined_by_empty;
       Alcotest.test_case "reject: key without literal" `Quick
         test_key_without_literal;
+      Alcotest.test_case "reject: time or IRI key not DER" `Quick
+        test_key_time_not_der;
       Alcotest.test_case "reject: foreign field" `Quick
         test_sequence_foreign_field;
       Alcotest.test_case "reject: repeated component" `Quick

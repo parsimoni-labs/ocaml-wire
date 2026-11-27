@@ -458,6 +458,44 @@ let x509lite =
         (sig_ $ fun (_, _, c) -> c);
       ]
 
+(* -- The six universal types everparse-asn1 adds to X.680's usual ones --
+
+   Each time and IRI is a DEFAULT, so that its literal is printed:
+   everparse-asn1 reads DATE, TIME-OF-DAY and DATE-TIME literals in the
+   extended format and checks them in F* (README:431-434). A RELATIVE-OID has
+   no literal and is required. *)
+
+type times = {
+  day : string;
+  clock : string;
+  stamp : string;
+  iri : string;
+  rel_iri : string;
+  rel : Asn1.Relative_oid.t;
+}
+
+let times =
+  let day = Asn1.default "day" "20240229" Asn1.date in
+  let clock = Asn1.default "clock" "235960" Asn1.time_of_day in
+  let stamp = Asn1.default "stamp" "15821015000000" Asn1.date_time in
+  let iri =
+    Asn1.default "iri" "/ISO/Registration_Authority/19785" Asn1.oid_iri
+  in
+  let rel_iri = Asn1.default "relIri" "a-b/1" Asn1.relative_oid_iri in
+  let rel = Asn1.required "rel" Asn1.relative_oid in
+  Asn1.sequence "Times"
+    (fun day clock stamp iri rel_iri rel ->
+      { day; clock; stamp; iri; rel_iri; rel })
+    Codec.
+      [
+        (day $ fun r -> r.day);
+        (clock $ fun r -> r.clock);
+        (stamp $ fun r -> r.stamp);
+        (iri $ fun r -> r.iri);
+        (rel_iri $ fun r -> r.rel_iri);
+        (rel $ fun r -> r.rel);
+      ]
+
 type packed = Packed : 'a Asn1.t -> packed
 
 (* Each type with the name of its module. *)
@@ -469,6 +507,7 @@ let types =
     ("KeptRoot", Packed kept_root);
     ("Clash", Packed clash);
     ("X509Lite", Packed x509lite);
+    ("Times", Packed times);
   ]
 
 let all = List.map (fun (m, Packed t) -> Asn1.project m (Asn1.codec t)) types
@@ -478,3 +517,4 @@ let names = Packed names
 let kept_root = Packed kept_root
 let clash = Packed clash
 let x509lite = Packed x509lite
+let times = Packed times
