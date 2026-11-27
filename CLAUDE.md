@@ -35,6 +35,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 
 - `lib/` -- core `wire` library: DSL types, Everparse codegen, Codec (parse/encode)
 - `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run everparse-3d.exe, generate C tests)
+- `lib/asn1/` -- `wire.asn1` sublibrary: everparse-asn1 pipeline (write .asn, run everparse-asn1.exe, generate C tests); the `Wire.Asn1` DSL itself is in `lib/`
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
 - `lib/ocaml/` -- `wire.ocaml` sublibrary: a fixed-size codec written out as OCaml (or OxCaml)
 - `lib/rust/` -- `wire.rust` sublibrary: the same codec written out as dependency-free Rust
@@ -58,13 +59,25 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 
 ## Feature shippability
 
-Every feature in `ocaml-wire` must project cleanly to EverParse 3D. A
-feature that decodes/encodes on the OCaml side but has no clean 3D
-projection is **not shipped**. The OCaml side and the 3D side are part
-of the same release-shaped unit; partial work goes in a branch but
-does not merge until both halves land.
+A feature ships when a verified parser backend expresses it and its
+projection is checked there. Today the backends are EverParse 3D and
+everparse-asn1. One wire description projects each codec to the
+backend that expresses it:
 
-A shape that cannot project is rejected when it is built, never
+- a codec 3D can express projects to 3D and is checked there;
+- a codec that needs what only everparse-asn1 has (DER tags and
+  lengths, OPTIONAL decided by peeking at a tag, SET OF ordering)
+  projects to everparse-asn1 and is checked there;
+- a codec that nests codecs of both kinds projects each nested codec
+  to its own backend, handed over as a byte region that backend's
+  validator checks, and each is checked.
+
+A feature that decodes/encodes on the OCaml side but has no checked
+verified projection is **not shipped**. The OCaml side and its
+projection are part of the same release-shaped unit; partial work goes
+in a branch but does not merge until both halves land.
+
+A shape no backend can express is rejected when it is built, never
 half-supported in OCaml: the combinator raises `Invalid_argument` with a
 message naming the shape and the reason, and every rejection has a unit
 test asserting it. The reject predicate mirrors the handler's supported
@@ -73,7 +86,13 @@ extending an element handler to a new shape, check that the shape
 projects in that position (as a repeat element, not only standalone).
 
 The EverParse limits that decide what projects, and so what must be
-rejected, are listed in [docs/projection.md](docs/projection.md#what-3d-cannot-express).
+rejected, are listed in [docs/projection.md](docs/projection.md#what-3d-cannot-express)
+for 3D and in [docs/asn1.md](docs/asn1.md#refused-when-built) for
+everparse-asn1. The `Wire.Asn1` combinators mirror everparse-asn1's
+checks (recursion, an implicit tag on a CHOICE, tags a decoder cannot
+tell apart, DEFAULT on a constructed type) as the binary combinators
+mirror 3D's. The DER rules and the handover between backends are in
+[docs/asn1.md](docs/asn1.md).
 
 ### Tagged unions
 
