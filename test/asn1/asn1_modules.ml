@@ -496,6 +496,33 @@ let times =
         (rel $ fun r -> r.rel);
       ]
 
+(* -- DER and binary codecs nested in each other -- *)
+
+(* A binary record holding a DER SubjectPublicKeyInfo, under its length. *)
+type framed = UInt16.t * spki
+
+let framed : framed Codec.t =
+  let len = Field.v "len" uint16be in
+  let key =
+    Field.v "key" (nested ~size:(Field.ref len) (codec (Asn1.codec spki)))
+  in
+  Codec.v "Framed" (fun len key -> (len, key)) Codec.[ len $ fst; key $ snd ]
+
+(* An OCTET STRING holding a DER value, as X.509's extnValue holds its
+   extension. *)
+let wrapped =
+  let inner =
+    let n = Asn1.required "n" Asn1.integer in
+    Asn1.sequence "Inner" Fun.id Codec.[ n $ Fun.id ]
+  in
+  let body =
+    Asn1.required "body" (Asn1.containing (codec (Asn1.codec inner)))
+  in
+  let tail = Asn1.required "tail" (Asn1.containing (codec payload_codec)) in
+  Asn1.sequence "Wrapped"
+    (fun body tail -> (body, tail))
+    Codec.[ body $ fst; tail $ snd ]
+
 type packed = Packed : 'a Asn1.t -> packed
 
 (* Each type with the name of its module. *)
@@ -508,9 +535,13 @@ let types =
     ("Clash", Packed clash);
     ("X509Lite", Packed x509lite);
     ("Times", Packed times);
+    ("Wrapped", Packed wrapped);
   ]
 
-let all = List.map (fun (m, Packed t) -> Asn1.project m (Asn1.codec t)) types
+let all =
+  List.map (fun (m, Packed t) -> Asn1.project m (Asn1.codec t)) types
+  @ [ Asn1.project "Framed" framed ]
+
 let spki = Packed spki
 let constructs = Packed constructs
 let names = Packed names
@@ -518,3 +549,4 @@ let kept_root = Packed kept_root
 let clash = Packed clash
 let x509lite = Packed x509lite
 let times = Packed times
+let wrapped = Packed wrapped

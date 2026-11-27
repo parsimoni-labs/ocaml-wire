@@ -34,8 +34,17 @@ val times : packed
 (** [times] holds DATE, TIME-OF-DAY, DATE-TIME, OID-IRI and RELATIVE-OID-IRI
     DEFAULTs and a RELATIVE-OID. *)
 
+type framed
+(** The type for records of {!val-framed}. *)
+
+val framed : framed Codec.t
+(** [framed] is a binary record holding {!val-spki}'s DER under its length. *)
+
+val wrapped : packed
+(** [wrapped] holds a DER value and a binary record under [containing]. *)
+
 val types : (string * packed) list
 (** [types] is each type with the name of its module. *)
 
 val all : Asn1.schema list
-(** [all] is the module of each of {!types}. *)
+(** [all] is the module of each of {!types}, and of {!framed}. *)

@@ -285,6 +285,44 @@ Times ::= SEQUENCE {
 END
 |}
 
+(* A binary codec holding DER projects to the module of the DER types it
+   holds; a DER value under a containing prints as such, its type in the same
+   module. *)
+let framed_asn = "Framed" ^ String.sub spki_asn 4 (String.length spki_asn - 4)
+
+let wrapped_asn =
+  {|Wrapped DEFINITIONS EXPLICIT TAGS ::= BEGIN
+
+Inner ::= SEQUENCE {
+  n INTEGER
+}
+
+Wrapped ::= SEQUENCE {
+  body OCTET STRING (CONTAINING Inner),
+  tail OCTET STRING
+}
+
+END
+|}
+
+let test_framed () =
+  let s = Asn1.project "Framed" Asn1_modules.framed in
+  Alcotest.(check string) "text" framed_asn (printed s);
+  Alcotest.(check (list string))
+    "roots" [ "SubjectPublicKeyInfo" ] (Asn1.roots s);
+  Alcotest.(check (list string))
+    "no binary under a containing" []
+    (List.map
+       (fun (s : Everparse.t) -> s.name)
+       (Asn1.contained Asn1_modules.framed))
+
+let test_wrapped () =
+  Alcotest.(check (list string))
+    "the binary contents only" [ "Payload" ]
+    (List.map
+       (fun (s : Everparse.t) -> s.name)
+       (contained Asn1_modules.wrapped))
+
 let check_module name t ~roots expected () =
   let s = projected name t in
   Alcotest.(check string) "text" expected (printed s);
@@ -384,6 +422,11 @@ let suite =
            x509lite_asn);
       Alcotest.test_case "times, IRIs and RELATIVE-OID" `Quick
         (check_module "Times" Asn1_modules.times ~roots:[ "Times" ] times_asn);
+      Alcotest.test_case "DER in a binary codec" `Quick test_framed;
+      Alcotest.test_case "DER under a containing" `Quick
+        (check_module "Wrapped" Asn1_modules.wrapped ~roots:[ "Wrapped" ]
+           wrapped_asn);
+      Alcotest.test_case "DER under a containing: contained" `Quick test_wrapped;
       Alcotest.test_case "deterministic" `Quick test_deterministic;
       Alcotest.test_case "contained" `Quick test_contained;
       Alcotest.test_case "contained once" `Quick test_contained_once;
