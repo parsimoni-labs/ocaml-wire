@@ -845,7 +845,7 @@ and pp_error_region ppf e ~p ~path size at_most body =
   Fmt.str "(%s + %s)" p n
 
 let min_size (r : V.record) =
-  Wire.Codec.struct_min_size (Wire.Codec.validator_of_struct r.struct_)
+  Wire.Private.struct_min_size (Wire.Private.validator_of_struct r.struct_)
 
 let pp_error_at ppf t (r : V.record) =
   let b = Buffer.create 1024 in

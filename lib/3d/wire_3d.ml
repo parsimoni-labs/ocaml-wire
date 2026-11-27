@@ -1,6 +1,6 @@
 (** Generate verified C libraries from Wire codecs via EverParse. *)
 
-open Wire.Everparse
+open Wire.Private.Everparse
 open Proc
 
 (* EverParse's own identifier mangling, transcribed from [pascal_case] in
@@ -58,10 +58,10 @@ let validator_name name =
    Keep the two concerns separate: [file_base] for filenames, [c_ident] for
    C identifiers. *)
 let file_base (s : t) =
-  Wire.Everparse.validate_output_name s.name;
-  String.capitalize_ascii s.name
+  Wire.Private.Everparse.validate_output_name (Wire.Everparse.name s);
+  String.capitalize_ascii (Wire.Everparse.name s)
 
-let c_ident (s : t) = everparse_name s.name
+let c_ident (s : t) = everparse_name (Wire.Everparse.name s)
 
 (* Both mangles are many-to-one, so two codecs with different names can land
    on one generated artifact and overwrite each other in silence. [file_base]
@@ -91,8 +91,8 @@ let check_name_collisions schemas =
             Fmt.invalid_arg
               "Wire_3d: codecs %S and %S both generate %s %S; rename one of \
                them"
-              first s.name what k
-        | None -> Hashtbl.add seen (fold k) s.name)
+              first (Wire.Everparse.name s) what k
+        | None -> Hashtbl.add seen (fold k) (Wire.Everparse.name s))
       schemas
   in
   check "the file" ~fold:String.lowercase_ascii (fun s -> file_base s ^ ".3d");
@@ -326,7 +326,7 @@ let write_external_typedefs ~outdir schemas =
   check_name_collisions schemas;
   List.iter
     (fun s ->
-      if Wire.Everparse.uses_wire_ctx s then begin
+      if Wire.Private.Everparse.uses_wire_ctx s then begin
         let path =
           Filename.concat outdir (file_base s ^ "_ExternalTypedefs.h")
         in
@@ -354,35 +354,37 @@ let index_macro s name =
    escape is injective, so only the macro can clash, but both are checked.
    Refuse naming both fields before writing either file. *)
 let check_visitor_names s =
-  let fields = Wire.Everparse.visitor_fields s in
+  let fields = Wire.Private.Everparse.visitor_fields s in
   List.iter
-    (fun (f : Wire.Everparse.visitor_field) ->
+    (fun (f : Wire.Private.Everparse.visitor_field) ->
       if not (Wire.Private.Names.is_identifier f.name) then
         Fmt.invalid_arg
           "Wire_3d: in %S, field %S is not an identifier \
            ([A-Za-z_][A-Za-z0-9_]*) and cannot name a visitor member; rename \
            it"
-          s.name f.name)
+          (Wire.Everparse.name s) f.name)
     fields;
   let check what ident =
     match
       Wire.Private.Names.clash
-        (List.map (fun f -> (f.Wire.Everparse.name, ident f.name)) fields)
+        (List.map
+           (fun f -> (f.Wire.Private.Everparse.name, ident f.name))
+           fields)
     with
     | None -> ()
     | Some (a, b, id) ->
         Fmt.invalid_arg
           "Wire_3d: in %S, fields %S and %S both define the visitor's %s %S; \
            rename one of them"
-          s.name a b what id
+          (Wire.Everparse.name s) a b what id
   in
   check "macro" (index_macro s);
-  check "struct member" Wire.Everparse.visitor_member
+  check "struct member" Wire.Private.Everparse.visitor_member
 
 (* Typed-struct visitor: one C struct per schema with one member per named field,
    plus a [WireSet*] implementation that switches on idx to populate it. *)
 let write_fields_header ~outdir s =
-  let fields = Wire.Everparse.visitor_fields s in
+  let fields = Wire.Private.Everparse.visitor_fields s in
   let base = file_base s in
   let ident = c_ident s in
   let path = Filename.concat outdir (base ^ "_Fields.h") in
@@ -399,7 +401,8 @@ let write_fields_header ~outdir s =
   pr "/* Field indices -- use with the schema's WireSet* callbacks in a@\n";
   pr "   custom [WIRECTX] if you only want to capture a subset. */@\n";
   List.iter
-    (fun f -> pr "#define %s %d@\n" (index_macro s f.Wire.Everparse.name) f.idx)
+    (fun f ->
+      pr "#define %s %d@\n" (index_macro s f.Wire.Private.Everparse.name) f.idx)
     fields;
   if fields <> [] then pr "@\n";
   pr
@@ -409,8 +412,8 @@ let write_fields_header ~outdir s =
   pr "typedef struct %sFields {@\n" ident;
   List.iter
     (fun f ->
-      pr "  %s %s;@\n" f.Wire.Everparse.c_type
-        (Wire.Everparse.visitor_member f.name))
+      pr "  %s %s;@\n" f.Wire.Private.Everparse.c_type
+        (Wire.Private.Everparse.visitor_member f.name))
     fields;
   if fields = [] then pr "  int _unused;@\n";
   pr "} %sFields;@\n" ident;
@@ -423,8 +426,8 @@ let write_fields_header ~outdir s =
    underlying [UINT32] / [UINT64] but the visitor struct stores the typed
    float; everyone else takes a value cast. *)
 let emit_setter_case ppf logical f =
-  if String.equal f.Wire.Everparse.setter logical then
-    let member = Wire.Everparse.visitor_member f.name in
+  if String.equal f.Wire.Private.Everparse.setter logical then
+    let member = Wire.Private.Everparse.visitor_member f.name in
     match f.c_type with
     | "float" | "double" ->
         Fmt.pf ppf
@@ -459,13 +462,13 @@ let physical_setter_names ~outdir s setters =
           Fmt.invalid_arg
             "Wire_3d: codec %S declares the extern setter %s but %s does not; \
              the generated header is not in a layout this understands"
-            s.name logical
+            (Wire.Everparse.name s) logical
             (extern_api_path ~outdir s))
     setters
 
 let write_fields_impl ~outdir s =
-  let fields = Wire.Everparse.visitor_fields s in
-  let setters = Wire.Everparse.visitor_setters s in
+  let fields = Wire.Private.Everparse.visitor_fields s in
+  let setters = Wire.Private.Everparse.visitor_setters s in
   let base = file_base s in
   let ident = c_ident s in
   let physical_names = physical_setter_names ~outdir s setters in
@@ -501,7 +504,7 @@ let write_fields ~outdir schemas =
   List.iter check_visitor_names schemas;
   List.iter
     (fun s ->
-      if Wire.Everparse.uses_wire_ctx s then begin
+      if Wire.Private.Everparse.uses_wire_ctx s then begin
         write_fields_header ~outdir s;
         write_fields_impl ~outdir s
       end)
@@ -515,7 +518,7 @@ let write_fields ~outdir schemas =
 let wire_ctx_files schemas =
   List.concat_map
     (fun s ->
-      if Wire.Everparse.uses_wire_ctx s then
+      if Wire.Private.Everparse.uses_wire_ctx s then
         let base = file_base s in
         [
           base ^ "_ExternalTypedefs.h";
@@ -531,7 +534,8 @@ let wire_ctx_files schemas =
 let fields_c_files schemas =
   List.filter_map
     (fun s ->
-      if Wire.Everparse.uses_wire_ctx s then Some (file_base s ^ "_Fields.c")
+      if Wire.Private.Everparse.uses_wire_ctx s then
+        Some (file_base s ^ "_Fields.c")
       else None)
     schemas
 
@@ -769,14 +773,16 @@ let emit_random_checks ppf ~validator ~ctx_arg wire_size =
 let emit_schema_test ppf s wire_size =
   let pr fmt = Fmt.pf ppf fmt in
   let validator =
-    match Wire.Everparse.entrypoint_struct s with
+    match Wire.Private.Everparse.entrypoint_struct s with
     | Some st -> validator_of ~module_name:(file_base s) (Raw.struct_name st)
-    | None -> Fmt.failwith "%s: the schema has no entrypoint to test" s.name
+    | None ->
+        Fmt.failwith "%s: the schema has no entrypoint to test"
+          (Wire.Everparse.name s)
   in
-  let lower = String.lowercase_ascii s.name in
-  let uses_ctx = Wire.Everparse.uses_wire_ctx s in
+  let lower = String.lowercase_ascii (Wire.Everparse.name s) in
+  let uses_ctx = Wire.Private.Everparse.uses_wire_ctx s in
   let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
-  pr "\n  /* %s (%d bytes) */\n" s.name wire_size;
+  pr "\n  /* %s (%d bytes) */\n" (Wire.Everparse.name s) wire_size;
   pr "  {\n";
   pr "    int pass = 0, fail = 0;\n";
   pr "    uint8_t buf[%d];\n" wire_size;
@@ -784,7 +790,8 @@ let emit_schema_test ppf s wire_size =
   if uses_ctx then pr "    %sFields ctx = {0};\n" (c_ident s);
   pr "\n";
   pr "    memset(buf, 0, %d);\n" wire_size;
-  emit_sanity_check ppf ~name:s.name ~validator ~ctx_arg wire_size;
+  emit_sanity_check ppf ~name:(Wire.Everparse.name s) ~validator ~ctx_arg
+    wire_size;
   pr "    CHECK(\"zero buffer validates\", EverParseIsSuccess(r));\n";
   pr "    CHECK(\"position advanced to %d\", r == %d);\n" wire_size wire_size;
   pr "\n";
@@ -808,14 +815,15 @@ let generate_test ~outdir schemas =
   pr "#include \"EverParse.h\"\n";
   let fixed_schemas =
     List.filter_map
-      (fun s -> Option.map (fun ws -> (s, ws)) s.wire_size)
+      (fun s ->
+        Option.map (fun ws -> (s, ws)) (Wire.Private.Everparse.wire_size s))
       schemas
   in
   List.iter
     (fun (s, _) ->
       let base = file_base s in
       pr "#include \"%s.h\"\n" base;
-      if Wire.Everparse.uses_wire_ctx s then
+      if Wire.Private.Everparse.uses_wire_ctx s then
         pr "#include \"%s_Fields.h\"\n" base)
     fixed_schemas;
   (* counting_error_handler is only referenced from the per-schema test
@@ -895,7 +903,7 @@ let batch_check schemas =
         in
         if process_status_code status <> 0 then failwith "EverParse rejected"
       in
-      pool (List.map (fun (s : t) -> (s.name, job s)) schemas)
+      pool (List.map (fun (s : t) -> (Wire.Everparse.name s, job s)) schemas)
       |> Result.map ignore
 
 let generate_c ?(quiet = true) ~outdir schemas =
@@ -1076,7 +1084,7 @@ let standalone_base ?name ~package () =
   let base =
     doc_module_name (match name with Some n -> n | None -> package)
   in
-  Wire.Everparse.validate_output_name base;
+  Wire.Private.Everparse.validate_output_name base;
   base
 
 (* -- Differential self-check for the doc pipeline. The doc projection emits a
@@ -1103,13 +1111,13 @@ let hex_of_bytes b =
    must span the whole buffer because the hardened [Check] wrapper rejects
    trailing bytes. [`Resize n] means that the parsed record occupies [n] bytes. *)
 let codec_verdict ?env c buf =
-  match Wire.Codec.decode ?env c buf 0 with
+  match Wire.Codec.decode ?env c buf ~off:0 with
   | Error e -> `Reject e
   | Ok _ -> (
-      match Wire.Codec.validate ?env c buf 0 with
+      match Wire.Codec.validate ?env c buf ~off:0 with
       | Error e -> `Reject e
       | Ok () -> (
-          match Wire.Codec.size_at ?env c buf 0 with
+          match Wire.Codec.size_at ?env c buf ~off:0 with
           | Error e -> `Reject e
           | Ok n -> if n = Bytes.length buf then `Accept else `Resize n))
 
@@ -1329,7 +1337,7 @@ let vacuous_corpus name ~accepts ~rejects =
     name accepts rejects
     (if accepts = 0 then
        "Nothing reached the accepting side of the codec's constraints. \
-        Wire.Everparse.Raw.field_seeds names values only for equality, \
+        Wire.Private.Everparse.Raw.field_seeds names values only for equality, \
         inequality, ordering and closed-enum constraints on whole-byte integer \
         fields; any other constraint needs a hand-written corpus."
      else "Every input was accepted; the corpus needs a rejected one.")
@@ -1371,15 +1379,15 @@ let emit_streams ~count ~emit ~rng ~center ~draw_params seeded =
 
 let corpus_of_codec ~count ppf (Pack c) =
   let rng = Random.State.make [| 0x5eed51 |] in
-  let schema = project ~mode:`Standalone c in
-  let name = schema.name in
+  let schema = Wire.Everparse.project ~mode:`Standalone c in
+  let name = Wire.Everparse.name schema in
   let pnames =
-    match schema.source with
+    match Wire.Private.Everparse.source schema with
     | Some source -> Raw.input_param_names source
     | None -> []
   in
   let seeds =
-    match schema.source with
+    match Wire.Private.Everparse.source schema with
     | Some source -> Raw.field_seeds source
     | None -> []
   in
@@ -1595,10 +1603,11 @@ let emit_agree_main ppf =
    entrypoint name. A raw-module schema has no source struct to read it from, so
    say so rather than guess a symbol that would only fail at link time. *)
 let schema_entrypoint_name s =
-  match s.source with
+  match Wire.Private.Everparse.source s with
   | Some source -> Wire.Private.Types.struct_tag_name (Raw.struct_name source)
   | None ->
-      Fmt.failwith "%s: raw-module schema has no entrypoint struct tag" s.name
+      Fmt.failwith "%s: raw-module schema has no entrypoint struct tag"
+        (Wire.Everparse.name s)
 
 (* EverParse names each entrypoint wrapper [<Base>CheckWire<Codec>] and gives
    it the input parameters before the trailing [base, len], so both the helper
@@ -1612,15 +1621,17 @@ let generate_agree ?name ~outdir ~package codecs =
   let triples =
     List.map
       (fun (Pack c) ->
-        let s = project ~mode:`Standalone c in
+        let s = Wire.Everparse.project ~mode:`Standalone c in
         let ptypes =
-          match s.source with Some st -> Raw.param_c_types st | None -> []
+          match Wire.Private.Everparse.source s with
+          | Some st -> Raw.param_c_types st
+          | None -> []
         in
         (* EverParse builds the wrapper symbol as
            [pascal_case (module ^ "_check_" ^ codec)], so compute it the same way
            rather than gluing pre-normalized parts: only the whole-string
            [pascal_case] gets the casing right for names like [TPM2B -> Tpm2b]. *)
-        ( s.name,
+        ( Wire.Everparse.name s,
           pascal_case (base ^ "_check_" ^ schema_entrypoint_name s),
           ptypes ))
       codecs
@@ -1641,9 +1652,11 @@ let generate_agree ?name ~outdir ~package codecs =
 
 let generate_3d_standalone ?name ~outdir ~package codecs =
   ensure_dir outdir;
-  write ~mode:`Standalone ~outdir
+  Wire.Everparse.write ~mode:`Standalone ~outdir
     ~name:(standalone_base ?name ~package ())
-    (List.map (fun (Pack c) -> project ~mode:`Standalone c) codecs)
+    (List.map
+       (fun (Pack c) -> Wire.Everparse.project ~mode:`Standalone c)
+       codecs)
 
 let generate_3d_standalone_check ?name ~outdir ~package codecs =
   let tmpdir = Filename.temp_dir "wire_3d_check" "" in
@@ -1734,7 +1747,7 @@ let emit_standalone_gen_rules ppf ~three_d ~c_files ~provenance =
 let wrapper_symbols base codecs =
   List.map
     (fun (Pack c) ->
-      let s = project ~mode:`Standalone c in
+      let s = Wire.Everparse.project ~mode:`Standalone c in
       pascal_case (base ^ "_check_" ^ schema_entrypoint_name s))
     codecs
 
@@ -1902,7 +1915,9 @@ let main ?name ~mode ~package codecs =
   let argv = Array.to_list Sys.argv in
   match mode with
   | `Ffi -> (
-      let schemas = List.map (fun (Pack c) -> project ~mode:`Ffi c) codecs in
+      let schemas =
+        List.map (fun (Pack c) -> Wire.Everparse.project ~mode:`Ffi c) codecs
+      in
       match argv with
       | [ _; "3d" ] -> generate_3d ~outdir:"." schemas
       | [ _; "3d-gen" ] -> generate_3d_check ~outdir:"." schemas

@@ -91,7 +91,7 @@ let named (s : T.struct_) =
     s.fields
 
 let min_size (r : P.record) =
-  Wire.Codec.struct_min_size (Wire.Codec.validator_of_struct r.struct_)
+  Wire.Private.struct_min_size (Wire.Private.validator_of_struct r.struct_)
 
 (* Whether a value of [typ] holds a borrow of the buffer it was read from. *)
 let rec typ_borrows : type a. P.records -> a T.typ -> bool =

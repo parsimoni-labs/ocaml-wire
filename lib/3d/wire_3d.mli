@@ -39,7 +39,7 @@
     v}
 
     If you want OCaml to call the generated C validators, use {!Wire_stubs} on
-    the resulting {!type:Wire.Everparse.Raw.struct_} values. *)
+    the resulting {!type:Wire.Private.Everparse.Raw.struct_} values. *)
 
 val everparse_name : string -> string
 (** [everparse_name name] is the C identifier EverParse derives from a struct
@@ -70,11 +70,11 @@ val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules.
 
     Raises [Invalid_argument] before writing any file if a schema name does not
-    satisfy {!Wire.Everparse.validate_output_name}, or if two schemas would
-    generate the same [.3d] file or C identifier. A collision names both codecs:
-    the second write would otherwise silently replace the first, leaving that
-    codec's FFI stubs running against another spec's verified C. Names collide
-    after capitalization ([header] and [Header]) and after EverParse's
+    satisfy {!Wire.Private.Everparse.validate_output_name}, or if two schemas
+    would generate the same [.3d] file or C identifier. A collision names both
+    codecs: the second write would otherwise silently replace the first, leaving
+    that codec's FFI stubs running against another spec's verified C. Names
+    collide after capitalization ([header] and [Header]) and after EverParse's
     identifier mangling ([TMFrame] and [Tmframe]). The same checks guard
     {!generate_c}, {!generate_dune}, {!write_external_typedefs} and
     {!write_fields}. *)
@@ -175,9 +175,9 @@ val check_visitor_names : Wire.Everparse.t -> unit
 (** [check_visitor_names s] raises [Invalid_argument] naming both fields when
     two of [s]'s fields would define one [_IDX_] macro or one struct member of
     its default visitor: the macro upper-cases the field name ([X] and [x]); the
-    member's escape ({!Wire.Everparse.visitor_member}) keeps names apart. It
-    also refuses a field whose name is not an identifier. {!write_fields} runs
-    it first. *)
+    member's escape ({!Wire.Private.Everparse.visitor_member}) keeps names
+    apart. It also refuses a field whose name is not an identifier.
+    {!write_fields} runs it first. *)
 
 val write_fields : outdir:string -> Wire.Everparse.t list -> unit
 (** [write_fields ~outdir schemas] writes the default [<Name>_Fields.{c,h}]
@@ -304,9 +304,9 @@ val generate_corpus : ?count:int -> Format.formatter -> packed list -> unit
 
     The inputs come from four streams: accepting seeds, built by writing the
     values each constrained field's own declaration names (see
-    {!Wire.Everparse.Raw.field_seeds}) at the offsets the codec's parse errors
-    report; boundary inputs, each seed with one constrained field set to each of
-    those values and its immediate neighbours; mutants of the seeds; and
+    {!Wire.Private.Everparse.Raw.field_seeds}) at the offsets the codec's parse
+    errors report; boundary inputs, each seed with one constrained field set to
+    each of those values and its immediate neighbours; mutants of the seeds; and
     uniformly drawn bytes at lengths biased around the codec's minimum size.
 
     Uniform bytes alone are vacuous for a codec that pins a field:
@@ -314,8 +314,8 @@ val generate_corpus : ?count:int -> Format.formatter -> packed list -> unit
     is a reject and the differential holds equally for a validator that rejects
     everything. [generate_corpus] therefore raises [Failure] rather than emit a
     corpus with nothing on one side of the accept/reject boundary, naming the
-    codec and tally. A constraint {!Wire.Everparse.Raw.field_seeds} cannot
-    describe needs a hand-written corpus. *)
+    codec and tally. A constraint {!Wire.Private.Everparse.Raw.field_seeds}
+    cannot describe needs a hand-written corpus. *)
 
 val generate_agree :
   ?name:string -> outdir:string -> package:string -> packed list -> unit

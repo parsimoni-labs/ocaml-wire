@@ -1245,7 +1245,7 @@ let mli ?(values = fun _ _ -> ()) ppf ~target t =
   values ppf t.root
 
 let of_codec ?(reserved = []) c =
-  { (v ~reserved (Gen.to_struct c)) with size = Wire.Codec.size c }
+  { (v ~reserved (Gen.to_struct c)) with size = Wire.Codec.fixed_size c }
 
 (* {1 The plan} *)
 

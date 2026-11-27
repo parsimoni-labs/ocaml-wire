@@ -54,11 +54,14 @@ val generate : schema_dir:string -> outdir:string -> packed_codec list -> unit
 (** [generate ~schema_dir ~outdir codecs] writes all FFI artifacts. *)
 
 val of_structs :
-  schema_dir:string -> outdir:string -> Wire.Everparse.Raw.struct_ list -> unit
+  schema_dir:string ->
+  outdir:string ->
+  Wire.Private.Everparse.Raw.struct_ list ->
+  unit
 (** Same as {!generate} but takes raw structs directly. With no codec to take a
     digest of, the stubs' [Make] does not check the codec it is applied to. *)
 
-val check_names : Wire.Everparse.Raw.struct_ -> unit
+val check_names : Wire.Private.Everparse.Raw.struct_ -> unit
 (** [check_names s] raises [Invalid_argument] naming both fields when
     {!of_structs} would refuse [s] because two of its fields spell one
     identifier: one 3D name in its FFI projection, one macro or member of its
@@ -70,7 +73,7 @@ val check_names : Wire.Everparse.Raw.struct_ -> unit
     These are the building blocks used by {!generate}. Most users should not
     need them directly. *)
 
-val to_c_stubs : Wire.Everparse.Raw.struct_ list -> string
+val to_c_stubs : Wire.Private.Everparse.Raw.struct_ list -> string
 (** Generate C stubs that call the EverParse validators directly.
 
     Raises [Invalid_argument] naming both codecs when two names fold to one stub
@@ -88,7 +91,7 @@ val build_codec_archive :
     to every compilation. [test.c] and [<Name>Wrapper.c] are skipped. Requires
     [cc] and [ar]. *)
 
-val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
+val to_ml_stubs : Wire.Private.Everparse.Raw.struct_ list -> string
 (** Generate the OCaml stubs of all structs, each the module {!module_name}
     names, holding its record type [t] and its functor [Make], which checks no
     digest.
@@ -96,16 +99,16 @@ val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
     Raises [Invalid_argument] naming both codecs when two names give one stub,
     as [foo] and [FOO] do, or naming a codec whose name gives no module. *)
 
-val to_ml_stub : Wire.Everparse.Raw.struct_ -> string
+val to_ml_stub : Wire.Private.Everparse.Raw.struct_ -> string
 (** Generate the contents of a standalone OCaml module, its record type [t] and
     its functor [Make], for one struct. *)
 
-val module_name : Wire.Everparse.Raw.struct_ -> string
+val module_name : Wire.Private.Everparse.Raw.struct_ -> string
 (** [module_name s] is the module of [s]'s stubs in {!to_ml_stubs}: its name,
     capitalised. Raises [Invalid_argument] if the name does not start with a
     letter or is not an identifier. *)
 
-val to_ml_stub_name : Wire.Everparse.Raw.struct_ -> string
+val to_ml_stub_name : Wire.Private.Everparse.Raw.struct_ -> string
 (** Derive the OCaml snake_case module name from a struct's CamelCase name. *)
 
 val everparse_name : string -> string

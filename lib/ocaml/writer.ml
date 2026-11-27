@@ -33,7 +33,8 @@ type t = {
 let record_part ~maps c =
   match record_plan ~maps c with
   | exception Unsupported reason -> Error reason
-  | _, size when Wire.Codec.size c <> Some size -> Error "its size is not fixed"
+  | _, size when Wire.Codec.fixed_size c <> Some size ->
+      Error "its size is not fixed"
   | plan, size -> Ok (plan, size)
 
 (* The walk covers a codec of any shape in its scope, with no map: the folds

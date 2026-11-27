@@ -1,41 +1,22 @@
-(** Binary wire format descriptions.
+(** Binary formats described once.
 
-    A wire format is a sequence of typed {!module-Field} values -- integers,
-    bitfields, enumerations, byte arrays -- laid out at fixed bit offsets in a
-    buffer. A {!Codec} binds those fields to an OCaml record, giving you:
+    A {!Codec} describes the bytes of a record once, as an OCaml value, and
+    everything that reads and writes those bytes derives from it. {e Values}:
+    {!Codec.decode} and {!Codec.encode} copy a whole record between bytes and
+    OCaml. {e Views}: {!Codec.View.check} runs every check of the codec once,
+    and a view then reads and writes single fields in place. {e Folds}:
+    {!Codec.View.fold} checks the records of a buffer one after the other and
+    hands the fields it names to a function. All of this is the {e interpreted}
+    form, [wire] alone. The {e generated} form is the module [Wire_ocaml] or
+    [Wire_rust] writes from the same codec, with the same concepts under the
+    same names, each field an accessor named after it. {!Everparse} projects the
+    same codec to a verified C validator.
 
-    - Zero-copy field access: {!Codec.get} and {!Codec.set} applied to a codec
-      and a field are its reader and writer.
-    - Full-record [decode] / [encode] between bytes and OCaml values.
-    - Constraint checking and dependent-size fields.
+    Bad bytes are a value: a check, a decoder or a read answers a refused check
+    or an {!Error.t} for any input and never raises. [Invalid_argument] is a
+    misuse by the program.
 
-    {[
-    open Wire
-
-    type header = { version : int; length : UInt16.t }
-
-    let f_version = Field.v "Version" (bits ~width:4 U8)
-    let f_length = Field.v "Length" uint16be
-    let bf_version = Codec.(f_version $ fun (h : header) -> h.version)
-    let bf_length = Codec.(f_length $ fun (h : header) -> h.length)
-
-    let codec : header Codec.t =
-      Codec.v "Header"
-        (fun version length -> { version; length })
-        Codec.[ bf_version; bf_length ]
-
-    let buf = Codec.to_bytes codec { version = 1; length = UInt16.v 42 }
-    let get_version = Codec.get codec bf_version
-    let () = assert (get_version buf 0 = Ok 1)
-
-    let () =
-      match Codec.decode codec buf 0 with
-      | Ok h -> assert (h.version = 1 && UInt16.to_int h.length = 42)
-      | Error _ -> assert false
-    ]}
-
-    The same description can be projected to an EverParse 3D schema via
-    {!Everparse}, for verified C parser generation. *)
+    The model is shown on one running example in {{!page-api}the API guide}. *)
 
 (** {1 Expressions}
 
@@ -348,9 +329,8 @@ end
     everything else.
 
     Define each field once with {!Field.v}, then reuse it everywhere: bind it
-    into a {!Codec} for zero-copy access and full-record round-trips, reference
-    it from dependent expressions with {!Field.ref}, or project it to EverParse
-    3D via {!Everparse.project}.
+    into a {!Codec} with [Codec.( $ )], reference it from dependent expressions
+    with {!Field.ref}, or project it to EverParse 3D with the codec.
 
     {[
     open Wire
@@ -417,9 +397,8 @@ module Buf = Buf
 (** Buffers named by a type.
 
     [let (Buf.Any b) = Buf.v bytes in ...] gives [bytes] a type ['b Buf.t] that
-    no other buffer has, and [Buf.length b] is its length, read once.
-    {!Codec.View} checks and reads records in such a buffer, and a view checked
-    in one buffer reads no other. *)
+    no other buffer has. {!Codec.View} checks records in such a buffer, and a
+    view checked in one buffer reads and writes no other. *)
 
 module Field : sig
   type 'a t
@@ -427,8 +406,6 @@ module Field : sig
 
   type 'a anon
   (** An anonymous (padding) field. Cannot be referenced. *)
-
-  type packed = Named : 'a t -> packed | Anon : 'a anon -> packed
 
   val v :
     string ->
@@ -608,9 +585,6 @@ module Field : sig
 
   val doc : 'a t -> string option
   (** Field note attached via {!v}'s [?doc], if any. *)
-
-  val decl_of_packed : packed -> Types.field
-  (** The underlying field declaration of a packed field. *)
 end
 
 (** {1 Type Descriptions}
@@ -628,9 +602,9 @@ end
     cannot hold is refused where the value is built. A {!bits} slice is the one
     shape left in a plain [int], which holds far more than the slice does, so a
     four-bit slice given [0x1F] raises [Invalid_argument] on every entry point
-    ({!to_string}, {!Codec.encode} and {!Codec.set} alike) rather than putting
-    an [0xF] on the wire that reads back as a perfectly legal [15], with nothing
-    left to say the caller meant something else. *)
+    ({!Codec.encode} and {!Codec.View.set} alike) rather than putting an [0xF]
+    on the wire that reads back as a perfectly legal [15], with nothing left to
+    say the caller meant something else. *)
 
 val uint8 : UInt8.t typ
 (** Unsigned 8-bit integer. Holds [0] to [255]: [511] is not a [uint8], even
@@ -761,10 +735,10 @@ val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions.
 
     [decode] must be total over the wire values [t] and its constraints admit.
-    {!Codec.validate} and {!Codec.View.val-check} do not call it, so a [decode]
-    that raises on such a value makes {!Codec.decode} raise on a buffer they
-    accept. For a table indexed by the wire value use {!lookup}, whose bound
-    they check. *)
+    {!Codec.validate} and {!Codec.View.check} do not call it, so a [decode] that
+    raises on such a value makes {!Codec.decode} raise on a buffer they accept.
+    For a table indexed by the wire value use {!lookup}, whose bound they check.
+*)
 
 val bool : bool -> bool expr
 (** Constant boolean expression. *)
@@ -784,9 +758,8 @@ val lookup : 'a list -> 'b typ -> 'a typ
     [t] may be any integer-valued description, as for {!bit}.
 
     The decoded integer selects the corresponding element from the list. An
-    out-of-range index produces an {!Error.constructor-Invalid_tag} error
-    (reported via [result] in {!of_reader} / {!of_string} / {!of_bytes}).
-    Encoding raises [Invalid_argument] if the value is not in the table. *)
+    out-of-range index is an {!Error.constructor-Invalid_tag} error. Encoding
+    raises [Invalid_argument] if the value is not in the table. *)
 
 val empty : unit typ
 (** [empty] is a description carrying no bytes and producing [()]. *)
@@ -909,8 +882,7 @@ val byte_array_where :
     {!val-sizeof_this} is [1]. *)
 
 val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ
-(** Fixed-size byte sequence exposed as a zero-copy slice by bytes-based
-    decoders. {!of_string} gives the mutable result its own backing bytes.
+(** Fixed-size byte sequence exposed as a zero-copy slice of the decoded bytes.
     Encoding raises [Invalid_argument] unless the slice is exactly [size] bytes,
     as for {!byte_array}. Raises [Invalid_argument] on a literal [size] that is
     negative or more than a buffer can hold. *)
@@ -1016,8 +988,9 @@ val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ
     the body takes whatever bytes remain, such a casetype has to be the trailing
     field of its struct. *)
 
-val size : 'a typ -> int option
-(** [size t] is the fixed wire size of a description, if known statically. *)
+val fixed_size : 'a typ -> int option
+(** [fixed_size t] is [Some n] if every value of [t] takes [n] bytes, and [None]
+    if its size varies. *)
 
 (** {1 Parsing Errors} *)
 
@@ -1027,711 +1000,366 @@ module Error = Wire_runtime.Error
     such as unexpected end of input or a constraint violation, from semantic
     failure such as an invalid enum or tag. *)
 
-(** {1 Direct Decoding and Encoding}
+(** {1:codecs Codecs}
 
-    These functions interpret a ['a typ] directly and exchange ordinary OCaml
-    values with bytes.
-
-    Use them when you want a value now: one-shot decoding, streaming code built
-    around [Bytesrw], tests, small tools, and formats that are naturally
-    consumed as values.
-
-    Use {!Codec} instead when the format is record-shaped and the main goal is
-    repeated access to individual fields in an existing buffer, without
-    allocating an OCaml record for each read.
-
-    The {!Error.t} result covers failures of the input: truncation, constraint
-    violations, a byte span the data sizes out of range. A description that
-    cannot be decoded whatever the input, such as {!field_pos} in a size
-    expression, is a programmer error and raises [Invalid_argument], the same
-    way encoding does. *)
-
-val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, Error.t) result
-(** Decodes one value from the current reader position.
-
-    If the description references parameters, bind them with {!Param.bind}
-    before calling. Output parameters are updated during decoding; read them
-    back with {!Param.get}.
-
-    For the zero-copy codec path, prefer {!Codec.decode} which takes an explicit
-    {!Param.env}.
-
-    Decoding consumes only the bytes of the decoded value; anything past it
-    stays on the reader, so successive values can be decoded back-to-back from
-    the same reader. Types that extend to the end of input ({!all_bytes},
-    {!all_zeros}, and anything containing them) consume the whole stream.
-
-    On [Error] the reader is rewound: every byte consumed by the failed decode
-    is pushed back, restoring the reader to its position before the call, so the
-    caller can retry with another description or after more input arrives. The
-    guarantee covers parse errors only; an exception escaping a user {!map}
-    function does not rewind, and output parameters written by actions during
-    the failed decode are not rolled back. Push back makes
-    [Bytesrw.Bytes.Reader.pos] non-monotonic across a failed decode. *)
-
-val of_string : ?consume:consumption -> 'a typ -> string -> ('a, Error.t) result
-(** Decodes one value from the start of the string. [consume] defaults to
-    [`Prefix], leaving trailing bytes uninterpreted; [`All] returns a
-    {!Error.constructor-Trailing_bytes} error unless the value consumes the
-    whole string. Decoding itself does not copy the input; mutable {!byte_slice}
-    values that escape in the result receive their own backing bytes so they
-    cannot modify the source string. *)
-
-val of_bytes : ?consume:consumption -> 'a typ -> bytes -> ('a, Error.t) result
-(** Decodes one value from the start of the byte sequence, with the same
-    [consume] contract as {!of_string}. *)
-
-(** {1 Direct Encoding}
-
-    Encoding follows the same description language as decoding. The functions in
-    this section are the direct counterparts of {!of_reader}, {!of_string}, and
-    {!of_bytes}: they work with whole OCaml values rather than field-level
-    accessors.
-
-    Unlike decoding, encoding is exception-based rather than result-based.
-    Decoding fails on untrusted input (truncated data, constraint violations),
-    so callers need structured errors. Encoding fails only on programmer errors
-    (wrong description for the value, unsupported form), which are not
-    data-dependent and should not be silently ignored. *)
-
-val to_writer : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit
-(** Encodes one value to a [Bytesrw.Bytes.Writer.t].
-
-    This function is exception-based. Unsupported description forms, such as
-    unresolved type references, raise an exception rather than returning an
-    error value. *)
-
-val to_bytes : 'a typ -> 'a -> bytes
-(** Encodes one value to freshly allocated bytes. *)
-
-val to_string : 'a typ -> 'a -> string
-(** Encodes one value to a freshly allocated string. *)
-
-(** {1 Codecs}
-
-    A codec is the primary way to work with a wire format. It binds
-    {!module-Field} values to an OCaml record type and provides:
-
-    - {b Full-record round-trip}: {!Codec.decode} and {!Codec.encode} convert
-      between bytes and OCaml values.
-    - {b Checked views}: {!Codec.View} checks a record once, then reads its
-      fields in place with no check of their own. This is the way to read fields
-      of untrusted input.
-    - {b Field access}: {!Codec.get} and {!Codec.set} read and write one field
-      in place, for bytes the program wrote itself.
-    - {b Word access}: {!Codec.Word} checks that a short fixed header lies in
-      the buffer and reads it as one word, with no other check. It is faster
-      than {!Codec.View} on records shorter than 8 bytes.
-
-    Every mode derives from the same definition, so the layout is always
-    consistent. {!Everparse.project} projects the same codec to a verified C
-    parser -- no separate description to maintain. *)
+    A codec describes the bytes of a record once: {!Codec.v} binds
+    {!module-Field} definitions to the fields of an OCaml record and resolves
+    where each lies. Everything that reads and writes the bytes derives from it:
+    the values {!Codec.decode} and {!Codec.encode} copy, the views of
+    {!Codec.View} that read and write fields in place, the folds over many
+    records, the modules [Wire_ocaml] and [Wire_rust] generate and the validator
+    {!Everparse} projects. *)
 
 module Codec : sig
+  (** {1:codecs Codecs} *)
+
   type 'r t
-  (** Sealed codec for record values of type ['r]. *)
+  (** The type for codecs of records ['r]. *)
 
   type ('a, 'r) field
-  (** A field bound to a record projection. The binding retains the identity of
-      its source {!Field.t}: an accessor may use another binding of that same
-      source field, but not a newly declared field that merely has the same
-      name. One source field may still be shared by multiple codecs. *)
+  (** The type for definitions of fields of type ['a] bound to records ['r]. A
+      definition exists before any codec, since {!v} takes it, and one
+      definition can be bound into several codecs. *)
 
-  (** The fields a {!writer} takes, in the order of its arguments. *)
-  type ('f, 'r) args =
-    | [] : (unit, 'r) args
-    | ( :: ) : ('a, 'r) field * ('f, 'r) args -> ('a -> 'f, 'r) args
-
-  type ('f, 'r) fields =
-    | [] : ('r, 'r) fields
-    | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
+  (** The type for definitions given in order to a function ending in ['k]: the
+      constructor of {!v}, where ['k] is the record ['r], or the visitor of
+      {!View.fold}, where ['k] is its accumulator. *)
+  type ('f, 'k, 'r) fields =
+    | [] : ('k, 'k, 'r) fields
+    | ( :: ) : ('a, 'r) field * ('f, 'k, 'r) fields -> ('a -> 'f, 'k, 'r) fields
 
   val ( $ ) : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field
-  (** [f $ proj] binds a {!Field.t} to a record projection. *)
+  (** [f $ proj] is the definition [f] bound to the records ['r], from which
+      [proj] reads its value. *)
 
   val v :
-    string -> ?where:bool expr -> ?doc:string -> 'f -> ('f, 'r) fields -> 'r t
-  (** [v name constructor fields] seals a codec. [?doc] attaches a free-text
-      note (e.g. an RFC citation) that the documentation projection renders as a
-      [/*++ ... --*/] comment on the codec's 3D typedef; see
-      {!Everparse.project}.
+    string ->
+    ?where:bool expr ->
+    ?doc:string ->
+    'f ->
+    ('f, 'r, 'r) fields ->
+    'r t
+  (** [v name ~where ~doc make fields] is the codec [name] of the records [make]
+      builds from the values of [fields], given in their order. [doc] is a
+      free-text note, such as an RFC citation, that {!Everparse.project} renders
+      as a [/*++ ... --*/] comment on the codec's 3D typedef.
 
-      [?where] is a whole-codec constraint. Mentioning only
+      [where] is a whole-record constraint. Mentioning only
       {!module-Param.val-input} parameters, it projects to 3D's [where] clause,
       which EverParse checks before reading any field. 3D's [where] sees
       parameters only, so an expression that also refers to fields projects as a
       refinement on the last field it mentions, the earliest point at which 3D
       can evaluate it.
 
-      [v] checks the description and compiles nothing; the first operation that
-      needs the layout (encoding, decoding, validating, sizing, making an
-      accessor, embedding with {!codec}) compiles it, from any domain. Domains
-      that use a new codec at the same time may each compile it; one result is
-      kept, and they are interchangeable. Raises [Invalid_argument] on a
-      repeated field or parameter name, on a field list EverParse 3D cannot
-      validate, and on a constraint, action or [?where] that refers to a field
-      it cannot see. What only the compile finds (a size expression referring to
-      a field it cannot see, a bitfield after a variable-size field, a field
-      type with no reader or writer, fixed fields that add up to more than a
-      buffer can hold) raises [Invalid_argument] at the first use instead.
+      [v] resolves where each definition of [fields] lies in the record: its
+      constant offset or how to compute it, its reader and its writer. The
+      definitions are not changed: one definition in two codecs is resolved in
+      each, and {!View.field} hands out the codec's resolution.
 
-      {[
-      let codec =
-        Codec.v "Packet"
-          (fun version length -> { version; length })
-          Codec.
-            [ (f_version $ fun p -> p.version); (f_length $ fun p -> p.length) ]
-      ]} *)
+      Raises [Invalid_argument], naming the shape and the reason, on a shape no
+      verified backend can express (the EverParse limits of
+      [docs/projection.md]); on a repeated field or parameter name; on a
+      constraint, action or [where] that refers to a field it cannot see; on a
+      size expression that refers to a field it cannot see, a bitfield after a
+      variable-size field, or fixed fields that add up to more than a buffer can
+      hold; and on a path ([( / )]) in [fields]. *)
 
-  val rename : string -> 'r t -> 'r t
-  (** [rename n c] is [c] with its name set to [n]. The name only determines the
-      generated 3D struct name, not the wire encoding, so renaming leaves
-      encode/decode and all field constraints unchanged. Use it to give a
-      generically built codec a unique, meaningful name for projection or code
-      generation. *)
+  (** {2:layers Layers}
+
+      A layer is a field that holds a record of another codec: the IPv4 header
+      of an Ethernet frame, present when its [ether_type] says so. A fold names
+      a field under a layer by its path, [ipv4 / protocol]. *)
+
+  (* Open question 6: [layer], [opt_layer], [( / )] and [( // )] are the
+     proposal, settled by this typing and a cram test of a rejected path. *)
+
+  type ('s, 'r) layer
+  (** The type for fields of records ['r] that hold a record ['s], present or
+      optional. *)
+
+  val layer : ('s, 'r) field -> ('s, 'r) layer
+  (** [layer f] is [f] as a layer, the field of a record: a {!Wire.codec} field,
+      or a {!Wire.nested} or {!Wire.nested_at_most} of one. Raises
+      [Invalid_argument] for any other field. *)
+
+  val opt_layer : ('s option, 'r) field -> ('s, 'r) layer
+  (** [opt_layer f] is {!layer} for a {!Field.optional} [f]: the layer is absent
+      where [f] is. *)
+
+  val ( / ) : ('s, 'r) layer -> ('a, 's) field -> ('a option, 'r) field
+  (** [l / f] is the field [f] of the record [l] holds, as a field of ['r]: it
+      is [None] where [l] is absent. A path names a nested field to
+      {!View.fold}; {!v} refuses it. *)
+
+  val ( // ) : ('s, 'r) layer -> ('t, 's) layer -> ('t, 'r) layer
+  (** [l // l'] is the layer [l'] of the record [l] holds, absent where [l] or
+      [l'] is, so [l // l' / f] is [None] where either is: one option, however
+      deep the path. *)
+
+  (** {1:props Properties} *)
 
   val name : 'r t -> string
-  (** [name c] is the name of [c], which {!rename} sets. *)
+  (** [name c] is the name of [c], the name of its 3D struct. *)
+
+  val rename : string -> 'r t -> 'r t
+  (** [rename n c] is [c] named [n]. The name is the 3D struct's only, so [c]'s
+      bytes, its checks, its definitions and its views are unchanged. *)
 
   val doc : 'r t -> string option
-  (** [doc c] is the note attached via {!v}'s [?doc], if any. *)
+  (** [doc c] is the note {!v}'s [doc] attaches to [c], if any. *)
+
+  val env : 'r t -> Param.env
+  (** [env c] is a fresh parameter environment for [c]. *)
 
   val min_size : 'r t -> int
   (** [min_size c] is the fewest bytes a record of [c] takes: its size when [c]
-      is of constant size. *)
+      has a constant size. *)
 
-  val size : 'r t -> int option
-  (** [size c] is the number of bytes of every record of [c], or [None] if [c]
-      is of variable size. *)
+  val fixed_size : 'r t -> int option
+  (** [fixed_size c] is [Some n] if every record of [c] takes [n] bytes, and
+      [None] if [c] has a variable size. *)
 
-  val size_at : ?env:Param.env -> 'r t -> bytes -> int -> (int, Error.t) result
-  (** [size_at c buf off] is the size of the record at [off] in [buf], read from
-      the sizes the buffer holds, or the error of bytes that hold none: the end
-      of input where the buffer cuts a length field. It does not check that the
-      record fits in [buf].
+  (** {1:values Values}
 
-      Raises [Invalid_argument] on a negative [off], and when [c]'s field sizes
-      are driven by an input param and [?env] is omitted, the same as {!decode}:
-      an unbound param reads 0, which would silently measure a param-sized field
-      as empty and report an extent shorter than the record. *)
-
-  val encoded_size : ?env:Param.env -> 'r t -> 'r -> int
-  (** [encoded_size c v] is the number of bytes [encode c v] writes. For a codec
-      of constant size it is {!size}; for dynamic-size codecs, the result
-      depends on [v]. Raises [Invalid_argument] for a value {!encode} would
-      refuse, such as a casetype value no case projects. *)
-
-  val env : 'r t -> Param.env
-  (** [env c] creates a fresh parameter environment for codec [c]. *)
+      A value is a whole record, copied between bytes and OCaml. Decoders and
+      validators answer the error of bad bytes as a value. The encoders raise
+      [Invalid_argument] on a record the decoder would refuse: they never write
+      bytes their own decoder refuses. *)
 
   val decode :
     ?consume:consumption ->
     ?env:Param.env ->
     'r t ->
     bytes ->
-    int ->
+    off:int ->
     ('r, Error.t) result
-  (** [decode ?env c buf off] decodes one record value at the given base offset.
-      [consume] defaults to [`Prefix], accepting one record followed by more
-      bytes. [`All] requires the record to end at [Bytes.length buf] and returns
-      a {!Error.constructor-Trailing_bytes} error otherwise.
+  (** [decode c buf ~off] is the record of [c] at [off] in [buf], or the error
+      of its bytes. [consume] defaults to [`Prefix], accepting one record
+      followed by more bytes; [`All] requires the record to end at
+      [Bytes.length buf] and answers {!Error.constructor-Trailing_bytes}
+      otherwise. [env] supplies the input parameters of [c], and receives its
+      output parameters on success.
 
-      If [?env] is supplied, input params are read from it and output params are
-      written back to it on success.
-
-      Raises [Invalid_argument] when [off] is negative, when [?env] was created
-      for a different codec, or when the codec has input params and the env is
-      missing or leaves one unbound, the same precondition {!encode} enforces:
-      an unbound input param would resolve a parametric field size to 0 and
-      silently truncate the field. *)
-
-  val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
-  (** [encode ?env c r buf off] encodes one record value into a buffer at the
-      given base offset.
-
-      For codecs with input parameters (e.g. [byte_array ~size:(Param.expr p)]),
-      the caller picks each parametric field's width and tells the encoder via
-      [?env] (built with [Codec.env c |> Param.bind p N]). The bound widths must
-      match the field values in [r]; the encoder cross-checks them.
-
-      Raises [Invalid_argument] when [?env] was created for a different codec,
-      when the codec has parameters and no env is supplied, when the env left
-      any input param unbound (the error names it), when the destination buffer
-      is too short, or when a parametric byte field's value length does not
-      match its env-bound size.
-
-      Also raises [Invalid_argument] on a record {!decode} would reject: a
-      closed enum field carrying an unlisted value, an {!val-all_zeros} field
-      carrying a non-zero byte, a {!val-byte_array_where} byte failing its
-      refinement, or a {!val-where} clause or field [~constraint_] that does not
-      hold for the values given. Encode never emits bytes its own decoder
-      refuses. Field [~action]s are not run by encode.
-
-      Encode is not all-or-nothing: it writes the record field by field and
-      checks the result, so after any of those raises the bytes from [off] on
-      hold a partial record and must be treated as scrap. Use {!to_bytes} or
-      {!to_string} when no destination buffer should escape on failure. Only the
-      single-field {!set} rolls its write back. *)
-
-  val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
-  (** [to_bytes ?env c r] encodes [r] into freshly allocated bytes, then runs
-      the same validation pass as {!validate}. Field [~action]s therefore fire,
-      and a rejecting action raises [Invalid_argument] instead of allowing bytes
-      that {!decode} would reject to escape. Action assignments are not written
-      back to [?env]. Because the buffer is fresh, no partially encoded buffer
-      is returned when either pass raises. *)
-
-  val to_string : ?env:Param.env -> 'r t -> 'r -> string
-  (** String counterpart of {!to_bytes}. The result is backed by the fresh
-      encoding buffer; no mutable alias to that buffer escapes. *)
-
-  val pp_value : 'r t -> 'r Fmt.t
-  (** [pp_value c] prints a record of [c] field by field: integer-valued fields
-      show as [name = value], the others are skipped. Use it with [%a]:
-      [Fmt.pr "%a@." (Codec.pp_value c) v].
-
-      It encodes the value to read the fields back and threads no {!Param.env},
-      so on a codec whose sizes or constraints reference a
-      {!module-Param.val-input} it raises [Invalid_argument]: with no binding
-      those params read as zero, and the record that comes out is not one the
-      codec accepts. *)
+      Raises [Invalid_argument] if [off] is negative, if [env] was made for
+      another codec, or if [c] has input parameters and [env] is omitted or
+      leaves one unbound: an unbound parameter would size a field as empty. *)
 
   val validate :
-    ?env:Param.env -> 'r t -> bytes -> int -> (unit, Error.t) result
-  (** [validate ?env c buf off] checks field [~constraint_] and [~where] clauses
-      without constructing a record, and answers the record's error as a value.
-      Field [~action]s do fire, so a rejecting action fails validation, but
-      assigned output parameters are not written back to [?env]. [?env] supplies
-      bindings for any {!val:Param.input} referenced in those clauses.
+    ?env:Param.env -> 'r t -> bytes -> off:int -> (unit, Error.t) result
+  (** [validate c buf ~off] is [Ok ()] if [decode c buf ~off] is a record, and
+      its error otherwise, with no record built. Field actions run, but their
+      assignments are not written back to [env]. Raises [Invalid_argument] as
+      {!decode} does. *)
 
-      Raises [Invalid_argument] when [off] is negative or when [?env] belongs to
-      another codec or leaves an input parameter unbound. *)
+  val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> off:int -> unit
+  (** [encode c r buf ~off] writes the record [r] at [off] in [buf]. A codec
+      with input parameters takes the width of each parametric field from [env]
+      (built with [Param.bind p n (env c)]), and the values of [r] must have
+      those widths. Field actions do not run.
 
-  val get :
-    ?env:Param.env ->
-    'r t ->
-    ('a, 'r) field ->
-    bytes ->
-    int ->
-    ('a, Error.t) result
-  (** [get c f buf off] is the value of the field [f] in the record at [off].
-      Apply it to [c] and [f] once: the reader is made then. It is, or the error
-      of its bytes: the field cut by the end of [buf], a closed enum outside its
-      cases, a lookup past its table, an action that aborts. The error is the
-      one {!decode} gives the field, at its offset and under its name. If the
-      field has an [~action], the action fires on every read. Pass [~env] to
-      sync output parameters after each action and to resolve a dependent
-      layout's parameters; omit it for parameter-free accessors.
+      Raises [Invalid_argument] if [buf] is too short, if [env] was made for
+      another codec, is omitted or leaves an input parameter unbound, or if
+      {!decode} would refuse [r]: a closed enum carrying an unlisted value, an
+      {!val-all_zeros} field carrying a non-zero byte, a constraint that does
+      not hold. The bytes from [off] then hold a partial record: use {!to_bytes}
+      when none must escape. *)
 
-      Raises [Invalid_argument] when the codec has input params and [~env] is
-      omitted, when it was created for another codec, or when the field binding
-      does not share its source {!Field.t} with the field in the codec: an
-      unbound param reads 0, which would place the reader on the bytes in front
-      of the field, while a same-named lookalike could interpret those bytes
-      with a different wire type. The reader raises [Invalid_argument] on a
-      negative offset, which is misuse, not input.
+  val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes
+  (** [to_bytes c r] is [r] encoded in fresh bytes, then validated as
+      {!validate} does, so field actions run and one that refuses the record
+      raises [Invalid_argument]. Raises as {!encode} does; no partial record
+      escapes. *)
 
-      Does not check [~where] clauses or other fields' constraints. On untrusted
-      input use {!View}. *)
+  val to_string : ?env:Param.env -> 'r t -> 'r -> string
+  (** [to_string c r] is [Bytes.to_string (to_bytes c r)], with no copy. *)
 
-  (** {2:views Checked views} *)
+  val size : ?env:Param.env -> 'r t -> 'r -> int
+  (** [size c r] is the number of bytes [encode c r] writes: [n] when
+      [fixed_size c] is [Some n]. Raises [Invalid_argument] on a record
+      {!encode} refuses. *)
 
-  (** Checked views.
+  val size_at :
+    ?env:Param.env -> 'r t -> bytes -> off:int -> (int, Error.t) result
+  (** [size_at c buf ~off] is the size of the record of [c] at [off] in [buf],
+      read from the sizes its bytes hold, or the error of bytes that hold none,
+      such as a length field [buf] cuts. It does not check that the record fits
+      in [buf]. Raises [Invalid_argument] as {!decode} does. *)
 
-      A view is a record that passed every check of its codec in a buffer. Its
-      fields are then read with no check of their own, as with the [View] of a
-      module [Wire_ocaml] generates. The buffer is named by a type ({!Buf}) and
-      so is the codec ({!View.val-codec}): a view is read only in the buffer it
-      was checked in and only by the fields of its codec.
+  val pp_value : 'r t -> 'r Fmt.t
+  (** [pp_value c] formats a record of [c] field by field: an integer-valued
+      field as [name = value], the others not at all. Raises [Invalid_argument]
+      on a codec with input parameters, which it has no environment to bind. *)
 
-      A check result and a view are immediate, so {!View.val-check}, {!View.ok}
-      and {!View.get} allocate nothing. {!View.read} allocates only what the
-      field's value needs: nothing for an integer, a {!Bytesrw.Bytes.Slice.t}
-      for a byte slice.
+  (** {1:views Views and folds} *)
 
-      {[
-      open Wire
+  (** Views of checked records, and folds over many.
 
-      type h = { version : int; ttl : UInt8.t }
+      A {e check} runs every check of a codec on one record of a buffer, once. A
+      {e view} is a record that passed: its fields are then read and written in
+      place, with no check of their own, through the codec's resolution of each
+      definition ({!field}). A {e fold} checks each record of a buffer and hands
+      the fields it names to a function.
 
-      let version =
-        Field.v "version"
-          ~self_constraint:Expr.(fun v -> v = int 4)
-          (bits ~width:4 U8)
+      The buffer is named by a type, ['b] ({!Buf}), which a check and a view
+      carry: a view is read and written only in the buffer it was checked in. A
+      check and a view are immediate integers, so {!check}, {!is_ok} and {!get}
+      allocate nothing. Why a record was refused is out of line:
+      {!Codec.validate} answers its error.
 
-      let ttl = Codec.(Field.v "ttl" uint8 $ fun h -> h.ttl)
-
-      let codec =
-        Codec.v "H"
-          (fun version ttl -> { version; ttl })
-          Codec.[ (version $ fun h -> h.version); ttl ]
-
-      module H = (val Codec.View.codec codec)
-
-      let h_ttl = Codec.View.field H.codec ttl
-
-      let ttl_of bytes =
-        let (Buf.Any b) = Buf.v bytes in
-        let k = Codec.View.check H.codec b (Buf.length b) 0 in
-        if Codec.View.ok k then
-          Some (Codec.View.read h_ttl b (Codec.View.get k))
-        else None
-
-      let () =
-        assert (ttl_of (Bytes.of_string "\x40\x07") = Some (UInt8.v 7));
-        assert (ttl_of (Bytes.of_string "\x50\x07") = None);
-        assert (ttl_of (Bytes.of_string "\x40") = None)
-      ]} *)
+      The module [Wire_ocaml] generates from a codec has the same values under
+      the same names, each field an accessor named after it:
+      [Space_packet.apid b v] is [read b v (field packet apid)]. *)
   module View : sig
-    type 'r record_codec := 'r t
-    type ('a, 'r) record_field := ('a, 'r) field
+    type 'r codec := 'r t
+    type ('a, 'r) definition := ('a, 'r) field
+    type ('s, 'r) codec_layer := ('s, 'r) layer
+    type ('f, 'k, 'r) definitions := ('f, 'k, 'r) fields
 
-    (** {1:codecs Naming a codec} *)
+    (** {1:checks Checks} *)
 
-    type ('c, 'r) codec
-    (** The type for a codec of ['r] named ['c]. *)
+    type ('b, 'r) check [@@immediate]
+    (** The type for checks of a record ['r] in the buffer named ['b]. *)
 
-    (** The type for modules that name a codec. *)
-    module type CODEC = sig
-      type c
-      (** The name of {!val-codec}. No other codec has it. *)
-
-      type r
-      (** The type for the records of {!val-codec}. *)
-
-      val codec : (c, r) codec
-      (** [codec] is the named codec. *)
-    end
-
-    val codec :
-      ?env:Param.env -> 'r record_codec -> (module CODEC with type r = 'r)
-    (** [codec ~env c] is [c], compiled, under a name of its own. [env] supplies
-        the input parameters of [c] as for {!Codec.get}; their values are read
-        at each check and each read. Unpack it once, where the fields are made,
-        as [module H = (val Codec.View.codec c)].
-
-        Each unpacking is a new name, so two unpackings of one codec share
-        neither fields nor views. In a function polymorphic in the record type,
-        the type must be named,
-        [let f (type r) (c : r Codec.t) = let module H = (val Codec.View.codec
-         c) in ...], and a field or a view of [H] cannot be returned from [f]. A
-        functor that unpacks in its body takes a final [()] argument: OCaml
-        refuses a new type in the body of an applicative functor.
-
-        Raises [Invalid_argument] if [env] was made for another codec or leaves
-        an input parameter of [c] unbound, if [c] has input parameters and [env]
-        is omitted, and as the first operation on [c] does (see {!Codec.v}). *)
-
-    (** {1:checks Checking} *)
-
-    type ('b, 'c) check [@@immediate]
-    (** The type for the results of checking a record of the codec named ['c] in
-        the buffer named ['b]. *)
+    (* Open question 3: [?len] stays unless the buffer's length read in
+       [check] counts beyond noise. *)
 
     val check :
-      ('c, 'r) codec -> 'b Buf.t -> 'b Buf.length -> int -> ('b, 'c) check
-    (** [check v b len off] is the result of checking the record of [v] at [off]
-        in [b]. The record is accepted iff {!Codec.validate} accepts it: the
-        same frame test, field constraints, [~where] clauses, enums and field
-        actions run. [len] must be [Buf.length b]; it is an argument so that a
-        loop over the records of [b] reads it once.
+      ?env:Param.env ->
+      ?len:int ->
+      'r codec ->
+      'b Buf.t ->
+      off:int ->
+      ('b, 'r) check
+    (** [check c b ~off] is the check of the record of [c] at [off] in [b], in
+        the [len] bytes there (defaults to the bytes from [off] to the end of
+        [b]). It passes iff [Codec.validate c (b :> bytes) ~off] accepts that
+        record: the same frame test, field and record constraints, enums and
+        actions run. [env] supplies the input parameters of [c], as for
+        {!Codec.decode}.
 
-        [check] never raises on [b] or [off]: a negative [off] or a record that
-        does not fit is refused. The error of a refused record is
-        [Codec.validate c (b :> bytes) off]. *)
+        [check] never raises on [b], [off] or [len] and allocates nothing: a
+        negative [off] or a window [b] does not hold is refused. Raises
+        [Invalid_argument] only on [env], as {!Codec.decode} does. *)
 
-    val ok : ('b, 'c) check -> bool
-    (** [ok k] is [true] iff [k] accepted its record. *)
+    val is_ok : ('b, 'r) check -> bool
+    (** [is_ok k] is [true] iff the check [k] passed. *)
 
     (** {1:views Views} *)
 
-    type ('b, 'c) t [@@immediate]
-    (** The type for views: records of the codec named ['c] that passed their
-        check in the buffer named ['b]. *)
+    (* Open question 1: a view does not carry its buffer unless a view that
+       does counts within noise on OCaml 5.4.1 and OxCaml. *)
 
-    val get : ('b, 'c) check -> ('b, 'c) t
-    (** [get k] is the view of the record [k] accepted.
+    type ('b, 'r) t [@@immediate]
+    (** The type for records ['r] that passed their check in the buffer named
+        ['b]. *)
 
-        Raises [Invalid_argument] if [ok k] is [false]. Test {!ok} first: a
-        refused record is input, not misuse. *)
+    val get : ('b, 'r) check -> ('b, 'r) t
+    (** [get k] is the view of the record the check [k] passed.
+
+        Raises [Invalid_argument] if [is_ok k] is [false]. A refused record is
+        input, not misuse: test {!is_ok} first. *)
 
     (** {1:fields Fields} *)
 
-    type ('a, 'c) field
-    (** The type for fields of type ['a] in the views of the codec named ['c].
-    *)
-
-    val field : ('c, 'r) codec -> ('a, 'r) record_field -> ('a, 'c) field
-    (** [field v f] is the field [f] in the views of [v], read with no check.
-        Make it once per field, not once per record.
-
-        An integer, a bitfield or a byte slice or string of constant size, at a
-        constant offset inside the frame of [v], without an action and under no
-        map, is read with no bounds check; a byte slice of size [0] is
-        {!Bytesrw.Bytes.Slice.eod}. Under an {!Wire.val-enum} or a
-        {!Wire.val-where} it reads the integer there, which the check accepted.
-
-        Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
-        codec of [v], or if it is any other field (after a variable-size field,
-        with an action, under a map): read that one with {!checked_field}. *)
-
-    val checked_field :
-      ('c, 'r) codec ->
-      ('a, 'r) record_field ->
-      (('a, Error.t) result, 'c) field
-    (** [checked_field v f] is the field [f] in the views of [v], read as
-        {!Codec.get} reads it: with its bounds check, its value's checks and its
-        action, which has already run once in {!val-check}. Its read answers the
-        error of bytes written after the check that no longer make a value of
-        [f], such as a field they move out of the buffer.
-
-        Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
-        codec of [v], or as {!Codec.get} does. *)
-
-    val read : ('a, 'c) field -> 'b Buf.t -> ('b, 'c) t -> 'a
-    (** [read f b r] is the value of [f] in the record [r] of [b]. It never
-        raises and never reads outside [b].
-
-        {b Warning.} If bytes of [b] are written after the check, the value may
-        be one the codec's checks refuse. A field of {!field} lies in the frame
-        the check tested, where no bytes move it; a field of {!checked_field}
-        answers the error of bytes that move it out of [b]. The accessors of the
-        views a [Wire_ocaml] module writes, which answer no error, read such a
-        field as absent: [0] for an integer, [false] for a presence, an empty
-        slice or string for bytes. *)
-
-    (** {1:subs Sub-records} *)
-
-    type ('cs, 'c) sub
-    (** The type for the fields of the codec named ['c] that hold a record of
-        the codec named ['cs]. *)
-
-    val sub :
-      ('c, 'r) codec ->
-      ('cs, 's) codec ->
-      ('s, 'r) record_field ->
-      ('cs, 'c) sub
-    (** [sub v w f] is the field [f] of [v] as a record of [w]: a field
-        {!Wire.codec} of the codec of [w], a {!Wire.nested} or
-        {!Wire.nested_at_most} of it, or a {!Field.optional_or} of those. Make
-        it once per field, not once per record.
-
-        Raises [Invalid_argument] if [f] was not bound from a {!Field.t} of the
-        codec of [v], if it does not hold the codec of [w], or if the codec of
-        [w] has input parameters. *)
-
-    val sub_option :
-      ('c, 'r) codec ->
-      ('cs, 's) codec ->
-      ('s option, 'r) record_field ->
-      ('cs, 'c) sub
-    (** [sub_option v w f] is {!sub} for a {!Field.optional} field [f]. *)
-
-    val enter :
-      ('cs, 'c) sub ->
-      'b Buf.t ->
-      'b Buf.length ->
-      ('b, 'c) t ->
-      ('b, 'cs) check
-    (** [enter s b len r] is the result of checking the record [s] holds in the
-        view [r]. The check that gave [r] already made every check of that
-        record, so [enter] makes none of them again: it accepts the record iff
-        it is present and its frame lies in [b]. [len] must be [Buf.length b].
-
-        [enter] never raises on [b]: a record whose bytes were written after the
-        check is refused when they move the sub-record out of [b]. *)
-  end
-
-  val set :
-    ?env:Param.env -> 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
-  (** [set c f buf off v] writes [v] as the field [f] of the record at [off].
-      Apply it to [c] and [f] once: the writer is made then. [~env] supplies the
-      input params a dependent field layout is measured from; omit it for
-      parameter-free codecs. Raises [Invalid_argument] on the same terms as
-      {!get}: an unbound param reads 0, which would put the write on a field the
-      caller never named and leave the one it did name unchanged.
-
-      Does not check constraints or fire actions -- call {!validate} after a
-      batch of writes to verify constraints still hold. *)
-
-  val writer : 'r t -> 'r -> ('f, 'r) args -> bytes -> int -> 'f
-  (** [writer c template fields buf off] writes [template] at [off] in [buf]
-      with each field of [fields] set to the value that follows, one per field,
-      as {!encode} of [template] then {!set} of each field would. Apply it to
-      [c], [template] and [fields] once: the writer is made then. A header that
-      differs from a template in a few fields is one call:
-
-      {[
-      open Wire
-
-      type hdr = { version : int; kind : int; len : UInt16.t }
-
-      let kind = Codec.(Field.v "kind" (bits ~width:4 U8) $ fun h -> h.kind)
-      let len = Codec.(Field.v "len" uint16be $ fun h -> h.len)
-
-      let codec =
-        Codec.v "Hdr"
-          (fun version kind len -> { version; kind; len })
-          Codec.
-            [
-              (Field.v "version" (bits ~width:4 U8) $ fun h -> h.version);
-              kind;
-              len;
-            ]
-
-      let stamp =
-        Codec.writer codec
-          { version = 4; kind = 0; len = UInt16.v 0 }
-          [ kind; len ]
-
-      let () =
-        let buf = Bytes.create 3 in
-        stamp buf 0 5 (UInt16.v 12);
-        assert (Bytes.to_string buf = "\x45\x00\x0c")
-      ]}
-
-      A record of at most 7 bytes whose fields in [fields] are big-endian
-      integers or bitfields of a byte or a big-endian 16- or 32-bit word is put
-      together in an [int] and written in a few stores, after every check.
-
-      Raises [Invalid_argument] when [c] is not of a fixed size or has input
-      params, when a field is not one of [c]'s or comes twice, or as {!encode}
-      raises on [template]. The writer raises [Invalid_argument] when the buffer
-      does not hold the record at the offset, and as {!set} raises on a value
-      its field cannot represent; the bytes from the offset on are then scrap,
-      as after a failed {!encode}. *)
-
-  val field_readers :
-    'r t -> (string * (bytes -> int -> (int, Error.t) result)) list
-  (** [field_readers c] is the decoder's own reader for every named int-valued
-      field of [c], keyed by field name: [read buf base] is the value
-      {!val-decode} makes of that field's bytes, converted to [int] (a [Map]
-      reports the raw value it was decoded from, which is what the wire
-      carries). Composite fields read as [0].
-
-      Unlike {!get} it needs no field handle, so a caller holding only a
-      type-erased codec can still read a field by name -- which is how the
-      differential fuzzer compares the OCaml decoder against a generated C
-      validator field by field. A reader answers an error when the field's bytes
-      are out of the buffer, or when the value does not fit an OCaml [int]. *)
-
-  (** Records of at most 7 bytes read as one word.
-
-      A check of a record of a fixed size that fits an [int] with a bit to spare
-      reads its bytes, big-endian, into one [int], with one bounds test and,
-      where the buffer holds 8 bytes from the record on, one load; each field is
-      then two shifts and a mask. A check tests no constraint of the record: on
-      untrusted input use {!View}. A word check stays for short fixed headers,
-      such as the 6-byte space packet and frame headers of [bench/routing] and
-      [bench/gateway]: a view reads a field of a frame shorter than 8 bytes out
-      of line, where a word is read once and each field taken from it inline.
-
-      {[
-      open Wire
-
-      type hdr = { kind : int; len : UInt16.t }
-
-      let kind = Codec.(Field.v "kind" (bits ~width:8 U8) $ fun h -> h.kind)
-      let len = Codec.(Field.v "len" uint16be $ fun h -> h.len)
-
-      let codec =
-        Codec.v "Hdr" (fun kind len -> { kind; len }) Codec.[ kind; len ]
-
-      let reader = Codec.Word.reader codec
-      let w_len = Codec.Word.field codec len
-
-      let len_of buf off =
-        let k = Codec.Word.check reader buf off in
-        if Codec.Word.ok k then Ok (Codec.Word.read w_len (Codec.Word.get k))
-        else Error (Codec.Word.error reader buf off)
-
-      let () =
-        assert (len_of (Bytes.of_string "\x05\x00\x0c") 0 = Ok (UInt16.v 12));
-        assert (Result.is_error (len_of (Bytes.of_string "\x05") 0))
-      ]} *)
-  module Word : sig
-    type 'r codec := 'r t
-    type ('a, 'r) codec_field := ('a, 'r) field
-
-    type 'r t = private int
-    (** The type for the bytes of a record of a ['r] codec, big-endian. *)
-
-    type 'r reader
-    (** The type for readers of the records of a ['r] codec. *)
-
-    val reader : 'r codec -> 'r reader
-    (** [reader c] reads the records of [c]. Raises [Invalid_argument] when [c]
-        is not of a fixed size or has more bytes than fit an [int] with a bit to
-        spare (7 on a 64-bit host, 3 on a 31- or 32-bit one). *)
-
-    type 'r check = private int
-    (** The type for the results of checking a record of a ['r] codec: its word,
-        or a negative [int] where it was refused. *)
-
-    val check : 'r reader -> bytes -> int -> 'r check
-    (** [check r buf off] is the record of [r] at [off] in [buf]. It is a
-        function the caller's compiler knows, so the load is inlined into the
-        caller's loop.
-
-        [check] never raises: a negative [off] or a record [buf] does not hold
-        is refused. Its error is {!error}. *)
-
-    val ok : 'r check -> bool
-    (** [ok k] is [true] iff [k] accepted its record. *)
-
-    val get : 'r check -> 'r t
-    (** [get k] is the word of the record [k] accepted.
-
-        Raises [Invalid_argument] if [ok k] is [false]. Test {!ok} first: a
-        refused record is input, not misuse. *)
-
-    val error : 'r reader -> bytes -> int -> Error.t
-    (** [error r buf off] is the error of a record {!check} refused: the error
-        {!Codec.get} answers for the first field [buf] cuts. Out of line, for
-        the slow path.
-
-        Raises [Invalid_argument] on a negative [off], as {!Codec.get} does, and
-        if {!check} accepts the record. *)
-
     type ('a, 'r) field
-    (** The type for fields of type ['a] of the words of a ['r] codec. *)
+    (** The type for definitions of fields of type ['a] resolved in a codec of
+        records ['r]: plain data, read with no lookup. *)
 
-    val field : 'r codec -> ('a, 'r) codec_field -> ('a, 'r) field
-    (** [field c f] is the field [f] of the words of [c]. Raises
-        [Invalid_argument] as {!reader} does, and when [f] is not one of [c]'s
-        or is not a big-endian integer or a bitfield of a byte or a big-endian
-        16- or 32-bit word. *)
+    val field : 'r codec -> ('a, 'r) definition -> ('a, 'r) field
+    (** [field c f] is the definition [f] as {!Codec.v} resolved it in [c]:
+        where it lies in the records of [c], its reader and its writer. Make it
+        once per field, not once per record.
 
-    val read : ('a, 'r) field -> 'r t -> 'a
-    (** [read f w] is the field [f] of [w]: two shifts and a mask, with no
-        memory access but the field's own. *)
+        Raises [Invalid_argument] if [f] is not one of the definitions [c] was
+        built from.
+
+        {b Warning.} A field and a view are indexed by their record type, not by
+        their codec. A field of another codec of the same record type is
+        accepted with a view of [c]: the read stays in the buffer, since an
+        interpreted read is a load bounds-checked against it, but it reads the
+        place the field has in the other codec and answers a wrong value. *)
+
+    val read : 'b Buf.t -> ('b, 'r) t -> ('a, 'r) field -> 'a
+    (** [read b v f] is the value of the field [f] in the record [v] of [b].
+
+        [read] never raises and never reads outside [b]. A field that bytes
+        written to [b] after the check move out of [b] reads as absent: [0] for
+        an integer, an empty slice or string for bytes. *)
+
+    val set : 'b Buf.t -> ('b, 'r) t -> ('a, 'r) field -> 'a -> unit
+    (** [set b v f x] writes [x] in place as the field [f] of the record [v] of
+        [b]. It checks none of the codec's constraints and runs no action: check
+        the record again after a batch of writes.
+
+        Raises [Invalid_argument], leaving [b] unchanged, if [x] is a value [f]
+        cannot hold, such as a bitfield value wider than its field or a string
+        of another length than its byte array, and if [f] has no constant place
+        in the record, as a field after a field of variable size. *)
+
+    (** {1:layers Layers} *)
+
+    type ('s, 'r) layer
+    (** The type for layers holding records ['s] resolved in a codec of records
+        ['r]. *)
+
+    val layer : 'r codec -> ('s, 'r) codec_layer -> ('s, 'r) layer
+    (** [layer c l] is {!field} for a layer: the layer [l] as {!Codec.v}
+        resolved it in [c]. Raises [Invalid_argument] if [l] is not one of the
+        definitions [c] was built from. *)
+
+    val sub : 'b Buf.t -> ('b, 'r) t -> ('s, 'r) layer -> ('b, 's) check
+    (** [sub b v l] is the check of the record the layer [l] holds in the record
+        [v] of [b]. The check of [v] already made every check of that record, so
+        [sub] makes none again: it passes iff the layer is present and its frame
+        lies in [b].
+
+        [sub] never raises: a layer that bytes written to [b] after the check
+        move out of [b] is refused. *)
+
+    (** {1:folds Folds} *)
+
+    (* Open question 4: the visitor takes the fields positionally, in the
+       order of the list, as the constructor of [Codec.v] takes them. *)
+
+    val fold :
+      ?env:Param.env ->
+      ?stride:int ->
+      ?offs:int array ->
+      ?lens:int array ->
+      ?invalid:('acc -> 'acc) ->
+      'r codec ->
+      ('f, 'acc, 'r) definitions ->
+      bytes ->
+      init:'acc ->
+      f:('acc -> 'f) ->
+      ('acc, Error.t * 'acc) result
+    (** [fold c fields buf ~init ~f] checks each record of [c] in [buf], as
+        {!check} does, and folds [f] over those that pass, from [init]:
+        [f acc x1 ... xn], where [xi] is the value of the [i]-th field of
+        [fields] in the record, read during its check. A path ([Codec.( / )]) in
+        [fields] reads [None] where its layer is absent. The records lie:
+        - back to back from offset [0] (default), each where the one before
+          ends, up to the end of [buf];
+        - in slots of [stride] bytes, the [i]-th at [i * stride], over the
+          [Bytes.length buf / stride] whole slots of [buf];
+        - in frames, the [i]-th in the [lens.(i)] bytes at [offs.(i)], as a
+          capture file lists them.
+
+        A record in a slot or a frame is checked in its window alone.
+
+        A refused record stops the fold with [Error (e, acc)], where [e] is the
+        error {!Codec.validate} answers and [acc] the fold of the records before
+        it: back to back, a refused record's length cannot be trusted to find
+        the next one. In slots or frames, [invalid acc] is the accumulator after
+        a refused record and the fold goes on.
+
+        [fold c fields] resolves [fields] once, when applied to them. Raises
+        [Invalid_argument] if an element of [fields] is not one of the
+        definitions [c] was built from, if [stride] is not positive, if [offs]
+        and [lens] are not given together or differ in length, if [stride] is
+        given with [offs], if [invalid] is given with records back to back, and
+        on [env] as {!check} does. *)
   end
-
-  (** {2 Struct validator}
-
-      For a [Types.struct_] (e.g. from EverParse 3D), build a validator directly
-      without going through {!v}'s record-constructor machinery. The same
-      int-array kernel that backs {!validate} on a [Codec.t]. *)
-
-  type validator
-  (** A struct validator without a constructor. *)
-
-  val validator_of_struct : Types.struct_ -> validator
-  (** [validator_of_struct s] compiles [s] into a validator. *)
-
-  val validate_struct : validator -> bytes -> int -> (unit, Error.t) result
-  (** [validate_struct v buf off] runs the validator [v] on the struct at [off],
-      answering its error as a value. *)
-
-  val struct_size_of : validator -> bytes -> int -> int
-  (** Byte size of the struct starting at [off]. *)
-
-  val struct_min_size : validator -> int
-  (** Minimum byte size accepted. *)
-
-  val wire_size_info_of_validator :
-    validator -> [ `Fixed of int | `Variable of bytes -> int -> int ]
-  (** Wire-size info for the validator. *)
 end
 
 (** {1 Nested Codec Combinators}
@@ -1750,309 +1378,51 @@ val codec : 'r Codec.t -> 'r typ
     the top of a struct field (e.g. nested in [array] or [casetype] case
     bodies). *)
 
-(** {1 Export}
+(** {1:backends Verified backends}
 
-    {!Everparse} is the pure export layer. The normal workflow is:
-
-    - build a record-shaped description with {!module-Field} and
-      {!module-Codec};
-    - project it with {!Everparse.project};
-    - emit separate FFI schemas or one merged standalone family with
-      {!Everparse.write};
-    - run EverParse/C tooling with [Wire_3d];
-    - optionally generate OCaml FFI stubs with [Wire_stubs].
-
-    For unusual EverParse constructs that have no codec equivalent yet, see the
-    explicit escape hatch {!Everparse.Raw}. *)
+    {!Everparse} projects a codec to an EverParse 3D schema, from which
+    EverParse writes a verified C validator: [Wire_3d] runs EverParse and
+    [Wire_stubs] binds the validator to OCaml. On a refusal the C validator
+    answers the {!Error.t} {!Codec.validate} answers, so every tier gives one
+    error for the same bytes. *)
 
 module Everparse : sig
-  type struct_
-  (** 3D struct declaration. *)
-
-  type decl
-  (** Top-level 3D declaration. *)
-
-  type decl_case
-  (** Case of a top-level 3D casetype declaration. *)
-
-  type module_
-  (** A 3D module. *)
-
-  type t = {
-    name : string;
-    module_ : module_;
-    wire_size : int option;
-    source : struct_ option;
-        (** Pre-[ffi_decls] source struct, [Some] for codec-derived schemas and
-            [None] for raw-module schemas. *)
-  }
-  (** A named 3D schema with its module and wire size ([None] for variable-size
-      schemas). *)
+  type t
+  (** The type for 3D schemas. *)
 
   type mode = [ `Ffi | `Standalone ]
-  (** How a codec projects to 3D. [`Standalone] (the default) emits a clean
-      [.3d] that EverParse compiles to a standalone verified C parser, which
-      also reads as a protocol specification. [`Ffi] emits the [WireCtx] extern
-      and per-field setter callbacks ([<Name>Set*]), so the C validator is
-      callable from OCaml and extracts every field through the visitor (used by
-      benchmarks and differential testing). *)
+  (** The type for how a codec projects to 3D. [`Standalone] emits a [.3d] that
+      EverParse compiles to a standalone verified C parser, which also reads as
+      the protocol's specification. [`Ffi] adds the [WireCtx] extern and a
+      setter callback per field, so the C validator is called from OCaml and
+      hands every field to its visitor. *)
 
   val project : ?mode:mode -> 'r Codec.t -> t
-  (** [project ?mode codec] projects [codec] to a 3D schema; [mode] defaults to
-      [`Standalone]. The struct-level and raw entry points live in {!Raw}. *)
+  (** [project ~mode c] is the 3D schema of [c] ([mode] defaults to
+      [`Standalone]). *)
 
-  val validate_output_name : string -> unit
-  (** [validate_output_name name] accepts portable ASCII identifiers beginning
-      with a letter or underscore and containing only letters, digits, and
-      underscores, except filesystem device names such as [NUL] and [COM1].
-      Raises [Invalid_argument] for any other name. *)
+  val name : t -> string
+  (** [name s] is the name of the schema [s], the name of its codec. *)
 
   val filename : t -> string
-  (** [filename s] is the [.3d] output filename for schema [s]. Raises
-      [Invalid_argument] when [s]'s name does not satisfy
-      {!validate_output_name}. *)
-
-  val uses_wire_ctx : t -> bool
-  (** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx] extern
-      typedef. The generated C header then [#include]s
-      [<Name>_ExternalTypedefs.h], so that file must be present at compile time.
-      Schemas built via {!project} always satisfy this. *)
-
-  type visitor_field = {
-    name : string;
-    idx : int;
-    c_type : string;
-    setter : string;
-    val_c_type : string;
-  }
-  (** Visitor info: the data needed to materialise a typed struct and
-      [<Name>Set*] dispatchers for a schema. See {!Everparse.visitor_field}. *)
-
-  val visitor_member : string -> string
-  (** [visitor_member name] is the visitor struct member a field named [name]
-      takes: [name] escaped against C's keywords and the macros of the headers
-      the visitor includes ([int_], [NULL_], and [int__] for [int_]), so
-      distinct names stay distinct members. *)
-
-  val visitor_fields : t -> visitor_field list
-  (** [visitor_fields s] enumerates the named fields of the source struct in
-      declaration order. Returns [[]] for schemas without a source struct. *)
-
-  val visitor_setters : t -> (string * string) list
-  (** [visitor_setters s] lists the unique [WireSet*] setters referenced by [s]
-      as [(setter, val_c_type)] pairs. *)
-
-  val entrypoint_struct : t -> struct_ option
-  (** Entrypoint typedef struct in the schema's module, if any. *)
-
-  val extern_fn_names : t -> string list
-  (** Names of every extern function declared in the schema's module. *)
-
-  type field_action_form = No_action | On_act | On_success
-
-  val equal_field_action_form : field_action_form -> field_action_form -> bool
-  (** Structural equality on field action forms. *)
-
-  val field_action_forms :
-    struct_ -> (string option * bool * field_action_form) list
-  (** [field_action_forms st] enumerates fields as [(name, is_bitfield, form)]
-      tuples. Used by tests to assert the codegen invariant that bitfields carry
-      {!constructor:On_act}, scalars {!constructor:On_success}, anonymous fields
-      {!constructor:No_action}. *)
+  (** [filename s] is the [.3d] file [s] is written to. Raises
+      [Invalid_argument] unless [name s] is a portable identifier: ASCII
+      letters, digits and underscores, starting with a letter or an underscore,
+      and no device name such as [NUL] or [COM1]. *)
 
   val write : ?mode:mode -> outdir:string -> ?name:string -> t list -> unit
-  (** [write ?mode ~outdir ?name ts] writes the projected schemas to [outdir].
-      With [`Ffi], one [.3d] per schema (its file name taken from the schema)
-      and [~name] is ignored. With [`Standalone] (the default), the schemas are
-      merged into a single [<name>.3d] -- a type shared across several codecs is
-      emitted once -- so a whole protocol family reads as one spec, and [~name]
-      is required. A sub-codec packed as a codec of its own and also reached
-      through another codec's field is one such shared type; the surviving
-      declaration keeps the entrypoint marker and the doc comment either copy
-      carried, so it still gets a validator of its own. Raises
-      [Invalid_argument] before opening a file if any output name does not
-      satisfy {!validate_output_name}, or if two schemas declare different types
-      under the same name, since one merged spec cannot honour both. *)
+  (** [write ~mode ~outdir ~name ss] writes the schemas [ss] to [outdir]. With
+      [`Ffi], each schema is a [.3d] of its own and [name] is ignored. With
+      [`Standalone] (the default), the schemas are merged into one [<name>.3d],
+      a type shared by several codecs written once, so a protocol family reads
+      as one specification; [name] is then required. A codec packed on its own
+      and also reached through another codec's field is one such shared type:
+      its one declaration keeps the entrypoint marker and the doc comment either
+      copy carried.
 
-  module Raw : sig
-    (** Escape hatch for manual 3D authoring.
-
-        These constructors exist for EverParse features that currently have no
-        codec-level equivalent, plus the struct-level projection knobs. Most
-        users should stay on the {!module-Field}/{!module-Codec} path and use
-        {!project}. *)
-
-    type nonrec struct_ = struct_
-    type field = Field.packed
-    type nonrec decl = decl
-    type nonrec decl_case = decl_case
-    type nonrec module_ = module_
-    type nonrec t = t
-
-    val typedef :
-      ?entrypoint:bool ->
-      ?export:bool ->
-      ?output:bool ->
-      ?extern_:bool ->
-      ?doc:string ->
-      struct_ ->
-      decl
-    (** Top-level typedef declaration. *)
-
-    val define : string -> int -> decl
-    (** Top-level integer definition. *)
-
-    val extern_fn : string -> param list -> 'a typ -> decl
-    (** External function declaration used by 3D actions. *)
-
-    val extern_probe : ?init:bool -> string -> decl
-    (** External probe declaration. *)
-
-    val enum_decl : string -> (string * int) list -> 'a typ -> decl
-    (** Top-level enum declaration. *)
-
-    val decl_case : int -> 'a typ -> decl_case
-    (** One tagged case in a top-level casetype declaration. *)
-
-    val decl_default : 'a typ -> decl_case
-    (** Default case in a top-level casetype declaration. *)
-
-    val casetype_decl : string -> param list -> 'a typ -> decl_case list -> decl
-    (** Top-level casetype declaration. *)
-
-    val module_ : ?doc:string -> decl list -> module_
-    (** Builds a 3D module from declarations. *)
-
-    val to_3d : ?enum_as_type:bool -> module_ -> string
-    (** Renders a 3D module to text. With [~enum_as_type:true] an enum field
-        renders as its named 3D enum type rather than the base type plus a
-        membership refinement. *)
-
-    val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
-    (** Writes a rendered 3D module to a file. See {!to_3d} for [enum_as_type].
-    *)
-
-    val struct_of_codec : 'r Codec.t -> struct_
-    (** Lower a codec to its 3D struct, the intermediate the stubs and benchmark
-        codegen operate on. *)
-
-    val project_struct : ?mode:mode -> struct_ -> t
-    (** [project_struct ?mode s] is {!project} on an already-lowered struct. *)
-
-    val field :
-      string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> field
-    (** Named field. Returns a packed {!Field.t}. *)
-
-    val anon_field : 'a typ -> field
-    (** Anonymous field in a 3D struct. *)
-
-    val field_ref : field -> int expr
-    (** [field_ref f] returns the expression referencing field [f] by name. The
-        field must have been created with {!val:field} (not {!anon_field}). *)
-
-    val struct_ : string -> field list -> struct_
-    (** Non-parameterised 3D struct. *)
-
-    val struct_name : struct_ -> string
-    (** Name of a struct declaration. *)
-
-    val field_names : struct_ -> string list
-    (** Named field names in declaration order. *)
-
-    (** The OCaml representation kind of a field (for FFI stub generation). *)
-    type ocaml_kind = Int | Int64 | Float32 | Float64 | Bool | String | Unit
-
-    val field_kinds : struct_ -> (string * ocaml_kind) list
-    (** Named field names with their OCaml type kind. *)
-
-    type int_slot = { width : int; endian : endian }
-    (** Byte width and order of a whole-byte integer field on the wire. *)
-
-    type field_seed = { field : string; slot : int_slot; values : int64 list }
-    (** A field whose own declaration singles out particular wire values. *)
-
-    val int_slots : struct_ -> (string * int_slot) list
-    (** [int_slots s] is the byte slot of every named whole-byte integer field
-        of [s], in declaration order. Bitfields (their base word is shared),
-        floats, byte spans and composites have no slot of their own and are left
-        out. {!field_seeds} is this same set narrowed to the fields whose
-        declaration singles out particular values. *)
-
-    val field_seeds : struct_ -> field_seed list
-    (** [field_seeds s] is, for each named whole-byte integer field of [s] whose
-        any refinement in the record compares against a value, the byte slot it
-        occupies and those values: the constant an equality or inequality names,
-        the values either side of an ordering boundary, and the members of a
-        closed enumeration. A refinement is credited to the field it compares
-        rather than to the field carrying it, and a struct-level {!val-where} is
-        read where the projection puts it, so a field's values are the ones the
-        generated validator tests it against. A casetype field seeds too: its
-        tag is parsed at the start of the field's own bytes, so the slot is the
-        tag's and the values are the case indices. Bitfields are omitted because
-        their base word is shared, so a byte offset alone cannot seed one.
-
-        The list over-approximates: it names candidates worth trying, not values
-        the description is guaranteed to admit, so a consumer must run each
-        through the codec to learn the verdict. *)
-
-    val struct_project :
-      struct_ -> name:string -> keep:Field.packed list -> struct_
-    (** [struct_project s ~name ~keep] returns a copy of [s] renamed to [name]
-        keeping only the fields in [keep]. All others become anonymous. *)
-
-    val struct_params : struct_ -> param list
-    (** Formal parameters of a struct (empty for non-parameterised structs). *)
-
-    val input_param_names : struct_ -> string list
-    (** Names of the input (non-mutable) parameters, in declaration order, which
-        is the order the generated validator and its wrapper take them. *)
-
-    val input_param_c_types : struct_ -> string list
-    (** C type of each input (non-mutable) parameter, in declaration order, e.g.
-        [["uint8_t"; "uint16_t"]]. Matches the widths the generated validator
-        wrapper takes, so a caller can build the wrapper call without reading
-        the generated header. *)
-
-    val param_c_types : struct_ -> [ `Input of string | `Output of string ] list
-    (** [param_c_types s] is, for each parameter of [s] in declaration order,
-        its C type: an input's is the type the generated validator wrapper takes
-        ({!input_param_c_types}), an output's the type of the cell the wrapper
-        takes a pointer to. *)
-
-    val struct_typ : struct_ -> unit typ
-    (** View a 3D struct as a wire description. *)
-
-    val param : string -> 'a typ -> param
-    (** Immutable parameter declaration. *)
-
-    val mutable_param : string -> 'a typ -> param
-    (** Mutable parameter declaration. *)
-
-    val param_struct :
-      string -> param list -> ?where:bool expr -> field list -> struct_
-    (** Parameterised 3D struct. *)
-
-    val apply : 'a typ -> int expr list -> 'a typ
-    (** Apply a parameterised description to integer arguments. *)
-
-    val type_ref : string -> 'a typ
-    (** Unqualified type reference. *)
-
-    val qualified_ref : string -> string -> 'a typ
-    (** Qualified type reference. *)
-
-    val pp_typ : Format.formatter -> 'a typ -> unit
-    (** Pretty-printer for 3D-facing type syntax. *)
-
-    val pp_module : Format.formatter -> module_ -> unit
-    (** Pretty-printer for 3D modules. *)
-
-    val struct_size : struct_ -> int option
-    (** Fixed wire size of a struct, if known statically. *)
-
-    val of_module : name:string -> module_:module_ -> wire_size:int -> t
-    (** Wraps an existing 3D module as a schema. *)
-  end
+      Raises [Invalid_argument], before writing any file, if an output name is
+      not a portable identifier ({!filename}) or if two schemas declare
+      different types under one name. *)
 end
 
 (** {1 ASN.1 DER}
@@ -2397,30 +1767,25 @@ module Asn1 : sig
       Raises [Invalid_argument] if two different schemas have one name. *)
 end
 
-(** {1 ASCII Bit Diagrams}
+(** {1:ascii Bit diagrams}
 
-    RFC-style 32-bit-wide ASCII bit layout diagrams, following the conventions
-    of RFC 791 and similar documents. *)
+    RFC-style bit layout diagrams, 32 bits wide, following the conventions of
+    {{:https://www.rfc-editor.org/rfc/rfc791}RFC 791}. *)
 
 module Ascii : sig
-  val of_struct : Everparse.struct_ -> string
-  (** Render a struct as an RFC-style bit diagram. *)
-
   val of_codec : 'r Codec.t -> string
-  (** Render a codec as an RFC-style bit diagram. *)
-
-  val pp_struct : Format.formatter -> Everparse.struct_ -> unit
-  (** Pretty-print a struct as an RFC-style bit diagram. *)
+  (** [of_codec c] is the bit diagram of [c]. *)
 
   val pp_codec : Format.formatter -> 'r Codec.t -> unit
-  (** Pretty-print a codec as an RFC-style bit diagram. *)
+  (** [pp_codec ppf c] formats the bit diagram of [c] on [ppf]. *)
 end
 
 (**/**)
 
 (** {1 Private}
 
-    Unstable internals exposed for testing. Do not depend on this module. *)
+    The internals [wire.ocaml], [wire.rust], [wire.3d], [wire.stubs] and
+    [wire.diff] are built on. Not part of the API: it changes with them. *)
 
 module Private : sig
   module UInt32 = UInt32
@@ -2501,6 +1866,310 @@ module Private : sig
   module Names = Names
   module Layout = Record_layout
 
+  (** A named or an anonymous field, whatever its type. *)
+  type packed = Named : 'a Field.t -> packed | Anon : 'a Field.anon -> packed
+
+  val decl_of_packed : packed -> Types.field
+  (** The underlying field declaration of a packed field. *)
+
+  (** The 3D plumbing of [wire.3d] and [wire.stubs]. *)
+  module Everparse : sig
+    type t = Everparse.t
+    type mode = Everparse.mode
+    type struct_ = Types.struct_
+
+    type decl
+    (** 3D top-level declaration. *)
+
+    type decl_case
+    (** Case of a top-level 3D casetype declaration. *)
+
+    type module_
+    (** A 3D module. *)
+
+    val module_ : t -> module_
+    (** [module_ s] is the 3D module of [s]. *)
+
+    val wire_size : t -> int option
+    (** [wire_size s] is the size of the records of [s], [None] if it varies. *)
+
+    val source : t -> struct_ option
+    (** [source s] is the struct [s] was projected from, [None] for a schema
+        wrapping a raw module. *)
+
+    val validate_output_name : string -> unit
+    (** [validate_output_name name] accepts portable ASCII identifiers beginning
+        with a letter or underscore and containing only letters, digits, and
+        underscores, except filesystem device names such as [NUL] and [COM1].
+        Raises [Invalid_argument] for any other name. *)
+
+    val uses_wire_ctx : t -> bool
+    (** [uses_wire_ctx s] is [true] when the schema declares the [WireCtx]
+        extern typedef. The generated C header then [#include]s
+        [<Name>_ExternalTypedefs.h], so that file must be present at compile
+        time. Schemas built via {!project} always satisfy this. *)
+
+    type visitor_field = {
+      name : string;
+      idx : int;
+      c_type : string;
+      setter : string;
+      val_c_type : string;
+    }
+    (** Visitor info: the data needed to materialise a typed struct and
+        [<Name>Set*] dispatchers for a schema. See {!Everparse.visitor_field}.
+    *)
+
+    val visitor_member : string -> string
+    (** [visitor_member name] is the visitor struct member a field named [name]
+        takes: [name] escaped against C's keywords and the macros of the headers
+        the visitor includes ([int_], [NULL_], and [int__] for [int_]), so
+        distinct names stay distinct members. *)
+
+    val visitor_fields : t -> visitor_field list
+    (** [visitor_fields s] enumerates the named fields of the source struct in
+        declaration order. Returns [[]] for schemas without a source struct. *)
+
+    val visitor_setters : t -> (string * string) list
+    (** [visitor_setters s] lists the unique [WireSet*] setters referenced by
+        [s] as [(setter, val_c_type)] pairs. *)
+
+    val entrypoint_struct : t -> struct_ option
+    (** Entrypoint typedef struct in the schema's module, if any. *)
+
+    val extern_fn_names : t -> string list
+    (** Names of every extern function declared in the schema's module. *)
+
+    type field_action_form = No_action | On_act | On_success
+
+    val equal_field_action_form : field_action_form -> field_action_form -> bool
+    (** Structural equality on field action forms. *)
+
+    val field_action_forms :
+      struct_ -> (string option * bool * field_action_form) list
+    (** [field_action_forms st] enumerates fields as [(name, is_bitfield, form)]
+        tuples. Used by tests to assert the codegen invariant that bitfields
+        carry {!constructor:On_act}, scalars {!constructor:On_success},
+        anonymous fields {!constructor:No_action}. *)
+
+    module Raw : sig
+      (** Escape hatch for manual 3D authoring.
+
+          These constructors exist for EverParse features that currently have no
+          codec-level equivalent, plus the struct-level projection knobs. Most
+          users should stay on the {!module-Field}/{!module-Codec} path and use
+          {!project}. *)
+
+      type nonrec struct_ = struct_
+      type field = packed
+      type nonrec decl = decl
+      type nonrec decl_case = decl_case
+      type nonrec module_ = module_
+      type nonrec t = t
+
+      val typedef :
+        ?entrypoint:bool ->
+        ?export:bool ->
+        ?output:bool ->
+        ?extern_:bool ->
+        ?doc:string ->
+        struct_ ->
+        decl
+      (** Top-level typedef declaration. *)
+
+      val define : string -> int -> decl
+      (** Top-level integer definition. *)
+
+      val extern_fn : string -> param list -> 'a typ -> decl
+      (** External function declaration used by 3D actions. *)
+
+      val extern_probe : ?init:bool -> string -> decl
+      (** External probe declaration. *)
+
+      val enum_decl : string -> (string * int) list -> 'a typ -> decl
+      (** Top-level enum declaration. *)
+
+      val decl_case : int -> 'a typ -> decl_case
+      (** One tagged case in a top-level casetype declaration. *)
+
+      val decl_default : 'a typ -> decl_case
+      (** Default case in a top-level casetype declaration. *)
+
+      val casetype_decl :
+        string -> param list -> 'a typ -> decl_case list -> decl
+      (** Top-level casetype declaration. *)
+
+      val module_ : ?doc:string -> decl list -> module_
+      (** Builds a 3D module from declarations. *)
+
+      val to_3d : ?enum_as_type:bool -> module_ -> string
+      (** Renders a 3D module to text. With [~enum_as_type:true] an enum field
+          renders as its named 3D enum type rather than the base type plus a
+          membership refinement. *)
+
+      val to_3d_file : ?enum_as_type:bool -> string -> module_ -> unit
+      (** Writes a rendered 3D module to a file. See {!to_3d} for
+          [enum_as_type]. *)
+
+      val struct_of_codec : 'r Codec.t -> struct_
+      (** Lower a codec to its 3D struct, the intermediate the stubs and
+          benchmark codegen operate on. *)
+
+      val project_struct : ?mode:mode -> struct_ -> t
+      (** [project_struct ?mode s] is {!project} on an already-lowered struct.
+      *)
+
+      val field :
+        string -> ?constraint_:bool expr -> ?action:Action.t -> 'a typ -> field
+      (** Named field. Returns a packed {!Field.t}. *)
+
+      val anon_field : 'a typ -> field
+      (** Anonymous field in a 3D struct. *)
+
+      val field_ref : field -> int expr
+      (** [field_ref f] returns the expression referencing field [f] by name.
+          The field must have been created with {!val:field} (not
+          {!anon_field}). *)
+
+      val struct_ : string -> field list -> struct_
+      (** Non-parameterised 3D struct. *)
+
+      val struct_name : struct_ -> string
+      (** Name of a struct declaration. *)
+
+      val field_names : struct_ -> string list
+      (** Named field names in declaration order. *)
+
+      (** The OCaml representation kind of a field (for FFI stub generation). *)
+      type ocaml_kind = Int | Int64 | Float32 | Float64 | Bool | String | Unit
+
+      val field_kinds : struct_ -> (string * ocaml_kind) list
+      (** Named field names with their OCaml type kind. *)
+
+      type int_slot = { width : int; endian : endian }
+      (** Byte width and order of a whole-byte integer field on the wire. *)
+
+      type field_seed = { field : string; slot : int_slot; values : int64 list }
+      (** A field whose own declaration singles out particular wire values. *)
+
+      val int_slots : struct_ -> (string * int_slot) list
+      (** [int_slots s] is the byte slot of every named whole-byte integer field
+          of [s], in declaration order. Bitfields (their base word is shared),
+          floats, byte spans and composites have no slot of their own and are
+          left out. {!field_seeds} is this same set narrowed to the fields whose
+          declaration singles out particular values. *)
+
+      val field_seeds : struct_ -> field_seed list
+      (** [field_seeds s] is, for each named whole-byte integer field of [s]
+          whose any refinement in the record compares against a value, the byte
+          slot it occupies and those values: the constant an equality or
+          inequality names, the values either side of an ordering boundary, and
+          the members of a closed enumeration. A refinement is credited to the
+          field it compares rather than to the field carrying it, and a
+          struct-level {!val-where} is read where the projection puts it, so a
+          field's values are the ones the generated validator tests it against.
+          A casetype field seeds too: its tag is parsed at the start of the
+          field's own bytes, so the slot is the tag's and the values are the
+          case indices. Bitfields are omitted because their base word is shared,
+          so a byte offset alone cannot seed one.
+
+          The list over-approximates: it names candidates worth trying, not
+          values the description is guaranteed to admit, so a consumer must run
+          each through the codec to learn the verdict. *)
+
+      val struct_project : struct_ -> name:string -> keep:packed list -> struct_
+      (** [struct_project s ~name ~keep] returns a copy of [s] renamed to [name]
+          keeping only the fields in [keep]. All others become anonymous. *)
+
+      val struct_params : struct_ -> param list
+      (** Formal parameters of a struct (empty for non-parameterised structs).
+      *)
+
+      val input_param_names : struct_ -> string list
+      (** Names of the input (non-mutable) parameters, in declaration order,
+          which is the order the generated validator and its wrapper take them.
+      *)
+
+      val input_param_c_types : struct_ -> string list
+      (** C type of each input (non-mutable) parameter, in declaration order,
+          e.g. [["uint8_t"; "uint16_t"]]. Matches the widths the generated
+          validator wrapper takes, so a caller can build the wrapper call
+          without reading the generated header. *)
+
+      val param_c_types :
+        struct_ -> [ `Input of string | `Output of string ] list
+      (** [param_c_types s] is, for each parameter of [s] in declaration order,
+          its C type: an input's is the type the generated validator wrapper
+          takes ({!input_param_c_types}), an output's the type of the cell the
+          wrapper takes a pointer to. *)
+
+      val struct_typ : struct_ -> unit typ
+      (** View a 3D struct as a wire description. *)
+
+      val param : string -> 'a typ -> param
+      (** Immutable parameter declaration. *)
+
+      val mutable_param : string -> 'a typ -> param
+      (** Mutable parameter declaration. *)
+
+      val param_struct :
+        string -> param list -> ?where:bool expr -> field list -> struct_
+      (** Parameterised 3D struct. *)
+
+      val apply : 'a typ -> int expr list -> 'a typ
+      (** Apply a parameterised description to integer arguments. *)
+
+      val type_ref : string -> 'a typ
+      (** Unqualified type reference. *)
+
+      val qualified_ref : string -> string -> 'a typ
+      (** Qualified type reference. *)
+
+      val pp_typ : Format.formatter -> 'a typ -> unit
+      (** Pretty-printer for 3D-facing type syntax. *)
+
+      val pp_module : Format.formatter -> module_ -> unit
+      (** Pretty-printer for 3D modules. *)
+
+      val struct_size : struct_ -> int option
+      (** Fixed wire size of a struct, if known statically. *)
+
+      val of_module : name:string -> module_:module_ -> wire_size:int -> t
+      (** Wraps an existing 3D module as a schema. *)
+    end
+  end
+
+  (** Struct validators: a [Types.struct_] validated without a constructor. *)
+
+  type validator
+  (** A struct validator without a constructor. *)
+
+  val validator_of_struct : Types.struct_ -> validator
+  (** [validator_of_struct s] compiles [s] into a validator. *)
+
+  val validate_struct : validator -> bytes -> int -> (unit, Error.t) result
+  (** [validate_struct v buf off] runs the validator [v] on the struct at [off],
+      answering its error as a value. *)
+
+  val struct_size_of : validator -> bytes -> int -> int
+  (** Byte size of the struct starting at [off]. *)
+
+  val struct_min_size : validator -> int
+  (** Minimum byte size accepted. *)
+
+  val wire_size_info_of_validator :
+    validator -> [ `Fixed of int | `Variable of bytes -> int -> int ]
+  (** Wire-size info for the validator. *)
+
+  (** Bit diagrams of a struct. *)
+  module Ascii : sig
+    val of_struct : Types.struct_ -> string
+    (** Render a struct as an RFC-style bit diagram. *)
+
+    val pp_struct : Format.formatter -> Types.struct_ -> unit
+    (** Pretty-print a struct as an RFC-style bit diagram. *)
+  end
+
   (** Support for code generated from a codec by [Wire_ocaml]. *)
   module Gen : sig
     val to_struct : 'r Codec.t -> Types.struct_
@@ -2520,9 +2189,9 @@ module Private : sig
     (** A use of a field's reader, whatever the field's type. *)
 
     val with_field_reader : 'r Codec.t -> string -> 'b field_k -> 'b option
-    (** [with_field_reader t name k] is [k.k ty r], where [r] is the reader
-        {!Codec.val-get} makes for the field [name] of [t] and [ty] its type, or
-        [None] when [t] has no field [name]. *)
+    (** [with_field_reader t name k] is [k.k ty r], where [r] is the reader the
+        decoder reads the field [name] of [t] with and [ty] its type, or [None]
+        when [t] has no field [name]. *)
 
     (** {2 Maps} *)
 
@@ -2550,89 +2219,6 @@ module Private : sig
     val check_map : 'r Codec.t -> string -> 'a Types.typ -> unit
     (** [check_map c name t] raises [Invalid_argument] unless the field [name]
         of [c] is the very value [t]. *)
-
-    (** {2 Kinds} *)
-
-    (** The type of a field the twin reads, as the codec declares it. *)
-    type _ kind =
-      | Int : int kind
-      | UInt8 : UInt8.t kind
-      | UInt16 : UInt16.t kind
-      | UInt32 : UInt32.t kind
-      | SInt8 : SInt8.t kind
-      | SInt16 : SInt16.t kind
-      | SInt32 : SInt32.t kind
-      | String : string kind
-      | Slice : Bytesrw.Bytes.Slice.t kind
-
-    (** {2 The interpreted twin}
-
-        What the interpreted twin of a generated module ([Wire_ocaml]) reads its
-        records through: each record of a codec, and each of its fields by its
-        place in the codec's field list, checked against the type the generated
-        module reads. A view and a check are the [int]s of {!Codec.View}. *)
-
-    type record
-    (** The type for the records of a codec. *)
-
-    val root : 'r Codec.t -> record
-    (** [root c] is the records of [c]. *)
-
-    val sub_at : record -> int -> record
-    (** [sub_at r i] is the records the field [i] of [r] holds. Raises
-        [Invalid_argument] if it holds none. *)
-
-    val enter_at : record -> int -> (unit, unit) Codec.View.sub
-    (** [enter_at r i] is the field [i] of [r] as a sub-record. *)
-
-    val enter :
-      (unit, unit) Codec.View.sub ->
-      'b Wire_runtime.Buf.t ->
-      'b Wire_runtime.Buf.length ->
-      int ->
-      int
-    (** [enter s b len v] is {!Codec.View.enter}. *)
-
-    val check_at :
-      record ->
-      'b Wire_runtime.Buf.t ->
-      'b Wire_runtime.Buf.length ->
-      int ->
-      int
-    (** [check_at r b len off] is {!Codec.View.val-check} on the record at
-        [off]. *)
-
-    val check_window :
-      record ->
-      'b Wire_runtime.Buf.t ->
-      'b Wire_runtime.Buf.length ->
-      off:int ->
-      len:int ->
-      int
-    (** [check_window r b length ~off ~len] is [off] when the [len] bytes at
-        [off] lie in [b] and the codec accepts them on their own, and [-1]
-        otherwise. *)
-
-    type 'a reader = ('a, unit) Codec.View.field
-    (** A field's read: a field of the views of its codec. *)
-
-    val read : 'a reader -> 'b Wire_runtime.Buf.t -> int -> 'a
-    (** [read h b v] reads the field [h] of the record [v] holds in [b]. *)
-
-    val field_at : record -> int -> 'a kind -> 'a reader
-    (** [field_at r i k] reads the field [i] of [r], of kind [k], or the zero of
-        [k] where it is absent. Raises [Invalid_argument] if it has another
-        kind. *)
-
-    val present_at : record -> int -> bool reader
-    (** [present_at r i] reads whether the optional field [i] of [r] is present.
-    *)
-
-    type 'a writer = { write : 'b. 'b Wire_runtime.Buf.t -> int -> 'a -> unit }
-    (** The write of a field of the record a view holds. *)
-
-    val set_at : record -> int -> 'a kind -> 'a writer
-    (** [set_at r i k] writes the field [i] of [r], as {!Codec.set} does. *)
 
     val scan : 'r Codec.t -> bytes -> int -> int -> int64 array option
     (** [scan c buf off len] is the outputs of the record in the [len] bytes at

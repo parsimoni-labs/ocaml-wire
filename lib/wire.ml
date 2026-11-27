@@ -6,8 +6,6 @@ module UInt63 = UInt63
 module Action = Action
 module Param = Param
 module Field = Field
-module Codec = Codec
-module Everparse = Everparse
 include Types
 
 type bitfield = U8 | U16 | U16be | U32 | U32be
@@ -28,20 +26,14 @@ let bool (b : Stdlib.Bool.t) : _ Types.expr =
 
 let bit = Types.bool
 let empty = Types.unit
-let size = Types.field_wire_size
+let fixed_size = Types.field_wire_size
 let lookup = Types.cases
 
 (* A string can be viewed as bytes while it is only read, but a mutable slice
    backed by that view must not escape. Codecs hide their result type behind a
    decode closure, so record once, when constructing their typ, whether their
    structural form can retain a slice. A legacy [Struct] produces [unit], hence
-   its fields do not escape through the direct decoder. *)
-(* A union reads its tag from a field of the record it belongs to; a bare typ
-   has no record. *)
-let union_outside_codec () =
-  invalid_arg
-    "Wire.Field.union: a union is only read and written as a codec field"
-
+   its fields do not escape. *)
 let rec typ_returns_slice : type a. a typ -> bool = function
   | Byte_slice _ -> true
   | Where { inner; _ } -> typ_returns_slice inner
@@ -209,946 +201,6 @@ module Expr = struct
   let bool b = if b then Types.true_ else Types.false_
 end
 
-module Reader = Bytesrw.Bytes.Reader
-module Slice = Bytesrw.Bytes.Slice
-
-(* [n] bytes starting at [off] must fit inside the region ending at [limit].
-   {!Types.Unexpected_eof} counts bytes, not positions: the value needed [n] of
-   them and the region had only [limit - off] left. *)
-let[@inline] check_eof limit ~off ~n =
-  if off + n > limit then
-    raise_eof ~at:limit ~expected:n ~got:(max 0 (limit - off))
-
-(* A span of [n] bytes starting at [off]. [n] comes from a size expression, so
-   an underflowing subtraction or a negative literal reaches here as data: a
-   bare [check_eof] would wave it through and [Bytes.sub] would then raise an
-   [Invalid_argument] that escapes [of_string]'s result. *)
-let[@inline] check_span len ~off ~n =
-  if n < 0 then raise_out_of_range ~at:off (Int64.of_int n);
-  check_eof len ~off ~n
-
-(* The single decoder kernel. Bytes-based, returns [(value, end_off)].
-   All types handled here -- no fallback. Expressions are evaluated in
-   [Eval.empty] (no field bindings); types using [Ref]/[Sizeof_this]/
-   [Field_pos] only make sense inside a [Struct], which goes through
-   [Codec.validator_of_struct] where the int-array context is wired up. *)
-(* Helpers extracted from [parse_direct] to keep the dispatch readable
-   and short. Each handles one composite case. *)
-
-let parse_all_zeros buf off len =
-  let n = len - off in
-  let s = Bytes.sub_string buf off n in
-  let rec check i =
-    if i >= n then s
-    else if s.[i] <> '\000' then raise_non_zero_padding ~at:(off + i)
-    else check (i + 1)
-  in
-  (check 0, len)
-
-(* [decode] and [size_of] arrive unapplied, and the evaluation context is
-   supplied here rather than by the caller: a top-level parse has no field
-   bindings, so binding one argument at the call site would turn each of them
-   into a closure built per parse for nothing. *)
-let parse_codec_typ ~copy_input decode fixed_size min_size size_of buf off len =
-  (* A variable-size codec computes its span by reading length / gate fields
-     from the buffer, and inside a nested region the buffer holds more than
-     this parse was handed. Demanding the codec's mandatory extent from the
-     region closes off every length field the codec always carries, but not one
-     the data puts wherever a preceding span ends, so hand the reads the
-     region's own end as well: a field past it is missing, however many bytes
-     the buffer has left. A misuse in the size expression, or an exception from
-     a user [map] callback, reaches the caller unchanged. *)
-  let ctx = Types.unbound_eval_ctx in
-  let input_end = Input_end.narrow (Input_end.of_bytes buf) len in
-  let sz =
-    match fixed_size with
-    | Some n -> n
-    | None ->
-        check_eof len ~off ~n:min_size;
-        size_of ctx input_end buf off
-  in
-  check_span len ~off ~n:sz;
-  if not copy_input then (decode ctx input_end buf off, off + sz)
-  else
-    let copy = Bytes.sub buf off sz in
-    let copy_end = Input_end.of_bytes copy in
-    match decode ctx copy_end copy 0 with
-    | value -> (value, off + sz)
-    | exception exn when is_parse_error exn ->
-        let error = parse_error_of exn in
-        raise_parse_error { error with at = off + error.at }
-
-(* Only a closed enum enforces membership; an open enum names known codes but
-   accepts any value. [Codec.decode] gates on [closed] the same way, so the two
-   decode paths agree on an unlisted code. *)
-let check_enum_membership ~at ~closed ~base cases v =
-  if closed then Types.check_enum_decode ~at ~cases (Types.int_of_exn base v)
-
-(* [Codec.validator_of_struct] compiles a struct into a validator whose scratch
-   is domain-local, and a domain-local scratch is backed by a [Domain.DLS] key
-   that is never reclaimed. Compiling a fresh validator per decode would leak a
-   key per call, so cache the validator per struct. The cache is itself
-   domain-local, which keeps it lock-free (each domain compiles its structs
-   once) and avoids sharing a validator, hence its scratch, across domains.
-   Keyed by physical identity, so the usual case of a codec built once and
-   decoded in a loop hits the cache.
-
-   Entries are never evicted. The [Domain.DLS] key outlives the validator that
-   allocated it, so dropping an entry does not give the key back: the next
-   decode of that struct compiles again and burns a second key. Physical
-   identity is also unhashable here, since two structs built from one schema are
-   indistinguishable to any hash, so no table turns the lookup sublinear either.
-   What the cache costs is therefore one entry per distinct struct the domain
-   has decoded, which is what compiling those structs already cost. *)
-let struct_validators =
-  Domain.DLS.new_key (fun () ->
-      (Stdlib.ref [] : (Types.struct_ * Codec.validator) list Stdlib.ref))
-
-exception Uncached
-
-(* Raises rather than returning an option: a hit is on the decode path, and the
-   option would allocate on every decode of a struct type. *)
-let rec cached_validator s = function
-  | [] -> raise_notrace Uncached
-  | (k, v) :: rest -> if k == s then v else cached_validator s rest
-
-let validator_for_struct s =
-  let cache = Domain.DLS.get struct_validators in
-  match cached_validator s !cache with
-  | v -> v
-  | exception Uncached ->
-      let v = Codec.validator_of_struct s in
-      cache := (s, v) :: !cache;
-      v
-
-let parse_struct_typ s buf off len =
-  let v = validator_for_struct s in
-  check_eof len ~off ~n:(Codec.struct_min_size v);
-  let sz = Codec.struct_size_of v buf off in
-  check_span len ~off ~n:sz;
-  (match Codec.validate_struct v buf off with
-  | Ok () -> ()
-  | Error e -> raise_parse_error e);
-  ((), off + sz)
-
-let parse_fixed size get buf off len =
-  check_eof len ~off ~n:size;
-  (get buf off, off + size)
-
-let int32_le = SInt32.le
-let int32_be = SInt32.be
-let float32_le buf off = Int32.float_of_bits (Bytes.get_int32_le buf off)
-let float32_be buf off = Int32.float_of_bits (Bytes.get_int32_be buf off)
-let float64_le buf off = Int64.float_of_bits (Bytes.get_int64_le buf off)
-let float64_be buf off = Int64.float_of_bits (Bytes.get_int64_be buf off)
-
-let rec parse_direct : type a.
-    copy_slices:bool -> a typ -> bytes -> int -> int -> a * int =
- fun ~copy_slices typ buf off len ->
-  match typ with
-  | Uint8 -> parse_fixed 1 UInt8.get buf off len
-  | Uint16 Little -> parse_fixed 2 UInt16.le buf off len
-  | Uint16 Big -> parse_fixed 2 UInt16.be buf off len
-  | Uint32 Little -> parse_fixed 4 UInt32.le buf off len
-  | Uint32 Big -> parse_fixed 4 UInt32.be buf off len
-  | Uint64 Little -> parse_fixed 8 UInt64.le buf off len
-  | Uint64 Big -> parse_fixed 8 UInt64.be buf off len
-  | Int8 -> parse_fixed 1 SInt8.get buf off len
-  | Int16 Little -> parse_fixed 2 SInt16.le buf off len
-  | Int16 Big -> parse_fixed 2 SInt16.be buf off len
-  | Int32 Little -> parse_fixed 4 int32_le buf off len
-  | Int32 Big -> parse_fixed 4 int32_be buf off len
-  | Int64 Little -> parse_fixed 8 Bytes.get_int64_le buf off len
-  | Int64 Big -> parse_fixed 8 Bytes.get_int64_be buf off len
-  | Float32 Little -> parse_fixed 4 float32_le buf off len
-  | Float32 Big -> parse_fixed 4 float32_be buf off len
-  | Float64 Little -> parse_fixed 8 float64_le buf off len
-  | Float64 Big -> parse_fixed 8 float64_be buf off len
-  | Uint_var { size; endian } ->
-      let n = Eval.expr Eval.empty size in
-      check_span len ~off ~n;
-      (Uint_var.read endian buf off n, off + n)
-  | Bits { width; base; bit_order } ->
-      let sz = Bitfield.byte_size base in
-      check_eof len ~off ~n:sz;
-      let total = Bitfield.total_bits base in
-      let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
-      let mask = (1 lsl width) - 1 in
-      let v =
-        match base with
-        | U32 Little when not Bitfield.int_holds_u32 ->
-            Bitfield.u32_field_le buf off shift mask
-        | U32 Big when not Bitfield.int_holds_u32 ->
-            Bitfield.u32_field_be buf off shift mask
-        | _ -> (Bitfield.read_word base buf off lsr shift) land mask
-      in
-      (v, off + sz)
-  | Unit -> ((), off)
-  | All_bytes -> (Bytes.sub_string buf off (len - off), len)
-  | All_zeros -> parse_all_zeros buf off len
-  | Zeroterm ->
-      let nul = Codec.zeroterm_nul_pos buf ~first:off ~limit:len in
-      (Bytes.sub_string buf off (nul - off), nul + 1)
-  | Zeroterm_at_most { size } ->
-      let n = Eval.expr Eval.empty size in
-      check_span len ~off ~n;
-      let nul = Codec.zeroterm_nul_pos buf ~first:off ~limit:(off + n) in
-      (Bytes.sub_string buf off (nul - off), off + n)
-  | Byte_array { size } ->
-      let n = Eval.expr Eval.empty size in
-      check_span len ~off ~n;
-      (Bytes.sub_string buf off n, off + n)
-  | Byte_array_where { size; elt_var; cond; test } ->
-      let n = Eval.expr Eval.empty size in
-      check_span len ~off ~n;
-      let bad =
-        Eval.first_bad
-          (Eval.byte_test ~elt_var ~cond test)
-          buf ~first:off ~len:n
-      in
-      if bad >= 0 then raise_constraint ~at:(off + bad) ~which:Per_byte ();
-      (Bytes.sub_string buf off n, off + n)
-  | Byte_slice { size } ->
-      let n = Eval.expr Eval.empty size in
-      check_span len ~off ~n;
-      if copy_slices then
-        let copy = Bytes.sub buf off n in
-        (Slice.make_or_eod copy ~first:0 ~length:n, off + n)
-      else (Slice.make_or_eod buf ~first:off ~length:n, off + n)
-  | Single_elem { size; elem; at_most } ->
-      let n = Eval.expr Eval.empty size in
-      check_span len ~off ~n;
-      let v, inner_end = parse_direct ~copy_slices elem buf off (off + n) in
-      let consumed = inner_end - off in
-      if (not at_most) && consumed <> n then
-        raise_eof ~at:inner_end ~expected:n ~got:consumed;
-      (v, off + n)
-  | Map { inner; decode; index_bound; _ } ->
-      let v, off' = parse_direct ~copy_slices inner buf off len in
-      (Types.map_decode ~index_bound decode ~at:off v, off')
-  | Where { cond; inner } -> parse_where ~copy_slices inner cond buf off len
-  | Enum { base; cases; closed; _ } ->
-      let v, off' = parse_direct ~copy_slices base buf off len in
-      check_enum_membership ~at:off ~closed ~base cases v;
-      (v, off')
-  | Codec
-      {
-        codec_decode;
-        codec_fixed_size;
-        codec_min_size;
-        codec_size_of;
-        codec_returns_slice;
-        _;
-      } ->
-      parse_codec_typ
-        ~copy_input:(copy_slices && codec_returns_slice)
-        codec_decode codec_fixed_size codec_min_size codec_size_of buf off len
-  | Struct s -> parse_struct_typ s buf off len
-  | Casetype { cases; tag; _ } ->
-      parse_casetype ~copy_slices tag cases buf off len
-  | Union _ -> union_outside_codec ()
-  | Optional { present; inner } ->
-      if Eval.expr Eval.empty present then
-        let v, off' = parse_direct ~copy_slices inner buf off len in
-        (Some v, off')
-      else (None, off)
-  | Optional_or { present; inner; default } ->
-      if Eval.expr Eval.empty present then
-        parse_direct ~copy_slices inner buf off len
-      else (default, off)
-  | Array { len = len_expr; elem; seq } ->
-      let n = Eval.expr Eval.empty len_expr in
-      parse_array_loop ~copy_slices ~elem ~seq buf off len ~n
-  | Repeat { size; elem; seq } ->
-      let budget = Eval.expr Eval.empty size in
-      parse_repeat_loop ~copy_slices ~elem ~seq buf off len ~budget
-  | Type_ref _ -> invalid_arg "Wire.type_ref: decoding needs a type registry"
-  | Qualified_ref _ ->
-      invalid_arg "Wire.qualified_ref: decoding needs a type registry"
-  | Apply _ -> invalid_arg "Wire.apply: decoding needs a type registry"
-  | Der _ -> invalid_arg "Wire: an ASN.1 component is decoded by Asn1.codec"
-
-and parse_where : type a.
-    copy_slices:bool -> a typ -> bool expr -> bytes -> int -> int -> a * int =
- fun ~copy_slices inner cond buf off len ->
-  let v, off' = parse_direct ~copy_slices inner buf off len in
-  if Eval.expr Eval.empty cond then (v, off')
-  else raise_constraint ~at:off ~which:Where ()
-
-and parse_casetype : type a k.
-    copy_slices:bool ->
-    k typ ->
-    (a, k) case_branch list ->
-    bytes ->
-    int ->
-    int ->
-    a * int =
- fun ~copy_slices tag cases buf off len ->
-  let tag_val, off' = parse_direct ~copy_slices tag buf off len in
-  let rec find_case = function
-    | [] ->
-        raise_invalid_tag ~at:off
-          (Option.value ~default:0 (Eval.int_of tag tag_val))
-    | Case_branch { cb_tag = Some expected; cb_inner; cb_inject; _ } :: rest ->
-        if expected = tag_val then
-          let body, off'' = parse_direct ~copy_slices cb_inner buf off' len in
-          (cb_inject tag_val body, off'')
-        else find_case rest
-    | Case_branch { cb_tag = None; cb_inner; cb_inject; _ } :: _ ->
-        let body, off'' = parse_direct ~copy_slices cb_inner buf off' len in
-        (cb_inject tag_val body, off'')
-  in
-  find_case cases
-
-and parse_array_loop : type elt seq.
-    copy_slices:bool ->
-    elem:elt typ ->
-    seq:(elt, seq) seq_map ->
-    bytes ->
-    int ->
-    int ->
-    n:int ->
-    seq * int =
- fun ~copy_slices ~elem ~seq:(Seq_map s) buf off len ~n ->
-  let rec loop acc off' i =
-    if i >= n then (s.finish acc, off')
-    else
-      let v, off'' = parse_direct ~copy_slices elem buf off' len in
-      loop (s.add acc v) off'' (i + 1)
-  in
-  loop s.empty off 0
-
-and parse_repeat_loop : type elt seq.
-    copy_slices:bool ->
-    elem:elt typ ->
-    seq:(elt, seq) seq_map ->
-    bytes ->
-    int ->
-    int ->
-    budget:int ->
-    seq * int =
- fun ~copy_slices ~elem ~seq:(Seq_map s) buf off len ~budget ->
-  let start = off in
-  if budget < 0 then raise_eof ~at:off ~expected:budget ~got:(max 0 (len - off));
-  check_eof len ~off:start ~n:budget;
-  let region_end = start + budget in
-  let rec loop acc off' =
-    if off' = region_end then (s.finish acc, off')
-    else
-      let v, off'' = parse_direct ~copy_slices elem buf off' region_end in
-      (* An element that consumes nothing never moves the cursor to
-         [region_end], so the byte-budget loop would spin. A literal zero-size
-         span is refused by [Field.repeat], but a [uint_var size] whose size
-         expression evaluates to zero is only detectable here, so report the
-         same eof [Codec.decode]'s compiled repeat reports for it. *)
-      if off'' <= off' then
-        raise_eof ~at:off' ~expected:(off'' - off') ~got:(region_end - off');
-      loop (s.add acc v) off''
-  in
-  loop s.empty off
-
-(* The value at the start of [buf], or the error that stopped it. *)
-let parse_all ~copy_slices consume typ buf =
-  let available = Bytes.length buf in
-  match
-    let value, consumed = parse_direct ~copy_slices typ buf 0 available in
-    check_consumption consume ~consumed ~available;
-    value
-  with
-  | value -> Ok value
-  | exception exn when is_parse_error exn ->
-      let e = parse_error_of exn in
-      Error e
-
-let of_string ?(consume = `Prefix) typ s =
-  parse_all ~copy_slices:true consume typ (Bytes.unsafe_of_string s)
-
-let of_bytes ?(consume = `Prefix) typ b =
-  parse_all ~copy_slices:false consume typ b
-
-let drain_reader reader =
-  let buf = Buffer.create 256 in
-  let rec loop () =
-    let slice = Reader.read reader in
-    if Slice.is_eod slice then Buffer.to_bytes buf
-    else begin
-      Buffer.add_subbytes buf (Slice.bytes slice) (Slice.first slice)
-        (Slice.length slice);
-      loop ()
-    end
-  in
-  loop ()
-
-let rec typ_consumes_rest : type a. a typ -> bool = function
-  | All_bytes | All_zeros -> true
-  | Map { inner; _ } -> typ_consumes_rest inner
-  | Where { inner; _ } -> typ_consumes_rest inner
-  | Enum { base; _ } -> typ_consumes_rest base
-  | Optional { inner; _ } -> typ_consumes_rest inner
-  | Optional_or { inner; _ } -> typ_consumes_rest inner
-  | Array { elem; _ } -> typ_consumes_rest elem
-  | Repeat { elem; _ } -> typ_consumes_rest elem
-  | Codec { codec_struct; _ } | Struct codec_struct ->
-      struct_consumes_rest codec_struct
-  | Casetype { tag; cases; _ } ->
-      typ_consumes_rest tag
-      || List.exists
-           (fun (Case_branch { cb_inner; _ }) -> typ_consumes_rest cb_inner)
-           cases
-  | Apply { typ; _ } -> typ_consumes_rest typ
-  | Single_elem _ -> false
-  | _ -> false
-
-and struct_consumes_rest (s : struct_) =
-  List.exists (fun (Field f) -> typ_consumes_rest f.field_typ) s.fields
-
-let push_back_bytes reader bytes first (length : int) =
-  if length > 0 then Reader.push_back reader (Slice.make bytes ~first ~length)
-
-let read_exact reader (n : int) =
-  let buf = Bytes.create n in
-  let rec loop off =
-    if off >= n then buf
-    else
-      let slice = Reader.read reader in
-      if Slice.is_eod slice then begin
-        push_back_bytes reader buf 0 off;
-        raise_eof ~at:off ~expected:n ~got:off
-      end
-      else
-        let slice_len = Slice.length slice in
-        let need = n - off in
-        let take = Int.min need slice_len in
-        Bytes.blit (Slice.bytes slice) (Slice.first slice) buf off take;
-        if slice_len > take then
-          Reader.push_back reader (Slice.drop_first_or_eod take slice);
-        loop (off + take)
-  in
-  loop 0
-
-(* Parse [bytes] and keep the reader transactional: on success push back the
-   bytes past the decoded value, on parse error push back everything so the
-   reader is restored to its position before the failed decode. *)
-let parse_or_rewind typ reader bytes len =
-  match parse_direct ~copy_slices:false typ bytes 0 len with
-  | v, off ->
-      push_back_bytes reader bytes off (len - off);
-      v
-  | exception exn when is_parse_error exn ->
-      push_back_bytes reader bytes 0 len;
-      raise exn
-
-(* A growable scratch the incremental reader accumulates slices into, so
-   retrying a parse costs nothing beyond the retry. [Buffer.to_bytes] rebuilt
-   everything read so far on every call, which is what made a value arriving in
-   small slices quadratic.
-
-   [Bytes.make] rather than [Bytes.create]: the parse is given a length, but a
-   size expression can still read the bytes behind it, and those must not be
-   whatever the allocator last held. *)
-type scratch = {
-  mutable buf : bytes;
-  mutable filled : int;
-  (* How far the terminator search has looked. A zeroterm cannot know where its
-     NUL is until it sees one, so a retry per slice rescans from the string's
-     start every time, which is what makes a dribbled zeroterm quadratic. The
-     cursor carries the search across retries so each byte is looked at once. *)
-  mutable nul_from : int;
-}
-
-let scratch_create () =
-  { buf = Bytes.make 256 '\000'; filled = 0; nul_from = 0 }
-
-let scratch_ensure s n =
-  if n > Bytes.length s.buf then begin
-    (* [Stdlib.ref]: [ref] here is [Types.ref], the field-reference
-       combinator. *)
-    let cap = Stdlib.ref (Bytes.length s.buf) in
-    while n > !cap do
-      cap := !cap * 2
-    done;
-    let b = Bytes.make !cap '\000' in
-    Bytes.blit s.buf 0 b 0 s.filled;
-    s.buf <- b
-  end
-
-(* Read one slice into [s]. [false] at the end of the reader. *)
-let scratch_read s reader =
-  let slice = Reader.read reader in
-  if Slice.is_eod slice then false
-  else begin
-    let n = Slice.length slice in
-    scratch_ensure s (s.filled + n);
-    Bytes.blit (Slice.bytes slice) (Slice.first slice) s.buf s.filled n;
-    s.filled <- s.filled + n;
-    true
-  end
-
-(* Read until [target] bytes are buffered, or the reader ends first. *)
-let rec scratch_fill s reader target =
-  s.filled >= target || (scratch_read s reader && scratch_fill s reader target)
-
-(* How far to read before retrying a parse that ran short. [expected] is what
-   the read needed and [got] what was already there, so [at] plus the shortfall
-   between them is where that read ends; never less than one byte past what is
-   buffered, or a hint of zero would spin. Taking the end from [at] rather than
-   from what is buffered matters for a read the data places: it can start past
-   everything received so far, and then nothing but [at] says how far ahead the
-   shortfall lies. *)
-let retry_target s ~at ~expected ~got = max (s.filled + 1) (at + expected - got)
-
-(* First NUL at or after [i] among the buffered bytes, or [-1] for none. *)
-let rec nul_at s i =
-  if i >= s.filled then -1
-  else if Bytes.get_uint8 s.buf i = 0 then i
-  else nul_at s (i + 1)
-
-(* Read until a NUL turns up at or after the scan cursor, or the reader ends.
-   Returns whether a terminator the retry has not been offered yet is buffered.
-   The cursor makes this one pass over the input however many slices it takes,
-   where a search restarted per slice reads the same bytes over and over. *)
-let rec fill_to_nul s reader =
-  let p = nul_at s s.nul_from in
-  if p >= 0 then begin
-    s.nul_from <- p + 1;
-    true
-  end
-  else begin
-    s.nul_from <- s.filled;
-    scratch_read s reader && fill_to_nul s reader
-  end
-
-let of_reader_incremental typ reader =
-  let s = scratch_create () in
-  let give_up e =
-    push_back_bytes reader s.buf 0 s.filled;
-    raise_parse_error e
-  in
-  (* Both recoverable kinds read ahead and retry, and give up only when the read
-     yields nothing at all. What differs is how far ahead to read. *)
-  let rec loop () =
-    match parse_direct ~copy_slices:false typ s.buf 0 s.filled with
-    | v, off ->
-        push_back_bytes reader s.buf off (s.filled - off);
-        v
-    | exception exn when is_parse_error exn -> (
-        let e = parse_error_of exn in
-        let before = s.filled in
-        match e.kind with
-        (* A search ran the length of the buffer without meeting its terminator,
-           so no retry can succeed until a NUL arrives: read until one does.
-           Waiting on it can only delay a retry, never skip one, since a reader
-           that ends first still retries over everything that arrived. *)
-        | Missing_terminator ->
-            let found = fill_to_nul s reader in
-            if found || s.filled > before then loop () else give_up e
-        (* The shortfall says how far to read ahead, never whether to fail. A
-           size that depends on a field the parse has not reached yet is
-           computed from whatever lies at that offset, so the figure can be far
-           larger than the input, and reaching the end of the reader while
-           chasing it is not an error. *)
-        | Unexpected_eof { expected; got } ->
-            ignore
-              (scratch_fill s reader (retry_target s ~at:e.at ~expected ~got)
-                : bool);
-            if s.filled > before then loop () else give_up e
-        | _ -> give_up e)
-  in
-  loop ()
-
-let read_value typ reader =
-  if typ_consumes_rest typ then
-    let bytes = drain_reader reader in
-    parse_or_rewind typ reader bytes (Bytes.length bytes)
-  else
-    match Types.field_wire_size typ with
-    | Some n ->
-        let bytes = read_exact reader n in
-        parse_or_rewind typ reader bytes n
-    | None -> of_reader_incremental typ reader
-
-let of_reader typ reader =
-  match read_value typ reader with
-  | v -> Ok v
-  | exception exn when is_parse_error exn ->
-      let e = parse_error_of exn in
-      Error e
-(* Binary encoding with Bytesrw.Bytes.Writer *)
-
-module Writer = Bytesrw.Bytes.Writer
-
-(* Encoder state *)
-(* Buffered encoder -- writes accumulate in o, flushed as a single Slice.t.
-   Mirrors the decoder's destructured-slice pattern. *)
-type encoder = {
-  writer : Writer.t;
-  o : bytes;
-  o_max : int;
-  mutable o_next : int;
-}
-
-let o_size = 4096
-
-let encoder writer =
-  { writer; o = Bytes.create o_size; o_max = o_size - 1; o_next = 0 }
-
-let[@inline] flush enc =
-  if enc.o_next > 0 then begin
-    Writer.write enc.writer (Slice.make enc.o ~first:0 ~length:enc.o_next);
-    enc.o_next <- 0
-  end
-
-let[@inline] ensure enc n = if enc.o_next + n > enc.o_max + 1 then flush enc
-
-let[@inline] write_byte enc b =
-  ensure enc 1;
-  Bytes.set_uint8 enc.o enc.o_next b;
-  enc.o_next <- enc.o_next + 1
-
-let[@inline] write_int8 enc v =
-  ensure enc 1;
-  SInt8.set enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 1
-
-let[@inline] write_int16_le enc v =
-  ensure enc 2;
-  SInt16.set_le enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 2
-
-let[@inline] write_int16_be enc v =
-  ensure enc 2;
-  SInt16.set_be enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 2
-
-let[@inline] write_uint16_le enc v =
-  ensure enc 2;
-  Bytes.set_uint16_le enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 2
-
-let[@inline] write_uint16_be enc v =
-  ensure enc 2;
-  Bytes.set_uint16_be enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 2
-
-let[@inline] write_int32_le enc v =
-  ensure enc 4;
-  Bytes.set_int32_le enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 4
-
-let[@inline] write_int32_be enc v =
-  ensure enc 4;
-  Bytes.set_int32_be enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 4
-
-let[@inline] write_uint32_le enc v =
-  ensure enc 4;
-  UInt32.set_le enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 4
-
-let[@inline] write_uint32_be enc v =
-  ensure enc 4;
-  UInt32.set_be enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 4
-
-let[@inline] write_int64_le enc v =
-  ensure enc 8;
-  Bytes.set_int64_le enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 8
-
-let[@inline] write_int64_be enc v =
-  ensure enc 8;
-  Bytes.set_int64_be enc.o enc.o_next v;
-  enc.o_next <- enc.o_next + 8
-
-let write_string enc s =
-  let len = String.length s in
-  if len <= enc.o_max + 1 - enc.o_next then begin
-    (* Fits in current buffer *)
-    Bytes.blit_string s 0 enc.o enc.o_next len;
-    enc.o_next <- enc.o_next + len
-  end
-  else begin
-    (* Flush current buffer, then write string directly *)
-    flush enc;
-    Writer.write_string enc.writer s
-  end
-
-let encode_codec ~encode ~fixed_size ~size_of_value v enc =
-  let sz = match fixed_size with Some n -> n | None -> size_of_value v in
-  let tmp = Bytes.create sz in
-  let _ : int = encode v tmp 0 in
-  write_string enc (Bytes.unsafe_to_string tmp)
-
-let check_byte_field_size size ~actual =
-  Types.check_byte_field_size ~expected:(Eval.expr Eval.empty size) ~actual
-
-(* The single encoder kernel. Writes [v] to [enc]. Top-level expressions
-   are evaluated in [Eval.empty]; [Struct] is rejected (encode goes
-   through [Codec.encode] for records). *)
-let rec encode_into : type a. a typ -> a -> encoder -> unit =
- fun typ v enc ->
-  match typ with
-  | Uint8 -> write_byte enc (UInt8.to_int v)
-  | Uint16 Little -> write_uint16_le enc (UInt16.to_int v)
-  | Uint16 Big -> write_uint16_be enc (UInt16.to_int v)
-  | Uint32 Little -> write_uint32_le enc v
-  | Uint32 Big -> write_uint32_be enc v
-  | Uint64 Little -> write_int64_le enc (UInt64.to_int64 v)
-  | Uint64 Big -> write_int64_be enc (UInt64.to_int64 v)
-  | Int8 -> write_int8 enc v
-  | Int16 Little -> write_int16_le enc v
-  | Int16 Big -> write_int16_be enc v
-  | Int32 Little ->
-      SInt32.check_encode v;
-      write_int32_le enc (SInt32.to_int32 v)
-  | Int32 Big ->
-      SInt32.check_encode v;
-      write_int32_be enc (SInt32.to_int32 v)
-  | Int64 Little -> write_int64_le enc v
-  | Int64 Big -> write_int64_be enc v
-  | Float32 Little -> write_int32_le enc (Int32.bits_of_float v)
-  | Float32 Big -> write_int32_be enc (Int32.bits_of_float v)
-  | Float64 Little -> write_int64_le enc (Int64.bits_of_float v)
-  | Float64 Big -> write_int64_be enc (Int64.bits_of_float v)
-  | Uint_var { size; endian } ->
-      let n = Eval.expr Eval.empty size in
-      ensure enc n;
-      Uint_var.write endian enc.o enc.o_next n v;
-      enc.o_next <- enc.o_next + n
-  | Bits { width; base; bit_order } -> (
-      Types.check_unsigned_encode ~bits:width v;
-      let mask = (1 lsl width) - 1 in
-      let total = Bitfield.total_bits base in
-      let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
-      let masked = (v land mask) lsl shift in
-      match base with
-      | U8 -> write_byte enc masked
-      | U16 Little -> write_uint16_le enc masked
-      | U16 Big -> write_uint16_be enc masked
-      (* Shift in [Int32]: a native-int shift would drop bit 31 of the word
-         on a narrow-int platform. *)
-      | U32 Little ->
-          write_int32_le enc
-            (Int32.shift_left (Int32.of_int (v land mask)) shift)
-      | U32 Big ->
-          write_int32_be enc
-            (Int32.shift_left (Int32.of_int (v land mask)) shift))
-  | Unit -> ()
-  | All_bytes -> write_string enc v
-  | All_zeros ->
-      Types.check_all_zeros_encode v;
-      write_string enc v
-  | Zeroterm ->
-      Types.check_zeroterm_encode v;
-      write_string enc v;
-      write_byte enc 0
-  | Zeroterm_at_most { size } ->
-      Types.check_zeroterm_encode v;
-      let n = Eval.expr Eval.empty size in
-      let len = String.length v in
-      Types.check_zeroterm_region ~region:n ~len;
-      write_string enc v;
-      (* Remaining bytes = NUL terminator plus any trailing padding. *)
-      for _ = len to n - 1 do
-        write_byte enc 0
-      done
-  | Where { cond; inner } ->
-      Types.check_where_encode cond (Eval.expr Eval.empty cond);
-      encode_into inner v enc
-  | Array { len; elem; seq } ->
-      let expected = Eval.expr Eval.empty len in
-      Types.exact_array_elements seq ~expected v
-      |> List.iter (fun elem_v -> encode_into elem elem_v enc)
-  | Byte_array { size } ->
-      check_byte_field_size size ~actual:(String.length v);
-      write_string enc v
-  | Byte_array_where { size; elt_var; cond; test } ->
-      check_byte_field_size size ~actual:(String.length v);
-      Eval.check_byte_refinement ~elt_var ~cond ~test v;
-      write_string enc v
-  | Byte_slice { size } ->
-      let src = Slice.bytes v in
-      let off = Slice.first v in
-      let len = Slice.length v in
-      check_byte_field_size size ~actual:len;
-      write_string enc (Bytes.sub_string src off len)
-  | Single_elem { size; elem; at_most } ->
-      let n = Eval.expr Eval.empty size in
-      let inner_sz = Types.size_of_typ_value Types.unbound_eval_ctx elem v in
-      Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;
-      encode_into elem v enc;
-      for _ = inner_sz to n - 1 do
-        write_byte enc 0
-      done
-  | Enum { name; base; cases; closed } ->
-      if closed then
-        Types.check_enum_encode ~name ~valid:(Types.enum_values cases)
-          (Types.int_of_exn base v);
-      encode_into base v enc
-  | Map { inner; encode; _ } -> encode_into inner (encode v) enc
-  | Codec { codec_encode; codec_fixed_size; codec_size_of_value; _ } ->
-      encode_codec
-        ~encode:(fun v buf off -> codec_encode v Types.unbound_eval_ctx buf off)
-        ~fixed_size:codec_fixed_size
-        ~size_of_value:(codec_size_of_value Types.unbound_eval_ctx)
-        v enc
-  | Optional { present; inner } ->
-      if Eval.expr Eval.empty present then encode_into inner (Option.get v) enc
-  | Optional_or { present; inner; _ } ->
-      if Eval.expr Eval.empty present then encode_into inner v enc
-  | Repeat { size; elem; seq } ->
-      let expected = Eval.expr Eval.empty size in
-      Types.exact_repeat_elements seq ~expected
-        ~size_of:(Types.size_of_typ_value Types.unbound_eval_ctx elem)
-        v
-      |> List.iter (fun (elem_v, _) -> encode_into elem elem_v enc)
-  | Casetype { tag; cases; _ } -> encode_casetype tag cases v enc
-  | Union _ -> union_outside_codec ()
-  | Struct _ -> invalid_arg "Wire.struct_: encoding a struct goes through Codec"
-  | Type_ref _ -> invalid_arg "Wire.type_ref: encoding needs a type registry"
-  | Qualified_ref _ ->
-      invalid_arg "Wire.qualified_ref: encoding needs a type registry"
-  | Apply _ -> invalid_arg "Wire.apply: encoding needs a type registry"
-  | Der _ -> invalid_arg "Wire: an ASN.1 component is encoded by Asn1.codec"
-
-and encode_casetype : type a k.
-    k typ -> (a, k) case_branch list -> a -> encoder -> unit =
- fun tag cases v enc ->
-  let rec find_case = function
-    | [] -> Types.raise_no_matching_case ()
-    | Case_branch { cb_inner; cb_project; _ } :: rest -> (
-        match cb_project v with
-        | Some (t, body) ->
-            encode_into tag t enc;
-            encode_into cb_inner body enc
-        | None -> find_case rest)
-  in
-  find_case cases
-
-let to_writer typ v writer =
-  let enc = encoder writer in
-  encode_into typ v enc;
-  flush enc
-
-(* Direct-to-bytes encode: no Writer, no Buffer, no encoder.
-   For fixed-size types, allocates only the output bytes. *)
-(* Helpers extracted from [encode_direct] to keep the dispatch readable. *)
-
-let encode_bits buf off v width base bit_order =
-  Types.check_unsigned_encode ~bits:width v;
-  let mask = (1 lsl width) - 1 in
-  let total = Bitfield.total_bits base in
-  let shift = Bitfield.shift ~bit_order ~total ~bits_used:0 ~width in
-  let masked = (v land mask) lsl shift in
-  match base with
-  | U8 ->
-      Bytes.set_uint8 buf off masked;
-      off + 1
-  | U16 Little ->
-      Bytes.set_uint16_le buf off masked;
-      off + 2
-  | U16 Big ->
-      Bytes.set_uint16_be buf off masked;
-      off + 2
-  (* Shift in [Int32]: a native-int shift would drop bit 31 of the word on a
-     narrow-int platform. *)
-  | U32 Little ->
-      Bytes.set_int32_le buf off
-        (Int32.shift_left (Int32.of_int (v land mask)) shift);
-      off + 4
-  | U32 Big ->
-      Bytes.set_int32_be buf off
-        (Int32.shift_left (Int32.of_int (v land mask)) shift);
-      off + 4
-
-(* Variable-size fallback: encode via the writer kernel into a Buffer,
-   then blit. Used by [encode_direct]'s catch-all. *)
-let encode_via_writer typ buf off v =
-  let tmp = Buffer.create 64 in
-  let writer = Writer.of_buffer tmp in
-  let enc = encoder writer in
-  encode_into typ v enc;
-  flush enc;
-  let s = Buffer.contents tmp in
-  let n = String.length s in
-  Bytes.blit_string s 0 buf off n;
-  off + n
-
-let rec encode_direct : type a. a typ -> bytes -> int -> a -> int =
- fun typ buf off v ->
-  match typ with
-  | Uint8 ->
-      UInt8.set buf off v;
-      off + 1
-  | Uint16 Little ->
-      UInt16.set_le buf off v;
-      off + 2
-  | Uint16 Big ->
-      UInt16.set_be buf off v;
-      off + 2
-  | Uint32 Little ->
-      UInt32.set_le buf off v;
-      off + 4
-  | Uint32 Big ->
-      UInt32.set_be buf off v;
-      off + 4
-  | Uint64 Little ->
-      UInt64.set_le buf off v;
-      off + 8
-  | Uint64 Big ->
-      UInt64.set_be buf off v;
-      off + 8
-  | Uint_var { size = Int n; endian } ->
-      Uint_var.write endian buf off n v;
-      off + n
-  | Uint_var _ ->
-      invalid_arg "Wire.uint_var: encoding a field-dependent size needs Codec"
-  | Bits { width; base; bit_order } ->
-      encode_bits buf off v width base bit_order
-  | Unit -> off
-  | All_bytes ->
-      let n = String.length v in
-      Bytes.blit_string v 0 buf off n;
-      off + n
-  | All_zeros ->
-      Types.check_all_zeros_encode v;
-      let n = String.length v in
-      Bytes.blit_string v 0 buf off n;
-      off + n
-  | Byte_array { size = Int n } -> Codec.blit_string_exact n buf off v
-  | Byte_slice { size = Int n } -> Codec.blit_slice_exact n buf off v
-  | Single_elem { size = Int n; elem; at_most } ->
-      let inner_sz = Types.size_of_typ_value Types.unbound_eval_ctx elem v in
-      Types.check_nested_size ~at_most ~expected:n ~actual:inner_sz;
-      let off' = encode_direct elem buf off v in
-      if off' < off + n then Bytes.fill buf off' (off + n - off') '\x00';
-      off + n
-  | Map { inner; encode; _ } -> encode_direct inner buf off (encode v)
-  | Where { cond; inner } ->
-      Types.check_where_encode cond (Eval.expr Eval.empty cond);
-      encode_direct inner buf off v
-  | Enum { name; base; cases; closed } ->
-      if closed then
-        Types.check_enum_encode ~name ~valid:(Types.enum_values cases)
-          (Types.int_of_exn base v);
-      encode_direct base buf off v
-  | Codec { codec_encode; _ } -> codec_encode v Types.unbound_eval_ctx buf off
-  | _ -> encode_via_writer typ buf off v
-
-let to_bytes typ v =
-  match field_wire_size typ with
-  | Some n ->
-      let buf = Bytes.create n in
-      ignore (encode_direct typ buf 0 v);
-      buf
-  | None ->
-      let buf = Buffer.create 64 in
-      let writer = Writer.of_buffer buf in
-      to_writer typ v writer;
-      Buffer.to_bytes buf
-
-let to_string typ v = Bytes.unsafe_to_string (to_bytes typ v)
-
 module UInt64 = UInt64
 module SInt32 = SInt32
 module SInt8 = SInt8
@@ -1175,9 +227,105 @@ module Private = struct
   module Names = Names
   module Layout = Record_layout
 
+  type packed = Field.packed =
+    | Named : 'a Field.t -> packed
+    | Anon : 'a Field.anon -> packed
+
+  let decl_of_packed = Field.decl_of_packed
+
+  module Everparse = struct
+    include Everparse
+
+    let module_ (t : t) = t.module_
+    let wire_size (t : t) = t.wire_size
+    let source (t : t) = t.source
+  end
+
+  type validator = Codec.validator
+
+  let validator_of_struct = Codec.validator_of_struct
+  let validate_struct = Codec.validate_struct
+  let struct_size_of = Codec.struct_size_of
+  let struct_min_size = Codec.struct_min_size
+  let wire_size_info_of_validator = Codec.wire_size_info_of_validator
+
+  module Ascii = Ascii
+
   let param_name = param_name
   let param_is_mutable = param_is_mutable
   let param_c_type = param_c_type
   let ml_type_of = Types.ml_type_of
   let c_type_of = Types.c_type_of
+end
+
+(* The public [Codec] and [Everparse] over the internal ones. What the interface
+   adds to them, layers, views and folds, raises [Failure "unimplemented"]. *)
+
+let unimplemented () = failwith "unimplemented"
+
+module Everparse = struct
+  include Everparse
+
+  let name (t : t) = t.name
+end
+
+module Codec = struct
+  module C = Codec
+
+  type 'r t = 'r C.t
+  type ('a, 'r) field = ('a, 'r) C.field
+
+  type ('f, 'k, 'r) fields =
+    | [] : ('k, 'k, 'r) fields
+    | ( :: ) : ('a, 'r) field * ('f, 'k, 'r) fields -> ('a -> 'f, 'k, 'r) fields
+
+  let rec constructor_fields : type f r. (f, r, r) fields -> (f, r) C.fields =
+    function
+    | [] -> []
+    | f :: fs -> f :: constructor_fields fs
+
+  let ( $ ) = C.( $ )
+
+  let v name ?where ?doc make fields =
+    C.v name ?where ?doc make (constructor_fields fields)
+
+  type ('s, 'r) layer = unit
+
+  let layer _ = unimplemented ()
+  let opt_layer _ = unimplemented ()
+  let ( / ) _ _ = unimplemented ()
+  let ( // ) _ _ = unimplemented ()
+  let name = C.name
+  let rename = C.rename
+  let doc = C.doc
+  let env = C.env
+  let min_size = C.min_size
+  let fixed_size = C.size
+  let decode ?consume ?env c buf ~off = C.decode ?consume ?env c buf off
+  let validate ?env c buf ~off = C.validate ?env c buf off
+  let encode ?env c r buf ~off = C.encode ?env c r buf off
+  let to_bytes = C.to_bytes
+  let to_string = C.to_string
+  let size = C.encoded_size
+  let size_at ?env c buf ~off = C.size_at ?env c buf off
+  let pp_value = C.pp_value
+
+  module View = struct
+    type ('b, 'r) check = int
+    type ('b, 'r) t = int
+    type ('a, 'r) field = unit
+    type ('s, 'r) layer = unit
+
+    let check ?env:_ ?len:_ _ _ ~off:_ = unimplemented ()
+    let is_ok k = k >= 0
+    let get k = if k >= 0 then k else invalid_arg "Wire.Codec.View.get"
+    let field _ _ = unimplemented ()
+    let read _ _ _ = unimplemented ()
+    let set _ _ _ _ = unimplemented ()
+    let layer _ _ = unimplemented ()
+    let sub _ _ _ = unimplemented ()
+
+    let fold ?env:_ ?stride:_ ?offs:_ ?lens:_ ?invalid:_ _ _ _ ~init:_ ~f:_ =
+      unimplemented ()
+  end
 end
