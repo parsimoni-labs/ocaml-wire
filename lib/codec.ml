@@ -17,10 +17,15 @@ open Codec_access
 type ('a, 'r) field = ('a, 'r) Codec_repr.field
 type 'r t = 'r Codec_repr.t
 
+type 'r components = 'r Codec_repr.components = {
+  find : 'a. ('a, 'r) field -> (bytes -> int -> ('a, Error.t) result) option;
+}
+
 let ( $ ) = ( $ )
 let field_name (f : _ field) = f.name
 let field_id (f : _ field) = f.id
 let field_typ (f : _ field) = f.typ
+let field_proj (f : _ field) = f.get
 let zeroterm_nul_pos = zeroterm_nul_pos
 let blit_string_exact = blit_string_exact
 let blit_slice_exact = blit_slice_exact
@@ -179,6 +184,87 @@ let v : type f r.
     doc;
     compiled = Atomic.make None;
     compile;
+    components = None;
+  }
+
+(* A codec whose bytes another module reads: its one field stands for the
+   whole record, the check and the read are the functions given, and the
+   record has no field a binary path places. Nothing is shared with a pass of
+   [Codec_seal]: no slots, no fast paths, no walk. *)
+let opaque_compiled ~name ~min_size ~check ~read ~extent ~write ~size_of_value =
+  let validate_ctx _ input_end buf off = check input_end buf off in
+  let checked _ input_end buf off =
+    check input_end buf off;
+    read input_end buf off
+  in
+  let plain_validate buf off =
+    if off < 0 then Errors.negative_offset off
+    else check (Input_end.of_bytes buf) buf off
+  in
+  let plain_decode buf off =
+    if off < 0 then Errors.negative_offset off
+    else checked no_runtime (Input_end.of_bytes buf) buf off
+  in
+  let write v buf off =
+    if off < 0 then
+      Fmt.invalid_arg "Codec.encode %s: negative offset %d" name off;
+    write v buf off
+  in
+  {
+    size_of_value = (fun _ v -> size_of_value v);
+    field_access = [];
+    field_readers = [];
+    field_actions = [];
+    decode = checked;
+    read = (fun _ input_end buf off -> read input_end buf off);
+    plain_decode = Some plain_decode;
+    walk = None;
+    places = [];
+    encode = (fun v _ buf off -> write v buf off);
+    wire_size =
+      Variable
+        {
+          min_size;
+          compute = (fun _ input_end buf off -> extent input_end buf off);
+        };
+    validate = (fun ?env_slots:_ buf off -> plain_validate buf off);
+    plain_validate;
+    plain_encode = Some (fun v buf off -> ignore (write v buf off : int));
+    fixed_frame = -1;
+    plain_pass = No_checks;
+    faults = validate_ctx;
+    validate_ctx;
+    validate_sized =
+      (fun rt input_end buf off _ -> validate_ctx rt input_end buf off);
+    check_end = (fun _ _ _ -> -2);
+    validate_arr =
+      (fun _ rt input_end buf off -> validate_ctx rt input_end buf off);
+    clear_scratch = ignore;
+    populate = (fun _ _ _ _ _ -> ());
+    n_array_slots = 0;
+    has_checks = true;
+    decode_scratch = (fun () -> { ints = [||]; int64s = [||] });
+    param_base = 0;
+    paths = [];
+  }
+
+let opaque ~name field ~min_size ~check ~read ~extent ~write ~size_of_value
+    ~components =
+  let compile _ =
+    opaque_compiled ~name ~min_size ~check ~read ~extent ~write ~size_of_value
+  in
+  {
+    id = Atomic.fetch_and_add id_counter 1;
+    name;
+    struct_fields = [ field ];
+    n_params = 0;
+    param_handles = [];
+    param_use = Stable;
+    where = None;
+    doc = None;
+    compiled = Atomic.make None;
+    compile;
+    components = Some components;
   }
 
 (* Two domains may both compile a codec neither has used; the first to publish
@@ -676,7 +762,18 @@ let action_reader ?env (codec : _ t) (c : _ compiled) rt access act read name =
           let e = Types.parse_error_of exn in
           field_error name e
 
-let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
+(* A field of a codec whose bytes another module reads: that module's reader,
+   which answers a negative offset as [get] does. *)
+let component_get (codec : _ t) (c : _ components) (f : (_, _) field) =
+  match c.find f with
+  | None ->
+      Fmt.invalid_arg "Codec.get: field %S does not belong to codec %S" f.name
+        codec.name
+  | Some read ->
+      fun buf off ->
+        if off < 0 then Errors.negative_offset off else read buf off
+
+let[@inline] binary_get (type a r) ?env (codec : r t) (f : (a, r) field) :
     bytes -> int -> (a, parse_error) result =
   (* A field's offset can be driven by an input param, and an unbound one reads
      0, which places a reader on the bytes in front of the field rather than
@@ -721,12 +818,22 @@ let[@inline] get (type a r) ?env (codec : r t) (f : (a, r) field) :
                   field_error name e))
   | Some act -> action_reader ?env codec c rt access act read name
 
+let[@inline] get ?env (codec : _ t) f =
+  match codec.components with
+  | Some c -> component_get codec c f
+  | None -> binary_get ?env codec f
+
 let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
     bytes -> int -> a -> unit =
   (* As for [get]: an unbound param places the write on the wrong bytes, which
      for a writer means overwriting a field the caller never named and leaving
      the one it did name as it was. *)
   require_env ~op:"set" codec env;
+  if Option.is_some codec.components then
+    Fmt.invalid_arg
+      "Codec.set: codec %S sets no field in place: its lengths move every \
+       offset"
+      codec.name;
   let access = field_access ~op:"Codec.set" codec f in
   let write = build_staged_writer f.typ access in
   let rt = runtime ?env () in
@@ -932,6 +1039,8 @@ module View = struct
     invalid_arg "Codec.View.get: the check refused the record"
 
   let[@inline] get k = if k < 0 then refused () else k
+  let offset r = r
+  let record_codec v = v.codec
 
   include Codec_view
 
@@ -984,8 +1093,9 @@ module View = struct
 
   let checked_field (type a r) (v : (_, r) codec) (f : (a, r) record_field) :
       ((a, Error.t) result, _) field =
-    ignore
-      (field_access ~op:"Codec.View.checked_field" v.codec f : field_access);
+    if Option.is_none v.codec.components then
+      ignore
+        (field_access ~op:"Codec.View.checked_field" v.codec f : field_access);
     Get (codec_get ?env:v.env v.codec f)
 
   (* A sub-codec field is data too: where its record starts in the record

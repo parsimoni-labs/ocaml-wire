@@ -53,6 +53,10 @@ val field_id : ('a, 'r) field -> int
 val field_typ : ('a, 'r) field -> 'a Types.typ
 (** [field_typ f] is the type of the source field of [f]. *)
 
+val field_proj : ('a, 'r) field -> 'r -> 'a
+(** [field_proj f r] is the value of [f] in the record [r], by the projection
+    [f] was bound with. *)
+
 val v :
   string ->
   ?where:bool Types.expr ->
@@ -392,6 +396,12 @@ module View : sig
       Raises [Invalid_argument] if [ok k] is [false]. Test {!ok} first: a
       refused record is input, not misuse. *)
 
+  val offset : ('b, 'c) t -> int
+  (** [offset r] is where the record of the view [r] starts in its buffer. *)
+
+  val record_codec : ('c, 'r) codec -> 'r record_codec
+  (** [record_codec v] is the codec [v] names. *)
+
   (** {1:fields Fields} *)
 
   type ('a, 'c) field
@@ -559,6 +569,34 @@ val embed_walk : 'r t -> 'r Types.walk option
 
 val embed_ref : 'r t -> 'r Types.codec_ref
 (** [embed_ref t] is [t] as the codec of a sub-codec field. *)
+
+type 'r components = {
+  find : 'a. ('a, 'r) field -> (bytes -> int -> ('a, Error.t) result) option;
+}
+(** The readers of the fields of an {!opaque} codec: [find f] reads the field
+    [f] of the record at an offset, as {!get} does, or is [None] when [f] is not
+    a field of the codec. Internal use. *)
+
+val opaque :
+  name:string ->
+  Types.field ->
+  min_size:int ->
+  check:(Input_end.t -> bytes -> int -> unit) ->
+  read:(Input_end.t -> bytes -> int -> 'r) ->
+  extent:(Input_end.t -> bytes -> int -> int) ->
+  write:('r -> bytes -> int -> int) ->
+  size_of_value:('r -> int) ->
+  components:'r components ->
+  'r t
+(** [opaque ~name f ~min_size ~check ~read ~extent ~write ~size_of_value
+     ~components] is the codec [name] whose bytes another module reads, such as
+    {!Asn1}'s DER: [f] stands for the whole record, [check] raises the parse
+    error of a record that does not hold before its [Input_end.t], [read] reads
+    a record [check] accepted, [extent] is where the record at an offset ends,
+    [write] writes a value and returns where it ends, raising [Invalid_argument]
+    on a value [check] would refuse, [size_of_value] is how many bytes [write]
+    writes, and [components] reads its fields for {!get} and
+    {!View.checked_field}. Internal use. *)
 
 val wire_size_info : 'r t -> [ `Fixed of int | `Variable of bytes -> int -> int ]
 (** Wire size information for embedding. *)

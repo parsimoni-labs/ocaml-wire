@@ -1306,6 +1306,14 @@ type 'r t = {
          from two domains at once raises [Lazy.Undefined]. *)
   compile : string -> 'r compiled;
       (* Compiles the codec under the given name, which its errors report. *)
+  components : 'r components option;
+      (* The readers of the fields of a codec whose bytes another module
+         reads ([Codec.opaque]): its fields have no access a binary path
+         places. *)
+}
+
+and 'r components = {
+  find : 'a. ('a, 'r) field -> (bytes -> int -> ('a, Error.t) result) option;
 }
 
 let pp ppf (t : _ t) = Fmt.string ppf t.name
