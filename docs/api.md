@@ -1,1125 +1,737 @@
 # The end-state API
 
-This is the public API `wire` reaches once the phases of the one generated
-module per codec land: the libraries `wire`, `wire.runtime`, `wire.ocaml`,
-`wire.rust`, `wire.3d` and `wire.stubs`, the OCaml module `Wire_ocaml`
-generates, its interpreted twin and the Rust module `Wire_rust` generates.
-Nothing is kept for existing callers (Thomas, 2026-11-26: "don't worry about
-backward compat. Just design a safe and efficient and clean and beautiful
-API.").
+`wire` describes a binary format once, as an OCaml value, and derives from
+that value everything that reads and writes the bytes: a decoder and an
+encoder, in-place views of untrusted buffers, folds over many records,
+generated OCaml, OxCaml and Rust, and a verified C validator. This document
+states the API `wire` reaches: the model first, on one running example, then
+the signatures that follow from it, what goes, what is still open and the
+decisions it rests on. Paths and line numbers are those of `ed6be0fc`.
 
-It applies a design already agreed and records it here, where the agreed
-text otherwise lives only in a session's scratch files. A section below
-quotes each decision it rests on; a point no decision settles is an open
-question, with the measurement that would settle it. The surface it starts
-from is the tip of `wire-no-raise` (`307d233d`, #568).
+## The model
 
-## Decisions it rests on
+The running example is the CCSDS space packet primary header, six bytes
+that a ground station routes by its `apid`. It is `Space.packet_codec`
+(examples/space/space.ml:8-45), called `packet` here, whose bound fields
+`bf_sp_apid` and `bf_sp_data_len` are called `apid` and `data_length`.
+`View` is `Codec.View`.
 
-**One generated module per codec** (Thomas, 2026-11-25): "No record/scanner
-split: one generated module per codec." Its common part (the agreed sketch):
-
-> ```ocaml
-> module type S = sig                     (* Wire.S *)
->   type 'b view = private int
->   type 'b check = private int
->   val min_size : int
->   val check : 'b Buf.t -> off:int -> len:int -> 'b check   (* never raises *)
->   val ok : 'b check -> bool
->   val get : 'b check -> 'b view
->   val validate : bytes -> off:int -> len:int -> (unit, Error.t) result
-> end
-> ```
->
-> No generic `enter` verb: a field's accessor is named after the field; a
-> scalar reads its value, a sub-record its view, an optional sub-record a
-> check. A sub-record's module is declared once per codec.
-
-**Names** (Thomas): "`View` (checked record), `Visitor` (the module receiving
-fields, serde's term; was consumer/step/plug). 'plug' renamed to 'visitor'
-everywhere. Don't invent new names."
-
-**The interpreted twin** (Thomas): "a functor over the codec value, no
-`~schema` string [...] It lives in a sibling unit (links `wire`), so the
-generated module links only `wire.runtime`. Its field handles come from the
-codec value's field list, checked by position and kind plus the layout digest
-when applied."
-
-**Visitors and shapes** (orchestrator, 2026-11-25, on Thomas's "don't ask me,
-experiment"): "Visitor named by its file in the dune rule [...] Not
-`__FUNCTION__`." "Every shape gets decode, encode, size and set_<field> on a
-view; labelled write only where every field has a constant size."
-
-**The window of a check** (orchestrator, measured): "A codec of constant size:
-`check b ~off` (record in the buffer from off, the old View.check contract);
-variable size: `check b ~off ~len`. Reason: the uniform `~len` cost 5-6 instr
-per check with the natural window [...] (OxCaml apps clcw 41.7 -> 47.9,
-gateway 627 -> 735 per frame)."
-
-**Deleted beyond v1** (agreed): the scanner's output record, its `decode`,
-`box`, `decode_unboxed`; every fold variant; the record modules' `Get`,
-`Value`, `Valid`, `View.at`, `View.with_`, `is_valid`, `view_*`, `read_*`,
-`*_int`, `*_word`, `*_of_word`, `Field` handles, `Global`, `Bigstring`;
-`Record.S` and `Scan.S` become one `S`; "`Buf.length`, `Buf.local` hidden";
-`Codec.Make`, `Gen.Outputs`, `Gen.Scan`, `Gen.field`, `Gen.kind`. From the
-first design review, carried over: `Staged`; the sizes collapse to `size`,
-`min_size`, `size_at`, `encoded_size`; `field_ref`, `field_readers`,
-`bitfield`/`load_word`/`extract`, the validator family and the `'r codec`
-alias go; `Everparse.Raw` and `Private` move to an internal library; "DSL
-unchanged".
-
-**The project's rules**, CLAUDE.md: Feature shippability ("A shape that
-cannot project is rejected when it is built [...] the combinator raises
-`Invalid_argument`"), Untrusted input ("Bad input makes a decoder return
-`Error`, never raise `Invalid_argument`"), Scalar type names ("A numbered
-scalar type name states the field's width on the wire, never the OCaml
-carrier"), Tagged unions (`variants` and `casetype` stay separate) and the
-Benchmarking principles ("Benchmark loops are what a user of each library
-writes [...] Every optimisation lives in the code generator or the runtime,
-never in the harness"). docs/execution.md, Invariants ("A read without a
-bounds check is created only for a field whose offset and width are constants
-of the schema [...] and a view is made only of a record whose frame lies in
-the buffer"; "Input never raises `Invalid_argument`") and Generated code
-("OCaml without flambda never inlines a function passed as an argument").
-docs/projection.md, [Narrow-int targets](projection.md#narrow-int-targets).
-
-## Principles
-
-1. **Bad input is a value**: a check, a decoder or an accessor answers a refused check or an `Error.t` for any bytes and never raises; `Invalid_argument` is misuse (a negative offset, a codec that cannot project, a value its field cannot hold). Check: `make test`, `fuzz/` and the differential lanes against the EverParse validators.
-2. **An unchecked read is proved in bounds**: only a view, which only a check makes, reads without a bounds check, and only the leading prefix of its record. Check: the `paranoid` profile and `verify/`'s Z3 proof of the packet-stack scanner.
-3. **The obvious loop is the fast loop**: a declared fold calling its visitor by name, or `check`, `ok`, `get` and the accessors, is what a user writes and what the benchmarks time, on OCaml, flambda and OxCaml. Check: `make bench-apps-count` and `bench/count.sh` on the MAWI rows, against the table below.
-4. **One way to do each thing**: one check, one accessor and one setter per field, one record write, one fold form, one name per concept (`View`, `Visitor`, `check`/`ok`/`get`, `Wire.Error`). Check: § What goes leaves no second path.
-5. **Names state wire widths, and nothing assumes a 63-bit `int`**: `uint16` is two bytes, a carrier holds its field, and a module that needs more than 31 bits refuses to load where ints are narrower. Check: `make test-wasm`.
-
-The measured table behind 3 (MAWI, 1M packets, `bench/count.sh`, median of
-5, instructions / cycles per packet, parse only; the design measurement of
-2026-11-25, then bench/README.md "The generated views" for the current tree):
-
-| Row | OCaml 5.4.1 | flambda | OxCaml |
-|---|---:|---:|---:|
-| scanner `fold_step`, at the design | 299.6 / 73.1 | 144.7 / 41.3 | 73.2 / 29.5 |
-| scanner `fold_step`, current tree | 150.0 / 43.1 | 144.6 / 42.0 | 73.2 / 30.0 |
-| check/view, accessors, current tree | 237.1 / 51.6 | 244.0 / 53.0 | 174.3 / 43.1 |
-| the header modules' `View.check`, linked headers | 222.2 / 48.8 | 250.1 / 52.7 | 197.9 / 48.8 |
-| prototype, check + enter, re-read | 230.0 / 50.7 | 233.7 / 52.8 | 213.0 / 50.2 |
-
-Rust, counted alike: the `wire.rust` scanner 68.7 / 23.0, `pnet_packet 0.35`
-66.7 / 22.5. A fold is the fast path of a whole-frame scan on all three
-compilers (check and accessors spend 1.6 to 2.4 times its instructions);
-check and accessors are the path of a loop that decides per record, and cost
-about what the linked headers cost (finding 3 of the design: moving header linking
-into the generated accessors is free).
-
-## Signatures
-
-Each block is the interface, abbreviated only where it says so. One doc line
-per value; the `.mli` carries the full text.
-
-### `wire`: the DSL
-
-Unchanged from the tip ("DSL unchanged"), but for the types that named the
-internal `Types` (`Field.action`, `seq_map`, `case_def`, now stated here) and
-`Field.packed`, which goes.
+### A codec describes the bytes once
 
 ```ocaml
-type 'a expr                  (** An expression of the wire description. *)
-type 'a typ                   (** A wire type with OCaml values ['a]. *)
-type bitfield = U8 | U16 | U16be | U32 | U32be
-                              (** The base word of a {!bits} slice. *)
-type bit_order = Msb_first | Lsb_first   (** Which end the first slice takes. *)
-type endian = Little | Big    (** Byte order of {!uint}. *)
-type consumption = [ `Prefix | `All ]    (** What a decoder does after one value. *)
-type param                    (** A parameter, untyped. *)
-type ('elt, 'seq) seq_map =
-  | Seq_map : {
-      empty : 'b; add : 'b -> 'elt -> 'b; finish : 'b -> 'seq;
-      iter : ('elt -> unit) -> 'seq -> unit;
-    } -> ('elt, 'seq) seq_map  (** How elements make a sequence. *)
-type ('a, 'k) case_def        (** A case of a tagged union. *)
+(* space.ml *)
+open Wire
 
-module Param : sig
-  type input                  (** The kind of an input parameter. *)
-  type output                 (** The kind of an output parameter. *)
-  type ('a, 'k) t             (** A parameter of type ['a] and kind ['k]. *)
-  type env                    (** The values of a codec's parameters. *)
-  val input : string -> 'a typ -> ('a, input) t      (** [input n t] is an input parameter. *)
-  val output : string -> 'a typ -> ('a, output) t    (** [output n t] is an output parameter. *)
-  val decl : ('a, 'k) t -> param                     (** [decl p] is [p], untyped. *)
-  val name : ('a, 'k) t -> string                    (** [name p] is [p]'s name. *)
-  val bind : ('a, input) t -> 'a -> env -> env       (** [bind p v env] sets [p] to [v]. *)
-  val bind_by_name : string -> int -> env -> env     (** [bind_by_name n v env] sets [n] to [v]. *)
-  val get : env -> ('a, 'k) t -> 'a                  (** [get env p] is [p]'s value. *)
-  val expr : ('a, 'k) t -> int expr                  (** [expr p] is [p] in an expression. *)
-  val pp : Format.formatter -> ('a, 'k) t -> unit    (** [pp] prints a parameter's name. *)
-end
+type packet = {
+  version : int; type_ : int; sec_hdr : int; apid : int;
+  seq_flags : int; seq_count : int; data_len : UInt16.t;
+}
 
-module Action : sig
-  type t                                             (** A field action. *)
-  type stmt                                          (** A statement of an action. *)
-  val on_success : stmt list -> t                    (** Runs once the field is read. *)
-  val on_act : stmt list -> t                        (** Runs as the field is read. *)
-  val assign : ('a, Param.output) Param.t -> int expr -> stmt  (** Sets an output. *)
-  val return_bool : bool expr -> stmt                (** Accepts or refuses the field. *)
-  val abort : stmt                                   (** Refuses the field. *)
-  val if_ : bool expr -> stmt list -> stmt list option -> stmt  (** A conditional. *)
-  val var : string -> int expr -> stmt               (** Binds a local. *)
-  val pp : Format.formatter -> t -> unit             (** [pp] prints an action. *)
-end
+let apid = Codec.(Field.v "APID" (bits ~width:11 U16be) $ fun p -> p.apid)
+let data_length = Codec.(Field.v "DataLength" uint16be $ fun p -> p.data_len)
 
-val int : int -> int expr                            (** [int n] is the literal [n]. *)
-val sizeof : 'a typ -> int expr                      (** [sizeof t] is [t]'s constant size. *)
-val sizeof_this : int expr                           (** The bytes read so far in the record. *)
-val field_pos : int expr                             (** The offset of the field being read. *)
-
-module Expr : sig
-  (* Unchanged: int64, + - * / mod land lor lxor lnot lsl lsr, land64, lsr64,
-     = <> < <= > >= && || not, if_then_else, true_, false_, bool, to_uint8,
-     to_uint16, to_uint32, to_uint64, each with its one-line doc. *)
-end
-
-module UInt8 = Wire_runtime.UInt8     (** § wire.runtime. *)
-module UInt16 = Wire_runtime.UInt16
-module UInt32 = Wire_runtime.UInt32
-module UInt64 = Wire_runtime.UInt64   (** Moves to the runtime: see § Gaps. *)
-module SInt8 = Wire_runtime.SInt8
-module SInt16 = Wire_runtime.SInt16
-module SInt32 = Wire_runtime.SInt32
-module Buf = Wire_runtime.Buf
-module Error = Wire_runtime.Error
-module type S = Wire_runtime.S
-
-module Field : sig
-  type 'a t                                          (** A named field of values ['a]. *)
-  type 'a anon                                       (** An anonymous (padding) field. *)
-  val v :
-    string -> ?constraint_:bool expr -> ?self_constraint:(int expr -> bool expr) ->
-    ?self_int64:(int64 expr -> bool expr) -> ?action:Action.t -> ?doc:string ->
-    'a typ -> 'a t                                   (** [v name t] is a field. *)
-  val optional :
-    string -> ?constraint_:bool expr -> ?self_constraint:(int expr -> bool expr) ->
-    ?self_int64:(int64 expr -> bool expr) -> ?action:Action.t -> present:bool expr ->
-    'a typ -> 'a option t                            (** Present iff [present]. *)
-  val optional_or :
-    string -> ?constraint_:bool expr -> ?self_constraint:(int expr -> bool expr) ->
-    ?self_int64:(int64 expr -> bool expr) -> ?action:Action.t -> present:bool expr ->
-    default:'a -> 'a typ -> 'a t                     (** [default] where absent. *)
-  val repeat :
-    string -> ?constraint_:bool expr -> ?self_constraint:(int expr -> bool expr) ->
-    ?self_int64:(int64 expr -> bool expr) -> ?action:Action.t -> size:int expr ->
-    'a typ -> 'a list t                              (** Elements filling [size] bytes. *)
-  val repeat_seq :
-    string -> ?constraint_:bool expr -> ?self_constraint:(int expr -> bool expr) ->
-    ?self_int64:(int64 expr -> bool expr) -> ?action:Action.t ->
-    seq:('a, 'seq) seq_map -> size:int expr -> 'a typ -> 'seq t   (** {!repeat} into ['seq]. *)
-  val union :
-    string -> ?action:Action.t -> ?doc:string -> on:'k t -> casetype:string ->
-    ('a, 'k) case_def list -> 'a t                   (** One case, chosen by [on]. *)
-  val anon : 'a typ -> 'a anon                       (** [anon t] is padding of type [t]. *)
-  val ref : 'a t -> int expr                         (** [ref f] is [f] in an expression. *)
-  val int : 'a t -> int expr                         (** [int f] is [f] as an [int]. *)
-  val int64 : 'a t -> int64 expr                     (** [int64 f] is [f] on 64 bits. *)
-  val name : 'a t -> string                          (** [name f] is [f]'s name. *)
-  val typ : 'a t -> 'a typ                           (** [typ f] is [f]'s type. *)
-  val constraint_ : 'a t -> bool expr option         (** [f]'s constraint. *)
-  val action : 'a t -> Action.t option               (** [f]'s action (was [Types.action]). *)
-  val doc : 'a t -> string option                    (** [f]'s note. *)
-  val pp : Format.formatter -> 'a t -> unit          (** [pp] prints [f]'s name. *)
-end
-
-(* Types: each one-line doc states its width and range, as the tip does. *)
-val uint8 : UInt8.t typ            val uint16 : UInt16.t typ      val uint16be : UInt16.t typ
-val uint32 : UInt32.t typ          val uint32be : UInt32.t typ    val uint64 : UInt64.t typ
-val uint64be : UInt64.t typ        val int8 : SInt8.t typ         val int16 : SInt16.t typ
-val int16be : SInt16.t typ         val int32 : SInt32.t typ       val int32be : SInt32.t typ
-val int64 : int64 typ              val int64be : int64 typ        val float32 : float typ
-val float32be : float typ          val float64 : float typ        val float64be : float typ
-val uint : ?endian:endian -> int -> Optint.Int63.t typ         (** [uint n]: [n] bytes, 1 to 7. *)
-val uint_var : ?endian:endian -> int expr -> Optint.Int63.t typ (** A width read from the data. *)
-val bits : ?bit_order:bit_order -> width:int -> bitfield -> int typ  (** [width] bits of a word. *)
-val is_finite : float Field.t -> bool expr                     (** The field is finite. *)
-val is_nan : float Field.t -> bool expr                        (** The field is a NaN. *)
-val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ   (** A view of ['w] as ['a]. *)
-val bool : bool -> bool expr                                   (** A boolean literal. *)
-val bit : 'a typ -> bool typ                                   (** A one-bit slice as a [bool]. *)
-val lookup : 'a list -> 'b typ -> 'a typ                       (** An index into a table. *)
-val empty : unit typ                                           (** No bytes. *)
-val all_bytes : string typ                                     (** The rest of the input. *)
-val all_zeros : string typ                                     (** The rest, all zero. *)
-val zeroterm : string typ                                      (** Bytes up to a zero. *)
-val zeroterm_at_most : size:int expr -> string typ             (** {!zeroterm} within [size]. *)
-val where : bool expr -> 'a typ -> 'a typ                      (** [t] refined by a predicate. *)
-val seq_list : ('a, 'a list) seq_map                           (** Elements as a list. *)
-val array : len:int expr -> 'a typ -> 'a list typ              (** [len] elements. *)
-val array_seq : ('a, 'seq) seq_map -> len:int expr -> 'a typ -> 'seq typ  (** {!array} into ['seq]. *)
-val byte_array : size:int expr -> string typ                   (** [size] bytes, copied. *)
-val byte_array_where : size:int expr -> per_byte:(int expr -> bool expr) -> string typ
-                                                               (** Bytes each passing a test. *)
-val byte_slice : size:int expr -> Bytesrw.Bytes.Slice.t typ    (** [size] bytes, in place. *)
-val rest_bytes : (_, _) Param.t -> string typ                  (** Bytes up to a parameter's end. *)
-val nested : size:int expr -> 'a typ -> 'a typ                 (** [t] in exactly [size] bytes. *)
-val nested_at_most : size:int expr -> 'a typ -> 'a typ         (** [t] in at most [size] bytes. *)
-val enum : string -> (string * int) list -> 'a typ -> 'a typ   (** A closed enumeration. *)
-val enum_open : string -> (string * int) list -> 'a typ -> 'a typ  (** An open enumeration. *)
-val variants : string -> (string * 'a) list -> 'b typ -> 'a typ    (** Values by position. *)
-val case : ?index:'k -> 'w typ -> inject:('w -> 'a) -> project:('a -> 'w option) -> ('a, 'k) case_def
-                                                               (** The body of tag [index]. *)
-val default : 'w typ -> inject:('k -> 'w -> 'a) -> project:('a -> ('k * 'w) option) -> ('a, 'k) case_def
-                                                               (** The body of any other tag. *)
-val casetype : string -> 'k typ -> ('a, 'k) case_def list -> 'a typ  (** A tag, then its body. *)
-val size : 'a typ -> int option                                (** [t]'s constant size. *)
-
-val of_reader : 'a typ -> Bytesrw.Bytes.Reader.t -> ('a, Error.t) result   (** One value. *)
-val of_string : ?consume:consumption -> 'a typ -> string -> ('a, Error.t) result
-val of_bytes : ?consume:consumption -> 'a typ -> bytes -> ('a, Error.t) result
-val to_writer : 'a typ -> 'a -> Bytesrw.Bytes.Writer.t -> unit             (** One value. *)
-val to_bytes : 'a typ -> 'a -> bytes
-val to_string : 'a typ -> 'a -> string
+let packet =
+  Codec.v "SpacePacket"
+    (fun version type_ sec_hdr apid seq_flags seq_count data_len ->
+      { version; type_; sec_hdr; apid; seq_flags; seq_count; data_len })
+    Codec.[
+      (Field.v "Version" (bits ~width:3 U16be) $ fun p -> p.version);
+      (Field.v "Type" (bits ~width:1 U16be) $ fun p -> p.type_);
+      (Field.v "SecHdrFlag" (bits ~width:1 U16be) $ fun p -> p.sec_hdr);
+      apid;
+      (Field.v "SeqFlags" (bits ~width:2 U16be) $ fun p -> p.seq_flags);
+      (Field.v "SeqCount" (bits ~width:14 U16be) $ fun p -> p.seq_count);
+      data_length;
+    ]
 ```
 
-The types refer to `Codec.t` through `codec`, which follows the `Codec`
-module below. The `'r codec` type alias goes; `codec` is the value only.
+A field states its width on the wire (`uint16be` is two bytes, `bits
+~width:11 U16be` eleven bits of a big-endian 16-bit word) and its OCaml type.
+`$` binds it to the record, and the constructor takes the fields in their
+order. Everything below is derived from `packet`. A shape that no verified
+backend can express is refused here, by `Codec.v`, with `Invalid_argument`.
 
-### `wire`: `Codec` and `Codec.View`
+### Values: decode and encode copy the whole record
+
+```ocaml
+match Codec.decode packet buf ~off:0 with
+| Ok p -> Fmt.pr "apid %d@." p.apid
+| Error e -> Fmt.pr "refused: %a@." Error.pp e
+```
+
+`buf` comes from an attacker, so no byte makes a decoder raise: bad bytes are
+an `Error`, never an exception. `Invalid_argument` means misuse by the
+program: a negative offset, or a record `Codec.encode packet p buf ~off`
+would write as bytes `decode` refuses.
+
+### Views: check once, then read and write in place
+
+A router that reads one field per packet should not copy the other six. A
+view reads the field where it lies.
+
+```ocaml
+let apid_f = View.field packet apid
+
+let apid_of buf ~off =
+  let (Buf.Any b) = Buf.v buf in
+  let c = View.check packet b ~off in
+  if View.is_ok c then Some (View.read b (View.get c) apid_f) else None
+```
+
+The definition `apid` says what the field is and exists before the codec,
+since `Codec.v` and `Field.ref` take it; the copy `apid_f` says where the
+field lies in `packet`, which only `Codec.v` can compute. One value for both
+would need the codec to create its fields, or `Codec.v` to mutate the
+definitions. `Codec.v` resolves a copy of each definition it receives (a
+constant offset or how to compute one, and the field's reader and writer),
+and `View.field` hands that copy out: plain data, read with no lookup. A
+definition in two codecs has a copy in each, and a field that is only
+decoded or encoded needs just the definition. `View.field` raises
+`Invalid_argument` on a definition that is not one of the codec's.
+
+`check` runs every check of the codec once. It never raises and allocates
+nothing: its answer is an immediate integer, and so is the view. `is_ok` says
+whether the record passed and `get` makes the answer a view, as
+`Result.is_ok` and `Option.get` do; `get` of a refused check raises
+`Invalid_argument`, since `is_ok` said so. A view reads a field with no check
+of its own, in one load in the generated form, and `View.set b v apid_f x`
+writes it in place. `Buf.v` names the buffer with a type `'b`, which the
+check and the view carry, so a view is read and written only in the buffer
+it was checked in. Why a record was refused is out of line: `Codec.validate
+packet buf ~off` answers its `Error`.
+
+### Fold and visitor: views over many records
+
+```ocaml
+let routes buf =
+  View.fold packet Codec.[ apid ] buf ~init:(Array.make 4 0)
+    ~f:(fun counts apid ->
+      let r = route_of_apid apid in
+      counts.(r) <- counts.(r) + 1;
+      counts)
+```
+
+A fold checks each record of `buf`, as `check` does, and hands the fields it
+names to its visitor `f`, positionally and in the order of the list, as
+`Codec.v` hands them to the constructor (`route_of_apid` is the
+application's table, as in bench/routing/routing_workload.ml:76). It takes
+the definitions and resolves them once, when it is applied. The fields are
+read during the check, not read again through a view. By default the records
+lie back to back; `~stride` places them in fixed slots and `~offs ~lens`
+takes an index of frames, as a capture file lists them. Back to back, a
+refused record stops the fold with `Error (e, acc)`, since its length cannot
+be trusted to find the next record. In slots or an index, `~invalid` is called on a refused record
+and the fold goes on: a flow classifier over a capture needs that (4,945 of
+the 1M MAWI frames are refused). Without `~invalid` it stops there too.
+
+### Two forms, same concepts
+
+Everything so far is the *interpreted* form: `wire` alone, nothing
+generated, fields addressed by the codec's copies of the definitions it was
+built from. It
+is for scripts, utop, codecs built at run time and the reference oracle. The
+*generated* form is a module `Wire_ocaml` (OCaml or OxCaml) or `Wire_rust`
+writes from the same codec, in which a field is a function named after it. It
+is for hot loops and other languages, and the OCaml module links
+`wire.runtime` only.
+
+```ocaml
+(* gen.ml, run by (rule (targets space_packet.ml space_packet.mli)
+                        (action (run ./gen.exe %{targets}))) *)
+let () = Wire_ocaml.(main [ v ~fold:[ "apid" ] Space.packet_codec ])
+
+(* the program *)
+let apid_of buf ~off =
+  let (Buf.Any b) = Buf.v buf in
+  let c = Space_packet.check b ~off in
+  if Space_packet.is_ok c then Some (Space_packet.apid b (Space_packet.get c))
+  else None
+
+let routes buf =
+  Space_packet.fold buf ~init:(Array.make 4 0) ~f:(fun counts apid -> ...)
+```
+
+Switching is a one-to-one rename:
+
+| Interpreted (`wire`) | Generated (`Space_packet`) |
+|---|---|
+| `View.field packet apid` | none: the module has it built in |
+| `View.check packet b ~off` | `Space_packet.check b ~off` |
+| `View.is_ok c`, `View.get c` | `Space_packet.is_ok c`, `Space_packet.get c` |
+| `View.read b v apid_f` | `Space_packet.apid b v` |
+| `View.set b v apid_f x` | `Space_packet.set_apid b v x` |
+| `View.fold packet Codec.[ apid ] buf ~init ~f` | `Space_packet.fold buf ~init ~f`, its fields declared in `gen.ml` |
+| `Codec.decode packet buf ~off`, `Codec.validate packet buf ~off` | `Space_packet.decode buf ~off`, `Space_packet.validate buf ~off` |
+
+The two forms share no module type: a generated module has its own record
+type and its fields are functions, where the interpreted form's are values.
+The differential tests (`test/diff`) prove that both answer the same on the
+same bytes. A generated module has at most one fold; two field sets over one
+codec are two modules (`v ~name:"space_packet_route" ~fold:[ ... ]`).
+
+#### Same shape as the generated module
+
+A program can give the interpreted form the generated module's functions,
+with the same arguments and labels, so that one line switches between the
+two:
+
+```ocaml
+(* p.ml; p.mli leaves out apid_f *)
+module View = Wire.Codec.View
+let apid_f = View.field Space.packet Space.apid    (* staged once: the codec's copy *)
+let check b ~off = View.check Space.packet b ~off
+let is_ok = View.is_ok
+let get = View.get
+let apid b v = View.read b v apid_f
+let set_apid b v x = View.set b v apid_f x
+let fold ?stride ?offs ?lens ?invalid buf ~init ~f =
+  View.fold ?stride ?offs ?lens ?invalid Space.packet Wire.Codec.[ Space.apid ] buf ~init ~f
+
+(* the program; [module P = Space_packet] runs it on the generated form *)
+let apid_of buf ~off =
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let c = P.check b ~off in
+  if P.is_ok c then Some (P.apid b (P.get c)) else None
+```
+
+User code sees two values with one name in two modules: `Space.apid`, the
+field, and `P.apid`, its accessor, the same pair as `Space.apid` and
+`Space_packet.apid` in the generated form. Staging returns data
+(`View.field`), not a function: a reader made by partial application, `let
+apid = View.read Space.packet Space.apid`, falls under the value restriction,
+its buffer brand `'b` becomes weak, and each `Buf.Any` unpacking has a fresh
+`'b`. The eta-expanded functions keep `'b` polymorphic and only interpret
+the copy resolved once. The module is optional (plain `View.read b v apid_f`
+works without it), and `wire` does not generate it, since the interpreted
+form needs no generation.
+
+### A nested codec
+
+The same concepts hold when a field holds a codec. `Packet_stack.codec`
+(examples/net/packet_stack.ml:220-229, called `eth` here) is an Ethernet
+header, then an IPv4 header when `ether_type` is `0x0800`, then a TCP header
+when the packet is unfragmented TCP (packet_stack.ml:127-131, 161-165). Its
+IPv4 and TCP codecs, `Packet_stack.ipv4` and `Packet_stack.tcp`, are called
+`stack_ipv4` and `stack_tcp`, and its bound fields `eth_ipv4`,
+`ipv4_protocol`, `ipv4_tcp` and `tcp_dst_port` are called `ipv4`,
+`protocol`, `tcp` and `dst_port` here.
+
+One `check` validates the frame and every layer present in it. Reaching a
+field that holds a codec gives that codec's check, whose `is_ok` says whether
+the layer is present, and makes no check again. `View.layer` resolves such a
+field in its codec, as `View.field` resolves any other.
+
+```ocaml
+(* interpreted *)
+let ipv4_f = View.layer eth ipv4
+let protocol_f = View.field stack_ipv4 protocol
+
+let c = View.check eth b ~off in
+if View.is_ok c then begin
+  let c4 = View.sub b (View.get c) ipv4_f in
+  if View.is_ok c4 then begin
+    let v4 = View.get c4 in
+    if View.read b v4 protocol_f = UInt8.v 6 then
+      View.set b v4 protocol_f (UInt8.v 17)
+  end
+end
+
+(* generated by Wire_ocaml.v ~name:"eth" eth *)
+let c = Eth.check b ~off in
+if Eth.is_ok c then begin
+  let c4 = Eth.ipv4 b (Eth.get c) in
+  if Eth.Stack_ipv4.is_ok c4 then begin
+    let v4 = Eth.Stack_ipv4.get c4 in
+    if Eth.Stack_ipv4.protocol b v4 = UInt8.v 6 then
+      Eth.Stack_ipv4.set_protocol b v4 (UInt8.v 17)
+  end
+end
+```
+
+The generated module has one submodule per codec a field holds, named after
+the codec and written once however many fields hold it: `StackIPv4` is
+`Eth.Stack_ipv4` and `StackTCP` is `Eth.Stack_tcp`
+(lib/ocaml/view_module.ml:98-121 derives the name, 244-270 writes each codec
+once). Each has `check`, `is_ok`, `get`, its accessors and `set_<field>`:
+`Eth.ipv4 b v : Eth.Stack_ipv4.check`, `Eth.Stack_ipv4.tcp b v4 :
+Eth.Stack_tcp.check`. `View.sub b v ipv4_f` is `Eth.ipv4 b v`, and
+`View.read b v4 protocol_f` is `Eth.Stack_ipv4.protocol b v4`.
+
+A fold names a nested field by the path of its definitions. A field under an
+optional layer reaches `f` as an `option`, `None` where the layer is absent:
+
+```ocaml
+View.fold eth Codec.[ Field.(ipv4 / protocol); Field.(ipv4 / tcp / dst_port) ]
+  buf ~offs ~lens ~init ~f:(fun acc proto dport -> ...)
+
+(* generated by Wire_ocaml.v ~name:"eth" ~fold:[ "ipv4.protocol"; "ipv4.tcp.dst_port" ] eth *)
+Eth.fold buf ~offs ~lens ~init ~f:(fun acc proto dport -> ...)
+```
+
+The paths and the options are proposals, listed under § Open questions.
+
+### Verified backends
+
+Each codec projects to the verified parser technology that can express it,
+and is checked there: EverParse 3D for binary layouts, everparse-asn1 for
+ASN.1 DER (docs/asn1.md on `lane/asn1-design`, `6c26ab0d`).
+
+```ocaml
+(* gen_3d.ml, run by the dune rules it writes *)
+let () = Wire_3d.main ~mode:`Ffi ~package:"space" [ Wire_3d.pack Space.packet_codec ]
+```
+
+This writes `SpacePacket.3d`, runs EverParse on it for a verified C
+validator, and `Wire_stubs` binds that validator to OCaml. On a refusal the C
+tier answers the `Error` `Codec.validate` answers, so every tier gives one
+error for the same bytes.
+
+## The surface
+
+Each block is an interface, abbreviated where it says so, under the concept
+it serves.
+
+### `wire`: codecs (a) and values (b)
+
+The DSL is unchanged (wire.mli:50-1019): `typ`, `expr`, `Param`, `Action`,
+`Expr`, `Field`, the scalar types, `bits`, `map`, `enum`, `variants`,
+`casetype`, the arrays and the byte types, `nested`, `codec`. `Field.packed`
+and `Field.decl_of_packed` go, and `size : 'a typ -> int option` becomes
+`fixed_size`.
 
 ```ocaml
 module Codec : sig
   type 'r t                                          (** A codec of records ['r]. *)
   type ('a, 'r) field                                (** A field bound to ['r]. *)
-  type ('f, 'r) fields =
-    | [] : ('r, 'r) fields
-    | ( :: ) : ('a, 'r) field * ('f, 'r) fields -> ('a -> 'f, 'r) fields
-  type ('f, 'r) args =
-    | [] : (unit, 'r) args
-    | ( :: ) : ('a, 'r) field * ('f, 'r) args -> ('a -> 'f, 'r) args
-
-  val ( $ ) : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field    (** [f $ proj] binds [f]. *)
-  val v : string -> ?where:bool expr -> ?doc:string -> 'f -> ('f, 'r) fields -> 'r t
-                                                     (** [v name make fields] is a codec. *)
-  val rename : string -> 'r t -> 'r t                (** [rename n c] is [c] named [n]. *)
-  val name : 'r t -> string                          (** [name c] is [c]'s name. *)
-  val doc : 'r t -> string option                    (** [doc c] is [c]'s note. *)
-  val min_size : 'r t -> int                         (** The fewest bytes a record takes. *)
-  val size : 'r t -> int option                      (** The bytes of every record, if constant. *)
-  val size_at : ?env:Param.env -> 'r t -> bytes -> int -> (int, Error.t) result
-                                                     (** The size of the record at [off]. *)
-  val encoded_size : ?env:Param.env -> 'r t -> 'r -> int   (** The bytes {!encode} writes. *)
+  type ('f, 'k, 'r) fields =
+    | [] : ('k, 'k, 'r) fields
+    | ( :: ) : ('a, 'r) field * ('f, 'k, 'r) fields -> ('a -> 'f, 'k, 'r) fields
+                         (** Fields given in order to a function ending in ['k]:
+                             the constructor of {!v}, or the visitor of a fold. *)
+  val ( $ ) : 'a Field.t -> ('r -> 'a) -> ('a, 'r) field   (** [f $ proj] binds [f]. *)
+  val v : string -> ?where:bool expr -> ?doc:string -> 'f -> ('f, 'r, 'r) fields -> 'r t
+                                                     (** Raises on a shape no backend checks. *)
+  val name : 'r t -> string
+  val rename : string -> 'r t -> 'r t
+  val doc : 'r t -> string option
   val env : 'r t -> Param.env                        (** A fresh environment for [c]. *)
+  val min_size : 'r t -> int                         (** The fewest bytes a record takes. *)
+  val fixed_size : 'r t -> int option                (** The bytes of every record, if constant. *)
 
   val decode :
-    ?consume:consumption -> ?env:Param.env -> 'r t -> bytes -> int -> ('r, Error.t) result
-                                                     (** The record at [off], or its error. *)
-  val validate : ?env:Param.env -> 'r t -> bytes -> int -> (unit, Error.t) result
-                                                     (** The record's error, if any. *)
-  val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> int -> unit
-                                                     (** Writes [r] at [off]. *)
-  val to_bytes : ?env:Param.env -> 'r t -> 'r -> bytes      (** [r], encoded and checked. *)
-  val to_string : ?env:Param.env -> 'r t -> 'r -> string    (** [r], encoded and checked. *)
-  val pp_value : 'r t -> 'r Fmt.t                    (** Prints a record field by field. *)
-
-  val get : ?env:Param.env -> 'r t -> ('a, 'r) field -> bytes -> int -> ('a, Error.t) result
-                                                     (** One field, for bytes the program wrote. *)
-  val set : ?env:Param.env -> 'r t -> ('a, 'r) field -> bytes -> int -> 'a -> unit
-                                                     (** Writes one field in place. *)
-  val writer : 'r t -> 'r -> ('f, 'r) args -> bytes -> int -> 'f
-                                                     (** Writes a template with [args] set. *)
-
-  module Word : sig                                  (** Records of at most 7 bytes ([Q11](#q11)). *)
-    type 'r codec := 'r t
-    type ('a, 'r) codec_field := ('a, 'r) field
-
-    type 'r t = private int                          (** A record's bytes, big-endian. *)
-    type 'r reader                                   (** A reader of records of ['r]. *)
-    val reader : 'r codec -> 'r reader               (** Raises on a record over 7 bytes. *)
-    type 'r check = private int                      (** Its word, or negative if refused. *)
-    val check : 'r reader -> bytes -> int -> 'r check
-                                                     (** Never raises, allocates nothing. *)
-    val ok : 'r check -> bool                        (** [ok k] iff [k] passed. *)
-    val get : 'r check -> 'r t                       (** Raises [Invalid_argument] unless [ok]. *)
-    val error : 'r reader -> bytes -> int -> Error.t (** Out of line: [Codec.get]'s error. *)
-    type ('a, 'r) field                              (** A field of the words of ['r]. *)
-    val field : 'r codec -> ('a, 'r) codec_field -> ('a, 'r) field
-                                                     (** Raises unless a word field of [c]. *)
-    val read : ('a, 'r) field -> 'r t -> 'a          (** Two shifts and a mask. *)
-  end
-
-  module View : sig
-    type 'r record_codec := 'r t
-    type ('a, 'r) record_field := ('a, 'r) field
-
-    type ('c, 'r) codec                              (** A codec of ['r] named ['c]. *)
-    module type CODEC = sig
-      type c                                         (** The name of {!val-codec}. *)
-      type r                                         (** Its records. *)
-      val codec : (c, r) codec                       (** The named codec. *)
-    end
-    val codec : ?env:Param.env -> 'r record_codec -> (module CODEC with type r = 'r)
-                                                     (** [c] under a name of its own. *)
-
-    type ('b, 'c) check [@@immediate]                (** A check in the buffer ['b]. *)
-    val check : ('c, 'r) codec -> 'b Buf.t -> int -> ('b, 'c) check
-                                                     (** Checks the record at [off]; never raises. *)
-    val ok : ('b, 'c) check -> bool                  (** [ok k] iff [k] passed. *)
-    type ('b, 'c) t [@@immediate]                    (** A record that passed in ['b]. *)
-    val get : ('b, 'c) check -> ('b, 'c) t           (** Raises [Invalid_argument] unless [ok]. *)
-
-    type ('a, 'c) field                              (** A field of the views of ['c]. *)
-    val field : ('c, 'r) codec -> ('a, 'r) record_field -> ('a, 'c) field
-                                                     (** A field read with no check. *)
-    val checked_field :
-      ('c, 'r) codec -> ('a, 'r) record_field -> (('a, Error.t) result, 'c) field
-                                                     (** Any other field, read as {!get}. *)
-    val read : ('a, 'c) field -> 'b Buf.t -> ('b, 'c) t -> 'a   (** Never raises. *)
-
-    type ('cs, 'c) sub                               (** A field holding a ['cs] record. *)
-    val sub : ('c, 'r) codec -> ('cs, 's) codec -> ('s, 'r) record_field -> ('cs, 'c) sub
-    val sub_option :
-      ('c, 'r) codec -> ('cs, 's) codec -> ('s option, 'r) record_field -> ('cs, 'c) sub
-    val enter : ('cs, 'c) sub -> 'b Buf.t -> ('b, 'c) t -> ('b, 'cs) check
-                                                     (** The sub-record, with no check again. *)
-  end
+    ?consume:consumption -> ?env:Param.env -> 'r t -> bytes -> off:int -> ('r, Error.t) result
+  val validate : ?env:Param.env -> 'r t -> bytes -> off:int -> (unit, Error.t) result
+  val encode : ?env:Param.env -> 'r t -> 'r -> bytes -> off:int -> unit
+                                                     (** Raises on a value [decode] refuses. *)
+  val to_string : ?env:Param.env -> 'r t -> 'r -> string
+  val size : ?env:Param.env -> 'r t -> 'r -> int     (** The bytes [encode] writes. *)
+  val size_at : ?env:Param.env -> 'r t -> bytes -> off:int -> (int, Error.t) result
+  val pp_value : 'r t -> 'r Fmt.t
+  module View : (* below *)
 end
-
-val codec : 'r Codec.t -> 'r typ                     (** A codec as a field type. *)
 ```
 
-`get`, `set`, `writer`, `decode` and `encode` compile their codec when
-applied to it, so `let get = Codec.get c f in` is the staged reader and no
-`Staged.t` remains. `Codec.get` and `Codec.set` stay for "a lone field"
-(CLAUDE.md, Benchmarking principles); on untrusted input the reader is
-`View`. With [Q9](#q9) answered as agreed, `View.check` and `View.enter` read
-the buffer's length from `'b Buf.t`.
+`Error` (lib/runtime/error.mli) is unchanged: `t = { at; field; kind }`,
+`pp`, `equal`, `compare`.
 
-### `wire`: `Everparse` and `Ascii`
+### `wire`: views (c) and folds (d)
 
 ```ocaml
-module Everparse : sig
-  type t                                             (** A 3D schema. *)
-  type mode = [ `Ffi | `Standalone ]                 (** With or without the FFI visitor. *)
-  val project : ?mode:mode -> 'r Codec.t -> t        (** [c]'s 3D schema. *)
-  val name : t -> string                             (** The schema's name. *)
-  val filename : t -> string                         (** Its [.3d] file name. *)
-  val write : ?mode:mode -> outdir:string -> ?name:string -> t list -> unit
-                                                     (** Writes the [.3d] files. *)
-end
+module View : sig
+  type ('b, 'r) check [@@immediate]                  (** A check of an ['r] in the buffer ['b]. *)
+  type ('b, 'r) t [@@immediate]                      (** An ['r] that passed in ['b]. *)
 
-module Ascii : sig
-  val of_codec : 'r Codec.t -> string                (** [c]'s bit diagram. *)
-  val pp_codec : Format.formatter -> 'r Codec.t -> unit   (** Prints {!of_codec}. *)
+  val check : ?env:Param.env -> ?len:int -> 'r Codec.t -> 'b Buf.t -> off:int -> ('b, 'r) check
+                                       (** Never raises, allocates nothing; [len] defaults
+                                           to the bytes from [off] to the end. *)
+  val is_ok : ('b, 'r) check -> bool
+  val get : ('b, 'r) check -> ('b, 'r) t             (** Raises [Invalid_argument] unless [is_ok]. *)
+
+  type ('a, 'r) field                  (** A field resolved in one codec of ['r]: plain data. *)
+  val field : 'r Codec.t -> ('a, 'r) Codec.field -> ('a, 'r) field
+                       (** The codec's copy of a definition. Raises
+                           [Invalid_argument] unless it is one of the codec's. *)
+  type ('s, 'r) layer                  (** A field of ['r] holding an ['s], resolved. *)
+  val layer : 'r Codec.t -> ('s, 'r) Codec.layer -> ('s, 'r) layer
+                       (** The same, for a field that holds a record. *)
+
+  val read : 'b Buf.t -> ('b, 'r) t -> ('a, 'r) field -> 'a
+                       (** Never reads outside ['b]. A field that bytes written
+                           after the check move out of ['b] reads as absent. *)
+  val set : 'b Buf.t -> ('b, 'r) t -> ('a, 'r) field -> 'a -> unit
+                       (** No constraint checked. Raises on a value the field
+                           cannot hold, or a field with no constant place. *)
+  val sub : 'b Buf.t -> ('b, 'r) t -> ('s, 'r) layer -> ('b, 's) check
+                       (** The record a field holds, checked by the outer check;
+                           refused where an optional layer is absent. *)
+
+  val fold :
+    ?env:Param.env -> ?stride:int -> ?offs:int array -> ?lens:int array ->
+    ?invalid:('acc -> 'acc) ->
+    'r Codec.t -> ('f, 'acc, 'r) Codec.fields -> bytes -> init:'acc -> f:('acc -> 'f) ->
+    ('acc, Error.t * 'acc) result
+       (** Back to back by default; [~stride] or [~offs ~lens] place the records.
+           [~invalid] continues past a refused record, in slots or an index only. *)
 end
 ```
 
-### `wire.runtime`
+The interpreted calls take the buffer as the generated ones do, so a view is
+an immediate in both forms and `check`, `is_ok` and `get` allocate nothing.
 
-What generated code links, and what `wire` re-exports. Its documented
-surface is `Buf`, `Error`, the carriers, `Vec` and `S`; the modules
-generated code calls (`Unchecked`, `Errors`, `Arith`, `Target`) and each
-carrier's unchecked loads are compiled in but hidden, `(**/**)` or a unit the
-main module does not re-export (house style: "the escape hatch is named
-`unsafe_` and hidden").
+`Codec.v` resolves a copy of every definition it receives into a static
+table: the field's constant offset or how to compute it, its reader and its
+writer. Definitions stay immutable: nothing is stored in them and nothing is
+sealed, so one definition in two codecs has an independent copy in each, as
+`test_same_field_two_codecs` (test/test_codec_action.ml:740) requires.
+`View.field` and `View.layer` hand a copy out, checking once that the
+definition is the codec's, as the tip checks it today (`field_access`,
+lib/codec.ml:598-603); `read`, `set` and `sub` interpret it, with no lookup
+per call. `fold` resolves its definitions once, when it is applied.
+
+A view is indexed by its record type, and so is a copy, so the types refuse
+a copy from a codec of another record type. The one mismatch they miss, a
+copy from another codec of the same record type, is § Open questions, 7.
+`Codec.layer`, a definition that holds a record, optional or not, and the
+paths `Field.( / )` a fold takes are proposals (§ Open questions, 6).
+
+### `wire.runtime`
 
 ```ocaml
 module Buf : sig
   type 'b t = private bytes                          (** A buffer named ['b]. *)
-  type any = Any : 'b t -> any [@@unboxed]           (** A buffer under a fresh name. *)
+  type any = Any : 'b t -> any [@@unboxed]
   val v : bytes -> any                               (** [v buf] names [buf]. *)
-  val pp : Format.formatter -> 'b t -> unit          (** Prints the length, not the bytes. *)
+  val pp : Format.formatter -> 'b t -> unit
 end
-
-module Error : sig
-  type predicate = Where | Field | Action | Per_byte (** Where a failed constraint comes from. *)
-  type kind =
-    | Unexpected_eof of { expected : int; got : int }
-    | Trailing_bytes of int
-    | Invalid_enum of { value : int; valid : int list }
-    | Invalid_tag of int
-    | Missing_terminator
-    | Non_zero_padding
-    | Value_out_of_range of { value : int64 }
-    | Zero_divisor
-    | Constraint_failed of { which : predicate; value : int64 option }
-                                                     (** Why input is refused. *)
-  type t = { at : int; field : string list; kind : kind }   (** Where and why. *)
-  val pp : Format.formatter -> t -> unit             (** Prints [len@4: ...]. *)
-  val pp_kind : Format.formatter -> kind -> unit     (** Prints a kind alone. *)
-  val equal : t -> t -> bool                         (** Equality. *)
-  val compare : t -> t -> int                        (** A total order. *)
-end
-
-module UInt16 : sig
-  type t = private int                               (** 0 to 65535. *)
-  val v : int -> t                                   (** Raises [Invalid_argument] out of range. *)
-  val v_opt : int -> t option                        (** [None] out of range. *)
-  val to_int : t -> int                              (** The value. *)
-  val zero : t                                       (** 0. *)
-  val min_int : t                                    (** 0. *)
-  val max_int : t                                    (** 65535. *)
-  val equal : t -> t -> bool                         (** Equality. *)
-  val compare : t -> t -> int                        (** Unsigned order. *)
-  val pp : Format.formatter -> t -> unit             (** Prints the value. *)
-end
-(* UInt8, SInt8 and SInt16: the same signature over their range.
-   UInt32, SInt32 and UInt64: [type t] abstract (a 32-bit value is no [int]
-   where ints have 31 or 32 bits), the same [v], [v_opt], [zero], [min_int],
-   [max_int], [equal], [compare], [pp], plus [to_int32]/[of_int32] or
-   [to_int64]/[of_int64], and [to_int_opt]; [to_int] is Q12. *)
-
-module Vec : sig
-  (* The SIMD lanes of [X4] (OxCaml on arm64 and amd64, empty elsewhere): [t],
-     [load], [store], [add], [sub], [logand], [logor], [equal], [is_zero],
-     [shift_right_logical], [shift_left], [v], [v4], [get], [before], [sum],
-     [is_all_zero], each with its one-line doc as at the tip. *)
-end
-
-module type S = sig
-  type 'b view = private int                         (** A record that passed in ['b]. *)
-  type 'b check = private int                        (** The answer of a check in ['b]. *)
-  val min_size : int                                 (** The fewest bytes a record takes. *)
-  val ok : 'b check -> bool                          (** [ok c] iff [c] passed. *)
-  val get : 'b check -> 'b view                      (** Raises [Invalid_argument] unless [ok]. *)
-  val validate : bytes -> int -> (unit, Error.t) result   (** The record's error, if any. *)
-end
+module Error : sig (* lib/runtime/error.mli, unchanged *) end
+module UInt8, UInt16, UInt32, SInt8, SInt16, SInt32 (* v, v_opt, to_int, zero,
+  min_int, max_int, equal, compare, pp; lib/runtime/uInt16.mli:13-41 *)
+module Vec (* the SIMD lanes the [~simd] modules use *)
 ```
 
-`check` is not in `S`: its window depends on the shape (the orchestrator's
-measured decision above), so each module states it. `validate` takes `buf
-off` as `Codec.validate` does: the record lies between `off` and the end of
-`buf`, where the sketch had `~off ~len`.
+### The generated module: views (c) and fold (d)
 
-### The generated module
-
-`Wire_ocaml` writes one module per codec, `<name>.ml` and `<name>.mli`,
-linking `wire.runtime` only (and `bytesrw` for a byte slice, `wire` for a
-map). It satisfies `Wire.S` (a test states `module _ : Wire.S = Clcw`) and
-adds members by shape. Shown for `Packet_stack.capture` with a fold
-`classify` whose visitor is `flow_step.ml`, and for the CLCW record; `Buf` is
-`Wire_runtime.Buf`.
+What `Wire_ocaml.v ~fold:[ "apid" ] Space.packet_codec` writes, as
+`space_packet.mli`. Accessors are snake_case, as prost spells protobuf fields.
 
 ```ocaml
-(* Every module: Wire.S, the record values and a member per named field. *)
-include Wire.S
+type 'b check = private int
+type 'b view = private int
+val min_size : int
+val check : 'b Buf.t -> off:int -> 'b check                (** Constant size; never raises. *)
+val is_ok : 'b check -> bool
+val get : 'b check -> 'b view                              (** Raises unless [is_ok]. *)
+val validate : bytes -> off:int -> (unit, Error.t) result
 
-type t = {
-  dst : Bytesrw.Bytes.Slice.t; src : Bytesrw.Bytes.Slice.t;
-  ether_type : Wire_runtime.UInt16.t; ipv4 : Captured_ipv4.t option;
-}                                                    (** The codec's records. *)
-val pp : Format.formatter -> t -> unit               (** Prints a record. *)
-val size : t -> int                                  (** The bytes {!encode} writes. *)
-val decode : bytes -> int -> (t, Wire.Error.t) result    (** The record at [off]. *)
-val encode : t -> bytes -> int -> unit               (** Writes [r]; raises on values it refuses. *)
+val version : 'b Buf.t -> 'b view -> int                   (** One load each. *)
+val apid : 'b Buf.t -> 'b view -> int
+val seq_count : 'b Buf.t -> 'b view -> int
+val data_length : 'b Buf.t -> 'b view -> UInt16.t          (* ... one per field *)
+val set_apid : 'b Buf.t -> 'b view -> int -> unit          (** Raises past 11 bits. *)
 
-val ether_type : 'b Buf.t -> 'b view -> Wire_runtime.UInt16.t   (** One load. *)
-val dst : 'b Buf.t -> 'b view -> Bytesrw.Bytes.Slice.t          (** A slice of [b]. *)
-val ipv4 : 'b Buf.t -> 'b view -> 'b Captured_ipv4.check        (** Present and in [b]. *)
-val set_ether_type : 'b Buf.t -> 'b view -> Wire_runtime.UInt16.t -> unit
-                                                     (** One store; no constraint checked. *)
+type t = { version : int; type_ : int; sec_hdr_flag : int; apid : int;
+           seq_flags : int; seq_count : int; data_length : UInt16.t }
+val decode : bytes -> off:int -> (t, Error.t) result
+val encode : t -> bytes -> off:int -> unit
+val size : t -> int
+val pp : Format.formatter -> t -> unit
+val write : bytes -> off:int -> version:int -> type_:int -> sec_hdr_flag:int -> apid:int ->
+  seq_flags:int -> seq_count:int -> data_length:UInt16.t -> unit   (** Constant size only. *)
 
-(* A codec of variable size: the window is the frame's. *)
-val check : 'b Buf.t -> off:int -> len:int -> 'b check    (** Never raises. *)
-
-(* One module per codec a field holds, named after it, written once. *)
-module Captured_ipv4 : sig
-  type 'b view = private int                         (** An IPv4 header that passed. *)
-  type 'b check = private int                        (** Its presence and place in [b]. *)
-  val ok : 'b check -> bool                          (** [ok c] iff present and in [b]. *)
-  val get : 'b check -> 'b view                      (** Raises [Invalid_argument] unless [ok]. *)
-  val protocol : 'b Buf.t -> 'b view -> Wire_runtime.UInt8.t     (** One load. *)
-  val src : 'b Buf.t -> 'b view -> Wire_runtime.UInt32.t         (** One load. *)
-  val tcp : 'b Buf.t -> 'b view -> 'b Stack_tcp.check            (** No check made again. *)
-  val opaque_present : 'b Buf.t -> 'b view -> bool               (** An optional's presence. *)
-  val set_protocol : 'b Buf.t -> 'b view -> Wire_runtime.UInt8.t -> unit
-  type t = { (* ... *) }                             (** The header's values. *)
-  val pp : Format.formatter -> t -> unit
-  val size : t -> int
-end
-
-(* Each declared fold [n], calling its visitor by name. *)
-val classify : bytes -> int -> int -> init:Flow_step.t -> Flow_step.t
-                                                     (** One frame. *)
-val classify_frames : bytes -> int -> int -> stride:int -> init:Flow_step.t -> Flow_step.t
-                                                     (** [len / stride] frames. *)
-val classify_index :
-  bytes -> offs:int array -> lens:int array -> init:Flow_step.t -> Flow_step.t
-                                                     (** The frames an index lists. *)
+val fold :
+  ?stride:int -> ?offs:int array -> ?lens:int array -> ?invalid:('acc -> 'acc) ->
+  bytes -> init:'acc -> f:('acc -> int -> 'acc) -> ('acc, Error.t * 'acc) result
 ```
 
-```ocaml
-(* A codec of constant size (CLCW) instead has: *)
-val check : 'b Buf.t -> int -> 'b check              (** The record at [off]; never raises. *)
-val write :
-  bytes -> int -> controlwordtype:int -> clcwversion:int -> (* ... *) reportvalue:int -> unit
-                                                     (** Writes a record; raises on a bitfield
-                                                         out of its range. *)
-
-(* With [~simd:true], OxCaml on arm64 or amd64, a 4-byte record of unsigned
-   one-byte fields also has [module X4] (Q13). *)
-```
-
-```ocaml
-(* The visitor of a fold: a source file the dune rule names,
-   [--visitor classify=%{dep:flow_step.ml}]. *)
-type t                                               (** The accumulator. *)
-val valid : t -> ipv4_present:bool -> ipv4_src:int64 -> (* ... *) -> t
-                                                     (** A record that passed: its outputs. *)
-val invalid : t -> t                                 (** A record that failed. *)
-```
-
-A field the walk places again (after a span, under a gate) is read after a
-test against the buffer's length, and reads as absent (0, `false`, an empty
-slice) when bytes written after the check move it out of the buffer
-(execution.md, Invariants). An integer is returned as its carrier, a bitfield
-as an `int`. An accessor whose name the module already defines takes a
-trailing `_`.
-
-### The interpreted twin
-
-`Wire_ocaml.main` writes `<name>_codec.ml` and `.mli` beside the module. It
-links `wire`.
-
-```ocaml
-module Make (C : sig
-  type r                                             (** The codec's records. *)
-  val codec : r Wire.Codec.t                         (** The codec the module came from. *)
-end) : sig
-  include Wire.S
-  (* The module's [check], accessors, setters, sub-record modules and folds,
-     with the types the module has for the [`OCaml] target, read through
-     [Wire.Codec.View]. Not the record values: [t], [decode], [encode],
-     [size] and [write] build the module's own record type, which the twin
-     cannot make from [C.r]. *)
-end
-(** Raises [Invalid_argument] when applied to a codec whose shape is not the
-    one the module was generated from: each field by place and kind, and the
-    digest of the layout. *)
-```
-
-Code written against the views runs on either by one line:
-`module P = Captured_stack` or
-`module P = Captured_stack_codec.Make (struct type r = Packet_stack.captured let codec = Packet_stack.capture end)`.
-The decision's example omits `type r`; the functor needs it to type `codec`.
-
-### `Wire_ocaml`
-
-```ocaml
-type target = [ `OCaml | `OxCaml ]                   (** The compiler the code is for. *)
-type map                                             (** A map called by its OCaml path. *)
-val map : string -> typ:string -> 'a Wire.typ -> map (** [map path ~typ m]. *)
-type fold                                            (** A fold a module declares. *)
-val fold : ?outputs:string list -> string -> fold    (** [fold name], every output by default. *)
-type t                                               (** A module to generate. *)
-val v :
-  ?name:string -> ?target:target -> ?simd:bool -> ?folds:fold list -> ?maps:map list ->
-  'r Wire.Codec.t -> t                               (** The module of [c]; [folds] default [[]]. *)
-val name : t -> string                               (** Its unit name. *)
-val to_ml : ?twin:bool -> ?visitors:(string * string) list -> t -> string
-                                                     (** Its source, or its twin's. *)
-val to_mli : ?twin:bool -> ?visitors:(string * string) list -> t -> string
-                                                     (** Its interface, or its twin's. *)
-val main : t list -> unit                            (** [gen.exe [--visitor F=FILE]... FILE...]. *)
-val outputs : 'r Wire.Codec.t -> (string * bool) list
-                                                     (** The outputs a fold hands out. *)
-val fstar : ?fields:string list -> codec:string -> 'r Wire.Codec.t -> (string * string) list
-                                                     (** The F* proof of its folds. *)
-```
-
-`v` raises `Invalid_argument`, naming the field, for a shape the walk does not
-cover (Feature shippability); `to_ml` raises it for a declared fold that no
-visitor names, so every fold calls its visitor by name. `fstar` states its
-theorem over the visitor form (`StepProof`, `OxStepProof`), the closure form
-having gone.
-
-### `Wire_rust` and the Rust module
-
-```ocaml
-type fold                                            (** A fold a module declares. *)
-val fold : ?outputs:string list -> string -> fold    (** As {!Wire_ocaml.fold}. *)
-type t                                               (** A module to generate. *)
-val v : ?name:string -> ?folds:fold list -> 'r Wire.Codec.t -> t
-                                                     (** The module of [c], as {!Wire_ocaml.v}. *)
-val name : t -> string                               (** Its file is [name t ^ ".rs"]. *)
-val to_rs : ?visitors:(string * string) list -> t -> string
-                                                     (** Its source; a visitor is a Rust type. *)
-val main : t list -> unit                            (** [gen.exe [--visitor F=TYPE]... FILE...]. *)
-```
+A codec of variable size takes its window, `check b ~off ~len`. A field that
+holds a record answers the check of the submodule named after that record's
+codec (`Eth.ipv4 b v : Eth.Stack_ipv4.check`), which passes iff the layer is
+present. The Rust module has
+the same names on a view that borrows its buffer:
 
 ```rust
-// The module of Packet_stack.capture; no_std, no unsafe code, no panic.
-pub const MIN_SIZE: usize;
-pub struct Error { pub at: usize, pub field: Path, pub kind: Kind }  // Wire.Error.t
-pub fn check(buf: &[u8], off: usize, len: usize) -> Check<'_>;      // constant size: (buf, off)
-pub struct Check<'a>;  impl Check<'a> { pub fn ok(&self) -> bool; pub fn get(self) -> Option<View<'a>>; }
-pub struct View<'a>;   impl View<'a> {
-    pub fn ether_type(&self) -> u16;                                 // one load
-    pub fn ipv4(&self) -> captured_ipv4::Check<'a>;                  // no check made again
-}
-pub fn offset(v: &View<'_>) -> usize;
-pub fn set_ether_type(buf: &mut [u8], at: usize, x: u16) -> Result<(), Error>;
-pub struct Record<'a> { /* each field, a slice borrowing buf */ }
-pub fn validate(buf: &[u8], off: usize) -> Result<(), Error>;
-pub fn decode(buf: &[u8], off: usize) -> Result<Record<'_>, Error>;
-pub fn encode(r: &Record<'_>, buf: &mut [u8], off: usize) -> Result<(), Error>;
-pub fn size(r: &Record<'_>) -> Result<usize, Error>;
-pub mod classify { pub trait Visitor { fn valid(&mut self /* , outputs */); fn invalid(&mut self); } }
-pub fn classify<V: classify::Visitor>(v: &mut V, buf: &[u8], off: usize, len: usize);
-pub fn classify_frames<V: classify::Visitor>(v: &mut V, buf: &[u8], off: usize, len: usize, stride: usize) -> bool;
-pub fn classify_index<V: classify::Visitor>(v: &mut V, buf: &[u8], offs: &[usize], lens: &[usize]) -> bool;
-pub mod captured_ipv4 { /* Check, View, set_<field>, Record, size */ }
+let c = space_packet::check(buf, off);
+if c.is_ok() { let v = c.get(); route(v.apid()); }
+let r = space_packet::fold(buf, [0u64; 4], |mut n, apid| { n[route(apid)] += 1; n });
 ```
 
-A `Record` literal names each field, as the labels of the OCaml `write` do, so
-`encode` takes the place of `write`. A view borrows its buffer, so a setter
-takes the buffer and the view's `offset`. The module has no `CODEC` and no
-`DIGEST`, as the OCaml module has no `digest`.
-
-### `Wire_3d` and `Wire_stubs`
+### The generators
 
 ```ocaml
+(* Wire_ocaml *)
+type target = [ `OCaml | `OxCaml ]
+type map
+val map : string -> typ:string -> 'a Wire.typ -> map     (** A map called by its OCaml path. *)
+type t
+val v : ?name:string -> ?target:target -> ?simd:bool -> ?fold:string list -> ?maps:map list ->
+  'r Wire.Codec.t -> t   (** [fold]: the paths of the fields the module's fold hands [f]. *)
+val name : t -> string
+val to_ml : t -> string
+val to_mli : t -> string
+val main : t list -> unit                                 (** [gen.exe FILE...]. *)
+
+(* Wire_rust *)
+type t
+val v : ?name:string -> ?fold:string list -> 'r Wire.Codec.t -> t
+val name : t -> string
+val to_rs : t -> string
+val main : t list -> unit
+```
+
+### Verified backends (f)
+
+```ocaml
+module Wire.Everparse : sig
+  type t                                             (** A 3D schema, abstract. *)
+  type mode = [ `Ffi | `Standalone ]
+  val project : ?mode:mode -> 'r Codec.t -> t
+  val name : t -> string
+  val filename : t -> string
+  val write : ?mode:mode -> outdir:string -> ?name:string -> t list -> unit
+end
+module Wire.Ascii : sig
+  val of_codec : 'r Codec.t -> string                (** The codec's bit diagram. *)
+  val pp_codec : Format.formatter -> 'r Codec.t -> unit
+end
+
 (* Wire_3d *)
-type packed                                          (** A codec, its type erased. *)
-val pack : 'a Wire.Codec.t -> packed                 (** [pack c]. *)
+type packed
+val pack : 'a Wire.Codec.t -> packed
 val run : ?quiet:bool -> outdir:string -> Wire.Everparse.t list -> unit
-                                                     (** [.3d] files, EverParse, C validators. *)
 val main : ?name:string -> mode:[ `Ffi | `Standalone ] -> package:string -> packed list -> unit
-                                                     (** The generator a dune rule runs. *)
 val parse_3d : ?batch:bool -> outdir:string -> string -> (unit, string) result
-                                                     (** Whether 3D accepts a [.3d] file. *)
-val locate_3d_exe : unit -> string option            (** EverParse's 3D compiler, if installed. *)
+val locate_3d_exe : unit -> string option
 
 (* Wire_stubs *)
 val generate : schema_dir:string -> outdir:string -> Wire_3d.packed list -> unit
-                                                     (** OCaml bindings to the C validators. *)
-val build_codec_archive :
-  ?cflags:string list -> schema_dir:string -> archive:string -> unit -> unit
-                                                     (** Archives the validators for dune. *)
+val build_codec_archive : ?cflags:string list -> schema_dir:string -> archive:string -> unit -> unit
 ```
-
-The stubs `generate` writes hold, for each codec `Name`, a module:
-
-```ocaml
-module Name : sig
-  type t = { (* the codec's fields *) }              (** The record of a codec with fields. *)
-  module type CODEC = sig
-    type r                                           (** The codec's records. *)
-    val codec : r Wire.Codec.t                       (** The codec the stubs came from. *)
-  end
-  module Make (_ : CODEC) : sig
-    val parse_k : (... -> 'a) -> bytes -> int -> ('a, Wire.Error.t) result
-                                                     (** The fields to a continuation. *)
-    val parse : bytes -> int -> (t, Wire.Error.t) result
-                                                     (** The record. *)
-  end
-end
-```
-
-The C validator decides only whether it accepts the record, the verified fast
-path. On a refusal `parse` answers the error `Codec.validate` answers for the
-codec, the bytes and the offset, computed in OCaml out of the validator's path,
-so the C tier and the OCaml tier answer one error for the same bytes.
-EverParse's own error, a kind and the position it stopped at, cannot fill a
-`Wire.Error.t`: it names no field and no value, its position is past the
-failing field, and four of its kinds have no constructor.
-
-The generated module cannot name the user's codec, so the stubs take it as
-the functor's argument, as the interpreted twin does, and check its digest
-once, when `Make` is applied: a different codec raises `Invalid_argument`.
-Where `Codec.validate` accepts a record the validator refused, the tiers
-disagree, a defect of one of them; `parse` then answers that the record fails
-as a whole, `Constraint_failed { which = Where; value = None }` at the offset
-with no field, and the differential test of `test/stubs` fails on it.
-
-### Internal
-
-One library of the package, outside the documented API, holds what the
-libraries share and what tests, fuzzers and benchmarks reach into:
-`Wire.Private` (its `Gen` is what the twin calls), `Everparse.Raw` and the
-`Everparse` values the FFI pipeline reads (`visitor_fields`, `visitor_member`,
-`visitor_setters`, `uses_wire_ctx`, `entrypoint_struct`, ...),
-`Codec.field_readers` and the struct validators, `Wire_ocaml.Plan` (shared
-with `Wire_rust` and `Wire_hardcaml`), `Wire_ocaml.views`, the steps of
-`Wire_3d` (`generate_*`, `run_everparse`, `write_fields`, `pool`, ...)
-and of `Wire_stubs` (`to_c_stubs`, `to_ml_stubs`, ...). Its name is an
-implementation choice.
 
 ## What goes
 
-### The libraries
+`lib/wire.mli` at `ed6be0fc` has 360 declarations (`val`, `type`, `module`,
+`module type`, read outside comments, the four local `:=` substitutions not
+counted). 171 go or become internal and 189 stay, 7 of them renamed.
 
-Every `val`, `type`, `module`, `module type` and `exception` of the public
-interfaces at the tip, read mechanically from `lib/wire.mli`, `lib/uInt64.mli`,
-`lib/uInt63.mli`, `lib/ocaml/wire_ocaml.mli`, `lib/rust/wire_rust.mli`,
-`lib/3d/wire_3d.mli`, `lib/stubs/wire_stubs.mli`, `lib/diff/wire_diff.mli` and
-the fourteen modules `wire.runtime` exports with an interface (`buf.std.mli`,
-`vec.neon.mli`): 727 declarations. `Wire_runtime.Paranoid`, which a rule
-writes with no interface (`enabled`), is hidden with the runtime's support
-modules. 322 stay (some renamed or retyped, as above), 392 go and 13 go
-if [Q9](#q9) and [Q11](#q11) are answered as the agreed design expects.
-`lib/codec.mli` is `Wire.Codec`'s implementation: the 60 declarations it has beyond
-`Wire.Codec` are reachable only as `Wire__Codec` and are not counted.
-`wire.diff` is test infrastructure and keeps its surface.
+| Group | Declarations (wire.mli line) | Count |
+|---|---|---:|
+| In-place access besides `View` | `Codec.get` 1310, `set` 1545, `writer` 1557, `args` 1141, `field_readers` 1604; `Codec.Word` 1652-1705 (the module and its 11 members) | 17 |
+| `View`'s codec names and second field kinds | `codec` (type) 1391, `CODEC` and its 3 members 1395-1402, `codec` 1406, `checked_field` 1478, `sub_option` 1523: a view is indexed by its record type, and `View.field` and `View.layer` cover every field | 8 |
+| Typ-level I/O | `of_reader` 1049, `of_string` 1072, `of_bytes` 1080, `to_writer` 1097, `to_bytes` 1104, `to_string` 1107: a codec is the unit | 6 |
+| Struct validators | `validator` 1716, `validator_of_struct` 1719, `validate_struct` 1722, `struct_size_of` 1726, `struct_min_size` 1729, `wire_size_info_of_validator` 1732 | 6 |
+| EverParse plumbing | `Everparse`'s `struct_`, `decl`, `decl_case`, `module_`, `validate_output_name`, `uses_wire_ctx`, `visitor_field`, `visitor_member`, `visitor_fields`, `visitor_setters`, `entrypoint_struct`, `extern_fn_names`, `field_action_form`, `equal_field_action_form`, `field_action_forms` (1769-1856); `Everparse.Raw` and its 47 members (1877-2053) | 63 |
+| `Ascii` of a struct | `of_struct` 2064, `pp_struct` 2070 | 2 |
+| `Private` | the module and its 66 members (2083-2362) | 67 |
+| Packed fields | `Field.packed` 431, `Field.decl_of_packed` 612 | 2 |
 
-The count after each name is the files outside its own library that name it
-as `Parent.name`, in the repository's OCaml, Rust, Markdown, cram, dune
-and make files: a module bound to a
-local alias (`module V = Wire_runtime.Vec`) or reached by generated code is
-not counted, so a 0 is a lower bound, not a proof of no use. A "none" below
-rests on its own grep, given with it.
+Renamed: `View.ok` (1443) to `is_ok`; `Codec.size` (1203) and `size` (1019)
+to `fixed_size`; `Codec.encoded_size` (1218) to `size`; `View.sub` (type
+1505 and value 1509) to `layer`, and `View.enter` (1530) to `sub`.
+`View.check` (1431) takes `~off` and no `'b Buf.length`; `View.field`
+(1464) and `View.layer` take the codec itself; `View.read` (1491) and
+`View.sub` take the buffer, the view and the copy. The fold's `Codec.fields`
+gains the parameter of its result.
 
-| Module | Declarations, each with its count of user files | Replacement |
-| --- | --- | --- |
-| `Wire` | `Staged` (module) 6 | partial application: `Codec.get c f` is the reader |
-| `Wire.Staged` | `t` (type) 0, `stage` 1, `unstage` 24 | partial application: `Codec.get c f` is the reader |
-| `Wire.Field` | `packed` (type) 0, `decl_of_packed` 2 | the internal library (§ Internal) |
-| `Wire.Codec` | `wire_size_opt` 10 | `Codec.size` |
-| `Wire.Codec` | `wire_size` 26 | `Codec.size` (an option); `Codec.min_size` for a codec of constant size |
-| `Wire.Codec` | `min_wire_size` 12 | `Codec.min_size` |
-| `Wire.Codec` | `wire_size_at` 16 | `Codec.size_at` |
-| `Wire.Codec` | `size_of_value` 25 | `Codec.encoded_size` |
-| `Wire.Codec` | `decoder` 2 | `Codec.decode c`, applied once |
-| `Wire.Codec` | `encoder` 2 | `Codec.encode c`, applied once |
-| `Wire.Codec` | `field_ref` 2 | `Field.ref` of the source field |
-| `Wire.Codec` | `field_readers` 3, `validator` (type) 0, `validator_of_struct` 6, `validate_struct` 4, `struct_size_of` 1, `struct_min_size` 2, `wire_size_info_of_validator` 1 | the internal library (§ Internal) |
-| `Wire.Codec` | `bitfield` (type) 5, `bitfield` 5, `load_word` 8, `extract` 7 | `Codec.Word` ([Q11](#q11), word-reads) |
-| `Wire.Codec` | `word` (type) 1, `word_reader` (type) 2, `word_reader` 2, `read_word` 8, `part` (type) 0, `word_part` 1, `of_word` 8 | `Codec.Word.t`, `reader`, `check`, `field` and `read` ([Q11](#q11), word-reads) |
-| `Wire` | `codec` (type) 17 | `Codec.t` |
-| `Wire` | `pp_value` 1 | `Codec.pp_value` |
-| `Wire.Everparse` | `struct_` (type) 2, `decl` (type) 0, `decl_case` (type) 0, `module_` (type) 2, `validate_output_name` 2, `uses_wire_ctx` 3, `entrypoint_struct` 4, `extern_fn_names` 2, `field_action_form` (type) 0, `equal_field_action_form` 2, `field_action_forms` 3, `Raw` (module) 47 | the internal library (§ Internal) |
-| `Wire.Everparse` | `plug_field` (type) 5 | the internal library (§ Internal), as `visitor_field` |
-| `Wire.Everparse` | `plug_member` 4 | the internal library (§ Internal), as `visitor_member` |
-| `Wire.Everparse` | `plug_fields` 7 | the internal library (§ Internal), as `visitor_fields` |
-| `Wire.Everparse` | `plug_setters` 4 | the internal library (§ Internal), as `visitor_setters` |
-| `Wire.Everparse.Raw` | `struct_` (type) 13, `field` (type) 4, `decl` (type) 0, `decl_case` (type) 1, `module_` (type) 7, `t` (type) 0, `typedef` 5, `define` 1, `extern_fn` 1, `extern_probe` 1, `enum_decl` 1, `decl_case` 1, `decl_default` 1, `casetype_decl` 1, `module_` 7, `to_3d` 10, `to_3d_file` 4, `struct_of_codec` 16, `project_struct` 8, `field` 4, `anon_field` 1, `field_ref` 1, `struct_` 13, `struct_name` 12, `field_names` 3, `ocaml_kind` (type) 0, `field_kinds` 4, `int_slot` (type) 2, `field_seed` (type) 1, `int_slots` 2, `field_seeds` 4, `struct_project` 2, `struct_params` 2, `input_param_names` 4, `input_param_c_types` 2, `param_c_types` 1, `struct_typ` 2, `param` 1, `mutable_param` 2, `param_struct` 2, `apply` 1, `type_ref` 1, `qualified_ref` 1, `pp_typ` 1, `pp_module` 1, `struct_size` 2, `of_module` 4 | the internal library (§ Internal) |
-| `Wire.Ascii` | `of_struct` 1, `pp_struct` 2 | the internal library (§ Internal) |
-| `Wire` | `Private` (module) 73 | the internal library (§ Internal) |
-| `Wire.Private` | `UInt32` (module) 9, `Unchecked` (module) 1, `UInt63` (module) 4, `Input_end` (module) 0, `Types` (module) 29, `Eval` (module) 0, `Expr_compiler` (module) 0, `Bitfield` (module) 1, `Uint_var` (module) 1, `Shape` (module) 0, `Names` (module) 7, `Layout` (module) 6, `Gen` (module) 5, `Testing` (module) 9, `param_name` 2, `param_is_mutable` 2, `param_c_type` 2, `ml_type_of` 2, `c_type_of` 1 | the internal library (§ Internal) |
-| `Wire.Private.Eval` | `ctx` (type) 0, `empty` 1, `expr` 1, `int_of` 1, `int_of_exn` 2 | the internal library (§ Internal) |
-| `Wire.Private.Bitfield` | `byte_size` 6, `total_bits` 1, `equal` 1, `read_word` 2, `u32_field_le` 1, `u32_field_be` 1, `write_word` 1, `native_bit_order` 1, `shift` 0, `extract` 1 | the internal library (§ Internal) |
-| `Wire.Private.Gen` | `to_struct` 10, `digest` 3, `check` 1, `field_k` (type) 0, `with_field_reader` 1, `map` (type) 0, `map_int` 0, `map_int32` 0, `map_id` 1, `check_map` 1, `kind` (type) 0, `Outputs` (module) 0, `record` (type) 0, `root` 0, `sub_at` 0, `enter_at` 0, `enter` 0, `check_at` 0, `check_window` 0, `reader` (type) 0, `read` 0, `field_at` 0, `present_at` 0, `writer` (type) 0, `set_at` 0, `scan` 0, `frames` 0, `index` 0 | the internal library (§ Internal) |
-| `Wire.Private.Gen.Outputs` | `t` (type) 0, `int` 1, `bool` 1 | the internal library (§ Internal) |
-| `Wire.Private.Testing` | `general` 9, `fresh` 2, `paths` 3, `staged_intervals` 3, `all_paths` 1 | the internal library (§ Internal) |
-| `Wire.UInt64` | `le` 1, `be` 1, `set_le` 1, `set_be` 1 | hidden: the codec's and generated code's loads (§ Runtime) |
-| `Wire.UInt64` | `of_int` 4 | `UInt64.v`, as the other carriers name it |
-| `Wire.Private.UInt63` | `t` (type) 3, `pp` 2, `check_encode` 1, `to_int` 1, `of_int` 4 | the internal library (§ Internal) |
-| `Wire_ocaml` | `buffer` (type) 0 | none: no bigarray user outside the tests (Q10) |
-| `Wire_ocaml` | `ident` 1 | `Wire_ocaml.outputs`, which spells each name |
-| `Wire_ocaml` | `view` (type) 1, `view_member` (type) 0, `views` 1, `Plan` (module) 21 | the internal library (§ Internal) |
-| `Wire_ocaml.Plan` | `kind` (type) 0, `check` (type) 0, `output` (type) 2, `field` (type) 0, `node` (type) 0, `t` (type) 2, `Facts` (module) 0, `v` 10, `nodes` 0, `pos` (type) 0, `values` (type) 0, `bound` (type) 0, `choice` (type) 0, `join` (type) 0, `short_frames` (type) 0, `decision` (type) 0, `pp_decision` 0, `decisions` 2, `outputs` 3, `select` 0, `slot_depth` 4, `slots` 1, `live` 2, `conditions` 0, `word_range` 1, `range` 0, `Scope` (module) 0, `tree` (type) 0, `tnode` (type) 0, `gates` 0, `decide` 0, `shared` 0 | the internal library (§ Internal) |
-| `Wire_ocaml.Plan.Facts` | `t` (type) 1, `empty` 1, `assume` 1, `simplify` 1 | the internal library (§ Internal) |
-| `Wire_ocaml.Plan.Scope` | `plan` (type) 0, `t` (type) 1, `v` 1, `facts` 1, `refine` 1, `range` 1, `wide` 1, `nonnegative` 0 | the internal library (§ Internal) |
-| `Wire_rust` | `ident` 2 | none: a Rust visitor's parameters are positional |
-| `Wire_rust` | `digest` 1 | none: no reader of `DIGEST` (as `Wire_ocaml`'s `digest`, 8e20a5bf) |
-| `Wire_rust` | `scanner` 9 | `Wire_rust.v ~folds`, `to_rs`, `main` |
-| `Wire_rust` | `rs` 7 | `Wire_rust.v`, `to_rs`, `main` |
-| `Wire_3d` | `everparse_name` 6, `pascal_case` 3, `generate_3d` 7, `generate_dune` 1, `run_everparse` 4, `check_provenance` 1, `max_jobs` 2, `pool` 2, `rm_rf` 5, `batch_check` 1, `write_external_typedefs` 3, `write_fields` 5, `generate_c` 4, `harden_wrapper_source` 1, `generate_standalone` 3, `generate_dune_standalone` 2, `wrapper_symbols` 1, `archive_link_steps` 1, `generate_corpus` 5, `generate_agree` 1, `ensure_dir` 1, `strict_cc_flags` 5, `everparse_type_defines` 3, `Private` (module) 2 | the internal library (§ Internal) |
-| `Wire_3d` | `check_plug_names` 4 | the internal library (§ Internal), as `check_visitor_names` |
-| `Wire_3d` | `has_3d_exe` 7 | `Wire_3d.locate_3d_exe () <> None` |
-| `Wire_3d.Private` | `run_3d_spawned` 1, `pool_in_process` 1, `locate_3d_exe` (the parameterised one) 2, `has_custard` 1 | the internal library (§ Internal) |
-| `Wire_stubs` | `packed_codec` (type) 0 | `Wire_3d.packed` |
-| `Wire_stubs` | `of_structs` 1, `check_names` 3, `to_c_stubs` 3, `to_ml_stubs` 3, `to_ml_stub` 1, `to_ml_stub_name` 1, `everparse_name` 0, `validator_name` 3, `ml_type_of` 0 | the internal library (§ Internal) |
-| `Wire_runtime.Arith` | `add_overflows` 2, `sub_overflows` 1, `mul_overflows` 1, `Overflow` 2, `add` 2, `sub` 1, `mul` 1, `checked_add` 2, `checked_sub` 2, `checked_mul` 2 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.Buf` | `length` (type) 32, `length` 32 | Q9: the length is read from `'b Buf.t` (open) |
-| `Wire_runtime.Buf` | `local` 1 | `Buf.v` on a local buffer (gap: OxCaml mode polymorphism) |
-| `Wire_runtime.Buf` | `Bigstring` (module) 5 | none: no bigarray user outside the tests (Q10) |
-| `Wire_runtime.Buf.Bigstring` | `bigstring` (type) 0, `t` (type) 5, `length` (type) 3, `any` (type) 0, `v` 1, `local` 0, `length` 3, `pp` 0 | none: no bigarray user outside the tests (Q10) |
-| `Wire_runtime.Errors` | `fail` 8, `is_error` 7, `error_of` 7, `negative_offset` 4, `eof` 0, `frame` 1, `field_constraint` 1, `invalid_enum` 0, `invalid_tag` 0, `where_clause` 1, `relocate` 0, `encode_too_short` 3, `encode_rejected` 1, `unsigned_too_wide` 2, `byte_length` 2, `enum_encode` 0, `check_unsigned` 3, `check_length` 0, `check_enum` 1 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.SInt8` | `get` 4, `set` 4 | hidden: the codec's and generated code's loads (§ Runtime) |
-| `Wire_runtime.SInt8` | `unsafe_of_int` 0, `unsafe_get` 6, `int_eq` 2 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.SInt16` | `le` 4, `be` 4, `set_le` 4, `set_be` 4 | hidden: the codec's and generated code's loads (§ Runtime) |
-| `Wire_runtime.SInt16` | `unsafe_of_int` 0, `unsafe_le` 6, `unsafe_be` 6, `int_eq` 2 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.SInt32` | `le` 4, `be` 4, `set_le` 2, `set_be` 2 | hidden: the codec's and generated code's loads (§ Runtime) |
-| `Wire_runtime.SInt32` | `check_encode` 2, `unsafe_le` 5, `unsafe_be` 5, `int_eq` 2 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.UInt8` | `get` 5, `set` 5 | hidden: the codec's and generated code's loads (§ Runtime) |
-| `Wire_runtime.UInt8` | `unsafe_of_int` 1, `unsafe_get` 5, `int_eq` 3 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.UInt16` | `le` 4, `be` 4, `set_le` 4, `set_be` 4 | hidden: the codec's and generated code's loads (§ Runtime) |
-| `Wire_runtime.UInt16` | `unsafe_of_int` 1, `unsafe_le` 5, `unsafe_be` 5, `int_eq` 3 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.UInt32` | `le` 4, `be` 6, `set_le` 4, `set_be` 4 | hidden: the codec's and generated code's loads (§ Runtime) |
-| `Wire_runtime.UInt32` | `check_encode` 1, `mask32` 11, `unsafe_le` 5, `unsafe_be` 5, `int_eq` 4 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.UInt32` | `of_int` 17 | `UInt32.v`, as the other carriers name it |
-| `Wire_runtime.Staged` | `t` (type) 3, `stage` 2, `unstage` 26 | partial application (with `Wire.Staged`) |
-| `Wire_runtime.Target` | its `include module type of struct ... end` (3 declarations) 0 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.Unchecked` | `checked` 2, `u8` 13, `u16le` 8, `u16be` 12, `i32le` 2, `i32be` 6, `i64le` 0, `i64be` 2, `set_u8` 7, `set_u16le` 5, `set_u16be` 7, `set_i32le` 3, `set_i32be` 5, `set_i64le` 0, `set_i64be` 0, `blit_string` 2 | hidden: generated code only (§ Runtime) |
-| `Wire_runtime.Unchecked` | `Bigstring` (module) 6 | none: no bigarray user outside the tests (Q10) |
-| `Wire_runtime.Unchecked.Bigstring` | `t` (type) 5, `length` 3, `u8` 0, `u16le` 0, `u16be` 0, `i32le` 0, `i32be` 0, `i64be` 0, `set_u8` 0, `set_u16le` 0, `set_u16be` 0, `set_i32le` 0, `set_i32be` 0, `set_i64le` 0, `set_i64be` 0, `get_uint8` 0, `get_uint16_le` 0, `get_uint16_be` 0, `get_int32_le` 0, `get_int32_be` 0, `sub_string` 0, `unsafe_blit_string` 0, `to_bytes` 0 | none: no bigarray user outside the tests (Q10) |
-| `Wire_runtime.Vec` | `load_bigstring` 0, `store_bigstring` 0 | none: no bigarray user outside the tests (Q10) |
+Beyond `wire.mli`:
 
-405 declarations in 72 rows.
-
-The greps behind each "none":
-
-- bigarray buffers: `grep -rln Bigstring --include='*.ml' bench examples`
-  prints nothing; `~buffer:`Bigstring` is used by `test/ocaml/gen.ml`,
-  `test/ocaml/standalone/gen.ml` and `test/diff/gen_ocaml.ml` only.
-- `DIGEST`: `grep -rn DIGEST --include='*.rs' bench test | grep -v /gen/`
-  prints nothing.
-- `Wire_rust.ident`, `Wire_rust.digest`, `Wire_ocaml.ident`,
-  `Wire_ocaml.views`: `grep -rln 'Wire_rust.ident\|Wire_rust.digest\|Wire_ocaml.ident\|Wire_ocaml.views' --include='*.ml' .`
-  prints `test/rust/test_wire_rust.ml`, `test/diff/gen_ocaml.ml` and
-  `test/diff/gen_rust.ml`, and the libraries themselves.
-
-### The generated module
-
-Every kind of member of the committed modules (`examples/generated/clcw.mli`
-and `stack.mli`, read mechanically, each field name made `<field>` and each
-sub-record module `<Sub>`), and the kinds only other options print
-(`lib/ocaml/interface.ml`, line given). "api-prune" marks a member that lane
-already deletes.
-
-| Member | Where | Status | Replacement |
-| --- | --- | --- | --- |
-| `digest` | clcw.mli:27 | gone, api-prune (8e20a5bf) | none: the twin carries its own copy |
-| `Value`, `Value.<field>` (type, val), `Value.<field>_low` | clcw.mli:38 | gone, api-prune (b5e3a96e) | the accessor's type (`int`, the carrier) |
-| `v` (positional constructor) | clcw.mli:202 | goes | the record literal |
-| `is_valid` | clcw.mli:230 | gone, api-prune (896d18c7) | `ok (check b off)`, `validate` |
-| `write_int`, `write_at`, `write_int_at` | clcw.mli:272-321 | gone, api-prune (b5e3a96e) | `write` |
-| `Get`, `Get.<field>`, `Get.<field>_word`, `<field>_of_word` | clcw.mli:351-533 | gone from modules with views, api-prune (0abb5783); kept on modules without | the accessor after `check`; no module without views |
-| `view_<field>_word` | clcw.mli:747 | gone, api-prune (0abb5783) | the accessor |
-| `fold`, `fold_frames` without a visitor | clcw.mli:539, stack.mli:53 | goes | a fold with a visitor: `n`, `n_frames`, `n_index` |
-| `decode_with` (OxCaml) | interface.ml:334 | gone, api-prune (896d18c7) | `check` and accessors |
-| `<n>_unboxed`, `<n>_frames_unboxed` (OxCaml) | interface.ml:832, 841 | goes | a fold with a visitor |
-| `Valid`, `Valid.v`, `read_<field>` | interface.ml:456, 469 | goes with `~buffer` | `check` and accessors |
-| `View`, `View.check`, `View.ok`, `View.get`, `View.with_` | interface.ml:489-506 | goes with `~buffer` | the module's own `check`, `ok`, `get` |
-| `view_<field>`, `view_<field>_int` | interface.ml:536, 542 | gone, api-prune (0abb5783) | the accessor |
-| `X4.with_`, `X4.write_int_at` | interface.ml:576, 597 | open: Q13 | `X4.check`, `X4.ok`, `X4.get`, `X4.write` |
-| Rust `CODEC`, `DIGEST` | `Wire_rust` module | goes | none: no reader |
-
-Stay: `min_size`, `t`, `pp`, `size`, `validate`, `decode`, `encode`,
-`write`, `view`, `check` (type and value), `ok`, `get`, `<field>`,
-`<field>_present`, `<sub>`, `set_<field>`, `<Sub>` with its members, the
-visitor folds `<n>`, `<n>_frames`, `<n>_index`, and `X4` but for Q13.
-
-That is 30 kinds of generated member gone (12 already on api-prune) and 2
-more if Q13 aligns `X4`, beside the 392 declarations of the libraries.
+- `Wire_ocaml` (lib/ocaml/wire_ocaml.mli): 59 of 68 go. `fold` (type and
+  value, 99-102) and `?folds` give way to `?fold:string list`; `outputs` 213,
+  `view`/`view_member` 257-262, `views` 275, `fstar` 279 and `Plan` with its
+  51 members (321-687) become internal. `to_ml`/`to_mli` lose `?twin` and
+  `?visitors`, `main` its `--visitor`: the interpreted twin (`<name>_codec`),
+  the visitor module and the per-fold functions `n`, `n_frames`, `n_index` go.
+- `Wire_rust` (lib/rust/wire_rust.mli): `fold` (type and value, 87-90) go,
+  `?fold` replaces `?folds`, `to_rs` loses `?visitors`.
+- `Wire_3d` (lib/3d/wire_3d.mli): 30 of 36 become internal, `pool` and
+  `max_jobs` among them; `packed`, `pack`, `run`, `main`, `parse_3d` and
+  `locate_3d_exe` stay.
+- `Wire_stubs` (lib/stubs/wire_stubs.mli): 10 of 12 become internal;
+  `packed_codec` gives way to `Wire_3d.packed`.
+- `wire.runtime`: `Buf.length` (type and value) and `Buf.local`
+  (lib/runtime/buf.std.mli:12-24) go; `Unchecked` (16), `Errors` (19),
+  `Arith` (10), `Target` and each carrier's `le`, `be`, `set_*`, `unsafe_*`
+  and `int_eq` are hidden, since only generated code calls them.
 
 ## Open questions
 
-The questions of the design (2026-11-25), each answered from a document or a
-measurement, or left open with the measurement that would answer it.
+Each with the measurement that settles it. The counts run as
+`bench/count.sh` does: `make bench-flow`, then
+`sh bench/count.sh 1000000 view _build/default/bench/rust/bench.exe flow _build/bench-flow/mawi.pcap RUNS "<row>"`,
+and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
+5.4.1 and OxCaml.
 
-**Q1. Where the twin lives.** Answered by Thomas: a sibling unit
-`<name>_codec`, so the module links `wire.runtime` only. In the code:
-`Wire_ocaml.main` writes it.
+1. **Whether a view could carry its buffer**, in both forms, so that
+   `Space_packet.apid v` and `View.read v apid_f` drop the `b`. Such a view is
+   a block, allocated per record unless the compiler unboxes it, where
+   `check`, `is_ok` and `get` now allocate nothing. Settled by the row
+   `wire.ocaml check/view, accessors, parse only` and the `wire.ocaml` rows
+   of `bench-apps-count`, on a branch whose views carry their buffer: the
+   buffer stays an argument unless that branch counts within noise on OCaml
+   5.4.1 and OxCaml.
+2. **Whether binding a field before `Codec.v`** (`f $ (fun p -> p.apid)`)
+   can be lighter. Not a cost: the binding runs once. Settled by writing
+   examples/space/space.ml and examples/net in the lighter form, with `make
+   test` and the 3D projections unchanged.
+3. **Whether `check` takes `~len` for a codec of variable size.** The ruling
+   on the window of a check stands (below). Once `Buf.length` goes, `check`
+   reads the buffer's length itself, where a loop now reads it once; recount
+   the rows of 1 with `check` reading it, and a cost beyond noise brings the
+   length back as an argument.
+4. **Positional visitor fields swap silently** when two of them share a type:
+   `~f:(fun acc seq_count apid -> ...)` over `[ apid; seq_count ]` type-checks.
+   Labelled arguments would catch it but cannot be shared with the
+   interpreted fold, whose field list is a value. Settled by counting the
+   folds of examples/ and bench/ whose fields share a type, and the rows of 1
+   for a generated fold taking labelled arguments.
+5. **`View.get` against `View.read`.** `View.get` turns a check into a view
+   and only that, as `Option.get`; a field is read by `View.read b v field`
+   (the tip's name, wire.mli:1491). Using `get` for both, as the decision of
+   2026-11-27 wrote `View.get v apid`, would clash. A proposal, to confirm.
+6. **Nested fields** (proposals, from the shape shown with the nested
+   example):
+   - A field under an absent optional layer reaches `f` as `None`. On stock
+     OCaml each present value allocates a `Some` per record; the
+     alternative, today's generated form, hands `f` a presence `bool` beside
+     a zero value (`<path>_present`, wire_ocaml.mli:213-218). Settled by the
+     MAWI rows of `bench/count.sh` for a fold over `ipv4 / protocol` and
+     `ipv4 / tcp / dst_port` both ways.
+   - The typed path combinator `Field.( / )`, and the type `Codec.layer` of
+     a field that holds a record, so that a path through a field that holds
+     none is a type error, and an optional layer under another gives one
+     `option`, not two. Settled by its typing in `wire.mli` and a cram test
+     of the rejected path.
+7. **A copy from another codec with the same record type.** A copy and a
+   view are both indexed by the record type, so when two codecs share one, a
+   copy from one (`View.field c1 apid`) given with a view of the other passes
+   the types. Three options:
+   - (a) Interpreted reads are loads bounds-checked against the buffer. The
+     mismatch is then memory-safe, but reads the copy's place in the other
+     record and answers a wrong value on misuse. Cost: one bound test per
+     interpreted read; the generated form is unaffected.
+   - (b) The codec's id packed into the view beside its offset, and one
+     compare per read raising `Invalid_argument`. Cost: offset bits, which on
+     31-bit ints (js_of_ocaml, wasm_of_ocaml) narrow the buffers a view can
+     address, against principle 5.
+   - (c) A type-level brand per codec, `('c, 'r) Codec.t`, which a
+     generative functor or an extra type parameter on `Codec.t` would give
+     (the tip names a codec with a first-class module for this,
+     wire.mli:1391-1423). Cost: every codec is named before its views are
+     used, the step the model removes.
 
-**Q2. Field handles.** Answered by Thomas: by place and kind in the codec's
-field list, and the layout digest, when the functor is applied; no naming
-convention in the schema module.
+   How often it arises, at `ed6be0fc`, read from the 279 `.cmt` files of
+   `dune build` (821 applications of `Codec.v`): 488 of them fall in 65
+   groups of two or more codecs with one record type, record types with a
+   type variable left out. All are in test/ and fuzz/, or share a tuple type
+   with a test from another program (scripts/fstar-gen/proved.ml,
+   bench/rust/headers.ml:8); no file of examples/, bench/, lib/ or scripts/
+   holds two codecs of one record type, and the 34 codecs of examples/ have
+   34 record types. `Codec.rename` has 7 callers (fuzz/gen/api_checks.ml:391,
+   fuzz/gen/curated.ml:509, test/diff/gen_diff.ml:313 and 358,
+   test/test_codec.ml:1104, 1120 and 1132); a renamed codec keeps the id and
+   the layout of its source (lib/dsl.ml:341), so its copies and views agree.
+   Settled by a ruling; the counts say how rarely the case arises outside
+   the tests.
 
-**Q3. Scope of the one walk.** Answered for what the walk refuses: "generation
-refuses, naming the field, only what the walk cannot cover" (the design's
-Capabilities), which Feature shippability requires. Still open: a fixed record
-of integers wider than 32 bits or of maps has no views at the tip and reads
-through `Get`; the end state extends the walk to them so that every module
-has views and `Get` goes. Still open, needing a ruling rather than a
-measurement: which of `casetype`, arrays, repeats, parameters and actions the
-walk covers next, and what names a `casetype` branch's accessors take (its
-cases carry tags, not names).
+## Decisions it rests on
 
-**Q4. Sub-record module names.** Answered by docs/execution.md, Generated
-code: "one module per codec, named after it (`CapturedIPv4` is
-`Captured_ipv4`, written once for the IPv4 and IPv6 fields that hold
-`StackTCP`)".
+**No backward compatibility** (Thomas, 2026-11-26): "don't worry about
+backward compat. Just design a safe and efficient and clean and beautiful
+API."
 
-**Q5. Several folds per module.** Answered: `?folds` with names
-(`Wire_ocaml.fold`; docs/execution.md, "each fold the module declares"). The
-form without a visitor goes: docs/execution.md, "OCaml without flambda never
-inlines a function passed as an argument", so it is never the fast path on
-stock OCaml, and a second form is a second way.
+**One generated module per codec** (Thomas, 2026-11-25): "No record/scanner
+split: one generated module per codec." "No generic `enter` verb: a field's
+accessor is named after the field; a scalar reads its value, a sub-record its
+view, an optional sub-record a check. A sub-record's module is declared once
+per codec."
 
-<a id="q6"></a>**Q6. Fold framing.** One frame, frames of a stride and frames
-of an index exist. A fold over consecutive self-delimited records (the routing
-workload: each packet's length gives the next one's offset) stays open. It
-needs the fold written, then the routing rows counted against the loop
-`bench/apps/loops.ml` writes today:
+**Names** (Thomas): "`View` (checked record), `Visitor` (the module receiving
+fields, serde's term [...]). Don't invent new names." Since 2026-11-27 the
+visitor is the fold's function `~f`, and every new name has a precedent
+(below).
 
-```
-make bench-apps-count
-sh bench/count.sh 100000 "routing run wire.ocaml" \
-  _build/default/bench/apps/bench.exe run _build/bench-apps-count/routing.bin \
-  100000 RUNS wire.ocaml
-```
+**Shapes** (orchestrator, 2026-11-25): "Every shape gets decode, encode, size
+and set_<field> on a view; labelled write only where every field has a
+constant size."
 
-**Q7. Record values for variable shapes.** Answered by the orchestrator:
-"Every shape gets decode, encode, size and set_<field> on a view; labelled
-write only where every field has a constant size."
+**The window of a check** (orchestrator, measured): "A codec of constant size:
+`check b ~off` [...]; variable size: `check b ~off ~len`. Reason: the uniform
+`~len` cost 5-6 instr per check with the natural window [...] (OxCaml apps
+clcw 41.7 -> 47.9, gateway 627 -> 735 per frame)."
 
-**Q8. Stock OCaml's fold slower than the views.** Answered by measurement: the
-generator fixed the consumer's cost. bench/README.md, "The generated views":
-`fold_step` counts 150.0 / 43.1 on OCaml 5.4.1 against 237.1 / 51.6 for check
-and accessors (299.6 / 73.1 at the design).
+**Deleted beyond v1** (agreed): "`Buf.length`, `Buf.local` hidden"; "DSL
+unchanged".
 
-<a id="q9"></a>**Q9. The length in `'b Buf.t`.** Agreed ("`Buf.length`,
-`Buf.local` hidden"; the sketch's `check` takes no length) but unmeasured: a
-check would read `Bytes.length` itself where the loop now reads it once. Open
-until counted on a branch where `check`, `enter` and the sub-record accessors
-read it, every row that checks, on OCaml, flambda and OxCaml:
+**The project's rules**, CLAUDE.md: Feature shippability, Untrusted input
+("Bad input makes a decoder return `Error`, never raise
+`Invalid_argument`"), Scalar type names, Tagged unions and the Benchmarking
+principles ("Every optimisation lives in the code generator or the runtime,
+never in the harness"). docs/execution.md, Invariants and Generated code
+("OCaml without flambda never inlines a function passed as an argument",
+execution.md:159-161).
 
-```
-make bench-apps-count     # rows "wire.ocaml" of routing, gateway, clcw
-make bench-flow           # builds _build/bench-flow/mawi.pcap
-sh bench/count.sh 1000000 view \
-  _build/default/bench/rust/bench.exe flow _build/bench-flow/mawi.pcap RUNS \
-  "wire.ocaml check/view, accessors, parse only"
-```
+**The model** (Thomas, 2026-11-27): the running example, the concepts in the
+order above, and the two forms. "Interpreted" and "generated" name an
+interpreter against a code generator, as in Carette, Kiselyov and Shan,
+"Finally Tagless, Partially Evaluated", MetaOCaml and the Futamura
+projections; never "twin", "dynamic" or "compiled", since ocamlopt compiles
+both. What goes is decision 5 of that day: `Codec.get`/`set`/`writer`,
+`Codec.Word` and `field_readers`; the EverParse plumbing, `Everparse.Raw`,
+`Private` and the struct validators; `Wire_ocaml`'s `outputs`, `views`,
+`Plan` and `fstar`; `Buf.length`/`Buf.local` and the runtime's helpers; the
+typ-level I/O. `Codec.View` stays as the one interpreted in-place API.
 
-(`, OxCaml target` before `, parse only` on OxCaml.) A cost beyond noise keeps
-`'b Buf.length` as an argument, and the end state's `check` takes it.
+**Names and their precedents** (Thomas, 2026-11-27; cited from memory, not
+checked against the sources): `is_ok` as `Result.is_ok`; `get` as
+`Option.get`, raising on the empty case; view as C++ `std::string_view`;
+visitor as serde's `Visitor`; fold as `List.fold_left`, labelled `~init ~f`
+as `ListLabels.fold_left` and Base's `List.fold`; snake_case accessors as
+prost spells protobuf fields; `set_<field>` as protobuf's C++ `set_foo()`;
+`check` and `validate` as EverParse's `<Base>Check<T>` wrapper (a yes or no,
+lib/3d/check_wrapper.mli:1-6) and `<Mod>Validate<T>` validator; `sub` as
+`Bytes.sub`; `size` the encoded size of a value and `fixed_size` the constant
+size.
 
-**Q10. Carried over.** Bounds-only `Get`: gone from modules with views
-(api-prune, 0abb5783), the rest with Q3. `_exn`: none is left but `Private.Eval.int_of_exn`, which moves to the
-internal library; `Parse_error` left the public surface (10510762). One visitor source for both targets: answered by
-docs/execution.md, "The consumer's `valid` takes its integer outputs as
-`int64` on both targets, so one consumer compiles for either." In-place writes
-on a view: `set_<field>` (execution.md, Generated code). Bigarray users: none
-outside the tests (grep above), so `?buffer`, `Buf.Bigstring`,
-`Unchecked.Bigstring` and `Vec.load_bigstring`/`store_bigstring` go. DSL
-renames: none ("DSL unchanged"); the clash of the two `bitfield` types ended
-when Q11 deleted the word reads' `bitfield` type.
+**The fold takes `~f` everywhere** (Thomas, 2026-11-27: "The alternative is
+~f everywhere. -> yes"), and is called `fold` in both forms ("Space_packet.route
+-> why `route` and not `fold` ?"). A generated module has at most one fold,
+its fields declared in the generator. Measured on `bench/count.sh`, MAWI, 1M
+packets, instructions per packet (branches `lane/fold-f`, `f01541ec`, and
+`lane/fused-f`, `fb57955e`):
 
-**Thomas's open point, how the generator learns the visitor.** Answered by the
-orchestrator and in the code: `main --visitor n=%{dep:flow_step.ml}`.
+| Row | OCaml 5.4.1 classify | OCaml 5.4.1 parse | OxCaml classify | OxCaml parse |
+|---|---:|---:|---:|---:|
+| fused fold, visitor module named in the dune rule | 240 | 164 | 203 | 77 |
+| fused fold taking `~f` (closure, fields positional): **chosen** | 503 | 409 | 205 | 88 |
+| `fold ~f` where `f` gets a view and re-reads its fields | 359 | 261 | 258 | 172 |
+| hand-written check/view loop | 326 | 238 | 259 | 174 |
 
-<a id="q11"></a>**Q11. Word reads.** Answered by the word-reads lane: the word
-reads stay, as one module `Codec.Word` in the `check`/`ok`/`get` shape of
-`Codec.View` and the generated modules, and `bitfield`/`load_word`/`extract`
-go. `Codec.View` reads a field of a frame shorter than 8 bytes out of line
-(wire.mli, `Codec.Word`), where a word is read once and each field taken from
-it inline, so the short fixed headers of the three workloads (the 6-byte space
-packet and frame headers, the 4-byte CLCW) keep a word read. Its signature is
-in [`Codec` and `Codec.View`](#wire-codec-and-codecview). A check is the
-record's word, which a record of at most 7 bytes leaves non-negative on every
-target, or -1 for a negative offset or a buffer that cuts the record: it never
-raises and allocates nothing (test_codec_word.ml, "a read allocates nothing"),
-where the result `read_word` answered was a block of 2 words per header on
-every compiler. `word_reader`, `word_part` and `of_word`
-are `Word.reader`, `Word.field` and `Word.read`; `bitfield`, `load_word` and
-`extract`, a second way to read a short record's word that answered an
-`Optint.t` in a result, are removed, and the CLCW workload reads its word
-through `Codec.Word`. CLAUDE.md's Benchmarking principles name
-`Codec.Word.check`, `ok`, `get` and `Codec.Word.read`. Still open: whether
-`Codec.View` reads these headers within noise of `Codec.Word`, which would
-delete `Codec.Word` too; the lane did not record that count, which is:
+On OxCaml the closure is inlined, and the fold costs what the fused fold with
+a named visitor costs (classify 205 against 203, parse 88 against 77). On
+stock OCaml 5.4.1 `f` is never inlined: each record is an indirect call
+(`caml_apply29`, 22 arguments through the domain state), and the fold takes
+about twice the instructions (classify 503 against 240, parse 409 against
+164). This trades stock OCaml's fold speed for one API across both forms and
+both compilers, and relaxes principle 3 for stock-OCaml folds. A visitor
+given a view loses fusion on both compilers, so `f` gets the fields.
 
-```
-make bench-apps-count
-sh bench/count.sh 100000 "routing run Wire.Codec" \
-  _build/default/bench/apps/bench.exe run _build/bench-apps-count/routing.bin \
-  100000 RUNS Wire.Codec
-```
+**The principles** the API is checked against:
 
-with `<app>_workload.ml` reading through `Codec.View` (and `gateway`, `clcw`,
-`run` and `write`, as the Makefile's `bench_count_rows` lists them).
-
-<a id="q12"></a>**Q12. `UInt32.to_int` on narrow ints.** uInt32.mli: "on a
-narrower one a value with bit 31 set does not fit and is truncated", which the
-narrow-int rule forbids an API to assume away. Open, a ruling rather than a
-measurement: `to_int_opt` only (an option per read in a loop), or `to_int`
-kept for code that, like a generated module reading a 32-bit field into an
-`int`, refuses to load where ints have 32 bits or fewer.
-
-<a id="q13"></a>**Q13. `X4`'s names.** `X4.with_` takes continuations and
-`X4.write_int_at` a buffer and its length, names the end state deletes
-elsewhere. Aligning them on `check`/`ok`/`get` and `write` is open until the
-NEON rows are counted on OxCaml:
-
-```
-make bench-apps-count     # rows "NEON lanes, OxCaml" of clcw run and clcw write
-```
-
-## Gaps
-
-Where the code, at the tip or on a running lane, contradicts the end state.
-
-### api-prune (Phase 5, deleting legacy generated members)
-
-The lane deletes `digest`, `Value`, `write_int`, `write_at`, `write_int_at`,
-`is_valid`, `decode_with`, `view_<field>_word`, `view_<field>_int`, `Get` on
-modules with views and `Gen.Outputs`. Also:
-
-1. Delete the positional constructor `v` of a fixed record
-   (examples/generated/clcw.mli:50 on the lane): the record literal builds the
-   same value and `encode`/`write` check it.
-2. Delete the folds without a visitor (`n`, `n_frames`, `n_unboxed`,
-   `n_frames_unboxed` taking `~invalid ~valid`) and `v`'s default fold: make
-   `?folds` default `[]` and make `to_ml`/`main` refuse a declared fold no
-   `--visitor` names. Port `examples/generated` (its `fold`, `fold_frames`),
-   `test/diff`, `verify/` (which classifies `fold` and `fold_frames`) and
-   `Wire_ocaml.fstar` (its `Scan`/`Proof` theorem is over `fold ~invalid
-   ~valid`; `Step`/`StepProof` already state it over a visitor).
-3. Delete `?buffer` and everything it reaches: `Wire_ocaml.buffer`,
-   `Buf.Bigstring`, `Unchecked.Bigstring`, `Vec.load_bigstring`,
-   `Vec.store_bigstring`, the bigarray `Get`, `Valid`, `View` (with
-   `View.with_`) and `read_<field>`, and their tests in `test/ocaml`,
-   `test/ocaml/standalone` and `test/diff`.
-4. Delete `Wire_ocaml.ident` (`outputs` spells each name) and move
-   `Wire_ocaml.view`, `view_member`, `views` and `Plan` to the internal
-   library.
-5. Rewrite the docs of `Wire_ocaml.target` and `Wire_ocaml.v` (they name
-   `is_valid`, `write_int`, `decode_with`, `Get`, `Valid`, `View.with_`,
-   `write_int_at`) and docs/execution.md, Generated code (`is_valid`, `Get`,
-   `Valid`, `View`, `read_<field>`, `view_<field>`, `n_unboxed`,
-   `` ~buffer:`Bigstring ``).
-
-### rust-api (Phase 4, Rust parity)
-
-The lane's `wire_rust.mli` (uncommitted in its worktree) has `v`, `fold`,
-`name`, `to_rs` and `main`, and drops `scanner` and `rs`. Also:
-
-1. Delete `Wire_rust.ident` and `Wire_rust.digest`, and the module's `CODEC`
-   and `DIGEST`: nothing reads them, and the OCaml module dropped its digest
-   for that reason (8e20a5bf).
-2. Write the checksum visitors `stack_step.rs` and `selected_step.rs` by hand
-   in `bench/rust/cargo/src`, not from `bench/rust/gen.ml` through
-   `Wire_ocaml.Plan`: a benchmark loop is what a user writes, and `Plan` is
-   internal in the end state. A Rust visitor's parameters are positional, so
-   it needs no generated names.
-
-### No lane yet
-
-1. `Staged`: delete `Wire.Staged` and `Wire_runtime.Staged`; `Codec.get`,
-   `set` and `writer` return their function, `decoder` and `encoder` go
-   (partial application of `decode` and `encode`).
-2. `Codec`: rename the sizes (`wire_size_opt`, `wire_size`, `min_wire_size`,
-   `wire_size_at`, `size_of_value` to `size`, `min_size`, `size_at`,
-   `encoded_size`); make `name` public; move `Wire.pp_value` to
-   `Codec.pp_value`; delete `field_ref`, the `'r codec` alias and the validator
-   family; `Field.action` answers `Action.t option`.
-3. The internal library: move `Wire.Private`, `Everparse.Raw`, the FFI values
-   of `Everparse`, `Codec.field_readers`, `Ascii.of_struct`/`pp_struct`, the
-   steps of `Wire_3d` and of `Wire_stubs` into it; make `Everparse.t` abstract
-   with `name`.
-4. "plug" to "visitor" everywhere (Thomas): `Everparse.plug_field`,
-   `plug_member`, `plug_fields`, `plug_setters` and
-   `Wire_3d.check_plug_names` still carry it at the tip.
-5. The runtime: add `Wire_runtime.S` (and `Wire.S`) and a test that each
-   committed module satisfies it; hide `Unchecked`, `Errors`, `Arith`,
-   `Target` and the carriers' `unsafe_*`, `int_eq`, `check_encode`, `mask32`,
-   `le`, `be`, `get`, `set`, `set_le`, `set_be`; rename `UInt32.of_int` and
-   `UInt64.of_int` to `v`; move `UInt64` into the runtime, which a module
-   reading a 64-bit field needs (Q3).
-6. `Buf.local`: hidden in the agreed design, but OxCaml names a buffer held
-   `local` with it (`test/ocaml-ox`); `Buf.v` must take a local buffer first.
-7. `Wire_stubs`: take `Wire_3d.packed` in place of `packed_codec`.
-8. Documents: CLAUDE.md (Benchmarking principles name `Codec.writer`; the
-   pipeline names `Wire_stubs.generate ... [ C codec ]`),
-   docs/projection.md (`Wire_3d.generate_dune_standalone`), and the README,
-   which has no section on the generated module.
-
-## Decided here
-
-Points no agreed text settles, which this document chose and Thomas may
-overrule:
-
-- `check` takes `off` positionally for a codec of constant size, as every
-  other offset of the API does (`decode buf off`); the decision's text wrote
-  `check b ~off`.
-- `validate` takes `buf off`, as `Codec.validate` does, not the sketch's `~off
-  ~len`.
-- `Codec.get`, `Codec.set` and `Codec.writer` stay, as CLAUDE.md names them;
-  only `Staged` leaves them.
-- `Wire.pp_value` becomes `Codec.pp_value`; `Codec.name` becomes public.
-- `Wire_3d` keeps `pack`, `run`, `main`, `parse_3d` and `locate_3d_exe`, which
-  replaces `has_3d_exe` (`verify/` needs the path, and `has_3d_exe ()` is
-  `locate_3d_exe () <> None`);
-  `Wire_stubs` keeps `generate` and `build_codec_archive`, over
-  `Wire_3d.packed`.
-- `Vec` stays public with `X4`: it is the API CLAUDE.md requires SIMD to go
-  through.
-- The carriers' byte reads (`le`, `be`, `get`, `set`, ...) are hidden: no
-  user outside the libraries and their tests calls them.
+1. **Bad input is a value**: a check, a decoder or an accessor answers a
+   refused check or an `Error.t` for any bytes and never raises;
+   `Invalid_argument` is misuse. Check: `make test`, `fuzz/` and the
+   differential tests against the EverParse validators.
+2. **An unchecked read is proved in bounds**: only a view, which only a check
+   makes, reads without a bounds check, and only inside its record. Check:
+   the `paranoid` profile and `verify/`.
+3. **The obvious loop is the fast loop**: `check`, `is_ok`, `get` and the
+   accessors, or a fold, are what a user writes and what the benchmarks time,
+   on OCaml, flambda and OxCaml. On stock OCaml, a fold calls its `~f`
+   indirectly per record and costs about twice a fused fold with a named
+   visitor (the table above); that cost is accepted for one fold API. Check:
+   `make bench-apps-count` and `bench/count.sh` on the MAWI rows.
+4. **One way to do each thing**: one check, one accessor and one setter per
+   field, one record write, one fold, one name per concept. Check: § What
+   goes leaves no second path.
+5. **Names state wire widths, and nothing assumes a 63-bit `int`**: `uint16`
+   is two bytes, a carrier holds its field, and a module that needs more than
+   31 bits refuses to load where ints are narrower. Check: `make test-wasm`.
