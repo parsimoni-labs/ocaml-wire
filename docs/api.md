@@ -43,12 +43,15 @@ val main : t list -> unit
 ```
 
 The Rust module has the names of the OCaml one on a view that borrows its
-buffer:
+buffer. Rust has no optional arguments, so the fold takes the placement of
+the records as a value, `Records::BackToBack`, `Records::Slots(stride)` or
+`Records::Frames(offs, lens)`, and `invalid` as an `Option`:
 
 ```rust
 let c = space_packet::check(buf, off);
 if c.is_ok() { let v = c.get(); route(v.apid()); }
-let r = space_packet::fold(buf, [0u64; 4], |mut n, apid| { n[route(apid)] += 1; n });
+let r = space_packet::fold(buf, Records::BackToBack, [0u64; 4], None,
+  |mut n, apid| { n[route(apid)] += 1; n });
 ```
 
 ### Verified backends (f)
@@ -128,6 +131,26 @@ and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
    of `bench-apps-count`, on a branch whose views carry their buffer: the
    buffer stays an argument unless that branch counts within noise on OCaml
    5.4.1 and OxCaml.
+
+   Counted (lane api-gen, `sh bench/count.sh 1000000 ROW
+   _build/default/bench/rust/bench.exe flow _build/bench-flow/mawi.pcap RUNS
+   ROW`, MAWI, 1M packets, instructions per packet, two runs each): the
+   generated module of `Packet_stack.capture` as written, and the same views
+   carrying their buffer, a block `{ b; k }` that `check` and `get` build and
+   every accessor and layer takes alone (one-line delegates over the module,
+   as a generator writing such views writes them, on a throwaway branch):
+
+   | Row, parse only | OCaml 5.4.1 | OxCaml 5.4.0-ox9 |
+   |---|---:|---:|
+   | `wire.ocaml check/view, accessors`, buffer an argument | 269.4, 271.1 | 193.0, 191.8 |
+   | the same, the view carrying its buffer | 379.0, 377.8 | 204.5, 210.8 |
+
+   A view carrying its buffer costs 40% on OCaml 5.4.1, which allocates the
+   block per record, and 7% on OxCaml: outside noise on both, so the buffer
+   stays an argument. The `wire.ocaml` rows of `bench-apps-count` were not
+   taken: bench/apps links the routing, gateway and CLCW workloads, which
+   still call `Codec.set` and `Codec.Word` and build only once the
+   interpreted API lands.
 2. **Whether binding a field before `Codec.v`** (`f $ (fun p -> p.apid)`)
    can be lighter. Not a cost: the binding runs once. Settled by writing
    examples/space/space.ml and examples/net in the lighter form, with `make
@@ -191,6 +214,29 @@ and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
    interpreted fold, whose field list is a value. Settled by counting the
    folds of examples/ and bench/ whose fields share a type, and the rows of 1
    for a generated fold taking labelled arguments.
+
+   Counted (lane api-gen): examples/ and bench/ hold three folds. That of
+   examples/generated/stack.ml hands an `UInt8.t option` and an
+   `UInt16.t option`, no type twice; that of bench/rust's `g_selected` hands
+   16 fields and that of `g_flow` 22, each with several fields of one type
+   (`UInt16.t option`, `UInt32.t option`). Two of three can swap fields
+   silently. On the row `wire.ocaml fold, selected fields, parse only` (the
+   fold of `g_flow` over an index, its `f` handing each key to `Flow_sum`),
+   counted as for question 1, with `f` taking its fields positionally and,
+   on a throwaway branch, labelled by their paths (`~ipv4_protocol:`):
+
+   | `f` takes its fields | OCaml 5.4.1 | OxCaml 5.4.0-ox9 |
+   |---|---:|---:|
+   | positionally | 397.0, 396.6 | 92.4, 94.0 |
+   | labelled | 397.1, 396.6 | 94.0, 93.6 |
+
+   Labels cost nothing on either compiler: they are erased at compile time,
+   and on stock OCaml the call through `caml_applyN` is the same. The count
+   does not settle the question against the default, which stays
+   positional, for the reason the question states: the interpreted fold's
+   fields are a value and cannot be labelled. The generated form alone could
+   take labels at no cost, with the swaps they catch in two of the three
+   folds; that trades the one shape of both forms for it.
 5. **`View.get` against `View.read`.** Ruled: the proposal stands.
    `View.get` turns a check into a view and only that, as `Option.get`; a
    field is read by `View.read b v field` (the tip's name, wire.mli:1491).
