@@ -1,0 +1,304 @@
+{0 The API on one example}
+
+[wire] describes a binary format once, as an OCaml value, and derives from
+that value everything that reads and writes the bytes: a decoder and an
+encoder, in-place views of untrusted buffers, folds over many records,
+generated OCaml, OxCaml and Rust, and a verified C validator. This page shows
+the model on one running example: the CCSDS space packet primary header, six
+bytes that a ground station routes by its [apid].
+
+{1:codec A codec describes the bytes once}
+
+{@ocaml[
+open Wire
+
+type packet = {
+  version : int;
+  type_ : int;
+  sec_hdr : int;
+  apid : int;
+  seq_flags : int;
+  seq_count : int;
+  data_len : UInt16.t;
+}
+
+let apid = Codec.(Field.v "APID" (bits ~width:11 U16be) $ fun p -> p.apid)
+
+let data_length =
+  Codec.(Field.v "DataLength" uint16be $ fun p -> p.data_len)
+
+let packet =
+  Codec.v "SpacePacket"
+    (fun version type_ sec_hdr apid seq_flags seq_count data_len ->
+      { version; type_; sec_hdr; apid; seq_flags; seq_count; data_len })
+    Codec.
+      [
+        (Field.v "Version" (bits ~width:3 U16be) $ fun p -> p.version);
+        (Field.v "Type" (bits ~width:1 U16be) $ fun p -> p.type_);
+        (Field.v "SecHdrFlag" (bits ~width:1 U16be) $ fun p -> p.sec_hdr);
+        apid;
+        (Field.v "SeqFlags" (bits ~width:2 U16be) $ fun p -> p.seq_flags);
+        (Field.v "SeqCount" (bits ~width:14 U16be) $ fun p -> p.seq_count);
+        data_length;
+      ]
+]}
+
+A field states its width on the wire ([uint16be] is two bytes,
+[bits ~width:11 U16be] eleven bits of a big-endian 16-bit word) and its OCaml
+type. [Codec.( $ )] binds it to the record, and the constructor takes the
+fields in their order. Everything below is derived from [packet]. A shape
+that no verified backend can express is refused here, by {!Wire.Codec.v},
+with [Invalid_argument].
+
+{1:values Values: decode and encode copy the whole record}
+
+{@ocaml[
+let print buf =
+  match Codec.decode packet buf ~off:0 with
+  | Ok p -> Fmt.pr "apid %d@." p.apid
+  | Error e -> Fmt.pr "refused: %a@." Error.pp e
+]}
+
+[buf] comes from an attacker, so no byte makes a decoder raise: bad bytes are
+an [Error], never an exception. [Invalid_argument] means a misuse by the
+program: a negative offset, or a record that [Codec.encode packet p buf ~off]
+would write as bytes {!Wire.Codec.decode} refuses.
+
+{1:views Views: check once, then read and write in place}
+
+A router that reads one field per packet should not copy the other six. A
+view reads the field where it lies.
+
+{@ocaml[
+module View = Codec.View
+
+let apid_f = View.field packet apid
+
+let apid_of buf ~off =
+  let (Buf.Any b) = Buf.v buf in
+  let c = View.check packet b ~off in
+  if View.is_ok c then Some (View.read b (View.get c) apid_f) else None
+]}
+
+The definition [apid] says what the field is and exists before the codec,
+since {!Wire.Codec.v} takes it. The field [apid_f] says where it lies in
+[packet], which only [Codec.v] can compute: [Codec.v] resolves each
+definition it receives (a constant offset or how to compute one, and the
+field's reader and writer), and {!Wire.Codec.View.field} hands that out,
+plain data read with no lookup. A definition in two codecs is resolved in
+each, and a field that is only decoded or encoded needs just the definition.
+
+{!Wire.Codec.View.check} runs every check of the codec once. It never raises
+and allocates nothing: its answer is an immediate integer, and so is the view.
+{!Wire.Codec.View.is_ok} says whether the record passed and
+{!Wire.Codec.View.get} makes the answer a view, as [Result.is_ok] and
+[Option.get] do; [get] of a refused check raises [Invalid_argument], since
+[is_ok] said so. A view reads a field with no check of its own, and
+[View.set b v apid_f x] writes it in place. {!Wire.Buf.v} names the buffer
+with a type ['b], which the check and the view carry, so a view is read and
+written only in the buffer it was checked in. Why a record was refused is out
+of line: [Codec.validate packet buf ~off] answers its [Error].
+
+{1:folds Folds: views over many records}
+
+{@ocaml[
+let route_of_apid apid = apid land 3
+
+let routes buf =
+  View.fold packet
+    Codec.[ apid ]
+    buf ~init:(Array.make 4 0)
+    ~f:(fun counts apid ->
+      let r = route_of_apid apid in
+      counts.(r) <- counts.(r) + 1;
+      counts)
+]}
+
+A fold checks each record of [buf], as [check] does, and hands the fields it
+names to its visitor [f], positionally and in the order of the list, as
+[Codec.v] hands them to the constructor. It resolves the definitions once,
+when it is applied, and reads the fields during the check. By default the
+records lie back to back; [~stride] places them in fixed slots and
+[~offs ~lens] takes an index of frames, as a capture file lists them. Back to
+back, a refused record stops the fold with [Error (e, acc)], since its length
+cannot be trusted to find the next record. In slots or an index, [~invalid]
+is called on a refused record and the fold goes on; without [~invalid] it
+stops there too.
+
+{1:forms Two forms, same concepts}
+
+Everything so far is the {e interpreted} form: [wire] alone, nothing
+generated, fields addressed by the codec's resolution of the definitions it
+was built from. It is for scripts, the toplevel, codecs built at run time and
+the reference oracle. The {e generated} form is a module [Wire_ocaml] (OCaml
+or OxCaml) or [Wire_rust] writes from the same codec, in which a field is a
+function named after it. It is for hot loops and other languages, and the
+OCaml module links [wire.runtime] only.
+
+{v
+(* gen.ml *)
+let () = Wire_ocaml.(main [ v ~fold:[ "apid" ] Space.packet_codec ])
+
+(* dune *)
+(rule
+ (targets space_packet.ml space_packet.mli)
+ (action (run ./gen.exe %{targets})))
+v}
+
+{@ocaml skip[
+let apid_of buf ~off =
+  let (Buf.Any b) = Buf.v buf in
+  let c = Space_packet.check b ~off in
+  if Space_packet.is_ok c then Some (Space_packet.apid b (Space_packet.get c))
+  else None
+
+let routes buf =
+  Space_packet.fold buf ~init:(Array.make 4 0) ~f:(fun counts apid ->
+      let r = route_of_apid apid in
+      counts.(r) <- counts.(r) + 1;
+      counts)
+]}
+
+Switching is a one-to-one rename:
+
+{table
+  {tr {th Interpreted ([wire])} {th Generated ([Space_packet])}}
+  {tr {td [View.field packet apid]} {td none: the module has it built in}}
+  {tr {td [View.check packet b ~off]} {td [Space_packet.check b ~off]}}
+  {tr {td [View.is_ok c], [View.get c]}
+      {td [Space_packet.is_ok c], [Space_packet.get c]}}
+  {tr {td [View.read b v apid_f]} {td [Space_packet.apid b v]}}
+  {tr {td [View.set b v apid_f x]} {td [Space_packet.set_apid b v x]}}
+  {tr {td [View.fold packet Codec.[ apid ] buf ~init ~f]}
+      {td [Space_packet.fold buf ~init ~f], its fields declared in [gen.ml]}}
+  {tr {td [Codec.decode packet buf ~off], [Codec.validate packet buf ~off]}
+      {td [Space_packet.decode buf ~off], [Space_packet.validate buf ~off]}}
+}
+
+A generated module has its own record type and its fields are functions,
+where the interpreted form's are values; it meets the signatures of
+[Wire_ocaml] ([FIXED], [FOLD]), which a test ascribes it to. The differential
+tests prove that both forms answer the same on the same bytes. A generated
+module has at most one fold: two field sets over one codec are two modules
+([v ~name:"space_packet_route" ~fold:[ ... ]]).
+
+{2:same_shape The same shape as the generated module}
+
+A program can give the interpreted form the generated module's functions,
+with the same arguments and labels, so that one line switches between the
+two:
+
+{@ocaml[
+module P = struct
+  let apid_f = View.field packet apid
+  let check b ~off = View.check packet b ~off
+  let is_ok = View.is_ok
+  let get = View.get
+  let apid b v = View.read b v apid_f
+  let set_apid b v x = View.set b v apid_f x
+
+  let fold ?stride ?offs ?lens ?invalid buf ~init ~f =
+    View.fold ?stride ?offs ?lens ?invalid packet Codec.[ apid ] buf ~init ~f
+end
+
+(* [module P = Space_packet] runs it on the generated form. *)
+let apid_of buf ~off =
+  let (Buf.Any b) = Buf.v buf in
+  let c = P.check b ~off in
+  if P.is_ok c then Some (P.apid b (P.get c)) else None
+]}
+
+The resolution is data ({!Wire.Codec.View.field}), not a function: a reader
+made by partial application falls under the value restriction, its buffer
+brand ['b] becomes weak, and each [Buf.Any] unpacking has a fresh ['b]. The
+eta-expanded functions keep ['b] polymorphic and only interpret the field
+resolved once. [wire] does not generate such a module, since the interpreted
+form needs no generation.
+
+{1:nested A nested codec}
+
+The same concepts hold when a field holds a codec. [Packet_stack.codec],
+called [eth] here, is an Ethernet header, then an IPv4 header when
+[ether_type] is [0x0800], then a TCP header when the packet is unfragmented
+TCP. Its IPv4 and TCP codecs are called [stack_ipv4] and [stack_tcp], and its
+bound fields [eth_ipv4], [ipv4_protocol], [ipv4_tcp] and [tcp_dst_port] are
+called [ipv4], [protocol], [tcp] and [dst_port]. [ipv4] and [tcp] are
+optional fields that hold a codec: {!Wire.Codec.opt_layer} makes each a
+layer.
+
+One check validates the frame and every layer present in it. Reaching a
+layer gives that codec's check, whose [is_ok] says whether the layer is
+present, and makes no check again. {!Wire.Codec.View.layer} resolves a layer
+in its codec, as [View.field] resolves any other field.
+
+{@ocaml skip[
+let ipv4_l = Codec.opt_layer ipv4
+let ipv4_f = View.layer eth ipv4_l
+let protocol_f = View.field stack_ipv4 protocol
+
+let retag b ~off =
+  let c = View.check eth b ~off in
+  if View.is_ok c then begin
+    let c4 = View.sub b (View.get c) ipv4_f in
+    if View.is_ok c4 then begin
+      let v4 = View.get c4 in
+      if View.read b v4 protocol_f = UInt8.v 6 then
+        View.set b v4 protocol_f (UInt8.v 17)
+    end
+  end
+]}
+
+The module [Wire_ocaml.v ~name:"eth" eth] writes has one submodule per codec
+a field holds, named after the codec and written once however many fields
+hold it: [StackIPv4] is [Eth.Stack_ipv4].
+
+{@ocaml skip[
+let retag b ~off =
+  let c = Eth.check b ~off ~len:(Bytes.length (b :> bytes) - off) in
+  if Eth.is_ok c then begin
+    let c4 = Eth.ipv4 b (Eth.get c) in
+    if Eth.Stack_ipv4.is_ok c4 then begin
+      let v4 = Eth.Stack_ipv4.get c4 in
+      if Eth.Stack_ipv4.protocol b v4 = UInt8.v 6 then
+        Eth.Stack_ipv4.set_protocol b v4 (UInt8.v 17)
+    end
+  end
+]}
+
+A fold names a nested field by its path: [l / f] is the field [f] under the
+layer [l], and [l // l'] the layer [l'] under [l]. A field under an optional
+layer reaches [f] as an [option], [None] where the layer is absent, and one
+option however deep the path:
+
+{@ocaml skip[
+let tcp_l = Codec.opt_layer tcp
+
+let count buf ~offs ~lens =
+  View.fold eth
+    Codec.[ ipv4_l / protocol; ipv4_l // tcp_l / dst_port ]
+    buf ~offs ~lens ~init:0
+    ~f:(fun n proto dport ->
+      match (proto, dport) with
+      | Some _, Some d when UInt16.to_int d = 80 -> n + 1
+      | _ -> n)
+]}
+
+The generated module takes the same paths, spelled with its accessor names:
+[Wire_ocaml.v ~name:"eth" ~fold:[ "ipv4.protocol"; "ipv4.tcp.dst_port" ] eth]
+writes [Eth.fold buf ~offs ~lens ~init ~f].
+
+{1:backends Verified backends}
+
+Each codec projects to the verified parser technology that can express it,
+and is checked there: EverParse 3D for binary layouts.
+
+{v
+(* gen_3d.ml *)
+let () =
+  Wire_3d.main ~mode:`Ffi ~package:"space" [ Wire_3d.pack Space.packet_codec ]
+v}
+
+This writes [SpacePacket.3d], runs EverParse on it for a verified C
+validator, and [Wire_stubs] binds that validator to OCaml. On a refusal the C
+tier answers the [Error] {!Wire.Codec.validate} answers, so every tier gives
+one error for the same bytes.

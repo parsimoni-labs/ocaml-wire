@@ -1,0 +1,17 @@
+{0 wire}
+
+[wire] describes a binary format once, as an OCaml value, and derives from it
+a decoder and an encoder, in-place views of untrusted buffers, folds over many
+records, generated OCaml and Rust, and a verified C validator.
+
+{1 Pages}
+
+{ul
+{- {!page-api}: the model on one running example, the interpreted form and
+   the generated one.}}
+
+{1 Libraries}
+
+{ul
+{- {!Wire}: codecs, values, views and folds.}
+{- [Wire_ocaml]: the generated form, an OCaml module per codec.}}

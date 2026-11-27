@@ -1,0 +1,11 @@
+(documentation
+ (package wire)
+ (mld_files index api))
+
+; api.mld runs the interfaces of lib/wire.mli, whose views, folds and layers
+; raise [Failure "unimplemented"] until the implementation lands. Enable the
+; stanza then.
+;
+; (mdx
+;  (files api.mld)
+;  (libraries fmt wire wire.runtime))
