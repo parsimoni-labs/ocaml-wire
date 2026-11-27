@@ -954,10 +954,6 @@ and eval ctx env path e k =
   | Pexp_constraint (e, _) | Pexp_coerce (e, _, _) | Pexp_newtype (_, e) ->
       eval ctx env path e k
   | Pexp_construct ({ txt; _ }, None) when is_type_equal txt -> k path Equal
-  | Pexp_construct ({ txt = Lident "None"; _ }, None) -> k path Opaque
-  | Pexp_construct ({ txt = Lident "Some"; _ }, Some arg) ->
-      (* An option a fold hands its [f], which only passes it on. *)
-      eval ctx env path arg (fun path _ -> k path Opaque)
   | Pexp_construct
       ({ txt = Lident (("Invalid_argument" | "Failure") as c); _ }, Some arg) ->
       eval ctx env path arg (fun path v ->
@@ -993,8 +989,15 @@ and eval ctx env path e k =
               if conj then k path (Bool Smt.False) else eval ctx env path b k))
   | Pexp_apply (f, args) ->
       eval ctx env path f (fun path fv ->
-          eval_args ctx env path args [] (fun path args ->
-              apply ctx path loc fv args k))
+          match fv with
+          | Prim (({ arity = None; _ } as p), []) ->
+              (* A continuation, [f] or [invalid], answers whatever it is
+                 handed: the fields [f] takes, converted to their carriers,
+                 are values the walk passes on and read no byte. *)
+              p.run ctx path loc [] k
+          | _ ->
+              eval_args ctx env path args [] (fun path args ->
+                  apply ctx path loc fv args k))
   | Pexp_ifthenelse (c, t, e_opt) ->
       let otherwise path =
         match e_opt with Some e -> eval ctx env path e k | None -> k path Unit
