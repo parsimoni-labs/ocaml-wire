@@ -108,6 +108,12 @@ rest are X.680's or EverParse's: `default`, `size`, `alternative` (X.680),
 | `bit_string` | `BIT STRING` | unused count, octets (`spec/ASN1.Spec.Content.BITSTRING.fst:32`) |
 | `utf8_string` ... `bmp_string` | the string type | content octets, alphabet checked |
 | `utc_time`, `generalized_time` | `UTCTime`, `GeneralizedTime` | characters, format checked |
+| `relative_oid` | `RELATIVE-OID` | one or more arcs below 2^32 (`spec/ASN1.Spec.Content.OIDU32.fst:59-61`) |
+| `date` | `DATE` | `YYYYMMDD`, year 1582 to 9999 (`spec/ASN1.Spec.Time.fst:197-200`) |
+| `time_of_day` | `TIME-OF-DAY` | `hhmmss`, local (`spec/ASN1.Spec.Time.fst:202-205`) |
+| `date_time` | `DATE-TIME` | `YYYYMMDDhhmmss` (`spec/ASN1.Spec.Time.fst:207-210`) |
+| `oid_iri` | `OID-IRI` | UTF-8, `/` then labels (`spec/ASN1.Spec.IRI.fst:54-58`) |
+| `relative_oid_iri` | `RELATIVE-OID-IRI` | UTF-8 labels (`spec/ASN1.Spec.IRI.fst:50-52`) |
 | `any` | `ANY` | one whole TLV |
 | `size ~min ~max t` | `t (SIZE (min..max))` | length in characters |
 | `implicit`/`explicit ?cls n t` | `[cls n] IMPLICIT/EXPLICIT t` | tag replaced / wrapped |
@@ -171,6 +177,9 @@ Invariants, "One answer"). Encoders write DER only.
 | SET components in tag order (10.3) | `spec/ASN1.Spec.SetComponents.fst:4-10` | sorts on encode (`asn_ber_der.ml:422-431`) |
 | SET OF sorted (11.6) | `spec/ASN1.Spec.Raw.fst:13-14,655-668` | sorts on encode (`asn_ber_der.ml:433-441`), not on decode (`:222`) |
 | minimal OID subidentifiers (8.19) | `spec/ASN1.Spec.Content.OIDU32.fst:20-21` | `asn_prim.ml:230` |
+| RELATIVE-OID non-empty (8.20.2) | `spec/ASN1.Spec.Content.OIDU32.fst:59-61` | no RELATIVE-OID |
+| IRI labels (8.21, 8.22; X.660 7.5) | `spec/ASN1.Spec.IRI.fst:34-58` | no IRI types |
+| DATE, TIME-OF-DAY, DATE-TIME basic format (8.26.2) | `spec/ASN1.Spec.Time.fst:191-210` | no such types |
 
 Wire does not check 11.2.2 either, so it agrees with the C; it offers no
 named-bit type until that is settled (Q6).

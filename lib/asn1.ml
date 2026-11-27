@@ -43,17 +43,20 @@ module Oid = struct
         a b;
     [| arc a64; arc b64 |]
 
-  let checked_arc n =
+  let checked_arc ~combinator n =
     let n64 = Int64.of_int n in
     if not (in_range n64) then
       Fmt.invalid_arg
-        "Wire.Asn1.Oid.( <| ) %d: an arc is between 0 and 2^32 - 1, the \
-         subidentifiers everparse-asn1 reads"
-        n;
+        "Wire.Asn1.%s %d: an arc is between 0 and 2^32 - 1, the subidentifiers \
+         everparse-asn1 reads"
+        combinator n;
     arc n64
 
-  let ( <| ) o n = Array.append o [| checked_arc n |]
-  let ( <|| ) o ns = Array.append o (Array.of_list (List.map checked_arc ns))
+  let ( <| ) o n = Array.append o [| checked_arc ~combinator:"Oid.( <| )" n |]
+
+  let ( <|| ) o ns =
+    Array.append o
+      (Array.of_list (List.map (checked_arc ~combinator:"Oid.( <|| )") ns))
 
   let compare a b =
     let la = Array.length a and lb = Array.length b in
@@ -79,7 +82,7 @@ module Oid = struct
     in
     if n = 0 || n > 10 || (n > 1 && Char.equal s.[0] '0') then None else go 0L 0
 
-  let of_string s =
+  let arcs_of_string s =
     let rec arcs acc = function
       | [] -> Some (List.rev acc)
       | s :: rest -> (
@@ -87,7 +90,10 @@ module Oid = struct
           | None -> None
           | Some a -> arcs (a :: acc) rest)
     in
-    match arcs [] (String.split_on_char '.' s) with
+    arcs [] (String.split_on_char '.' s)
+
+  let of_string s =
+    match arcs_of_string s with
     | Some (a :: b :: _ as l) when head_ok a b ->
         Some (Array.of_list (List.map arc l))
     | _ -> None
@@ -97,6 +103,31 @@ module Oid = struct
       (Array.to_list (Array.map (fun a -> Int64.to_string (int64_of_arc a)) o))
 
   let pp ppf o = Fmt.string ppf (to_string o)
+end
+
+module Relative_oid = struct
+  (* The arcs, at least one, each below 2^32 (X.690 8.20,
+     spec/ASN1.Base.fst:204-207): those of an object identifier without the
+     rule on the first two. *)
+  type t = UInt32.t array
+
+  let v ns =
+    if List.is_empty ns then
+      invalid_arg
+        "Wire.Asn1.Relative_oid.v: a RELATIVE-OID has at least one arc (X.690 \
+         8.20.2, spec/ASN1.Base.fst:204-207)";
+    Array.of_list (List.map (Oid.checked_arc ~combinator:"Relative_oid.v") ns)
+
+  let equal = Oid.equal
+  let compare = Oid.compare
+
+  let of_string s =
+    match Oid.arcs_of_string s with
+    | Some (_ :: _ as l) -> Some (Array.of_list (List.map Oid.arc l))
+    | _ -> None
+
+  let to_string = Oid.to_string
+  let pp = Oid.pp
 end
 
 (* Tags. An identifier is a class, a number and the constructed bit, as
@@ -141,7 +172,8 @@ type chars =
   | Bmp
   | Universal_chars
 
-type time = Utc | Generalized
+type time = Utc | Generalized | Date | Time_of_day | Date_time
+type iri = Oid_iri | Relative_oid_iri
 
 type _ prim =
   | Bool : bool prim
@@ -150,10 +182,12 @@ type _ prim =
   | Enumerated : (string * int) list -> int prim
   | Null : unit prim
   | Oid : Oid.t prim
+  | Relative_oid : Relative_oid.t prim
   | Bit_string : (int * string) prim
   | Octet_string : string prim
   | Chars : chars -> string prim
   | Time : time -> string prim
+  | Iri : iri -> string prim
 
 type _ t =
   | Prim : 'a prim -> 'a t
@@ -242,6 +276,7 @@ let prim_number : type a. a prim -> int = function
   | Octet_string -> 4
   | Null -> 5
   | Oid -> 6
+  | Relative_oid -> 13
   | Enumerated _ -> 10
   | Chars Utf8 -> 12
   | Chars Numeric -> 18
@@ -253,6 +288,11 @@ let prim_number : type a. a prim -> int = function
   | Chars Visible -> 26
   | Chars Universal_chars -> 28
   | Chars Bmp -> 30
+  | Time Date -> 31
+  | Time Time_of_day -> 32
+  | Time Date_time -> 33
+  | Iri Oid_iri -> 35
+  | Iri Relative_oid_iri -> 36
 
 let union a b =
   match (a, b) with All, _ | _, All -> All | Tags a, Tags b -> Tags (a @ b)
@@ -320,6 +360,7 @@ let enumerated ns =
 
 let null = Prim Null
 let oid = Prim Oid
+let relative_oid = Prim Relative_oid
 let bit_string = Prim Bit_string
 let octet_string = Prim Octet_string
 let utf8_string = Prim (Chars Utf8)
@@ -332,6 +373,11 @@ let bmp_string = Prim (Chars Bmp)
 let universal_string = Prim (Chars Universal_chars)
 let utc_time = Prim (Time Utc)
 let generalized_time = Prim (Time Generalized)
+let date = Prim (Time Date)
+let time_of_day = Prim (Time Time_of_day)
+let date_time = Prim (Time Date_time)
+let oid_iri = Prim (Iri Oid_iri)
+let relative_oid_iri = Prim (Iri Relative_oid_iri)
 let any = Any
 
 (* Constraints. SIZE bounds are below 65536 and form one range
@@ -438,11 +484,38 @@ let in_size ~min ~max (inner : string t) v =
   let n = char_count k v in
   n >= min && n <= max
 
-(* DEFAULT applies to a terminal type other than OBJECT IDENTIFIER, under at
-   most one EXPLICIT tag and then unconstrained (everparse-asn1
-   README:464-467,496-498; a constrained DEFAULT under EXPLICIT has no
-   literal, spec/ASN1.Base.fst:688), with a value its constraint admits
-   (spec/ASN1.Base.fst:745). *)
+(* The characters of the times and IRIs, as their contents rules state them
+   (spec/ASN1.Spec.Time.fst:166-210, spec/ASN1.Spec.IRI.fst:50-58). *)
+let time_ok k s =
+  match k with
+  | Utc -> Der.utc_ok s
+  | Generalized -> Der.generalized_ok s
+  | Date -> Der.date_ok s
+  | Time_of_day -> Der.time_of_day_ok s
+  | Date_time -> Der.date_time_ok s
+
+let time_keyword = function
+  | Utc -> "UTCTime"
+  | Generalized -> "GeneralizedTime"
+  | Date -> "DATE"
+  | Time_of_day -> "TIME-OF-DAY"
+  | Date_time -> "DATE-TIME"
+
+let iri_ok k s =
+  match k with
+  | Oid_iri -> Der.oid_iri_ok s
+  | Relative_oid_iri -> Der.relative_oid_iri_ok s
+
+let iri_keyword = function
+  | Oid_iri -> "OID-IRI"
+  | Relative_oid_iri -> "RELATIVE-OID-IRI"
+
+(* DEFAULT applies to a terminal type other than OBJECT IDENTIFIER and
+   RELATIVE-OID, under at most one EXPLICIT tag and then unconstrained
+   (everparse-asn1 README:464-467,495-498; a constrained DEFAULT under
+   EXPLICIT has no literal, spec/ASN1.Base.fst:688), with a value its
+   constraint admits (spec/ASN1.Base.fst:745); a time or IRI default is a
+   DER value of its type (README:431-434). *)
 let rec check_default : type a. string -> explicit:bool -> a t -> a -> unit =
  fun name ~explicit t v ->
   let fail fmt =
@@ -472,6 +545,17 @@ let rec check_default : type a. string -> explicit:bool -> a t -> a -> unit =
       fail
         "DEFAULT on an OBJECT IDENTIFIER, which everparse-asn1 does not \
          support (README:464-467)"
+  | Prim Relative_oid ->
+      fail
+        "DEFAULT on a RELATIVE-OID, which everparse-asn1 does not support \
+         (README:464-467,495)"
+  | Prim (Time k) ->
+      if not (time_ok k v) then
+        fail "the default %S is not a DER %s (README:431-434)" v
+          (time_keyword k)
+  | Prim (Iri k) ->
+      if not (iri_ok k v) then
+        fail "the default %S is not a DER %s (README:431-434)" v (iri_keyword k)
   | Prim (Bounded_integer { min; max }) ->
       unconstrained "a constrained INTEGER";
       if Int64.compare v min < 0 || Int64.compare v max > 0 then
@@ -764,21 +848,27 @@ let equal_prim : type a. a prim -> a -> a -> bool =
   | Enumerated _ -> Int.equal a b
   | Null -> true
   | Oid -> Oid.equal a b
+  | Relative_oid -> Relative_oid.equal a b
   | Bit_string ->
       let ua, sa = a and ub, sb = b in
       Int.equal ua ub && String.equal sa sb
   | Octet_string -> String.equal a b
   | Chars _ -> String.equal a b
   | Time _ -> String.equal a b
+  | Iri _ -> String.equal a b
 
 (* A key is a mandatory component of a terminal type other than RELATIVE-OID,
-   without constraints, under any tags (README:300-302). Its values are
+   without constraints, under any tags (README:308-309). Its values are
    compared as they are encoded. *)
 type 'k key_shape = Key of ('k -> 'k -> bool) | Not_key of string
 
 let rec key_shape : type k. k t -> k key_shape = function
   | Prim (Bounded_integer _ | Enumerated _) | Size _ ->
       Not_key "constrained; everparse-asn1 takes an unconstrained key"
+  | Prim Relative_oid ->
+      Not_key
+        "a RELATIVE-OID, which everparse-asn1 does not take as a key \
+         (README:308-309)"
   | Prim p -> Key (equal_prim p)
   | Implicit { inner; _ } | Explicit { inner; _ } -> key_shape inner
   | Map { inner; encode; _ } -> (
@@ -903,9 +993,6 @@ let chars_ok k s =
   | Bmp -> bmp_ok s
   | Universal_chars -> universal_ok s
 
-let time_ok k s =
-  match k with Utc -> utc_ok s | Generalized -> generalized_ok s
-
 let tlv (t : tag) content =
   Der.tlv ~cls:(class_bits t.cls) ~constructed:t.constructed ~number:t.number
     content
@@ -956,6 +1043,9 @@ let check_prim : type a. a prim -> bytes -> int -> int -> unit =
                { value = Option.fold ~none:(-1) ~some:Int64.to_int v; valid }))
   | Null -> if n <> 0 then rule_broken ~at:cs
   | Oid -> check_subidentifiers buf cs ce
+  | Relative_oid ->
+      (* X.690 8.20.2, spec/ASN1.Spec.Content.OIDU32.fst:59-61 *)
+      check_subidentifiers buf cs ce
   | Bit_string ->
       (* X.690 11.2.1, spec/ASN1.Spec.Content.BITSTRING.fst:13-24 *)
       if n = 0 then rule_broken ~at:cs;
@@ -967,7 +1057,11 @@ let check_prim : type a. a prim -> bytes -> int -> int -> unit =
   | Chars k ->
       if not (chars_ok k (Bytes.sub_string buf cs n)) then rule_broken ~at:cs
   | Time k ->
+      (* X.690 8.26.2, 11.7, 11.8; spec/ASN1.Spec.Content.TIME.fst:11-25 *)
       if not (time_ok k (Bytes.sub_string buf cs n)) then rule_broken ~at:cs
+  | Iri k ->
+      (* X.690 8.21, 8.22; spec/ASN1.Spec.Content.IRI.fst:9-13 *)
+      if not (iri_ok k (Bytes.sub_string buf cs n)) then rule_broken ~at:cs
 
 let read_oid buf cs ce =
   let first, p = subidentifier buf cs ce in
@@ -984,6 +1078,20 @@ let read_oid buf cs ce =
   in
   Array.of_list (Oid.arc a :: Oid.arc b :: arcs [] p)
 
+let read_relative_oid buf cs ce =
+  let rec arcs acc p =
+    if p >= ce then Array.of_list (List.rev acc)
+    else
+      let v, p = subidentifier buf p ce in
+      arcs (Oid.arc v :: acc) p
+  in
+  arcs [] cs
+
+let relative_oid_content (o : Relative_oid.t) =
+  let b = Buffer.create 16 in
+  Array.iter (fun a -> base128 b (Oid.int64_of_arc a)) o;
+  Buffer.contents b
+
 let read_prim : type a. a prim -> bytes -> int -> int -> a =
  fun p buf cs ce ->
   let n = ce - cs in
@@ -998,10 +1106,12 @@ let read_prim : type a. a prim -> bytes -> int -> int -> a =
       | None -> Types.raise_invalid_tag ~at:cs (Int64.to_int v))
   | Null -> ()
   | Oid -> read_oid buf cs ce
+  | Relative_oid -> read_relative_oid buf cs ce
   | Bit_string -> (byte buf cs, Bytes.sub_string buf (cs + 1) (n - 1))
   | Octet_string -> Bytes.sub_string buf cs n
   | Chars _ -> Bytes.sub_string buf cs n
   | Time _ -> Bytes.sub_string buf cs n
+  | Iri _ -> Bytes.sub_string buf cs n
 
 let prim_content : type a. a prim -> a -> string =
  fun p v ->
@@ -1022,6 +1132,7 @@ let prim_content : type a. a prim -> a -> string =
       integer_of_int64 (Int64.of_int v)
   | Null -> ""
   | Oid -> oid_content v
+  | Relative_oid -> relative_oid_content v
   | Bit_string ->
       let u, s = v in
       let n = String.length s in
@@ -1040,7 +1151,12 @@ let prim_content : type a. a prim -> a -> string =
       v
   | Time k ->
       if not (time_ok k v) then
-        cannot_write "%S is not a DER time (X.690 11.7, 11.8)" v;
+        cannot_write "%S is not a DER %s (X.690 8.26.2, 11.7, 11.8)" v
+          (time_keyword k);
+      v
+  | Iri k ->
+      if not (iri_ok k v) then
+        cannot_write "%S is not a DER %s (X.690 8.21, 8.22)" v (iri_keyword k);
       v
 
 (* Nodes. [check buf pos lim] checks the value at [pos], which ends before

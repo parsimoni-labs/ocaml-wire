@@ -2106,6 +2106,33 @@ module Asn1 : sig
     (** [pp] prints an object identifier as {!to_string} does. *)
   end
 
+  (** Relative object identifiers, with arcs below [2{^32}]. *)
+  module Relative_oid : sig
+    type t
+    (** The type for relative object identifiers. *)
+
+    val v : int list -> t
+    (** [v ns] is the relative object identifier of the arcs [ns]. Raises
+        [Invalid_argument] if [ns] is empty, or an arc is negative or not below
+        [2{^32}]. *)
+
+    val equal : t -> t -> bool
+    (** [equal r r'] is [true] iff [r] and [r'] have the same arcs. *)
+
+    val compare : t -> t -> int
+    (** [compare] orders relative object identifiers arc by arc. *)
+
+    val of_string : string -> t option
+    (** [of_string s] is the relative object identifier of the dotted string
+        [s]. *)
+
+    val to_string : t -> string
+    (** [to_string r] is the dotted string of [r]. *)
+
+    val pp : Format.formatter -> t -> unit
+    (** [pp] prints a relative object identifier as {!to_string} does. *)
+  end
+
   (** {1:prim Primitives} *)
 
   val bool : bool t
@@ -2128,6 +2155,9 @@ module Asn1 : sig
 
   val oid : Oid.t t
   (** [oid] is OBJECT IDENTIFIER. *)
+
+  val relative_oid : Relative_oid.t t
+  (** [relative_oid] is RELATIVE-OID. *)
 
   val bit_string : (int * string) t
   (** [bit_string] is BIT STRING as its count of unused bits, [0] to [7], and
@@ -2167,6 +2197,24 @@ module Asn1 : sig
   (** [generalized_time] is GeneralizedTime as its characters,
       [YYYYMMDDhhmmss[.f]Z]. *)
 
+  val date : string t
+  (** [date] is DATE as its characters, [YYYYMMDD], the year from 1582. *)
+
+  val time_of_day : string t
+  (** [time_of_day] is TIME-OF-DAY as its characters, [hhmmss]. *)
+
+  val date_time : string t
+  (** [date_time] is DATE-TIME as its characters, [YYYYMMDDhhmmss], the year
+      from 1582. *)
+
+  val oid_iri : string t
+  (** [oid_iri] is OID-IRI as its UTF-8 characters, [/] then labels separated by
+      [/]. *)
+
+  val relative_oid_iri : string t
+  (** [relative_oid_iri] is RELATIVE-OID-IRI as its UTF-8 characters, labels
+      separated by [/]. *)
+
   val any : string t
   (** [any] is ANY: one whole DER element, tag and length included. *)
 
@@ -2199,7 +2247,8 @@ module Asn1 : sig
   val default : string -> 'a -> 'a t -> 'a Field.t
   (** [default name v t] is a component [name] of type [t] marked [DEFAULT v]:
       absent when it is [v]. Raises [Invalid_argument] unless [t] is a primitive
-      other than OBJECT IDENTIFIER, possibly under one EXPLICIT tag. *)
+      other than OBJECT IDENTIFIER and RELATIVE-OID, possibly under one EXPLICIT
+      tag, and on a time or IRI [v] that is not a DER value of [t]. *)
 
   val sequence : string -> 'f -> ('f, 'r) Codec.fields -> 'r t
   (** [sequence name make fields] is the SEQUENCE [name] of [fields]. Raises

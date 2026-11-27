@@ -71,7 +71,7 @@ val subidentifier : bytes -> int -> int -> int64 * int
 
 val check_subidentifiers : bytes -> int -> int -> unit
 (** [check_subidentifiers buf cs ce] checks that [cs]..[ce] is one or more
-    subidentifiers. *)
+    subidentifiers: the contents of an OBJECT IDENTIFIER or a RELATIVE-OID. *)
 
 val integer_ok : bytes -> int -> int -> bool
 (** [integer_ok buf cs ce] is [true] iff [cs]..[ce] is an INTEGER in the fewest
@@ -115,6 +115,24 @@ val utc_ok : string -> bool
 val generalized_ok : string -> bool
 (** [generalized_ok s] is [true] iff [s] is a DER GeneralizedTime,
     [YYYYMMDDhhmmss[.f]Z]. *)
+
+val date_ok : string -> bool
+(** [date_ok s] is [true] iff [s] is a DER DATE, [YYYYMMDD] from year 1582. *)
+
+val time_of_day_ok : string -> bool
+(** [time_of_day_ok s] is [true] iff [s] is a DER TIME-OF-DAY, [hhmmss]. *)
+
+val date_time_ok : string -> bool
+(** [date_time_ok s] is [true] iff [s] is a DER DATE-TIME, [YYYYMMDDhhmmss] from
+    year 1582. *)
+
+val oid_iri_ok : string -> bool
+(** [oid_iri_ok s] is [true] iff [s] is an OID-IRI: UTF-8, [/] then labels
+    separated by [/]. *)
+
+val relative_oid_iri_ok : string -> bool
+(** [relative_oid_iri_ok s] is [true] iff [s] is a RELATIVE-OID-IRI: UTF-8
+    labels separated by [/]. *)
 
 val any_end : bytes -> int -> int -> int
 (** [any_end buf pos lim] checks the one DER value of any tag at [pos], before

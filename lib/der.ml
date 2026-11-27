@@ -241,11 +241,22 @@ let generalized_ok s =
     && s.[n - 2] <> '0'
     && s.[n - 1] = 'Z'
 
-(* The universal types ANY checks the contents of, beyond those with a
-   combinator: DATE, TIME-OF-DAY, DATE-TIME (spec/ASN1.Spec.Time.fst:191-210)
-   and the IRIs (spec/ASN1.Spec.IRI.fst). *)
+(* DATE, TIME-OF-DAY and DATE-TIME (X.680 38.4.1-38.4.3, X.690 8.26.2):
+   YYYYMMDD, hhmmss and YYYYMMDDhhmmss, the year Basic, 1582 to 9999, and a
+   leap second at the end of any minute, these being local times
+   (spec/ASN1.Spec.Time.fst:81-89,191-210). *)
 let basic_year_ok s = digits s 0 4 && num s 0 4 >= 1582
+let date_ok s = String.length s = 8 && yyyymmdd_ok s 0 && basic_year_ok s
+let time_of_day_ok s = String.length s = 6 && hms_ok ~utc:false s 0
 
+let date_time_ok s =
+  String.length s = 14
+  && yyyymmdd_ok s 0 && basic_year_ok s && hms_ok ~utc:false s 8
+
+(* OID-IRI and RELATIVE-OID-IRI (X.680 34, 35; X.690 8.21, 8.22): UTF-8,
+   "/"-separated non-empty labels of RFC 3987 iunreserved or non-ASCII
+   octets, an all-digit label without a leading zero (X.660 7.5), and a
+   leading "/" for OID-IRI only (spec/ASN1.Spec.IRI.fst:19-58). *)
 let iri_labels_ok s start =
   let n = String.length s in
   let label_char c =
@@ -266,6 +277,11 @@ let iri_labels_ok s start =
            (all_digits && match s.[i] with '0' .. '9' -> true | _ -> false)
   in
   go start start true
+
+let oid_iri_ok s =
+  utf8_ok s && String.length s > 0 && s.[0] = '/' && iri_labels_ok s 1
+
+let relative_oid_iri_ok s = utf8_ok s && iri_labels_ok s 0
 
 (* Bytes with no [int] wider than they need. *)
 let minimal_integer s =
@@ -325,22 +341,11 @@ let leaf_ok number buf cs ce =
   | 26 -> String.for_all visible_char (s ())
   | 28 -> universal_ok (s ())
   | 30 -> bmp_ok (s ())
-  | 31 ->
-      let s = s () in
-      String.length s = 8 && yyyymmdd_ok s 0 && basic_year_ok s
-  | 32 ->
-      let s = s () in
-      String.length s = 6 && hms_ok ~utc:false s 0
-  | 33 ->
-      let s = s () in
-      String.length s = 14
-      && yyyymmdd_ok s 0 && basic_year_ok s && hms_ok ~utc:false s 8
-  | 35 ->
-      let s = s () in
-      utf8_ok s && String.length s > 0 && s.[0] = '/' && iri_labels_ok s 1
-  | 36 ->
-      let s = s () in
-      utf8_ok s && iri_labels_ok s 0
+  | 31 -> date_ok (s ())
+  | 32 -> time_of_day_ok (s ())
+  | 33 -> date_time_ok (s ())
+  | 35 -> oid_iri_ok (s ())
+  | 36 -> relative_oid_iri_ok (s ())
   | _ -> true
 
 (* ANY: one DER value of any tag, its universal primitive contents checked and
