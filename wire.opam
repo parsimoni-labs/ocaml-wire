@@ -21,10 +21,6 @@ depends: [
   "mdx" {with-test}
   "odoc" {with-doc}
 ]
-depopts: [
-  "hardcaml" {= "v0.17.1"}
-  "base"
-]
 build: [
   ["dune" "subst"] {dev}
   [
