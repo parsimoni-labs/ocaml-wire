@@ -24,7 +24,23 @@ let reject_no_int64_slot ~combinator name typ =
       "Wire.Field.%s: field %S does not have a full-width int64 validation slot"
       combinator name
 
+(* A DER component has no integer view and no action hook: [Asn1] reads it,
+   and would drop either. *)
+let reject_refined_der name typ ~refined =
+  match typ with
+  | Types.Der _ when refined ->
+      Fmt.invalid_arg
+        "Wire.Field.v: field %S is an ASN.1 component, which takes no \
+         constraint and no action: DER has no expression over its components"
+        name
+  | _ -> ()
+
 let v name ?constraint_ ?self_constraint ?self_int64 ?action ?doc typ =
+  reject_refined_der name typ
+    ~refined:
+      (Option.is_some constraint_
+      || Option.is_some self_constraint
+      || Option.is_some self_int64 || Option.is_some action);
   if Option.is_some self_int64 then
     reject_no_int64_slot ~combinator:"v ?self_int64" name typ;
   let constraint_ =

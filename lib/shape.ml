@@ -203,7 +203,45 @@ let reject_duplicate_field_names name fields =
       | Some field -> Hashtbl.add seen field ())
     fields
 
+(* Whether a type holds an ASN.1 component, under any wrapper a binary codec
+   reads through. *)
+let rec has_der : type a. a Types.typ -> bool = function
+  | Types.Der _ -> true
+  | Types.Map { inner; _ } -> has_der inner
+  | Types.Where { inner; _ } -> has_der inner
+  | Types.Optional { inner; _ } -> has_der inner
+  | Types.Optional_or { inner; _ } -> has_der inner
+  | Types.Enum { base; _ } -> has_der base
+  | Types.Apply { typ; _ } -> has_der typ
+  | Types.Array { elem; _ } -> has_der elem
+  | Types.Repeat { elem; _ } -> has_der elem
+  | Types.Single_elem { elem; _ } -> has_der elem
+  | Types.Casetype { tag; cases; _ } -> has_der tag || cases_have_der cases
+  | Types.Union { cases; _ } -> cases_have_der cases
+  | _ -> false
+
+and cases_have_der : type a k. (a, k) Types.case_branch list -> bool =
+ fun cases ->
+  List.exists
+    (fun (Types.Case_branch { cb_inner; _ }) -> has_der cb_inner)
+    cases
+
+(* A component of [Asn1.sequence] has a DER tag and length, which a binary
+   record has no reader for and 3D no type for. *)
+let reject_der_fields name fields =
+  List.iter
+    (fun (Types.Field f) ->
+      if has_der f.field_typ then
+        Fmt.invalid_arg
+          "Codec.v %s: field %s holds an ASN.1 component, which only \
+           Asn1.sequence and Asn1.set read; a DER value enters a binary record \
+           as nested ~size (codec (Asn1.codec t))"
+          name
+          (Option.value ~default:"<anon>" f.field_name))
+    fields
+
 let reject_invalid_codec_shape ?where name fields =
+  reject_der_fields name fields;
   reject_duplicate_field_names name fields;
   reject_greedy_not_last name fields;
   reject_zeroterm_with_sibling name fields;

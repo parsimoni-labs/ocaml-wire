@@ -52,4 +52,5 @@ let () =
       Test_shape.suite;
       Test_names.suite;
       Test_layout.suite;
+      Test_asn1.suite;
     ]
