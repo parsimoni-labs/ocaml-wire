@@ -157,10 +157,13 @@ measures the trick, not the library, and its win belongs in the generator.
 **Application benchmarks** (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
-does the same work with the codec's read and write API, as a user would:
-`Codec.Word.check`, `ok` and `get` once per header (or CLCW word) and
-`Codec.Word.read` per field, `Codec.writer` per header written, and
-`Codec.get`/`Codec.set` for a lone field.
+does the same work as a user would, in the terms of docs/api.md: the
+interpreted view loop for the `Wire.Codec` rows (`Codec.View.check`, `is_ok`
+and `get` once per header, `Codec.View.read` per field and `Codec.View.set`
+per field written in place), the same loop over the generated module for the
+generated rows (`check`, `is_ok`, `get`, an accessor per field, `set_<field>`
+and `write`), and a fold with its visitor `~f` where the workload is one pass
+over many records.
 
 **Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one
 exception to the three tiers: it measures the code generators against
