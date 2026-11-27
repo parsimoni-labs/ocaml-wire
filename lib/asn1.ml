@@ -869,8 +869,10 @@ and choice_node : type a. a alternative list -> a node =
     content = no_content;
   }
 
-(* The root of a DER codec: the codec's one field, which the [.asn] printer
-   reads too. *)
+(* The root of a DER codec, its ASN.1 type, as the typ of the codec's one
+   field. It is how a DER codec is told from a binary one: by its views,
+   which find their record there, by [project] and [contained], and under a
+   [containing]. *)
 type _ Types.der += Root : 'a t -> 'a Types.der
 
 let rec type_name : type a. a t -> string = function
@@ -1059,7 +1061,7 @@ let pp ppf s = Fmt.string ppf s.text
 let whole (s : Types.struct_) =
   List.find_map
     (fun (Types.Field f) ->
-      match f.field_typ with Types.Der (Whole t) -> Some (Pack t) | _ -> None)
+      match f.field_typ with Types.Der (Root t) -> Some (Pack t) | _ -> None)
     s.fields
 
 (* The ASN.1 type the content of a [containing] is, if it is DER. *)
@@ -1555,10 +1557,6 @@ let project m c =
         (Codec.name c)
   | types -> print m types
 
-let project_type m t =
-  check_module_name m;
-  print m [ (m, Pack t) ]
-
 (* The binary types under a [containing], each with its path. *)
 let rec binaries : type a. path:string -> a t -> (string * binary) list =
  fun ~path t ->
@@ -1635,8 +1633,6 @@ let schemas_of types =
 
 let contained c =
   schemas_of (types_of ~base:(ident ~upper:true (Codec.name c)) c)
-
-let contained_type t = schemas_of [ ("Root", Pack t) ]
 
 let write ~outdir ss =
   let rec check = function

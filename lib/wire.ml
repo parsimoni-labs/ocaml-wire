@@ -1172,12 +1172,6 @@ module Private = struct
   module Shape = Shape
   module Gen = Codec.Gen
   module Testing = Codec.Testing
-
-  module Asn1_type = struct
-    let project = Asn1.project_type
-    let contained = Asn1.contained_type
-  end
-
   module Names = Names
   module Layout = Record_layout
 

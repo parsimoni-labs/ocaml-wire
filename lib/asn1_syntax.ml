@@ -263,13 +263,6 @@ and component =
 
 type _ Types.der += Component_of : 'a decorated -> 'a Types.der
 
-(* The ASN.1 type of a codec [codec] makes, which the codec's struct holds as
-   the typ of one of its fields: [project], [contained] and [containing] tell a
-   DER codec from a binary one by it. *)
-type _ Types.der += Whole : 'a t -> 'a Types.der
-
-let whole_typ t = Types.Der (Whole t)
-
 (* The tags a value of a type can start with. [All] is ANY's: every tag. *)
 type tags = All | Tags of tag list
 

@@ -5,7 +5,7 @@
 
 open Wire
 
-let project = Private.Asn1_type.project
+let project m t = Asn1.project m (Asn1.codec t)
 
 (* [f ()] raises [Invalid_argument] with a message that mentions [msg]. *)
 let rejects ~msg f =
@@ -16,7 +16,7 @@ let rejects ~msg f =
         Alcotest.failf "Invalid_argument %S does not mention %S" m msg
 
 let printed s = Fmt.str "%a" Asn1.pp s
-let contained (Asn1_modules.Packed t) = Private.Asn1_type.contained t
+let contained (Asn1_modules.Packed t) = Asn1.contained (Asn1.codec t)
 let projected name (Asn1_modules.Packed t) = project name t
 
 (* -- The printed modules -- *)
@@ -314,7 +314,7 @@ let test_contained_once () =
   in
   Alcotest.(check (list string))
     "one schema" [ "Payload" ]
-    (List.map (fun (s : Everparse.t) -> s.name) (Private.Asn1_type.contained t))
+    (List.map (fun (s : Everparse.t) -> s.name) (Asn1.contained (Asn1.codec t)))
 
 (* -- What the projection refuses -- *)
 

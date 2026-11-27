@@ -324,15 +324,3 @@ val pp : Format.formatter -> schema -> unit
 val write : outdir:string -> schema list -> unit
 (** [write ~outdir ss] writes the [.asn] file of each schema in [outdir]. Raises
     [Invalid_argument] if two different schemas have one name. *)
-
-(**/**)
-
-val whole_typ : 'a t -> 'a Types.typ
-(** [whole_typ t] is the typ of the field by which the struct of {!codec}[ t]
-    names [t], which {!project} and {!contained} read. Internal use. *)
-
-val project_type : string -> 'a t -> schema
-(** [project_type m t] is {!project} [m] of the codec of [t]. Internal use. *)
-
-val contained_type : 'a t -> Everparse.t list
-(** [contained_type t] is {!contained} of the codec of [t]. Internal use. *)

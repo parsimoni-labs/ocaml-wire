@@ -204,13 +204,6 @@ and component =
 type _ Types.der +=
   | Component_of : 'a decorated -> 'a Types.der
         (** The typ of the [Field.t] of a component. *)
-  | Whole : 'a t -> 'a Types.der
-        (** The typ of the field by which the struct of a DER codec names its
-            ASN.1 type. *)
-
-val whole_typ : 'a t -> 'a Types.typ
-(** [whole_typ t] is the typ of the field by which the struct of the codec of
-    [t] names [t]. *)
 
 (** The type for the tags a value of a type can start with. *)
 type tags =

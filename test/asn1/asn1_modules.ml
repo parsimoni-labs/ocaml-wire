@@ -471,7 +471,7 @@ let types =
     ("X509Lite", Packed x509lite);
   ]
 
-let all = List.map (fun (m, Packed t) -> Private.Asn1_type.project m t) types
+let all = List.map (fun (m, Packed t) -> Asn1.project m (Asn1.codec t)) types
 let spki = Packed spki
 let constructs = Packed constructs
 let names = Packed names
