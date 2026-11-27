@@ -156,6 +156,42 @@ let test_oid_arc_rejects () =
   if Sys.int_size > 32 then
     rejects ~msg:"between 0 and 2^32 - 1" (fun () -> Asn1.Oid.(rsa <| 1 lsl 32))
 
+(* -- Relative object identifiers -- *)
+
+let reloid = Alcotest.testable Asn1.Relative_oid.pp Asn1.Relative_oid.equal
+
+(* A RELATIVE-OID is one or more arcs below 2^32, with no rule on the first
+   two (X.690 8.20.2, spec/ASN1.Base.fst:204-207). *)
+let test_relative_oid_strings () =
+  List.iter
+    (fun s ->
+      match Asn1.Relative_oid.of_string s with
+      | None -> Alcotest.failf "Relative_oid.of_string %S: None" s
+      | Some r -> Alcotest.(check string) s s (Asn1.Relative_oid.to_string r))
+    [ "0"; "5"; "99.1"; "1.2.3"; "2147483648" (* 2^31 *); "4294967295" ];
+  Alcotest.(check string)
+    "v" "8571.3.2"
+    (Asn1.Relative_oid.to_string (Asn1.Relative_oid.v [ 8571; 3; 2 ]));
+  Alcotest.(check string)
+    "pp" "1.2"
+    (Fmt.str "%a" Asn1.Relative_oid.pp (Asn1.Relative_oid.v [ 1; 2 ]));
+  List.iter
+    (fun s ->
+      Alcotest.(check (option reloid)) s None (Asn1.Relative_oid.of_string s))
+    [ ""; "."; "1."; ".1"; "1..2"; "01"; "-1"; "a"; "4294967296" (* 2^32 *) ];
+  Alcotest.(check bool)
+    "compare" true
+    (Asn1.Relative_oid.(compare (v [ 1; 2 ]) (v [ 1; 2; 0 ])) < 0)
+
+let test_relative_oid_v_rejects () =
+  rejects ~msg:"a RELATIVE-OID has at least one arc" (fun () ->
+      Asn1.Relative_oid.v []);
+  rejects ~msg:"Relative_oid.v -1: an arc is between 0 and 2^32 - 1" (fun () ->
+      Asn1.Relative_oid.v [ 1; -1 ]);
+  if Sys.int_size > 32 then
+    rejects ~msg:"an arc is between 0 and 2^32 - 1" (fun () ->
+        Asn1.Relative_oid.v [ 1 lsl 32 ])
+
 (* -- Positive shapes the rejections must not catch -- *)
 
 (* A SEQUENCE tells an OPTIONAL [0] IMPLICIT INTEGER from a following [0]
@@ -187,7 +223,15 @@ let test_default_shapes () =
   builds (fun () -> Asn1.default "b" false Asn1.bool);
   builds (fun () -> Asn1.default "v" 1L (Asn1.bounded_integer ~min:0L ~max:2L));
   builds (fun () ->
-      Asn1.default "s" "ab" (Asn1.size ~min:1 ~max:2 Asn1.utf8_string))
+      Asn1.default "s" "ab" (Asn1.size ~min:1 ~max:2 Asn1.utf8_string));
+  (* DEFAULT on DATE, TIME-OF-DAY, DATE-TIME and the IRIs, also under one
+     EXPLICIT tag (README:431-434,464-467). *)
+  builds (fun () -> Asn1.default "d" "20250101" Asn1.date);
+  builds (fun () ->
+      Asn1.default "t" "120000" (Asn1.explicit 0 Asn1.time_of_day));
+  builds (fun () -> Asn1.default "dt" "20250101120000" Asn1.date_time);
+  builds (fun () -> Asn1.default "i" "/ISO/a" Asn1.oid_iri);
+  builds (fun () -> Asn1.default "r" "a/1" Asn1.relative_oid_iri)
 
 (* -- Refused when built: one test per shape of docs/asn1.md -- *)
 
@@ -329,6 +373,26 @@ let test_default_on_oid () =
   rejects ~msg:"DEFAULT on an OBJECT IDENTIFIER" (fun () ->
       Asn1.default "d" rsa Asn1.oid)
 
+let test_default_on_relative_oid () =
+  rejects ~msg:"DEFAULT on a RELATIVE-OID" (fun () ->
+      Asn1.default "d" (Asn1.Relative_oid.v [ 1 ]) Asn1.relative_oid)
+
+(* everparse-asn1 checks that a time or IRI DEFAULT is a DER value of its type
+   (README:431-434). *)
+let test_default_not_a_value () =
+  rejects ~msg:"the default \"2025-01-01\" is not a DER DATE" (fun () ->
+      Asn1.default "d" "2025-01-01" Asn1.date);
+  rejects ~msg:"the default \"240000\" is not a DER TIME-OF-DAY" (fun () ->
+      Asn1.default "t" "240000" (Asn1.explicit 0 Asn1.time_of_day));
+  rejects ~msg:"the default \"15000101120000\" is not a DER DATE-TIME"
+    (fun () -> Asn1.default "dt" "15000101120000" Asn1.date_time);
+  rejects ~msg:"the default \"ISO\" is not a DER OID-IRI" (fun () ->
+      Asn1.default "i" "ISO" Asn1.oid_iri);
+  rejects ~msg:"the default \"/a\" is not a DER RELATIVE-OID-IRI" (fun () ->
+      Asn1.default "r" "/a" Asn1.relative_oid_iri);
+  rejects ~msg:"the default \"250101120000\" is not a DER UTCTime" (fun () ->
+      Asn1.default "u" "250101120000" Asn1.utc_time)
+
 let test_default_explicit_constrained_integer () =
   rejects ~msg:"DEFAULT on a constrained INTEGER under an EXPLICIT tag"
     (fun () ->
@@ -358,6 +422,16 @@ let test_size_on_size () =
   rejects ~msg:"a type takes one SIZE" (fun () ->
       Asn1.size ~min:1 ~max:2 (Asn1.size ~min:0 ~max:4 Asn1.octet_string))
 
+(* SIZE applies to OCTET STRING and the character strings only
+   (README:452-458); RELATIVE-OID has no [string] carrier, so [size] does not
+   take it. *)
+let test_size_on_times_and_iris () =
+  List.iter
+    (fun t ->
+      rejects ~msg:"applies to an OCTET STRING or a character string only"
+        (fun () -> Asn1.size ~min:0 ~max:8 t))
+    Asn1.[ date; time_of_day; date_time; oid_iri; relative_oid_iri ]
+
 let test_size_not_a_range () =
   rejects ~msg:"SIZE (3..2) is not a range" (fun () ->
       Asn1.size ~min:3 ~max:2 Asn1.octet_string);
@@ -384,6 +458,16 @@ let test_key_constrained () =
   let k = Asn1.required "k" (Asn1.bounded_integer ~min:0L ~max:9L) in
   rejects ~msg:"the key \"k\" is constrained" (fun () ->
       Asn1.defined_by "d" ~on:k [ case_int 1L ])
+
+let test_key_relative_oid () =
+  let k = Asn1.required "k" Asn1.relative_oid in
+  rejects ~msg:"the key \"k\" is a RELATIVE-OID" (fun () ->
+      Asn1.defined_by "d" ~on:k [ case_int (Asn1.Relative_oid.v [ 1 ]) ]);
+  (* An IRI or a DATE is a key (README:308-311). *)
+  let k = Asn1.required "k" Asn1.oid_iri in
+  builds (fun () -> Asn1.defined_by "d" ~on:k [ case_int "/ISO" ]);
+  let k = Asn1.required "k" Asn1.date in
+  builds (fun () -> Asn1.defined_by "d" ~on:k [ case_int "20250101" ])
 
 let test_key_not_primitive () =
   let k = Asn1.required "k" (Asn1.sequence_of Asn1.integer) in
@@ -705,6 +789,149 @@ let test_rule_oid () =
       Alcotest.(check string) "2^32 - 1" "1.2.4294967295" (Asn1.Oid.to_string o)
   | Error e -> Alcotest.failf "%a" Error.pp e);
   refuses oid_c (of_hex "06072a9080808000")
+
+(* [c] writes [v] as bytes that read back as [v]. *)
+let round_trip (type a) (testable : a Alcotest.testable) (c : a Codec.t) v =
+  let s = Codec.to_string c v in
+  match Codec.decode ~consume:`All c (Bytes.of_string s) 0 with
+  | Ok v' -> Alcotest.check testable (to_hex s) v v'
+  | Error e -> Alcotest.failf "%s: refused (%a)" (to_hex s) Error.pp e
+
+(* X.690 8.20.2: one or more subidentifiers, each in the fewest octets and
+   below 2^32 (spec/ASN1.Spec.Content.OIDU32.fst:59-61), under UNIVERSAL 13
+   (spec/ASN1.Base.fst:418). *)
+let test_rule_relative_oid () =
+  let c = Asn1.codec Asn1.relative_oid in
+  accepts c (of_hex "0d0100");
+  accepts c (of_hex "0d03010203");
+  accepts c (of_hex "0d058fffffff7f");
+  refuses c (of_hex "0d00");
+  refuses c (of_hex "0d028001");
+  refuses c (of_hex "0d0181");
+  refuses c (of_hex "0d069080808000");
+  refuses c (of_hex "2d03010203");
+  refuses c (of_hex "0603010203");
+  (match Codec.decode c (Bytes.of_string (of_hex "0d058fffffff7f")) 0 with
+  | Ok r ->
+      Alcotest.(check string)
+        "2^32 - 1" "4294967295"
+        (Asn1.Relative_oid.to_string r)
+  | Error e -> Alcotest.failf "%a" Error.pp e);
+  writes c (Asn1.Relative_oid.v [ 8571; 3; 2 ]) "0d04c27b0302";
+  List.iter (round_trip reloid c)
+    (List.map
+       (fun s -> Option.get (Asn1.Relative_oid.of_string s))
+       [ "0"; "1.2.3"; "128"; "2147483648"; "4294967295" ])
+
+let date_c = Asn1.codec Asn1.date
+let tod_c = Asn1.codec Asn1.time_of_day
+let date_time_c = Asn1.codec Asn1.date_time
+
+(* X.690 8.26.2, X.680 38.4.1: DATE is YYYYMMDD, the year Basic, 1582 to 9999
+   (spec/ASN1.Spec.Time.fst:191-200), under UNIVERSAL 31
+   (spec/ASN1.Base.fst:431). *)
+let test_rule_date () =
+  accepts date_c "\x1f\x1f\x0815821015";
+  accepts date_c "\x1f\x1f\x0820000229";
+  accepts date_c "\x1f\x1f\x0899991231";
+  refuses date_c "\x1f\x1f\x0815811231";
+  refuses date_c "\x1f\x1f\x0819000229";
+  refuses date_c "\x1f\x1f\x0820250431";
+  refuses date_c "\x1f\x1f\x0820251301";
+  refuses date_c "\x1f\x1f\x0820250100";
+  refuses date_c "\x1f\x1f\x082025010a";
+  refuses date_c "\x1f\x1f\x092025010100";
+  refuses date_c "\x1f\x1f\x0a2025-01-01";
+  refuses date_c "\x3f\x1f\x0820250101";
+  refuses date_c "\x18\x0820250101";
+  rejects_write ~msg:"is not a DER DATE" date_c "2025-01-01";
+  List.iter
+    (round_trip Alcotest.string date_c)
+    [ "15821015"; "20240229"; "99991231" ]
+
+(* X.690 8.26.2, X.680 38.4.2: TIME-OF-DAY is hhmmss, a local time whose leap
+   second ends any minute (spec/ASN1.Spec.Time.fst:81-89,202-205), under
+   UNIVERSAL 32 (spec/ASN1.Base.fst:432). *)
+let test_rule_time_of_day () =
+  accepts tod_c "\x1f\x20\x06000000";
+  accepts tod_c "\x1f\x20\x06235959";
+  accepts tod_c "\x1f\x20\x06120060";
+  refuses tod_c "\x1f\x20\x06240000";
+  refuses tod_c "\x1f\x20\x06126000";
+  refuses tod_c "\x1f\x20\x06120061";
+  refuses tod_c "\x1f\x20\x0612000Z";
+  refuses tod_c "\x1f\x20\x0712000000";
+  refuses tod_c "\x1f\x20\x00";
+  rejects_write ~msg:"is not a DER TIME-OF-DAY" tod_c "12:00:00";
+  List.iter (round_trip Alcotest.string tod_c) [ "000000"; "120060"; "235959" ]
+
+(* X.690 8.26.2, X.680 38.4.3: DATE-TIME is YYYYMMDDhhmmss, the year Basic and
+   the time local (spec/ASN1.Spec.Time.fst:207-210), under UNIVERSAL 33
+   (spec/ASN1.Base.fst:433). *)
+let test_rule_date_time () =
+  accepts date_time_c "\x1f\x21\x0e20250101120000";
+  accepts date_time_c "\x1f\x21\x0e15821015000000";
+  accepts date_time_c "\x1f\x21\x0e20240229101060";
+  refuses date_time_c "\x1f\x21\x0e15811231235959";
+  refuses date_time_c "\x1f\x21\x0e20250229120000";
+  refuses date_time_c "\x1f\x21\x0e20250101240000";
+  refuses date_time_c "\x1f\x21\x0e20250101120061";
+  refuses date_time_c "\x1f\x21\x0f20250101120000Z";
+  refuses date_time_c "\x1f\x21\x0d2025010112000";
+  rejects_write ~msg:"is not a DER DATE-TIME" date_time_c "20250101T120000";
+  List.iter
+    (round_trip Alcotest.string date_time_c)
+    [ "20250101120000"; "15821015000000"; "20161231235960" ]
+
+let oid_iri_c = Asn1.codec Asn1.oid_iri
+let rel_iri_c = Asn1.codec Asn1.relative_oid_iri
+
+(* The universal [number] of the high-tag form, primitive, with contents [s]
+   of under 128 octets. *)
+let high_tlv number s =
+  Fmt.str "\x1f%c%c%s" (Char.chr number) (Char.chr (String.length s)) s
+
+(* X.690 8.21, X.680 34.3, X.660 7.5: OID-IRI is UTF-8, "/" then non-empty
+   labels separated by "/", of RFC 3987 iunreserved or non-ASCII characters,
+   an integer label without a leading zero (spec/ASN1.Spec.IRI.fst:19-58),
+   under UNIVERSAL 35 (spec/ASN1.Base.fst:434). *)
+let test_rule_oid_iri () =
+  List.iter
+    (fun s -> accepts ~msg:s oid_iri_c (high_tlv 0x23 s))
+    [ "/ISO"; "/0"; "/1/2"; "/ISO/Registration-Authority/a.b_c~d"; "/\xc3\xa9" ];
+  List.iter
+    (fun s -> refuses ~msg:s oid_iri_c (high_tlv 0x23 s))
+    [
+      "";
+      "/";
+      "ISO";
+      "/01";
+      "/a//b";
+      "/a/";
+      "/a b";
+      "/a?b";
+      "/\xc3";
+      "/\xc0\xaf";
+    ];
+  refuses oid_iri_c (high_tlv 0x24 "/ISO");
+  rejects_write ~msg:"is not a DER OID-IRI" oid_iri_c "ISO";
+  List.iter
+    (round_trip Alcotest.string oid_iri_c)
+    [ "/ISO/a"; "/2/999"; "/\xc3\xa9t\xc3\xa9" ]
+
+(* X.690 8.22, X.680 35.3, X.660 7.5: RELATIVE-OID-IRI is the labels of an
+   OID-IRI without the leading "/" (spec/ASN1.Spec.IRI.fst:50-52), under
+   UNIVERSAL 36 (spec/ASN1.Base.fst:435). *)
+let test_rule_relative_oid_iri () =
+  List.iter
+    (fun s -> accepts ~msg:s rel_iri_c (high_tlv 0x24 s))
+    [ "a"; "0"; "a/b"; "10/ISO"; "\xc3\x9c" ];
+  List.iter
+    (fun s -> refuses ~msg:s rel_iri_c (high_tlv 0x24 s))
+    [ ""; "/a"; "a/"; "a//b"; "007"; "a/b c"; "\xff" ];
+  refuses rel_iri_c (high_tlv 0x23 "a");
+  rejects_write ~msg:"is not a DER RELATIVE-OID-IRI" rel_iri_c "/a";
+  List.iter (round_trip Alcotest.string rel_iri_c) [ "a/b"; "0"; "\xc3\x9c/1" ]
 
 (* -- Other constructs -- *)
 
@@ -1288,14 +1515,12 @@ let runners =
     ("DiffStrings2.General", c (universal_octets 27));
     ("DiffTime.Utc", c Asn1.utc_time);
     ("DiffTime.Gen", c Asn1.generalized_time);
-    (* No combinator reads these with their content rules: RELATIVE-OID,
-       OID-IRI, RELATIVE-OID-IRI, DATE, TIME-OF-DAY, DATE-TIME. *)
-    ("DiffRelOid.RelOid", None);
-    ("DiffIRI.Iri", None);
-    ("DiffIRI.RelIri", None);
-    ("DiffTime2.Date", None);
-    ("DiffTime2.Tod", None);
-    ("DiffTime2.DateTime", None);
+    ("DiffRelOid.RelOid", c Asn1.relative_oid);
+    ("DiffIRI.Iri", c Asn1.oid_iri);
+    ("DiffIRI.RelIri", c Asn1.relative_oid_iri);
+    ("DiffTime2.Date", c Asn1.date);
+    ("DiffTime2.Tod", c Asn1.time_of_day);
+    ("DiffTime2.DateTime", c Asn1.date_time);
   ]
 
 let test_vectors () =
@@ -1311,8 +1536,8 @@ let test_vectors () =
           if v.accept then accepts ~msg c (of_hex v.hex)
           else refuses ~msg c (of_hex v.hex))
     Asn1_vectors.all;
-  Alcotest.(check int) "vectors run" 289 !run;
-  Alcotest.(check int) "vectors skipped" 36 !skipped
+  Alcotest.(check int) "vectors run" 325 !run;
+  Alcotest.(check int) "vectors skipped" 0 !skipped
 
 let suite =
   ( "asn1",
@@ -1327,6 +1552,10 @@ let suite =
       Alcotest.test_case "oid: compare" `Quick test_oid_compare;
       Alcotest.test_case "oid: base rejects" `Quick test_oid_base_rejects;
       Alcotest.test_case "oid: arc rejects" `Quick test_oid_arc_rejects;
+      Alcotest.test_case "relative oid: strings" `Quick
+        test_relative_oid_strings;
+      Alcotest.test_case "relative oid: v rejects" `Quick
+        test_relative_oid_v_rejects;
       Alcotest.test_case "sequence: constructed bit" `Quick
         test_sequence_constructed_bit;
       Alcotest.test_case "sequence: trailing optional" `Quick
@@ -1362,6 +1591,10 @@ let suite =
         test_default_on_constructed;
       Alcotest.test_case "reject: DEFAULT on ANY" `Quick test_default_on_any;
       Alcotest.test_case "reject: DEFAULT on OID" `Quick test_default_on_oid;
+      Alcotest.test_case "reject: DEFAULT on RELATIVE-OID" `Quick
+        test_default_on_relative_oid;
+      Alcotest.test_case "reject: DEFAULT not a value" `Quick
+        test_default_not_a_value;
       Alcotest.test_case "reject: DEFAULT on EXPLICIT constrained INTEGER"
         `Quick test_default_explicit_constrained_integer;
       Alcotest.test_case "reject: DEFAULT on EXPLICIT ENUMERATED" `Quick
@@ -1373,12 +1606,15 @@ let suite =
       Alcotest.test_case "reject: SIZE on SEQUENCE OF" `Quick
         test_size_on_sequence_of;
       Alcotest.test_case "reject: SIZE on SIZE" `Quick test_size_on_size;
+      Alcotest.test_case "reject: SIZE on times and IRIs" `Quick
+        test_size_on_times_and_iris;
       Alcotest.test_case "reject: SIZE not a range" `Quick test_size_not_a_range;
       Alcotest.test_case "reject: SIZE reaches 65536" `Quick
         test_size_reaches_65536;
       Alcotest.test_case "reject: key OPTIONAL" `Quick test_key_optional;
       Alcotest.test_case "reject: key DEFAULT" `Quick test_key_default;
       Alcotest.test_case "reject: key constrained" `Quick test_key_constrained;
+      Alcotest.test_case "reject: key RELATIVE-OID" `Quick test_key_relative_oid;
       Alcotest.test_case "reject: key not primitive" `Quick
         test_key_not_primitive;
       Alcotest.test_case "reject: key after component" `Quick
@@ -1433,6 +1669,16 @@ let suite =
         test_rule_set_of;
       Alcotest.test_case "der: minimal OID subidentifiers (X.690 8.19)" `Quick
         test_rule_oid;
+      Alcotest.test_case "der: RELATIVE-OID (X.690 8.20)" `Quick
+        test_rule_relative_oid;
+      Alcotest.test_case "der: DATE (X.690 8.26)" `Quick test_rule_date;
+      Alcotest.test_case "der: TIME-OF-DAY (X.690 8.26)" `Quick
+        test_rule_time_of_day;
+      Alcotest.test_case "der: DATE-TIME (X.690 8.26)" `Quick
+        test_rule_date_time;
+      Alcotest.test_case "der: OID-IRI (X.690 8.21)" `Quick test_rule_oid_iri;
+      Alcotest.test_case "der: RELATIVE-OID-IRI (X.690 8.22)" `Quick
+        test_rule_relative_oid_iri;
       Alcotest.test_case "der: character strings and times" `Quick test_strings;
       Alcotest.test_case "der: SIZE" `Quick test_size;
       Alcotest.test_case "der: bounded INTEGER and ENUMERATED" `Quick

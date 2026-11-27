@@ -1,5 +1,6 @@
 (** Fuzz tests for the DER codec of {!Wire.Asn1}, on the SubjectPublicKeyInfo
-    and Certificate types of RFC 5280. *)
+    and Certificate types of RFC 5280 and on the primitives with a contents rule
+    of their own. *)
 
 open Wire
 open Alcobar
@@ -25,6 +26,25 @@ let check_bytes (type a) name (c : a Codec.t) s =
 
 let test_spki s = check_bytes "spki" Rfc5280.spki_codec s
 let test_certificate s = check_bytes "certificate" Rfc5280.certificate_codec s
+
+(* The primitives whose contents rule is more than an alphabet, under their
+   own identifier so that arbitrary contents reach the rule. *)
+let primitives =
+  let c name t = check_bytes name (Asn1.codec t) in
+  [|
+    ("\x0d", c "relative_oid" Asn1.relative_oid);
+    ("\x1f\x1f", c "date" Asn1.date);
+    ("\x1f\x20", c "time_of_day" Asn1.time_of_day);
+    ("\x1f\x21", c "date_time" Asn1.date_time);
+    ("\x1f\x23", c "oid_iri" Asn1.oid_iri);
+    ("\x1f\x24", c "relative_oid_iri" Asn1.relative_oid_iri);
+  |]
+
+let test_primitive i s =
+  let s = if String.length s > 127 then String.sub s 0 127 else s in
+  let id, check = primitives.(i) in
+  check s;
+  check (id ^ String.make 1 (Char.chr (String.length s)) ^ s)
 
 (* Certificates built from generated parts, so that mutations start from
    bytes the codec accepts. *)
@@ -98,6 +118,9 @@ let suite =
   ( "asn1",
     [
       test_case "spki: arbitrary bytes" [ bytes ] test_spki;
+      test_case "primitives: arbitrary contents"
+        [ range (Array.length primitives); bytes ]
+        test_primitive;
       test_case "certificate: arbitrary bytes" [ bytes ] test_certificate;
       test_case "certificate: built"
         [ bytes; bytes; bytes; bytes; bool; uint8 ]
