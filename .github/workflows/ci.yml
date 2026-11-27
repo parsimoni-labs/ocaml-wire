@@ -476,8 +476,9 @@ jobs:
       - name: Run the suites that need EverParse-generated C
         run: |
           opam exec -- dune build \
-            @test/stubs/runtest @fuzz/diff/runtest @test/bench-diff/runtest \
-            @test/bench/runtest @test/ocaml/runtest @fuzz/diff/ocaml/runtest
+            @test/stubs/runtest @test/diff/runtest @fuzz/diff/runtest \
+            @test/bench-diff/runtest @test/bench/runtest @test/ocaml/runtest \
+            @fuzz/diff/ocaml/runtest
         env:
           BUILD_EVERPARSE: 1
 
