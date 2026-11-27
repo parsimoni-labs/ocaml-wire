@@ -66,6 +66,23 @@ let test_everparse_name () =
       ("ScanBitGuardsU16BEMsb", "ScanBitGuardsU16bemsb");
     ]
 
+(* The validator each stub calls, as the generated [<Name>.h] declares it:
+   [Random18] is the schema test/diff's stubs called [Random18ValidateRandom18]
+   when EverParse declares [Random18ValidateWireRandom18]. *)
+let test_validator_name () =
+  List.iter
+    (fun (name, expected) ->
+      Alcotest.(check string) name expected (Wire_3d.validator_name name))
+    [
+      ("Random18", "Random18ValidateWireRandom18");
+      ("CLCW", "ClcwValidateWireClcw");
+      ("Foo2Bar", "Foo2barValidateWireFoo2bar");
+      ("myField", "MyFieldValidateWiremyField");
+      ("type", "TypeValidateWiretype");
+      ( "ScanBitGuardsU16BEMsb",
+        "ScanBitGuardsU16bemsbValidateWireScanBitGuardsU16bemsb" );
+    ]
+
 (* [pascal_case] mirrors EverParse's wrapper-symbol mangling. EverParse builds a
    wrapper as [pascal_case (module ^ "_check_" ^ codec)]; these expectations were
    read straight off EverParse's generated [<Module>Wrapper.h]. *)
@@ -1403,9 +1420,9 @@ let e2e_repeat_byte_chunks_codec =
   v "RepChunks" (fun n chunks -> (n, chunks)) [ f_n $ fst; f_chunks $ snd ]
 
 (* A codec whose name carries a capital [V] before the [Validate] keyword
-   (e.g. [VeritySuperblockValidateVeritySuperblock] in the generated [.h]).
-   [read_validate_name] must find [Validate] past that leading [V] rather than
-   stopping at the first [V] it sees, or C generation fails outright. *)
+   ([VeritySuperblockValidateWireVeritySuperblock] in the generated [.h]): the
+   test.c [Wire_3d] writes calls the validator by that name, or it does not
+   compile. *)
 let e2e_vname_codec =
   let open Wire in
   let f_sig = Field.v "signature" (byte_array ~size:(int 8)) in
@@ -1782,6 +1799,7 @@ let suite =
     [
       Alcotest.test_case "everparse_name" `Quick test_everparse_name;
       Alcotest.test_case "pascal_case" `Quick test_pascal_case;
+      Alcotest.test_case "validator_name" `Quick test_validator_name;
       Alcotest.test_case "generate 3d files" `Quick test_generate_3d_files;
       Alcotest.test_case "schema_of_struct" `Quick test_schema_of_struct;
       Alcotest.test_case "ensure_dir" `Quick test_ensure_dir;

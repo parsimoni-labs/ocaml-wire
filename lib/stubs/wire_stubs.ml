@@ -3,12 +3,6 @@
 let ml_type_of = Wire.Private.ml_type_of
 let everparse_name = Wire_3d.everparse_name
 
-let validator_name name =
-  Wire_3d.pascal_case
-    (String.capitalize_ascii name
-    ^ "_validate_Wire"
-    ^ Wire.Private.Types.escape_3d name)
-
 let pp_c_stub_error_handler ppf lower =
   Fmt.pf ppf
     "static void %s_err(const char *t, const char *f, const char *r,@\n" lower;
@@ -137,7 +131,7 @@ let check_codec_names structs =
 let pp_c_stub ppf (s : Wire.Everparse.Raw.struct_) =
   let name = Wire.Everparse.Raw.struct_name s in
   let ep = everparse_name name in
-  let validator = validator_name name in
+  let validator = Wire_3d.validator_name name in
   let lower = String.lowercase_ascii name in
   pp_c_stub_error_handler ppf lower;
   pp_c_stub_output ppf ~lower ~ep ~validator s

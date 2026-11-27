@@ -307,19 +307,6 @@ let test_name_single () =
     "single" "foo"
     (Wire_stubs.to_ml_stub_name (struct_ "Foo" [ field "x" uint8 ]))
 
-let test_validator_name () =
-  List.iter
-    (fun (name, expected) ->
-      Alcotest.(check string) name expected (Wire_stubs.validator_name name))
-    [
-      ("CLCW", "ClcwValidateWireClcw");
-      ("Foo2Bar", "Foo2barValidateWireFoo2bar");
-      ("myField", "MyFieldValidateWiremyField");
-      ("type", "TypeValidateWiretype");
-      ( "ScanBitGuardsU16BEMsb",
-        "ScanBitGuardsU16bemsbValidateWireScanBitGuardsU16bemsb" );
-    ]
-
 (* -- Field names -- *)
 
 let rejects what subs f =
@@ -1061,7 +1048,7 @@ let test_e2e_full_stack () =
         Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
         Wire_3d.write_fields ~outdir:dir [ schema ])
       schemas;
-    let validator = Wire_stubs.validator_name in
+    let validator = Wire_3d.validator_name in
     let fields name = Wire_3d.everparse_name name ^ "Fields" in
     let ip_off = Net.ethernet_size - Net.ethernet_payload_size in
     let tcp_off = ip_off + (Net.ipv4_size - Net.ipv4_payload_size) in
@@ -1172,7 +1159,7 @@ int main(void) {
         Fmt.(list ~sep:comma int)
         (List.init (Bytes.length frame) (Bytes.get_uint8 frame))
         (Wire_3d.everparse_name "WideTop" ^ "Fields")
-        (Wire_stubs.validator_name "WideTop")
+        (Wire_3d.validator_name "WideTop")
     in
     write_file (Filename.concat dir "wide.c") driver;
     Fmt.kstr run
@@ -1225,8 +1212,6 @@ let suite =
       Alcotest.test_case "name: camelCase" `Quick test_name_camel;
       Alcotest.test_case "name: ALLCAPS" `Quick test_name_allcaps;
       Alcotest.test_case "name: single word" `Quick test_name_single;
-      Alcotest.test_case "name: validator entry point" `Quick
-        test_validator_name;
       Alcotest.test_case "field names: labels that clash" `Quick
         test_ml_labels_clash;
       Alcotest.test_case "field names: keywords" `Quick test_keyword_fields;

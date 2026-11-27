@@ -1185,6 +1185,11 @@ val escape_3d : string -> string
     trailing underscores and C reads [typeof] as a keyword. The map is
     injective. *)
 
+val struct_tag_name : string -> string
+(** [struct_tag_name name] is the tag of the 3D struct [name]: [Wire] then
+    [escape_3d name]. EverParse names the struct's validator and its wrapper
+    after the tag. *)
+
 (** {1:parse-errors Parse Errors}
 
     The {!predicate}, {!error_kind}, and {!parse_error} types are declared near

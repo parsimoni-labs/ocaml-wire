@@ -279,7 +279,7 @@ let pp_scan_stub ppf i (schema : Wire.Everparse.t) members =
     (Wire_3d.everparse_name schema.name);
   Fmt.pf ppf
     "  uint64_t end = %s((WIRECTX *) &f, NULL, scan_error, data, len, 0);@\n"
-    (Wire_stubs.validator_name schema.name);
+    (Wire_3d.validator_name schema.name);
   Fmt.pf ppf "  if (!scan_ok(end, len)) return Val_long(-1);@\n";
   List.iteri
     (fun k (member, _, _) ->
@@ -300,7 +300,7 @@ let pp_standalone_stub ppf i (schema : Wire.Everparse.t) =
     "  if (!scan_frame(buffer, offset, length, &data, &len)) return \
      Val_long(-1);@\n";
   Fmt.pf ppf "  uint64_t end = %s(NULL, scan_error, data, len, 0);@\n"
-    (Wire_stubs.validator_name schema.name);
+    (Wire_3d.validator_name schema.name);
   Fmt.pf ppf "  if (!scan_ok(end, len)) return Val_long(-1);@\n";
   Fmt.pf ppf "  return Val_long((intnat) end);@\n}@\n"
 

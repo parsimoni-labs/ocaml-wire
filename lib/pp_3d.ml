@@ -63,7 +63,7 @@ let escape_3d name =
    each takes its enum's name: [A] of [E] is [E_A], and two enums naming the
    same case stay apart. *)
 let enum_constant enum case = escape_3d (enum ^ "_" ^ case)
-let struct_tag_name (s : struct_) = "Wire" ^ escape_3d s.name
+let struct_tag_name name = "Wire" ^ escape_3d name
 let pp_endian ppf = function Little -> () | Big -> Fmt.string ppf "BE"
 
 let pp_bitfield_base ppf = function
@@ -1118,7 +1118,7 @@ let pp_struct ppf (s : struct_) =
       (fun (Field f) -> Option.map escape_3d f.field_name)
       s.fields;
   let name = escape_3d s.name in
-  let tag = struct_tag_name s in
+  let tag = struct_tag_name s.name in
   let where, fields = projected_fields ~params:s.params s.where s.fields in
   Fmt.pf ppf "typedef struct %s%a" tag (pp_params ?as_enum:None) s.params;
   Option.iter (Fmt.pf ppf "@,where (%a)" pp_expr) where;
@@ -1219,7 +1219,7 @@ let pp_decl ppf = function
         (* The tag occupies C's distinct tag namespace; a readable [Wire]
            prefix keeps it separate from the public typedef name. *)
         let n = escape_3d st.name in
-        Fmt.pf ppf "extern typedef struct %s %s@,@," (struct_tag_name st) n
+        Fmt.pf ppf "extern typedef struct %s %s@,@," (struct_tag_name st.name) n
       else begin
         if output then Fmt.pf ppf "output@,";
         if export then Fmt.pf ppf "export@,";
@@ -1302,7 +1302,7 @@ let module_idents decls =
     (function
       | Typedef { struct_ = st; _ } ->
           let src = Fmt.str "struct %S" st.name in
-          [ (src, escape_3d st.name); (src, struct_tag_name st) ]
+          [ (src, escape_3d st.name); (src, struct_tag_name st.name) ]
       | Define { name; _ } -> [ (Fmt.str "constant %S" name, name) ]
       | Extern_fn { name; _ } -> [ (Fmt.str "extern %S" name, name) ]
       | Extern_probe { name; _ } -> [ (Fmt.str "probe %S" name, name) ]

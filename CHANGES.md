@@ -37,6 +37,9 @@
 - The type alias `Wire.codec` is removed: write `Wire.Codec.t`; `Wire.codec`
   is the value that embeds a codec as a field type (#570, @samoht)
 
+- `Wire_stubs.validator_name` is `Wire_3d.validator_name`, which names the
+  validator from the struct tag the 3D printer writes (#574, @samoht)
+
 - `Wire_3d.has_3d_exe` is removed: `Wire_3d.locate_3d_exe ()` is the path of
   EverParse's 3D compiler, or `None` where `has_3d_exe ()` was `false`
   (#570, @samoht)

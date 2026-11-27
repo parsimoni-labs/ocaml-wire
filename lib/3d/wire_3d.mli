@@ -59,6 +59,13 @@ val pascal_case : string -> string
     [pascal_case "tpm_check_TPM2B"] is ["TpmCheckTpm2b"] and
     [pascal_case "virtio_check_Virtq_desc"] is ["VirtioCheckVirtqDesc"]. *)
 
+val validator_name : string -> string
+(** [validator_name name] is the C validator EverParse generates for the struct
+    [name] of the module [<Name>.3d]: {!pascal_case} of the module, [_validate_]
+    and the struct's 3D tag, which the 3D printer derives from [name]. E.g.
+    [validator_name "Random18"] is ["Random18ValidateWireRandom18"]. Every stub
+    that calls a validator names it so. *)
+
 val generate_3d : outdir:string -> Wire.Everparse.t list -> unit
 (** [generate_3d ~outdir schemas] generates [.3d] files from Wire modules.
 

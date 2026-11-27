@@ -132,7 +132,7 @@ let generate_c oc =
     (fun s ->
       let name = Wire.Everparse.Raw.struct_name s in
       let ep = Wire_3d.everparse_name name in
-      let validator = Wire_stubs.validator_name name in
+      let validator = Wire_3d.validator_name name in
       let lower = String.lowercase_ascii name in
       let n_fields = List.length (Wire.Everparse.Raw.field_names s) in
       ignore n_fields;

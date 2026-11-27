@@ -38,6 +38,16 @@ let pascal_case name =
    that mode even for a name with no underscore of its own. *)
 let everparse_name name = pascal_case (String.capitalize_ascii name ^ "_")
 
+(* EverParse names the validator of the struct [name] of the 3D module
+   [module_name] after the module and the struct's tag, which the 3D printer
+   gives: [pascal_case (module_name ^ "_validate_" ^ tag)]. *)
+let validator_of ~module_name name =
+  pascal_case
+    (module_name ^ "_validate_" ^ Wire.Private.Types.struct_tag_name name)
+
+let validator_name name =
+  validator_of ~module_name:(String.capitalize_ascii name) name
+
 (* EverParse derives the C output filename from the [.3d] filename, which
    [Wire.Everparse.filename] already writes with [String.capitalize_ascii].
    All filenames wire.3d emits or references must go through the same
@@ -136,55 +146,6 @@ let read_extern_names ~outdir s =
     else scan (i + 1) acc
   in
   scan 0 []
-
-(* EverParse's top-level validator function follows its own normalization rule
-   and includes the 3D struct tag after [Validate]. Rather than duplicate that
-   logic, extract the complete function name from the generated [<Name>.h]. *)
-let read_validate_name ~outdir s =
-  let path = Filename.concat outdir (file_base s ^ ".h") in
-  let ic = open_in path in
-  let found = ref None in
-  let needle = "Validate" in
-  let nlen = String.length needle in
-  let is_ident c =
-    (c >= 'A' && c <= 'Z')
-    || (c >= 'a' && c <= 'z')
-    || (c >= '0' && c <= '9')
-    || c = '_'
-  in
-  (* Find [Validate] inside the declaration and return its complete surrounding
-     C identifier. Scanning every position lets the module name itself contain a
-     [V]; the identifier boundaries also discard the return type and arguments. *)
-  let identifier_containing_validate line =
-    let len = String.length line in
-    let rec scan i =
-      if i + nlen > len then None
-      else if i > 0 && is_ident line.[i - 1] && String.sub line i nlen = needle
-      then begin
-        let j = ref i in
-        while !j > 0 && is_ident line.[!j - 1] do
-          decr j
-        done;
-        let k = ref (i + nlen) in
-        while !k < len && is_ident line.[!k] do
-          incr k
-        done;
-        Some (String.sub line !j (!k - !j))
-      end
-      else scan (i + 1)
-    in
-    scan 0
-  in
-  (try
-     while !found = None do
-       let line = String.trim (input_line ic) in
-       found := identifier_containing_validate line
-     done
-   with End_of_file -> ());
-  close_in ic;
-  match !found with
-  | Some n -> n
-  | None -> Fmt.failwith "could not find Validate function name in %s" path
 
 let write_3d ~outdir schemas =
   check_name_collisions schemas;
@@ -765,13 +726,13 @@ let emit_random_checks ppf ~validator ~ctx_arg wire_size =
   pr "      CHECK(\"random position correct\", r == %d);\n" wire_size;
   pr "    }\n"
 
-let emit_schema_test ~outdir ppf s wire_size =
+let emit_schema_test ppf s wire_size =
   let pr fmt = Fmt.pf ppf fmt in
-  (* Read the validator name straight out of EverParse's generated [.h]
-     -- the one authoritative source. EverParse applies its own naming
-     rules (different for the top-level Validate function vs. the extern
-     callbacks); any attempt to re-implement them here has drifted before. *)
-  let validator = read_validate_name ~outdir s in
+  let validator =
+    match Wire.Everparse.entrypoint_struct s with
+    | Some st -> validator_of ~module_name:(file_base s) (Raw.struct_name st)
+    | None -> Fmt.failwith "%s: the schema has no entrypoint to test" s.name
+  in
   let lower = String.lowercase_ascii s.name in
   let uses_ctx = Wire.Everparse.uses_wire_ctx s in
   let ctx_arg = if uses_ctx then "(WIRECTX *) &ctx, " else "" in
@@ -836,7 +797,7 @@ let generate_test ~outdir schemas =
   pr "} while(0)\n\n";
   pr "int main(void) {\n";
   pr "  int failures = 0;\n";
-  List.iter (fun (s, ws) -> emit_schema_test ~outdir ppf s ws) fixed_schemas;
+  List.iter (fun (s, ws) -> emit_schema_test ppf s ws) fixed_schemas;
   pr "\n  if (failures == 0)\n";
   pr "    printf(\"All tests passed.\\n\");\n";
   pr "  else\n";
@@ -1639,7 +1600,7 @@ let emit_agree_main ppf =
    say so rather than guess a symbol that would only fail at link time. *)
 let schema_entrypoint_name s =
   match s.source with
-  | Some source -> "Wire" ^ Raw.struct_name source
+  | Some source -> Wire.Private.Types.struct_tag_name (Raw.struct_name source)
   | None ->
       Fmt.failwith "%s: raw-module schema has no entrypoint struct tag" s.name
 
