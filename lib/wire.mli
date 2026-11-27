@@ -3,8 +3,8 @@
     A {!Codec} describes the bytes of a record once, as an OCaml value, and
     everything that reads and writes those bytes derives from it. {e Values}:
     {!Codec.decode} and {!Codec.encode} copy a whole record between bytes and
-    OCaml. {e Views}: {!Codec.View.check} runs every check of the codec once,
-    and a view then reads and writes single fields in place. {e Folds}:
+    OCaml. {e Views}: {!Codec.View.val-check} runs every check of the codec
+    once, and a view then reads and writes single fields in place. {e Folds}:
     {!Codec.View.fold} checks the records of a buffer one after the other and
     hands the fields it names to a function. All of this is the {e interpreted}
     form, [wire] alone. The {e generated} form is the module [Wire_ocaml] or
@@ -735,10 +735,10 @@ val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w typ -> 'a typ
 (** [map ~decode ~encode t] views a wire value through conversion functions.
 
     [decode] must be total over the wire values [t] and its constraints admit.
-    {!Codec.validate} and {!Codec.View.check} do not call it, so a [decode] that
-    raises on such a value makes {!Codec.decode} raise on a buffer they accept.
-    For a table indexed by the wire value use {!lookup}, whose bound they check.
-*)
+    {!Codec.validate} and {!Codec.View.val-check} do not call it, so a [decode]
+    that raises on such a value makes {!Codec.decode} raise on a buffer they
+    accept. For a table indexed by the wire value use {!lookup}, whose bound
+    they check. *)
 
 val bool : bool -> bool expr
 (** Constant boolean expression. *)
@@ -1054,7 +1054,7 @@ module Codec : sig
       [v] resolves where each definition of [fields] lies in the record: its
       constant offset or how to compute it, its reader and its writer. The
       definitions are not changed: one definition in two codecs is resolved in
-      each, and {!View.field} hands out the codec's resolution.
+      each, and {!View.val-field} hands out the codec's resolution.
 
       Raises [Invalid_argument], naming the shape and the reason, on a shape no
       verified backend can express (the EverParse limits of
@@ -1083,8 +1083,8 @@ module Codec : sig
       [Invalid_argument] for any other field. *)
 
   val opt_layer : ('s option, 'r) field -> ('s, 'r) layer
-  (** [opt_layer f] is {!layer} for a {!Field.optional} [f]: the layer is absent
-      where [f] is. *)
+  (** [opt_layer f] is {!val-layer} for a {!Field.optional} [f]: the layer is
+      absent where [f] is. *)
 
   val ( / ) : ('s, 'r) layer -> ('a, 's) field -> ('a option, 'r) field
   (** [l / f] is the field [f] of the record [l] holds, as a field of ['r]: it
@@ -1202,9 +1202,9 @@ module Codec : sig
 
       The buffer is named by a type, ['b] ({!Buf}), which a check and a view
       carry: a view is read and written only in the buffer it was checked in. A
-      check and a view are immediate integers, so {!check}, {!is_ok} and {!get}
-      allocate nothing. Why a record was refused is out of line:
-      {!Codec.validate} answers its error.
+      check and a view are immediate integers, so {!View.val-check},
+      {!View.is_ok} and {!View.get} allocate nothing. Why a record was refused
+      is out of line: {!Codec.validate} answers its error.
 
       The module [Wire_ocaml] generates from a codec has the same values under
       the same names, each field an accessor named after it:
@@ -1303,7 +1303,7 @@ module Codec : sig
         ['r]. *)
 
     val layer : 'r codec -> ('s, 'r) codec_layer -> ('s, 'r) layer
-    (** [layer c l] is {!field} for a layer: the layer [l] as {!Codec.v}
+    (** [layer c l] is {!val-field} for a layer: the layer [l] as {!Codec.v}
         resolved it in [c]. Raises [Invalid_argument] if [l] is not one of the
         definitions [c] was built from. *)
 
@@ -1334,7 +1334,7 @@ module Codec : sig
       f:('acc -> 'f) ->
       ('acc, Error.t * 'acc) result
     (** [fold c fields buf ~init ~f] checks each record of [c] in [buf], as
-        {!check} does, and folds [f] over those that pass, from [init]:
+        {!val-check} does, and folds [f] over those that pass, from [init]:
         [f acc x1 ... xn], where [xi] is the value of the [i]-th field of
         [fields] in the record, read during its check. A path ([Codec.( / )]) in
         [fields] reads [None] where its layer is absent. The records lie:
@@ -1358,7 +1358,7 @@ module Codec : sig
         definitions [c] was built from, if [stride] is not positive, if [offs]
         and [lens] are not given together or differ in length, if [stride] is
         given with [offs], if [invalid] is given with records back to back, and
-        on [env] as {!check} does. *)
+        on [env] as {!val-check} does. *)
   end
 end
 

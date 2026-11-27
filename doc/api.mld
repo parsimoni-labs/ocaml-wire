@@ -84,11 +84,11 @@ The definition [apid] says what the field is and exists before the codec,
 since {!Wire.Codec.v} takes it. The field [apid_f] says where it lies in
 [packet], which only [Codec.v] can compute: [Codec.v] resolves each
 definition it receives (a constant offset or how to compute one, and the
-field's reader and writer), and {!Wire.Codec.View.field} hands that out,
+field's reader and writer), and {!Wire.Codec.View.val-field} hands that out,
 plain data read with no lookup. A definition in two codecs is resolved in
 each, and a field that is only decoded or encoded needs just the definition.
 
-{!Wire.Codec.View.check} runs every check of the codec once. It never raises
+{!Wire.Codec.View.val-check} runs every check of the codec once. It never raises
 and allocates nothing: its answer is an immediate integer, and so is the view.
 {!Wire.Codec.View.is_ok} says whether the record passed and
 {!Wire.Codec.View.get} makes the answer a view, as [Result.is_ok] and
@@ -208,7 +208,7 @@ let apid_of buf ~off =
   if P.is_ok c then Some (P.apid b (P.get c)) else None
 ]}
 
-The resolution is data ({!Wire.Codec.View.field}), not a function: a reader
+The resolution is data ({!Wire.Codec.View.val-field}), not a function: a reader
 made by partial application falls under the value restriction, its buffer
 brand ['b] becomes weak, and each [Buf.Any] unpacking has a fresh ['b]. The
 eta-expanded functions keep ['b] polymorphic and only interpret the field
@@ -228,7 +228,7 @@ layer.
 
 One check validates the frame and every layer present in it. Reaching a
 layer gives that codec's check, whose [is_ok] says whether the layer is
-present, and makes no check again. {!Wire.Codec.View.layer} resolves a layer
+present, and makes no check again. {!Wire.Codec.View.val-layer} resolves a layer
 in its codec, as [View.field] resolves any other field.
 
 {@ocaml skip[
