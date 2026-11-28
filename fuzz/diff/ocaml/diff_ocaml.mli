@@ -183,7 +183,13 @@ val scan_codecs : (string * Fuzz_gen.packed) list
 (** [scan_codecs] is every sampled codec without parameters, fixed or not, and
     the flat records of {!codecs}. *)
 
-val scan_report : string -> (string * Fuzz_gen.packed * string) list -> bool
-(** [scan_report name refused] prints how many of {!scan_codecs} the scanner
-    took, and is [false] when one it refused is {!scannable} and was refused for
-    another reason than an ambiguous output name. *)
+val scan_report :
+  string ->
+  scanned:string list ->
+  (string * Fuzz_gen.packed * string) list ->
+  bool
+(** [scan_report name ~scanned refused] prints how many of {!scan_codecs} the
+    scanner took, the labels [scanned], and is [false] when one of
+    {!scan_codecs} is neither in [scanned] nor in [refused], or when one it
+    refused is {!scannable} and was refused for another reason than an ambiguous
+    output name. *)

@@ -891,10 +891,22 @@ let scan_codecs =
   sampled
   @ List.filter (fun (label, _) -> not (List.mem_assoc label sampled)) codecs
 
-let scan_report name refused =
-  let total = List.length scan_codecs and n = List.length refused in
+let scan_report name ~scanned refused =
+  let total = List.length scan_codecs in
   Fmt.epr "%s: %d of the %d sampled shapes scanned, %d refused@." name
-    (total - n) total n;
+    (List.length scanned) total (List.length refused);
+  let dropped =
+    List.filter
+      (fun (label, _) ->
+        not
+          (List.mem label scanned
+          || List.exists (fun (l, _, _) -> String.equal l label) refused))
+      scan_codecs
+  in
+  List.iter
+    (fun (label, _) ->
+      Fmt.epr "%s: FATAL %s was neither scanned nor refused@." name label)
+    dropped;
   let unexpected =
     List.filter
       (fun (_, Fuzz_gen.Pack g, msg) ->
@@ -908,4 +920,4 @@ let scan_report name refused =
          %s@."
         name label msg)
     unexpected;
-  unexpected = []
+  dropped = [] && unexpected = []

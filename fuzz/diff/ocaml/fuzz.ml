@@ -53,6 +53,7 @@ let () =
     in
     let scanned =
       Diff_ocaml.scan_report Ocaml_index.name
+        ~scanned:(List.map fst Ocaml_index.sampled_scanners)
         (refused Diff_ocaml.scan_codecs Ocaml_index.scan_refused)
     in
     Diff_driver.report_oracle Ocaml_index.name;

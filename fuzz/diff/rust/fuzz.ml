@@ -199,6 +199,7 @@ let () =
     let fixed = Diff_ocaml.report Rust_index.name (with_codec fixed_refused)
     and scanned =
       Diff_ocaml.scan_report Rust_index.name
+        ~scanned:(List.map fst Rust_index.sampled)
         (with_codec Rust_index.scan_refused)
     in
     Fmt.epr "%s: %d flat records refused for an ambiguous output name@."
