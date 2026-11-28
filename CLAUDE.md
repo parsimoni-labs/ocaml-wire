@@ -123,6 +123,24 @@ bits. Widths without a power-of-two size have no alias and go through
 needs, and never by renaming an existing type. A carrier narrower than
 its field is a carrier defect, fixed by changing the carrier.
 
+## API names
+
+A codec has two forms with the same concepts under the same names: the
+interpreted form, `wire` alone (`Codec.View`), and the generated form, the
+module `Wire_ocaml` or `Wire_rust` writes from the codec, each field an
+accessor named after it. "Interpreted" and "generated" name an interpreter
+against a code generator, as in Carette, Kiselyov and Shan's "Finally
+Tagless, Partially Evaluated"; never "twin", "dynamic" or "compiled", since
+ocamlopt compiles both. Each concept has one name and one way to do it: one
+check, one accessor and one setter per field, one record write, one fold.
+A name has a precedent in a well-known library: `is_ok` as `Result.is_ok`,
+`get` as `Option.get` (raising on the empty case), `fold ~init ~f` as
+`ListLabels.fold_left`, `set_<field>` as protobuf's C++ `set_foo()`, `check`
+as EverParse's `<Base>Check<T>` wrapper, `sub` as `Bytes.sub`; `size` is the
+encoded size of a value and `fixed_size` the constant size.
+The measurements behind the API's shape are in
+[docs/execution.md](docs/execution.md).
+
 ## Tests and commits
 
 - Cram tests never pin compiler diagnostic text, whose quoting differs

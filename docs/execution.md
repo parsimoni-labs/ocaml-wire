@@ -59,6 +59,48 @@ integer or bitfield in a frame of at least 8 bytes is read inline, one test,
 one 8-byte load, a shift and a mask; in a frame of 4 to 7 bytes it is read
 from a 4-byte word by one call. Any other field is one call.
 
+A field and a view are indexed by their record type, not by their codec, so
+a field resolved in one codec is accepted with a view of another codec of
+the same record type. The bound test of each read keeps that misuse in the
+buffer, where it answers a wrong value, as `View.field` documents. Catching
+it would take either the codec's id packed into the view beside its offset
+and one compare per read, which narrows the buffers a view can address where
+ints have 31 bits (js_of_ocaml, wasm_of_ocaml), or a type-level brand per
+codec, `('c, 'r) Codec.t`, which makes every codec be named before its views
+are used. The case arises in tests only: read from the 279 `.cmt` files of
+`dune build` at `ed6be0fc`, 488 of the 821 applications of `Codec.v` fall in
+65 groups of two or more codecs of one record type, all in test/ and fuzz/
+or sharing a tuple type with a test (scripts/fstar-gen/proved.ml,
+bench/rust/headers.ml); no file of examples/, bench/, lib/ or scripts/ holds
+two codecs of one record type, and the 34 codecs of examples/ have 34 record
+types. A codec `Codec.rename` makes keeps the id and the layout of its
+source, so its fields and views agree.
+
+`View.fold` hands `f` a field under an absent optional layer as `None`, so
+each present value costs a `Some`. The alternative, a presence `bool` beside
+a zero value, costs more, since its `bool` and its value are two fields and
+each enters the layers. Counted by `bench/count.sh 1000000 ROW q6.exe
+mawi.pcap RUNS ROW`, a harness that folds `Packet_stack.codec` over the
+index (`~offs ~lens`) of the first 1,000,000 packets of the MAWI trace,
+refused frames passed to `~invalid`, built with `--profile=bench`, the
+alternatives added to a scratch copy of the library; instructions (cycles)
+per packet, OCaml 5.4.1:
+
+| Fold over | `option` | presence `bool` and zero | zero only |
+|---|---:|---:|---:|
+| `ipv4 / protocol` | 722.3 (178.5) | 799.1 (200.3) | 721.2 (177.2) |
+| `ipv4 // tcp / dst_port` | 763.4 (192.7) | 880.7 (214.1) | |
+
+and OxCaml 5.4.0-ox9:
+
+| Fold over | `option` | presence `bool` and zero | zero only |
+|---|---:|---:|---:|
+| `ipv4 / protocol` | 678.2 (166.7) | 751.9 (180.8) | 678.3 (171.2) |
+| `ipv4 // tcp / dst_port` | 722.3 (170.4) | 834.1 (193.0) | |
+
+The `Some` costs about one instruction per packet over a zero on OCaml 5.4.1
+and none on OxCaml.
+
 A codec of variable size, or one whose checks are more than word tests, is
 checked by its walk in check mode: the same plan as the walk that decodes
 it, the same frame, tests, spans, gates and regions in field order, with no
@@ -165,6 +207,39 @@ of `f`, and each present optional field a `Some` allocated for it. OxCaml
 inlines `f` where it inlines `fold`. The runtime's loads are inlined across
 units by the release profile.
 
+Taking `f` makes one fold API for both forms and both compilers, at a cost on
+stock OCaml only. Counted by `bench/count.sh` on the first 1,000,000 packets
+of the MAWI trace, on branches that each wrote one form, instructions per
+packet:
+
+| Row | OCaml 5.4.1 classify | OCaml 5.4.1 parse | OxCaml classify | OxCaml parse |
+|---|---:|---:|---:|---:|
+| fused fold, visitor module named in the dune rule | 240 | 164 | 203 | 77 |
+| fused fold taking `~f`, fields positional | 503 | 409 | 205 | 88 |
+| `fold ~f` where `f` gets a view and re-reads its fields | 359 | 261 | 258 | 172 |
+| check/view loop | 326 | 238 | 259 | 174 |
+
+On OxCaml the closure is inlined, and the fold costs what the fused fold with
+a named visitor costs. On stock OCaml 5.4.1 `f` is never inlined: each record
+is an indirect call (`caml_apply29`, 22 arguments through the domain state),
+and the fold takes about twice the instructions. A visitor given a view loses
+fusion on both compilers, so `f` gets the fields.
+
+`f` takes them labelled by their paths, the accessor names joined with `_`
+(`~ipv4_protocol`, `~ipv4_tcp_dst_port`), and `Wire_ocaml.v` refuses two
+paths that give one label. Positional fields of one type swap silently, and
+two of the three folds of examples/ and bench/ hand several fields of one
+type (`g_selected` in bench/rust 16 fields, `g_flow` 22, among them
+`UInt16.t option` and `UInt32.t option`). The labels cost nothing: on the row
+`wire.ocaml fold, selected fields, parse only` (the fold of `g_flow` over an
+index), counted by `sh bench/count.sh 1000000 ROW
+_build/default/bench/rust/bench.exe flow _build/bench-flow/mawi.pcap RUNS
+ROW`, two runs each, `f` taking its fields positionally counts 397.0 and
+396.6 instructions per packet on OCaml 5.4.1 and 92.4 and 94.0 on OxCaml
+5.4.0-ox9, and labelled 397.1 and 396.6, and 94.0 and 93.6. The interpreted
+fold's fields are a list, a value, which cannot carry labels; the Rust
+closure takes them positionally, as Rust has no labels.
+
 The interpreted form has the same concepts under the same names, so code
 written against a generated module's views runs on `Codec.View` once a
 module gives `Codec.View` those names, as [doc/api.mld](../doc/api.mld)
@@ -207,7 +282,77 @@ accepts, and `Codec.View.check` on the window's bytes. `length` is
 `Wire.Buf.length b`, which a loop reads once per buffer. A codec of constant
 size takes no window, `check b length ~off`, whose bounds fold into one test
 of `off` against `length - size`; `is_ok` tests the answer and `get` makes
-it a `'b view`, an `int` only the accessors of the buffer named `'b` take. Each named integer field is an accessor named after
+it a `'b view`, an `int` only the accessors of the buffer named `'b` take.
+
+Only a codec of variable size takes a window: a `~len` on every check cost 5
+to 6 instructions per check with the natural window, on OxCaml 41.7 to 47.9
+per word for CLCW and 627 to 735 per frame for the gateway
+(`make bench-apps-count`).
+
+The check takes the buffer's length rather than read `Bytes.length` itself,
+since ocamlopt does not hoist that read out of a loop. Counted at `8334c9ec`
+with `--profile=bench`, with the check taking the length the loop read once
+(a), and with the generator patched so that every check reads
+`Bytes.length` itself (b), by `sh bench/count.sh 100000 LABEL bench.exe
+MODE FILE 100000 RUNS wire.ocaml` on the inputs `bench/apps/bench.exe inputs
+DIR 100000 100000 100000` writes and `sh bench/count.sh 1000000 LABEL
+bench.exe flow mawi.pcap RUNS ROW` on the first 1,000,000 MAWI packets;
+instructions (cycles) per item, OCaml 5.4.1:
+
+| Row | (a) length an argument | (b) check reads it |
+|---|---:|---:|
+| routing run, `wire.ocaml` | 44.5 (9.6) | 56.4 (11.0) |
+| routing write, `wire.ocaml` | 111.3 (21.3) | 116.0 (18.6) |
+| gateway run, `wire.ocaml` | 751.7 (220.9) | 880.8 (180.1) |
+| gateway write, `wire.ocaml` | 991.2 (168.8) | 983.7 (167.6) |
+| clcw run, `wire.ocaml` | 41.9 (7.7) | 54.1 (13.0) |
+| clcw write, `wire.ocaml` | 74.1 (15.3) | 73.6 (9.8) |
+| `wire.ocaml check/view, accessors` | 325.3 (337.5) | 360.9 (391.5) |
+| `wire.ocaml check/view, accessors, parse only` | 237.5 (70.6) | 271.6 (78.5) |
+
+and OxCaml 5.4.0-ox9:
+
+| Row | (a) length an argument | (b) check reads it |
+|---|---:|---:|
+| routing run, `wire.ocaml` | 34.9 (8.7) | 33.4 (6.1) |
+| routing write, `wire.ocaml` | 87.0 (36.6) | 80.2 (19.4) |
+| gateway run, `wire.ocaml` | 602.6 (189.9) | 610.2 (201.1) |
+| gateway write, `wire.ocaml` | 597.0 (65.4) | 611.4 (139.7) |
+| clcw run, `wire.ocaml` | 37.3 (4.9) | 40.9 (10.9) |
+| clcw write, `wire.ocaml` | 61.1 (8.4) | 61.9 (18.3) |
+| `wire.ocaml check/view, accessors` | 257.9 (272.3) | 277.6 (303.3) |
+| `wire.ocaml check/view, accessors, parse only` | 173.7 (47.7) | 191.0 (54.9) |
+
+Reading the length in the check costs the reading rows 11 to 29% more
+instructions on OCaml 5.4.1 and up to 10% on OxCaml, and the writing rows
+nothing. In the routing loop on arm64 (`otool -tV` of `Loops.routing`, OCaml
+5.4.1), the path of one accepted packet is 56 instructions with the length
+an argument and 64 with `Bytes.length` in each check: 9 instructions that
+ocamlopt does not hoist out of the loop, against one reload of the length
+the loop read once. `'b` names one buffer and bytes never
+shrink, so a `'b Buf.length` cannot be wrong, and taking it is as memory-safe
+as reading `Bytes.length` in each check. `Codec.View.check` reads the length
+itself, with `?len` for a window. The Rust `check` takes a slice, whose
+length is part of the reference.
+
+A view does not carry its buffer: it is an `int`, and every accessor takes
+the buffer. A view that carried it would be a block `{ b; k }`, allocated
+per record unless the compiler unboxes it. Counted on the row `wire.ocaml
+check/view, accessors, parse only` by `sh bench/count.sh 1000000 ROW
+_build/default/bench/rust/bench.exe flow _build/bench-flow/mawi.pcap RUNS
+ROW`, MAWI, 1,000,000 packets, two runs each, the generated module of
+`Packet_stack.capture` against the same views carrying their buffer, as
+one-line delegates over the module, instructions per packet:
+
+| Row, parse only | OCaml 5.4.1 | OxCaml 5.4.0-ox9 |
+|---|---:|---:|
+| `wire.ocaml check/view, accessors`, buffer an argument | 269.4, 271.1 | 193.0, 191.8 |
+| the same, the view carrying its buffer | 379.0, 377.8 | 204.5, 210.8 |
+
+A view carrying its buffer costs 40% on OCaml 5.4.1, which allocates the
+block per record, and 7% on OxCaml.
+
+Each named integer field is an accessor named after
 it, each optional field that holds no record a presence `<name>_present`,
 and each field that holds a record an accessor that answers a check of that
 record's module, one module per codec, named after it (`CapturedIPv4` is

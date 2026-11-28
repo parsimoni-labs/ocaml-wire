@@ -1070,8 +1070,9 @@ module Codec : sig
       of an Ethernet frame, present when its [ether_type] says so. A fold names
       a field under a layer by its path, [ipv4 / protocol]. *)
 
-  (* Open question 6: [layer], [opt_layer], [( / )] and [( // )] are the
-     proposal, settled by this typing and a cram test of a rejected path. *)
+  (* Two operators, as fpath splits them: one left-associative [/] cannot
+     answer a layer or a field depending on its right operand. They are in
+     [Codec], since [Field] comes before it and cannot name a bound field. *)
 
   type ('s, 'r) layer
   (** The type for fields of records ['r] that hold a record ['s], present or
@@ -1325,7 +1326,8 @@ module Codec : sig
 
     (* The visitor takes the fields positionally, in the order of the list,
        as the constructor of [Codec.v] takes them: the list is a value, and
-       cannot carry labels (docs/api.md, question 4). *)
+       cannot carry labels. The generated fold labels them
+       (docs/execution.md). *)
 
     val fold :
       ?env:Param.env ->

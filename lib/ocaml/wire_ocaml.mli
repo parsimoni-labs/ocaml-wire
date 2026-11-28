@@ -155,7 +155,8 @@ val main : t list -> unit
     such a module meets these signatures with each [local] buffer argument
     [local], and a test ascribes it to that copy of them. *)
 
-(* Open question 1, measured: a view does not carry its buffer. *)
+(* A view does not carry its buffer: as a block it costs 40% on OCaml 5.4.1
+   (docs/execution.md). *)
 
 (** The records of a codec and their views, which every module and submodule
     has. *)
