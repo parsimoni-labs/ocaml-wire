@@ -2062,7 +2062,9 @@ end
     {!Asn1.codec} makes any ASN.1 type a {!Codec.t}, a DER value nests in a
     binary codec through {!val-codec} and a binary codec nests in DER through
     {!Asn1.containing}. A codec projects to EverParse 3D where 3D expresses it
-    and to everparse-asn1 where it does not; see docs/asn1.md. *)
+    and to everparse-asn1 where it does not; see docs/asn1.md.
+
+    [Asn1] is experimental: its API will certainly break in 2.1.0. *)
 
 module Asn1 : sig
   type 'a t

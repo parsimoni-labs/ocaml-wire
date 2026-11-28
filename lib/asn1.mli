@@ -10,7 +10,9 @@
     Each ASN.1 type projects to an [.asn] module for everparse-asn1, and a shape
     everparse-asn1 cannot express is refused when it is built: the combinator
     raises [Invalid_argument] naming the shape and the reason. Bad bytes are a
-    decode [Error], never an exception. See docs/asn1.md. *)
+    decode [Error], never an exception. See docs/asn1.md.
+
+    This module is experimental: its API will certainly break in 2.1.0. *)
 
 type 'a t
 (** The type for ASN.1 types with OCaml values ['a]. *)

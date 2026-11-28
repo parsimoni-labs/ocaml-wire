@@ -181,6 +181,11 @@
 
 ### Added
 
+- `Wire.Asn1`, experimental: ASN.1 DER types in the same description as
+  binary codecs, decoded, validated and encoded by `Asn1.codec`, and
+  projected by `Asn1.project` to the `.asn` modules everparse-asn1 verifies
+  (`Wire_asn1.run`). Its API will break in 2.1.0 (#PR, @samoht)
+
 - `Wire_ocaml.fstar`: an F* proof that a fold of a generated scanner, and
   the walk of a frame of its loops, accepts what the parser EverParse writes
   for the codec accepts, and hands its visitor the same values, for records
