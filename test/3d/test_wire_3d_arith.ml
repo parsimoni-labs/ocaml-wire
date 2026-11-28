@@ -117,7 +117,7 @@ let test_wide_outputs () =
   let line = Agree.corpus_line "Out64" out64_codec in
   let expected _ hex =
     let env = Codec.env out64_codec in
-    match Codec.decode ~env out64_codec (hex_bytes hex) 0 with
+    match Codec.decode ~env out64_codec (hex_bytes hex) ~off:0 with
     | Error _ -> "none"
     | Ok _ ->
         Fmt.str "%Lu,%Lu"
@@ -153,7 +153,7 @@ let test_sizeof_this () =
   let line = Agree.corpus_line "SizeofThis" sizeof_codec in
   let expected _ hex =
     let env = Codec.env sizeof_codec in
-    match Codec.decode ~env sizeof_codec (hex_bytes hex) 0 with
+    match Codec.decode ~env sizeof_codec (hex_bytes hex) ~off:0 with
     | Error _ -> "none"
     | Ok _ -> Fmt.str "%d" (UInt8.to_int (Param.get env this8))
   in
@@ -209,7 +209,7 @@ let test_bits_act () =
   let line = Agree.corpus_line "BitsAct" bits_act_codec in
   let expected _ hex =
     let env = Codec.env bits_act_codec in
-    match Codec.decode ~env bits_act_codec (hex_bytes hex) 0 with
+    match Codec.decode ~env bits_act_codec (hex_bytes hex) ~off:0 with
     | Error _ -> "none"
     | Ok _ ->
         Fmt.str "%d,%d"

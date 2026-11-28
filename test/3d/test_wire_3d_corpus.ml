@@ -225,12 +225,12 @@ let test_corpus_verdict_resolves_params () =
          went back through the extent reader would be re-using the thing it is
          meant to check. *)
       let accepts =
-        match Codec.decode ~env c b 0 with
+        match Codec.decode ~env c b ~off:0 with
         | Error _ -> false
         | Ok v -> (
-            match Codec.validate ~env c b 0 with
+            match Codec.validate ~env c b ~off:0 with
             | Error _ -> false
-            | Ok () -> Int.equal (Codec.encoded_size c v) (Bytes.length b))
+            | Ok () -> Int.equal (Codec.size c v) (Bytes.length b))
       in
       if not (Bool.equal accepts verdict) then
         Alcotest.failf "corpus records %b for size=%d %s, the codec answers %b"

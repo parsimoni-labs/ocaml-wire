@@ -271,9 +271,9 @@ let all_bytes =
     Alcobar.map
       Alcobar.[ value_gen ]
       (fun s ->
-        let sz = Wire.Codec.encoded_size codec s in
+        let sz = Wire.Codec.size codec s in
         let buf = Bytes.create sz in
-        Wire.Codec.encode codec s buf 0;
+        Wire.Codec.encode codec s buf ~off:0;
         (s, buf))
   in
   {
@@ -300,9 +300,9 @@ let all_zeros =
     Alcobar.map
       Alcobar.[ zeros_gen ]
       (fun s ->
-        let sz = Wire.Codec.encoded_size codec s in
+        let sz = Wire.Codec.size codec s in
         let buf = Bytes.create sz in
-        Wire.Codec.encode codec s buf 0;
+        Wire.Codec.encode codec s buf ~off:0;
         (s, buf))
   in
   (* Adversarial: bytes with at least one non-zero -- decoder must
@@ -342,9 +342,9 @@ let zeroterm =
     Alcobar.map
       Alcobar.[ nul_free_gen ]
       (fun s ->
-        let sz = Wire.Codec.encoded_size codec s in
+        let sz = Wire.Codec.size codec s in
         let buf = Bytes.create sz in
-        Wire.Codec.encode codec s buf 0;
+        Wire.Codec.encode codec s buf ~off:0;
         (s, buf))
   in
   (* Adversarial: a run with no terminator -- decode must surface a clean
@@ -380,9 +380,9 @@ let zeroterm_at_most n =
     Alcobar.map
       Alcobar.[ value_gen ]
       (fun s ->
-        let sz = Wire.Codec.encoded_size codec s in
+        let sz = Wire.Codec.size codec s in
         let buf = Bytes.create sz in
-        Wire.Codec.encode codec s buf 0;
+        Wire.Codec.encode codec s buf ~off:0;
         (s, buf))
   in
   {
@@ -510,7 +510,7 @@ let uint_var ~endian size =
   in
   let encode v =
     let buf = Bytes.create size in
-    Wire.Codec.encode codec v buf 0;
+    Wire.Codec.encode codec v buf ~off:0;
     buf
   in
   let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
@@ -795,13 +795,13 @@ let repeat_sized name make_items ~bytes:total_bytes inner =
        a budget that is not a multiple of the element size encodes fewer bytes
        than the budget, and the prefix must match what is written. *)
     let items_bytes =
-      match Wire.Codec.size inner.codec with
+      match Wire.Codec.fixed_size inner.codec with
       | Some size -> fun xs -> Wire.UInt16.v (size * List.length xs)
       | None ->
           fun xs ->
             Wire.UInt16.v
               (List.fold_left
-                 (fun acc v -> acc + Wire.Codec.encoded_size inner.codec v)
+                 (fun acc v -> acc + Wire.Codec.size inner.codec v)
                  0 xs)
     in
     Wire.Codec.v name
@@ -849,9 +849,9 @@ let repeat ?(name = "_rep") ~bytes inner =
 let codec_wrap (c : 'a Wire.Codec.t) ~value_gen ~equal =
   let typ = Wire.codec c in
   let encode v =
-    let sz = Wire.Codec.encoded_size c v in
+    let sz = Wire.Codec.size c v in
     let buf = Bytes.create sz in
-    Wire.Codec.encode c v buf 0;
+    Wire.Codec.encode c v buf ~off:0;
     buf
   in
   let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
@@ -946,7 +946,7 @@ let enum name cases =
   in
   let encode v =
     let buf = Bytes.create 1 in
-    Wire.Codec.encode codec v buf 0;
+    Wire.Codec.encode codec v buf ~off:0;
     buf
   in
   let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
@@ -975,7 +975,7 @@ let enum_open =
   let codec = codec_of_typ typ in
   let encode v =
     let buf = Bytes.create 1 in
-    Wire.Codec.encode codec v buf 0;
+    Wire.Codec.encode codec v buf ~off:0;
     buf
   in
   let positive =
@@ -1109,7 +1109,7 @@ let bounded_u8 ~min ~max =
   in
   let encode v =
     let buf = Bytes.create 1 in
-    Wire.Codec.encode codec v buf 0;
+    Wire.Codec.encode codec v buf ~off:0;
     buf
   in
   let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in
@@ -1166,7 +1166,7 @@ let bounded_int ~inner_typ ~size ~set ~max_val ~min ~max ~of_int ~equal =
   in
   let encode v =
     let buf = Bytes.create size in
-    Wire.Codec.encode codec v buf 0;
+    Wire.Codec.encode codec v buf ~off:0;
     buf
   in
   let positive = Alcobar.map Alcobar.[ value_gen ] (fun v -> (v, encode v)) in

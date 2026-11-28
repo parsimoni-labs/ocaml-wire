@@ -13,82 +13,6 @@ let positive_env g =
   | Some s -> Some (s.positive (Wire.Codec.env g.codec))
   | None -> None
 
-(* Typ-level vs codec-level agreement. [Wire.of_string] (typ level) and
-   [Codec.decode] (codec level) are two independent reader constructions over
-   the same schema, so they can drift apart: a refinement enforced by one and
-   dropped by the other accepts input the other -- and the EverParse C built
-   from the same schema -- rejects. The two may legitimately report different
-   errors (offsets and kinds are not part of the contract), so only the
-   accept/reject verdict is compared, plus the decoded value where both
-   accept. *)
-
-let direct_decodes g bs =
-  match Wire.of_string g.typ (string_of_bytes bs) with
-  | Ok v -> `Accept v
-  | Error _ -> `Reject
-  | exception Invalid_argument _ -> `Crash
-
-let codec_decodes g bs =
-  match Wire.Codec.decode g.codec bs 0 with
-  | Ok v -> `Accept v
-  | Error _ -> `Reject
-  | exception Invalid_argument _ -> `Crash
-
-(* Decode the same bytes both ways and require the same verdict. Codecs that
-   bind a [Param.env] are skipped: the typ-level entry points cannot thread
-   one. *)
-let check_direct_codec_agree label kind g bs =
-  if Option.is_none g.env then
-    match (direct_decodes g bs, codec_decodes g bs) with
-    | `Crash, _ -> Alcobar.failf "%s %s of_string crashed" label kind
-    | _, `Crash -> Alcobar.failf "%s %s Codec.decode crashed" label kind
-    | `Reject, `Reject -> ()
-    | `Accept direct, `Accept codec ->
-        if not (g.equal direct codec) then
-          Alcobar.failf "%s %s of_string and Codec.decode decoded differently"
-            label kind
-    | `Accept _, `Reject ->
-        Alcobar.failf "%s %s of_string accepted but Codec.decode rejected" label
-          kind
-    | `Reject, `Accept _ ->
-        Alcobar.failf "%s %s Codec.decode accepted but of_string rejected" label
-          kind
-
-(* The encode-side twin. [Wire.to_bytes] (typ level) and [Codec.encode] (codec
-   level) are, like the two decoders, separate constructions over one schema:
-   they must refuse the same values and, when they accept, write the same bytes.
-   A value one path writes and the other refuses is a frame the library produces
-   through one entry point and rejects through the other. *)
-
-let direct_encodes g value =
-  match Wire.to_bytes g.typ value with
-  | bs -> `Wrote (string_of_bytes bs)
-  | exception Invalid_argument _ -> `Refused
-
-let codec_encodes g value =
-  match Wire.Codec.encoded_size g.codec value with
-  | exception Invalid_argument _ -> `Refused
-  | sz -> (
-      let buf = Bytes.create sz in
-      match Wire.Codec.encode g.codec value buf 0 with
-      | () -> `Wrote (string_of_bytes buf)
-      | exception Invalid_argument _ -> `Refused)
-
-let check_direct_codec_encode_agree label kind g value =
-  if Option.is_none g.env then
-    match (direct_encodes g value, codec_encodes g value) with
-    | `Refused, `Refused -> ()
-    | `Wrote direct, `Wrote codec ->
-        if not (String.equal direct codec) then
-          Alcobar.failf "%s %s to_bytes and Codec.encode wrote different bytes"
-            label kind
-    | `Wrote _, `Refused ->
-        Alcobar.failf "%s %s to_bytes wrote a value Codec.encode refuses" label
-          kind
-    | `Refused, `Wrote _ ->
-        Alcobar.failf "%s %s Codec.encode wrote a value to_bytes refuses" label
-          kind
-
 (* Round-trip one positive sample: decode the canonical bytes back to the
    value, then re-encode into a buffer sized from [encoded_size] and require
    the two to agree. Sizing from [encoded_size] (rather than from the
@@ -98,7 +22,7 @@ let check_direct_codec_encode_agree label kind g value =
    A wrong [encoded_size] then shows up here as a mismatch -- or, if it
    under-counts, as an [encode] overrun -- rather than silently. *)
 let check_positive_decode label g value bs env =
-  match Wire.Codec.decode ?env g.codec bs 0 with
+  match Wire.Codec.decode ?env g.codec bs ~off:0 with
   | Ok decoded ->
       if not (g.equal decoded value) then
         Alcobar.failf "%s positive decode mismatch" label
@@ -109,11 +33,11 @@ let check_positive_decode label g value bs env =
    reads none. An [~action] codec writes output params and needs an env without
    reading one, so "has an env strategy" is not the same question. *)
 let input_param_names g =
-  Wire.Everparse.Raw.input_param_names
-    (Wire.Everparse.Raw.struct_of_codec g.codec)
+  Wire.Private.Everparse.Raw.input_param_names
+    (Wire.Private.Everparse.Raw.struct_of_codec g.codec)
 
 let check_positive_size label g value bs env =
-  let sz = Wire.Codec.encoded_size g.codec value in
+  let sz = Wire.Codec.size g.codec value in
   if sz <> Bytes.length bs then
     Alcobar.failf "%s encoded_size = %d but canonical encoding is %d" label sz
       (Bytes.length bs);
@@ -122,7 +46,7 @@ let check_positive_size label g value bs env =
   match env with
   | None -> sz
   | Some env ->
-      let with_env = Wire.Codec.encoded_size ~env g.codec value in
+      let with_env = Wire.Codec.size ~env g.codec value in
       if with_env <> sz then
         Alcobar.failf "%s encoded_size = %d with an env bound, %d without" label
           with_env sz;
@@ -138,7 +62,7 @@ let check_positive_size_metadata label g bs env =
   if min_sz > len then
     Alcobar.failf "%s min_size = %d but canonical encoding is %d" label min_sz
       len;
-  (match Wire.Codec.size_at ?env g.codec bs 0 with
+  (match Wire.Codec.size_at ?env g.codec bs ~off:0 with
   | Ok actual ->
       if actual <> len then
         Alcobar.failf "%s size_at = %d but canonical encoding is %d" label
@@ -147,7 +71,7 @@ let check_positive_size_metadata label g bs env =
       Alcobar.failf "%s size_at refused a positive: %a" label Wire.Error.pp e
   | exception Invalid_argument m ->
       Alcobar.failf "%s size_at raised on a positive: %s" label m);
-  match Wire.Codec.size g.codec with
+  match Wire.Codec.fixed_size g.codec with
   | Some fixed when fixed <> len ->
       Alcobar.failf "%s size = %d but canonical encoding is %d" label fixed len
   | Some _ | None -> ()
@@ -160,16 +84,16 @@ let check_env_required label g bs =
   match input_param_names g with
   | [] -> ()
   | _ :: _ -> (
-      (match Wire.Codec.size_at g.codec bs 0 with
+      (match Wire.Codec.size_at g.codec bs ~off:0 with
       | Ok n -> Alcobar.failf "%s size_at answered %d with no env bound" label n
       | Error e ->
           Alcobar.failf "%s size_at answered %a with no env bound" label
             Wire.Error.pp e
       | exception Invalid_argument _ -> ());
-      (match Wire.Codec.decode g.codec bs 0 with
+      (match Wire.Codec.decode g.codec bs ~off:0 with
       | _ -> Alcobar.failf "%s decode answered with no env bound" label
       | exception Invalid_argument _ -> ());
-      match Wire.Codec.validate g.codec bs 0 with
+      match Wire.Codec.validate g.codec bs ~off:0 with
       | Ok () -> Alcobar.failf "%s validate passed with no env bound" label
       | exception Invalid_argument _ -> ()
       | Error _ ->
@@ -179,7 +103,7 @@ let check_env_required label g bs =
 let check_positive_encode label g value bs env sz =
   let bs_str = string_of_bytes bs in
   let out = Bytes.create sz in
-  (try Wire.Codec.encode ?env g.codec value out 0
+  (try Wire.Codec.encode ?env g.codec value out ~off:0
    with Invalid_argument _ -> Alcobar.failf "%s positive encode raised" label);
   if string_of_bytes out <> bs_str then
     Alcobar.failf "%s positive reencode mismatch" label
@@ -187,14 +111,13 @@ let check_positive_encode label g value bs env sz =
 let check_positive label g (value, bs) =
   let env = positive_env g in
   check_positive_decode label g value bs env;
-  check_direct_codec_encode_agree label "positive" g value;
   let sz = check_positive_size label g value bs env in
   check_positive_size_metadata label g bs env;
   if Option.is_some env then check_env_required label g bs;
   check_positive_encode label g value bs env sz
 
 let validate_one ?env g bs =
-  match Wire.Codec.validate ?env g.codec bs 0 with
+  match Wire.Codec.validate ?env g.codec bs ~off:0 with
   | Ok () -> `Ok
   | exception Invalid_argument _ -> `Crash
   | Error e ->
@@ -231,7 +154,7 @@ let check_validate_safety label kind ?env g bs =
   | `Crash -> Alcobar.failf "%s validate %s crashed" label kind
 
 let check_decode_safety label kind ?env g bs =
-  match Wire.Codec.decode ?env g.codec bs 0 with
+  match Wire.Codec.decode ?env g.codec bs ~off:0 with
   | Ok _ | Error _ -> ()
   | exception Invalid_argument _ ->
       Alcobar.failf "%s %s crashed decoder" label kind
@@ -239,14 +162,14 @@ let check_decode_safety label kind ?env g bs =
 (* The bytes a hostile value encodes to, or [None] when encode refused it, which
    is one of the two outcomes [check_encode_safety] allows. *)
 let hostile_encoding label ?env g value =
-  match Wire.Codec.encoded_size g.codec value with
+  match Wire.Codec.size g.codec value with
   | exception Invalid_argument _ -> None
   | sz -> (
       match Bytes.create sz with
       | exception Invalid_argument _ ->
           Alcobar.failf "%s encode safety: encoded_size returned %d" label sz
       | buf -> (
-          match Wire.Codec.encode ?env g.codec value buf 0 with
+          match Wire.Codec.encode ?env g.codec value buf ~off:0 with
           | exception Invalid_argument _ -> None
           | () -> Some buf))
 
@@ -261,7 +184,7 @@ let check_encode_safety label ?env g value =
   match hostile_encoding label ?env g value with
   | None -> ()
   | Some buf -> (
-      match Wire.Codec.decode ?env g.codec buf 0 with
+      match Wire.Codec.decode ?env g.codec buf ~off:0 with
       | Ok back ->
           if not (g.equal back value) then
             Alcobar.failf
@@ -282,13 +205,13 @@ let check_encode_safety label ?env g value =
 type 'a verdict = Accepted of 'a | Rejected of Wire.Error.t | Crashed
 
 let decode_at ?env g bs off =
-  match Wire.Codec.decode ?env g.codec bs off with
+  match Wire.Codec.decode ?env g.codec bs ~off with
   | Ok v -> Accepted v
   | Error e -> Rejected e
   | exception Invalid_argument _ -> Crashed
 
 let validate_at ?env g bs off =
-  match Wire.Codec.validate ?env g.codec bs off with
+  match Wire.Codec.validate ?env g.codec bs ~off with
   | Ok () -> Accepted ()
   | Error e -> Rejected e
   | exception Invalid_argument _ -> Crashed
@@ -338,16 +261,16 @@ let hostile_value_stream g =
   | None -> Alcobar.const None
   | Some gen -> Alcobar.map Alcobar.[ gen ] (fun v -> Some v)
 
-(* {1 Per-field accessor properties}
+(* {1 Per-field view properties}
 
-   [Codec.get] and [Codec.set] are built by [build_staged_reader] and
-   [build_staged_writer], which are separate constructions from the record
-   populator [decode] runs and the record encoder [encode] runs. Addressing one
-   field at a time is therefore a second, independent reading (and writing) of
-   the same bytes rather than another call into the same code, and the two can
-   drift: a width the encoder refuses and the staged writer truncates, or a
-   write that spills into the next field, is invisible to any check phrased
-   over the whole record. *)
+   A view reads and writes one field in place through what [Codec.View.field]
+   resolved, which is a separate construction from the record populator
+   [decode] runs and the record encoder [encode] runs. Addressing one field at
+   a time is therefore a second, independent reading (and writing) of the same
+   bytes rather than another call into the same code, and the two can drift: a
+   width the encoder refuses and the view's writer truncates, or a write that
+   spills into the next field, is invisible to any check phrased over the whole
+   record. *)
 
 (* The codec a per-field property addresses, paired with the fields it may
    name. A record built by [Codec.v] is addressed directly: it kept its own
@@ -355,9 +278,7 @@ let hostile_value_stream g =
    other gen is addressed through the one-field record [codec_of_typ] wraps its
    typ in -- the same wire format, since [typ] and [codec] are two spellings of
    one schema, and the only spelling whose single slot is guaranteed to carry
-   the typ the checker was built from. Naming a slot of the gen's own codec
-   instead would resolve the offset by name and then read it at whatever typ
-   the checker happened to hold, which is not the same field. *)
+   the typ the checker was built from. *)
 module Schema_types = Wire.Private.Types
 
 let rec typ_field_names : type a. a Schema_types.typ -> string list = function
@@ -392,6 +313,10 @@ type 'r addressed = {
   ggeneral : 'r Wire.Codec.t;
       (* The gen's codec, and [acodec], with every fast path off. *)
   ageneral : 'r Wire.Codec.t;
+  aembed : 'r Wire.Codec.t option;
+      (* A record gen's codec embedded as the one field of a record. *)
+  aown : bool;
+      (* Whether [acodec] is the gen's own codec, which its env was made for. *)
 }
 
 (* [g.typ] is the whole schema for a [Codec.v] gen ([Wire.codec] of its own
@@ -416,24 +341,159 @@ let addressed g =
         anames;
         ggeneral;
         ageneral = Wire.Private.Testing.general acodec;
+        aembed = None;
+        aown = false;
       }
   | fs ->
-      { acodec = g.codec; achecks = fs; anames; ggeneral; ageneral = ggeneral }
+      {
+        acodec = g.codec;
+        achecks = fs;
+        anames;
+        ggeneral;
+        ageneral = ggeneral;
+        aembed = Some (codec_of_typ g.typ);
+        aown = true;
+      }
 
-(* Making an accessor refuses on a field whose access shape has none, which is
-   a documented gap in the accessor API rather than a failure: skip. *)
+(* Top level against embedded. A record gen's codec and the one-field record
+   that holds it ([Wire.codec]) read the same bytes through two constructions,
+   the top-level decoder and the sub-codec one, so they can drift apart: a
+   refinement enforced by one and dropped by the other accepts input the other
+   -- and the EverParse C built from the same schema -- rejects. The two may
+   report different errors, so only the verdict is compared, plus the value
+   where both accept. Codecs that bind a [Param.env] are skipped: the wrapper
+   has no parameters to bind. *)
+
+let verdict_of f =
+  match f () with
+  | Ok v -> `Accept v
+  | Error _ -> `Reject
+  | exception Invalid_argument _ -> `Crash
+
+let check_embedded_agree label kind a g bs =
+  match a.aembed with
+  | Some embed when Option.is_none g.env -> (
+      match
+        ( verdict_of (fun () -> Wire.Codec.decode embed bs ~off:0),
+          verdict_of (fun () -> Wire.Codec.decode g.codec bs ~off:0) )
+      with
+      | `Crash, _ -> Alcobar.failf "%s %s embedded decode crashed" label kind
+      | _, `Crash -> Alcobar.failf "%s %s Codec.decode crashed" label kind
+      | `Reject, `Reject -> ()
+      | `Accept e, `Accept c ->
+          if not (g.equal e c) then
+            Alcobar.failf "%s %s embedded and top-level decode differ" label
+              kind
+      | `Accept _, `Reject ->
+          Alcobar.failf "%s %s embedded decode accepted, top-level rejected"
+            label kind
+      | `Reject, `Accept _ ->
+          Alcobar.failf "%s %s top-level decode accepted, embedded rejected"
+            label kind)
+  | _ -> ()
+
+(* The encode-side twin: the two encoders must refuse the same values and,
+   when they accept, write the same bytes. *)
+let encodes codec value =
+  match Wire.Codec.size codec value with
+  | exception Invalid_argument _ -> `Refused
+  | sz -> (
+      let buf = Bytes.create sz in
+      match Wire.Codec.encode codec value buf ~off:0 with
+      | () -> `Wrote (string_of_bytes buf)
+      | exception Invalid_argument _ -> `Refused)
+
+let check_embedded_encode_agree label kind a g value =
+  match a.aembed with
+  | Some embed when Option.is_none g.env -> (
+      match (encodes embed value, encodes g.codec value) with
+      | `Refused, `Refused -> ()
+      | `Wrote e, `Wrote c ->
+          if not (String.equal e c) then
+            Alcobar.failf
+              "%s %s embedded and top-level encode wrote different bytes" label
+              kind
+      | `Wrote _, `Refused ->
+          Alcobar.failf
+            "%s %s embedded encode wrote a value Codec.encode refuses" label
+            kind
+      | `Refused, `Wrote _ ->
+          Alcobar.failf
+            "%s %s Codec.encode wrote a value embedded encode refuses" label
+            kind)
+  | _ -> ()
+
+module View = Wire.Codec.View
+
+(* [View.field] refuses a field an input parameter places, a documented gap
+   in the interpreted views rather than a failure: skip it. *)
+let resolve a field =
+  match View.field a.acodec field with
+  | f -> Some f
+  | exception Invalid_argument _ -> None
+
+(* The field [f] of the record of [a] at [off] in [buf], through the view of
+   its check, or the error [validate] answers when the check refuses it. A
+   check that refuses what [validate] accepts is a failure of its own. *)
+let view_get ?env a f buf off =
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let k = View.check ?env a.acodec b ~off in
+  if View.is_ok k then Ok (View.read b (View.get k) f)
+  else
+    match Wire.Codec.validate ?env a.acodec buf ~off with
+    | Error e -> Error e
+    | Ok () ->
+        Alcobar.failf "View.check of %s refuses a record validate accepts"
+          (Wire.Codec.name a.acodec)
+
+(* An env made for the gen's codec binds nothing of the one-field wrapper of a
+   leaf: a wrapper that reads an input param has no read to stage, and one whose
+   action writes an output param takes none. *)
 let stage_get ?env a field =
-  match Wire.Codec.get ?env a.acodec field with
-  | read -> Some read
-  | exception Invalid_argument _ -> None
+  match env with
+  | Some _ when not a.aown ->
+      let names =
+        Wire.Private.Everparse.Raw.input_param_names
+          (Wire.Private.Everparse.Raw.struct_of_codec a.acodec)
+      in
+      if names <> [] then None else Option.map (view_get a) (resolve a field)
+  | _ -> Option.map (view_get ?env a) (resolve a field)
 
-let stage_set a field =
-  match Wire.Codec.set a.acodec field with
-  | write -> Some write
-  | exception Invalid_argument _ -> None
+(* What a write in place answers: the view refused before it, [set] refused
+   the value, or the value the same view reads after it. The read goes through
+   the view checked before the write, as a caller who writes a batch of fields
+   and checks again after does, so a write that breaks another field's
+   constraint still reads back. *)
+type 'a written = Unchecked | Refused | Read of 'a
 
-(* [Codec.get] against the value the canonical bytes were encoded from: the
-   staged reader and the encoder, over one buffer, with no shared code between
+let view_set_read ?env a f buf off x =
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let k = View.check ?env a.acodec b ~off in
+  if not (View.is_ok k) then Unchecked
+  else
+    let v = View.get k in
+    match View.set b v f x with
+    | exception Invalid_argument _ -> Refused
+    | () -> Read (View.read b v f)
+
+(* Whether [f] takes a write at all: writing back the value it reads must not
+   be refused. A field with no constant place, or a shape with no writer, is a
+   documented gap of [View.set], skipped like a field [resolve] refuses. *)
+let writable a f bs =
+  match view_get a f bs 0 with
+  | Ok x -> (
+      match view_set_read a f (Bytes.copy bs) 0 x with
+      | Read _ -> true
+      | Unchecked | Refused -> false)
+  | Error _ | (exception Invalid_argument _) -> false
+
+let stage_set a field bs =
+  match resolve a field with
+  | Some f when writable a f bs -> Some f
+  | Some _ | None -> None
+
+(* A view's read against the value the canonical bytes were encoded from: the
+   resolved field and the encoder, over one buffer, with no shared code between
    them. *)
 let check_field_get label ?env a value bs =
   List.iter
@@ -446,89 +506,74 @@ let check_field_get label ?env a value bs =
               match get bs 0 with
               | exception Invalid_argument m ->
                   Alcobar.failf
-                    "%s field %s: Codec.get raised on a positive: %s" label
+                    "%s field %s: View.read raised on a positive: %s" label
                     f.name m
               | Error e ->
-                  Alcobar.failf "%s field %s: Codec.get rejected a positive: %a"
+                  Alcobar.failf "%s field %s: View.check refused a positive: %a"
                     label f.name Wire.Error.pp e
               | Ok got ->
                   if not (f.equal got (f.proj value)) then
                     Alcobar.failf
-                      "%s field %s: Codec.get reads back a value the encoder \
+                      "%s field %s: View.read reads back a value the encoder \
                        did not write"
                       label f.name)))
     a.achecks
 
-(* [Codec.set] then [Codec.get]: the staged writer against the staged reader.
-   [set] is documented to refuse a value the field cannot represent and to
+(* [View.set] then [View.read]: the resolved writer against the resolved
+   reader. [set] is documented to refuse a value the field cannot hold and to
    leave the buffer untouched when it does, so a refusal is one of the two
    accepted outcomes; what is not accepted is writing bytes that read back as a
-   different value, which puts a number on the wire the caller never asked for
-   and which no later [validate] can notice. [strict] says the value came from
-   the positive stream, so the reader has to succeed as well as agree; a
-   hostile value may legitimately be unreadable, since [set] is documented not
-   to check enum membership and the reader does. *)
-let check_field_set label ~strict a target bs =
+   different value, which puts a number on the wire the caller never asked
+   for. A positive value may be refused too: a span whose length another
+   field holds takes only values of that length. *)
+let check_field_set label a target bs =
   List.iter
     (fun (Field_check f) ->
-      match (stage_get a f.field, stage_set a f.field) with
-      | Some get, Some set -> (
+      match stage_set a f.field bs with
+      | None -> ()
+      | Some rf -> (
           let buf = Bytes.copy bs in
           let want = f.proj target in
-          match set buf 0 want with
-          | exception Invalid_argument _ ->
+          match view_set_read a rf buf 0 want with
+          | Unchecked -> ()
+          | Refused ->
               if not (Bytes.equal buf bs) then
                 Alcobar.failf
-                  "%s field %s: Codec.set refused a value after writing to the \
+                  "%s field %s: View.set refused a value after writing to the \
                    buffer"
                   label f.name
-          | () -> (
-              match get buf 0 with
-              | exception Invalid_argument m ->
-                  Alcobar.failf
-                    "%s field %s: Codec.get raised on bytes Codec.set just \
-                     wrote: %s"
-                    label f.name m
-              | Error e ->
-                  if strict then
-                    Alcobar.failf
-                      "%s field %s: Codec.get rejects the value Codec.set just \
-                       wrote: %a"
-                      label f.name Wire.Error.pp e
-              | Ok got ->
-                  if not (f.equal got want) then
-                    Alcobar.failf
-                      "%s field %s: Codec.set wrote a value Codec.get reads \
-                       back as a different one"
-                      label f.name))
-      | _ -> ())
+          | Read got ->
+              if not (f.equal got want) then
+                Alcobar.failf
+                  "%s field %s: View.set wrote a value View.read reads back as \
+                   a different one"
+                  label f.name))
     a.achecks
 
-(* A value [Codec.set] will not put in a field is a value the record encoder
+(* A value [View.set] will not put in a field is a value the record encoder
    must not put there either. The two width and length checks are written
-   separately -- the staged writer's, and the per-field encoder's inside
+   separately -- the view's writer, and the per-field encoder inside
    [Codec.encode] -- so one can gain a refusal the other does not have, and
    then the same frame is legal through one entry point and refused through the
    other. Fixed-size codecs only: with a runtime-sized field the value's own
    length changes the frame's size instead of overflowing a declared one, so
    the two are answering different questions. *)
 let check_field_set_refusal label a record bs =
-  if Option.is_some (Wire.Codec.size a.acodec) then
+  if Option.is_some (Wire.Codec.fixed_size a.acodec) then
     List.iter
       (fun (Field_check f) ->
-        match stage_set a f.field with
+        match stage_set a f.field bs with
         | None -> ()
-        | Some set -> (
-            let buf = Bytes.copy bs in
-            match set buf 0 (f.proj record) with
-            | () -> ()
-            | exception Invalid_argument _ -> (
+        | Some rf -> (
+            match view_set_read a rf (Bytes.copy bs) 0 (f.proj record) with
+            | Unchecked | Read _ -> ()
+            | Refused -> (
                 let out = Bytes.create (Bytes.length bs) in
-                match Wire.Codec.encode a.acodec record out 0 with
+                match Wire.Codec.encode a.acodec record out ~off:0 with
                 | exception Invalid_argument _ -> ()
                 | () ->
                     Alcobar.failf
-                      "%s field %s: Codec.set refuses this value but \
+                      "%s field %s: View.set refuses this value but \
                        Codec.encode writes the same record"
                       label f.name)))
       a.achecks
@@ -554,36 +599,61 @@ let field_snapshot ?env a buf fc =
                     | Error _ -> false
                     | Ok after -> f.equal before after )))
 
+(* The other fields of [a] read through the view [v] of [b], as predicates
+   that read them again through it. *)
+let view_snapshots a b v others =
+  List.filter_map
+    (fun (Field_check o) ->
+      Option.map
+        (fun rf ->
+          let before = View.read b v rf in
+          (o.name, fun () -> o.equal before (View.read b v rf)))
+        (resolve a o.field))
+    others
+
 (* Write locality, and its mirror, read independence: setting one field must
    not change what any other field reads, and reading a field must not depend
-   on a sibling's value. Both directions are the same experiment. Restricted to
-   fixed-size codecs, where every field has a static offset and size, because a
-   variable layout makes the dependency real: setting a length field genuinely
-   moves the span that follows it. *)
+   on a sibling's value. Both directions are the same experiment, run through
+   one view. Restricted to fixed-size codecs, where every field has a static
+   offset and size, because a variable layout makes the dependency real:
+   setting a length field genuinely moves the span that follows it. *)
+(* The fields of [snaps] read the same after [View.set] wrote [x] as the field
+   [name] through the view [v]. *)
+let reads_unchanged label b v rf x name snaps =
+  match View.set b v rf x with
+  | exception Invalid_argument _ -> ()
+  | () ->
+      List.iter
+        (fun (other, same) ->
+          if not (same ()) then
+            Alcobar.failf "%s: View.set on field %s changed what field %s reads"
+              label name other)
+        snaps
+
+(* One field of [check_field_locality]: write it through a view and check the
+   reads of the [others] it snapshot. *)
+let field_locality label a target bs others (Field_check f) =
+  match stage_set a f.field bs with
+  | None -> ()
+  | Some rf ->
+      let buf = Bytes.copy bs in
+      let (Wire.Buf.Any b) = Wire.Buf.v buf in
+      let k = View.check a.acodec b ~off:0 in
+      if View.is_ok k then
+        let v = View.get k in
+        reads_unchanged label b v rf (f.proj target) f.name
+          (view_snapshots a b v others)
+
 let check_field_locality label a target bs =
   let checks = a.achecks in
   if
-    Option.is_some (Wire.Codec.size a.acodec)
+    Option.is_some (Wire.Codec.fixed_size a.acodec)
     && List.compare_length_with checks 1 > 0
   then
     List.iter
-      (fun (Field_check f as fc) ->
-        match stage_set a f.field with
-        | None -> ()
-        | Some set -> (
-            let buf = Bytes.copy bs in
-            let others = List.filter (fun o -> o != fc) checks in
-            let snaps = List.filter_map (field_snapshot a buf) others in
-            match set buf 0 (f.proj target) with
-            | exception Invalid_argument _ -> ()
-            | () ->
-                List.iter
-                  (fun (other, same) ->
-                    if not (same buf) then
-                      Alcobar.failf
-                        "%s: Codec.set on field %s changed what field %s reads"
-                        label f.name other)
-                  snaps))
+      (fun fc ->
+        let others = List.filter (fun o -> o != fc) checks in
+        field_locality label a target bs others fc)
       checks
 
 let first_difference a b =
@@ -595,7 +665,7 @@ let first_difference a b =
   in
   go 0
 
-(* Writing back exactly what the reader just returned must not move a byte. The
+(* Writing back exactly what the view just read must not move a byte. The
    positive stream's bytes are [encode]'s own output, so they are already the
    canonical spelling of every field and there is nothing for a re-write to
    normalise. This is the only check in the file that observes which bytes a
@@ -604,55 +674,64 @@ let first_difference a b =
 let check_field_write_back label a bs =
   List.iter
     (fun (Field_check f) ->
-      match (stage_get a f.field, stage_set a f.field) with
-      | Some get, Some set -> (
-          match get bs 0 with
+      match resolve a f.field with
+      | None -> ()
+      | Some rf -> (
+          match view_get a rf bs 0 with
           | exception Invalid_argument _ -> ()
           | Error _ -> ()
-          | Ok v -> (
+          | Ok x -> (
               let buf = Bytes.copy bs in
-              match set buf 0 v with
-              | exception Invalid_argument _ ->
+              match view_set_read a rf buf 0 x with
+              | Unchecked -> ()
+              | Refused ->
                   if not (Bytes.equal buf bs) then
                     Alcobar.failf
-                      "%s field %s: Codec.set refused a value after writing to \
+                      "%s field %s: View.set refused a value after writing to \
                        the buffer"
                       label f.name
-              | () ->
+              | Read _ ->
                   if not (Bytes.equal buf bs) then
                     Alcobar.failf
-                      "%s field %s: writing back the value Codec.get just read \
+                      "%s field %s: writing back the value View.read just read \
                        changed the canonical encoding at byte %d"
-                      label f.name (first_difference buf bs)))
-      | _ -> ())
+                      label f.name (first_difference buf bs))))
     a.achecks
 
-(* Setting every field in turn into a zeroed buffer is an encode spelled with
-   the staged writers, so it must land on the same bytes [encode] writes.
-   Fixed-size codecs only: with a variable layout the fields have to be written
-   in an order the offsets agree with, and a skipped field leaves a hole the
-   comparison would blame on the wrong writer. Inconclusive, and so skipped,
-   as soon as one field has no staged writer or refuses its own value. *)
-let check_field_set_sweep label a value bs =
-  let checks = a.achecks in
-  if Option.is_some (Wire.Codec.size a.acodec) && checks <> [] then begin
-    let buf = Bytes.make (Bytes.length bs) '\x00' in
-    let wrote fc =
-      match fc with
-      | Field_check f -> (
-          match stage_set a f.field with
-          | None -> false
-          | Some set -> (
-              match set buf 0 (f.proj value) with
-              | exception Invalid_argument _ -> false
-              | () -> true))
-    in
-    if List.for_all wrote checks && not (Bytes.equal buf bs) then
-      Alcobar.failf
-        "%s: writing every field with Codec.set does not reproduce the bytes \
-         Codec.encode writes (first difference at byte %d)"
-        label (first_difference buf bs)
-  end
+(* Setting every field of [other]'s bytes in turn to [value]'s is an encode of
+   [value] spelled with the views' writers, so it must land on the same bytes
+   [encode] writes. Fixed-size codecs only: with a variable layout the fields
+   have to be written in an order the offsets agree with, and a skipped field
+   leaves a hole the comparison would blame on the wrong writer. Inconclusive,
+   and so skipped, as soon as one field takes no write or refuses its own
+   value. *)
+(* Whether [View.set] wrote the field of [value] in the view [v]. *)
+let wrote_field a b v value bs (Field_check f) =
+  match stage_set a f.field bs with
+  | None -> false
+  | Some rf -> (
+      match View.set b v rf (f.proj value) with
+      | exception Invalid_argument _ -> false
+      | () -> true)
+
+let sweep label a value bs buf =
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let k = View.check a.acodec b ~off:0 in
+  if
+    View.is_ok k
+    && List.for_all (wrote_field a b (View.get k) value bs) a.achecks
+    && not (Bytes.equal buf bs)
+  then
+    Alcobar.failf
+      "%s: writing every field with View.set does not reproduce the bytes \
+       Codec.encode writes (first difference at byte %d)"
+      label (first_difference buf bs)
+
+let check_field_set_sweep label a value bs other =
+  if Option.is_some (Wire.Codec.fixed_size a.acodec) && a.achecks <> [] then
+    match Wire.Codec.to_bytes a.acodec other with
+    | exception Invalid_argument _ -> ()
+    | buf -> sweep label a value bs buf
 
 (* All of the above on one positive sample. [other] is a second, independent
    positive: it supplies a value of each field's own type that differs from the
@@ -661,42 +740,39 @@ let check_field_set_sweep label a value bs =
    an integer wider than its declared width, a value a closed enum does not
    list -- which is where [set] and [encode] are most likely to disagree. *)
 let check_fields label a g (value, bs) other hostile =
-  (* [get] threads the env the positive was encoded with; [set] takes none, so
-     the write checks stay off a codec that binds one. *)
+  (* A read threads the env the positive was encoded with; the write checks
+     stay off a codec that binds one. *)
   check_field_get label ?env:(positive_env g) a value bs;
   if Option.is_none g.env then begin
+    check_embedded_encode_agree label "positive" a g value;
     check_field_write_back label a bs;
-    check_field_set_sweep label a value bs;
-    check_field_set label ~strict:true a other bs;
+    check_field_set_sweep label a value bs other;
+    check_field_set label a other bs;
     check_field_locality label a other bs;
     Option.iter
       (fun h ->
-        check_field_set label ~strict:false a h bs;
+        check_field_set label a h bs;
         check_field_set_refusal label a h bs;
         check_field_locality label a h bs)
       hostile
   end
 
-(* The accessors against the two things that are supposed to license them.
+(* The views against the two things that are supposed to license them.
 
-   [validate] is the gate [codec.mli] tells a caller to run before reaching for
-   an accessor on untrusted input, so a buffer it accepts must be safe for every
-   [get] the codec offers: the validator walks its own compiled layout and the
-   staged readers compute theirs separately, and a frame one of them thinks is
-   long enough and the other does not surfaces here as a read of whatever the
-   caller's buffer holds past the end.
+   [validate] is the gate the views stand for, so a buffer it accepts must be
+   one [View.check] accepts, and safe for every read the codec offers.
 
    [decode] builds the same record through a third construction again, the
    record populator. Where it accepts, every field it filled in must equal what
-   the staged reader makes of the same bytes. On this stream the values come
-   from the fuzzer's byte generators rather than from any encoder, so neither
-   side is reading back something it wrote. *)
+   the view reads of the same bytes. On this stream the values come from the
+   fuzzer's byte generators rather than from any encoder, so neither side is
+   reading back something it wrote. *)
 let check_field_reads label kind ?env a g bs =
   let validated =
     match validate_at ?env g bs 0 with Accepted () -> true | _ -> false
   in
   let decoded =
-    match Wire.Codec.decode ?env g.codec bs 0 with
+    match Wire.Codec.decode ?env g.codec bs ~off:0 with
     | Ok record -> Some record
     | Error _ -> None
     | exception Invalid_argument _ -> None
@@ -711,7 +787,7 @@ let check_field_reads label kind ?env a g bs =
             | exception Invalid_argument m ->
                 if validated then
                   Alcobar.failf
-                    "%s %s field %s: Codec.get raised on a buffer validate \
+                    "%s %s field %s: View.read raised on a buffer validate \
                      accepted: %s"
                     label kind f.name m
             | Error _ -> ()
@@ -720,11 +796,98 @@ let check_field_reads label kind ?env a g bs =
                   (fun record ->
                     if not (f.equal got (f.proj record)) then
                       Alcobar.failf
-                        "%s %s field %s: Codec.get and Codec.decode read \
+                        "%s %s field %s: View.read and Codec.decode read \
                          different values from the same bytes"
                         label kind f.name)
                   decoded))
       a.achecks
+
+(* {1 Windows and folds} *)
+
+(* [View.check ~len] checks the record in its window alone, so it must answer
+   what [validate] answers on a copy of the window. The windows are the prefix
+   the record declares, a byte less, and the whole buffer. *)
+let check_window label kind ?env a bs =
+  let c = a.acodec in
+  let n = Bytes.length bs in
+  let window len =
+    if len >= 0 && len <= n then begin
+      let (Wire.Buf.Any b) = Wire.Buf.v bs in
+      let viewed =
+        match View.check ?env ~len c b ~off:0 with
+        | k -> Some (View.is_ok k)
+        | exception Invalid_argument _ -> None
+      in
+      let validated =
+        match Wire.Codec.validate ?env c (Bytes.sub bs 0 len) ~off:0 with
+        | Ok () -> Some true
+        | Error _ -> Some false
+        | exception Invalid_argument _ -> None
+      in
+      if viewed <> validated then
+        Alcobar.failf
+          "%s %s: View.check ~len:%d and validate of the %d-byte window \
+           disagree"
+          label kind len len
+    end
+  in
+  window n;
+  match Wire.Codec.size_at ?env c bs ~off:0 with
+  | Ok sz ->
+      window sz;
+      window (sz - 1)
+  | Error _ | (exception Invalid_argument _) -> ()
+
+(* A fold over records back to back hands [f] the fields decode reads of each
+   record, in order, and stops with an error where decode refuses one, with the
+   fields of the records before it. [copies] records of the positive [bs] are
+   laid one after the other; a greedy tail reads its neighbours into the first,
+   so the copies need not all decode. *)
+let check_fold label a bs ~copies =
+  match a.achecks with
+  | Field_check f :: _ when copies > 0 -> (
+      let buf = Bytes.concat Bytes.empty (List.init copies (fun _ -> bs)) in
+      let rec decoded acc off =
+        if off >= Bytes.length buf then Ok (List.rev acc)
+        else
+          match
+            ( Wire.Codec.decode a.acodec buf ~off,
+              Wire.Codec.size_at a.acodec buf ~off )
+          with
+          | Ok r, Ok sz when sz > 0 -> decoded (f.proj r :: acc) (off + sz)
+          | _ -> Error (List.rev acc)
+      in
+      let folded =
+        match
+          View.fold a.acodec
+            Wire.Codec.[ f.field ]
+            buf ~init:[]
+            ~f:(fun acc x -> x :: acc)
+        with
+        | Ok xs -> Some (Ok (List.rev xs))
+        | Error (_, xs) -> Some (Error (List.rev xs))
+        | exception Invalid_argument _ -> None
+      in
+      let same = List.equal f.equal in
+      match (folded, decoded [] 0) with
+      | None, _ -> ()
+      | Some (Ok got), Ok want | Some (Error got), Error want ->
+          if not (same got want) then
+            Alcobar.failf
+              "%s: View.fold over %d copies of a positive reads %d values \
+               where decode reads %d, or different ones"
+              label copies (List.length got) (List.length want)
+      | Some (Ok _), Error want ->
+          Alcobar.failf
+            "%s: View.fold accepts %d copies of a positive where decode stops \
+             after %d"
+            label copies (List.length want)
+      | Some (Error got), Ok _ ->
+          Alcobar.failf
+            "%s: View.fold stops after %d of %d copies of a positive decode \
+             reads"
+            label (List.length got) copies)
+  | _ -> ()
 
 (* {1 Metamorphic properties}
 
@@ -749,7 +912,7 @@ let noise_gen =
       bytes_of_string (if String.length s > 8 then String.sub s 0 8 else s))
 
 let size_at g bs off =
-  match Wire.Codec.size_at g.codec bs off with
+  match Wire.Codec.size_at g.codec bs ~off with
   | Ok n -> Some n
   | Error _ -> None
   | exception Invalid_argument _ -> None
@@ -831,7 +994,7 @@ let check_offset_invariance label ?env a g pad bs =
                 in
                 check_shifted
                   (Fmt.str "%s field %s" label f.name)
-                  "Codec.get" ~k ~same:f.equal (read bs 0) (read bs' k)))
+                  "View.read" ~k ~same:f.equal (read bs 0) (read bs' k)))
       a.achecks
   end
 
@@ -841,11 +1004,11 @@ let check_offset_invariance label ?env a g pad bs =
 let check_offset_encode label ?env g value bs pad =
   let k = Bytes.length pad in
   if k > 0 then
-    match Wire.Codec.encoded_size g.codec value with
+    match Wire.Codec.size g.codec value with
     | exception Invalid_argument _ -> ()
     | sz -> (
         let out = Bytes.make (k + sz + k) '\xa5' in
-        match Wire.Codec.encode ?env g.codec value out k with
+        match Wire.Codec.encode ?env g.codec value out ~off:k with
         | exception Invalid_argument m ->
             Alcobar.failf "%s: Codec.encode raised at base %d on a positive: %s"
               label k m
@@ -1050,8 +1213,8 @@ let check_frame_isolation label kind ?env a g bs interloper =
     (fun (name, same) ->
       if not (same bs) then
         Alcobar.failf
-          "%s: Codec.get on field %s reads a different value once the same \
-           reader has been used on another frame"
+          "%s: View.read of field %s reads a different value once the same \
+           field has been read in another frame"
           label name)
     snaps
 
@@ -1122,32 +1285,23 @@ let check_answer label what ?(pp = pp_some) ~equal (na, a) (nb, b) =
 let warm c = ignore (Wire.Codec.min_size c)
 
 let decode_answer ?env c bs =
-  answer_result (fun () -> Wire.Codec.decode ?env c bs 0)
+  answer_result (fun () -> Wire.Codec.decode ?env c bs ~off:0)
 
 let validate_answer ?env c bs =
-  answer_result (fun () -> Wire.Codec.validate ?env c bs 0)
-
-module View = Wire.Codec.View
+  answer_result (fun () -> Wire.Codec.validate ?env c bs ~off:0)
 
 (* Whether [View.check] of [c] accepts the record at 0 of [bs]. *)
-let check_answer_of (type r) ?env (c : r Wire.Codec.t) bs =
+let check_answer_of ?env c bs =
   answer (fun () ->
-      let module V = (val View.codec ?env c) in
       let (Wire.Buf.Any b) = Wire.Buf.v bs in
-      View.ok (View.check V.codec b (Wire.Buf.length b) 0))
+      View.is_ok (View.check ?env c b ~off:0))
 
-(* [View.read] of [f] in the view of [c], on a record [View.check] accepts:
-   of [View.field] where it takes [f], of [View.checked_field] where it reads
-   [f] with a check. *)
-let view_read (type r) ?env (c : r Wire.Codec.t) f bs =
-  answer_result (fun () ->
-      let module V = (val View.codec ?env c) in
+(* [View.read] of [f] in the view of [c], on a record [View.check] accepts. *)
+let view_read ?env c f bs =
+  answer (fun () ->
+      let f = View.field c f in
       let (Wire.Buf.Any b) = Wire.Buf.v bs in
-      let r = View.get (View.check V.codec b (Wire.Buf.length b) 0) in
-      match View.field V.codec f with
-      | f -> Ok (View.read f b r)
-      | exception Invalid_argument _ ->
-          View.read (View.checked_field V.codec f) b r)
+      View.read b (View.get (View.check ?env c b ~off:0)) f)
 
 let unit_equal () () = true
 
@@ -1169,17 +1323,14 @@ let check_fast_general_core label kind ?env g general bs =
     ~names:(("the fast path", g.codec), ("the general path", general))
     bs
 
-let field_get ?env c f bs =
-  answer_result (fun () -> (Wire.Codec.get ?env c f) bs 0)
-
-(* [check] then [read] of each field, against [validate] then [get] of the
-   general codec, and [get] of each field on both. *)
+(* [check] of the warm codec against [check] of the general one and against
+   [validate], then [read] of each field on both, where the check accepts. *)
 let check_accessors label ?env ~fast ~general checks bs =
   let fast_valid = check_answer_of ?env fast bs in
   check_answer label "View.check" ~equal:Bool.equal
     ("the fast path", fast_valid)
     ("the general path", check_answer_of ?env general bs);
-  (* A misuse names the call that refused it: [View.codec] or
+  (* A misuse names the call that refused it: [View.check] or
      [Codec.validate]. The two must refuse the same misuse. *)
   let misuse = function
     | Invalid m -> (
@@ -1196,23 +1347,17 @@ let check_accessors label ?env ~fast ~general checks bs =
   check_answer label "View.check against validate" ~equal:Bool.equal
     ("View.check", misuse fast_valid)
     ("Codec.validate", accepted (validate_answer ?env general bs));
-  List.iter
-    (fun (Field_check f) ->
-      let reference = field_get ?env general f.field bs in
-      check_answer label
-        ("Codec.get of field " ^ f.name)
-        ~equal:f.equal
-        ("the fast path", field_get ?env fast f.field bs)
-        ("the general path", reference);
-      match fast_valid with
-      | Value true ->
+  match fast_valid with
+  | Value true ->
+      List.iter
+        (fun (Field_check f) ->
           check_answer label
             ("View.read of field " ^ f.name)
             ~equal:f.equal
-            ("View.read", view_read ?env fast f.field bs)
-            ("Codec.get on the general path", reference)
-      | Value false | Parse _ | Invalid _ -> ())
-    checks
+            ("the fast path", view_read ?env fast f.field bs)
+            ("the general path", view_read ?env general f.field bs))
+        checks
+  | Value false | Parse _ | Invalid _ -> ()
 
 let check_fast_general label kind ?env a g bs =
   check_fast_general_core label kind ?env g a.ggeneral bs;
@@ -1278,13 +1423,13 @@ let check_cold_warm label kind ?env a g bs =
     (fst names, check_answer_of ?env (Testing.fresh a.acodec) bs)
     (snd names, check_answer_of ?env a.acodec bs);
   match a.achecks with
-  | Field_check f :: _ ->
+  | Field_check f :: _ when check_answer_of ?env a.acodec bs = Value true ->
       check_answer label
-        ("Codec.get of field " ^ f.name)
+        ("View.read of field " ^ f.name)
         ~equal:f.equal
-        (fst names, field_get ?env (Testing.fresh a.acodec) f.field bs)
-        (snd names, field_get ?env a.acodec f.field bs)
-  | [] -> ()
+        (fst names, view_read ?env (Testing.fresh a.acodec) f.field bs)
+        (snd names, view_read ?env a.acodec f.field bs)
+  | _ -> ()
 
 (* A value whose getters answer the same on successive calls. A flapping one
    has no single encoding to compare byte for byte; [check_encode_safety]
@@ -1296,13 +1441,13 @@ let encode_answer ?env c v ~len ~off =
   let buf = Bytes.make len '\xa5' in
   map_answer
     (fun () -> Bytes.to_string buf)
-    (answer (fun () -> Wire.Codec.encode ?env c v buf off))
+    (answer (fun () -> Wire.Codec.encode ?env c v buf ~off))
 
 (* [encode] into a buffer of exactly the value's size, one short of it, and
    one behind a prefix, on the fast, the general and a cold codec. *)
 let check_encode_paths label kind ?env a g value =
   if pure_value g value then
-    match Wire.Codec.encoded_size ?env g.codec value with
+    match Wire.Codec.size ?env g.codec value with
     | exception Invalid_argument _ -> ()
     | n ->
         warm g.codec;
@@ -1323,7 +1468,7 @@ let check_encode_paths label kind ?env a g value =
             end)
           [ (n, 0); (n - 1, 0); (n + 3, 3) ]
 
-(* [set] of each field on the fast and the general codec, from the same
+(* [View.set] of each field on the fast and the general codec, from the same
    buffer. *)
 let check_set_paths label a value bs =
   List.iter
@@ -1332,10 +1477,13 @@ let check_set_paths label a value bs =
         let buf = Bytes.copy bs in
         map_answer
           (fun () -> Bytes.to_string buf)
-          (answer (fun () -> Wire.Codec.set c f.field buf 0 (f.proj value)))
+          (answer (fun () ->
+               let rf = View.field c f.field in
+               let (Wire.Buf.Any b) = Wire.Buf.v buf in
+               View.set b (View.get (View.check c b ~off:0)) rf (f.proj value)))
       in
       check_answer label
-        ("Codec.set of field " ^ f.name)
+        ("View.set of field " ^ f.name)
         ~pp:pp_hex ~equal:String.equal
         ("the fast path", set a.acodec)
         ("the general path", set a.ageneral))

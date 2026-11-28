@@ -10,10 +10,10 @@
     There are two of those. Both sides must agree on which inputs are valid, and
     on an input they both accept they must agree on what they read out of it:
     every field {!Diff_codecs.compared_fields} says the two can both hand back
-    is compared value against value, the OCaml side through
-    {!Wire.Codec.field_readers} and the C side through {!Diff_index.values}. An
-    accept/reject check on its own is blind to the more dangerous case, two
-    decoders that accept the same bytes and read a different number out of them.
+    is compared value against value, the OCaml side through the decoder's reader
+    of each field and the C side through {!Diff_index.values}. An accept/reject
+    check on its own is blind to the more dangerous case, two decoders that
+    accept the same bytes and read a different number out of them.
 
     {!Diff_driver} runs the suite, and reports the codecs the candidate filter
     dropped (variable-size, zero-size, parameterised or casetype). *)
@@ -43,12 +43,12 @@ let pp_verdict ppf = function
    must reach the same verdict too. *)
 let general_verdict (Pack g) =
   let general = Wire.Private.Testing.general (codec g) in
-  fun b -> rejection (Wire.Codec.decode general b 0)
+  fun b -> rejection (Wire.Codec.decode general b ~off:0)
 
 let ocaml_accepts label (Pack g) general b =
   let c = codec g in
-  let decoded = rejection (Wire.Codec.decode c b 0) in
-  let validated = rejection (Wire.Codec.validate c b 0) in
+  let decoded = rejection (Wire.Codec.decode c b ~off:0) in
+  let validated = rejection (Wire.Codec.validate c b ~off:0) in
   let slow = general b in
   if Option.is_none decoded <> Option.is_none validated then
     failf "%s: on %a, OCaml decode %a but Codec.validate %a" label pp_hex
@@ -88,7 +88,7 @@ let diff_field label b c_fields f =
                from %a"
               label f.fname o c pp_hex (Bytes.to_string b)
       | Error _ ->
-          (* [Codec.field_readers] reports through an OCaml [int], one bit short
+          (* The OCaml reader reports through an OCaml [int], one bit short
              of an 8-byte field, so past 2^62 it has no [int] to report and
              answers an error instead. All the comparison can pin there is that the C side
              does not fit an [int] either, which still holds the field's top two
@@ -132,17 +132,28 @@ let diff_check case b =
       (if c then "accepts" else "rejects");
   if Option.is_none o then diff_values case.label case.fields case.c_values b
 
-(* The OCaml half of the value comparison. [Codec.field_readers] keys the
-   decoder's own per-field readers by name, which is what makes this reachable
-   at all: the record type is hidden behind [Pack], so there is no field handle
-   to hand [Codec.get]. A compared field with no reader would mean the two sides
-   disagree about what the schema's fields are, so it fails the run rather than
-   quietly comparing one field fewer. *)
+(* The decoder's reader of the field [name] of [c], found by its name, its
+   value as an [int]: the record type is hidden behind [Pack], so there is no
+   field handle to resolve in a view. *)
+let int_reader c name =
+  let k typ read buf off =
+    match read buf off with
+    | Error e -> Error e
+    | Ok v -> (
+        match Wire.Private.Eval.int_of_exn typ v with
+        | n -> Ok n
+        | exception exn when Wire.Private.Types.is_parse_error exn ->
+            Error (Wire.Private.Types.parse_error_of exn))
+  in
+  Wire.Private.Gen.with_field_reader c name { k }
+
+(* The OCaml half of the value comparison. A compared field with no reader
+   would mean the two sides disagree about what the schema's fields are, so it
+   fails the run rather than quietly comparing one field fewer. *)
 let field_checks label (Pack g as p) =
-  let readers = Wire.Codec.field_readers (codec g) in
   List.map
     (fun (cf : Diff_codecs.compared_field) ->
-      match List.assoc_opt cf.name readers with
+      match int_reader (codec g) cf.name with
       | Some read -> { fname = cf.name; width = cf.width; read }
       | None ->
           Fmt.failwith "diff: %s has no OCaml field reader for %s" label cf.name)

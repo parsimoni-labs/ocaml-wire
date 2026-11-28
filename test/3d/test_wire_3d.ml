@@ -1,7 +1,7 @@
 (** Tests for the EverParse pipeline -- schema generation and 3D output. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 
 let simple_struct =
   struct_ "TestSimple" [ field "version" uint8; field "length" uint16be ]
@@ -105,8 +105,8 @@ let test_pascal_case () =
 let test_generate_3d_files () =
   let tmpdir = Filename.temp_dir "wire_3d_test" "" in
   let s =
-    Wire.Everparse.Raw.of_module ~name:"TestSimple" ~module_:simple_module
-      ~wire_size:3
+    Wire.Private.Everparse.Raw.of_module ~name:"TestSimple"
+      ~module_:simple_module ~wire_size:3
   in
   Wire_3d.generate_3d ~outdir:tmpdir [ s ];
   let path = Filename.concat tmpdir "TestSimple.3d" in
@@ -115,7 +115,7 @@ let test_generate_3d_files () =
   Unix.rmdir tmpdir
 
 let test_schema_of_struct () =
-  let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
+  let s = Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   (* generate_3d uses the schema -- check we can produce a .3d file *)
   let tmpdir = Filename.temp_dir "wire_3d_test2" "" in
   Wire_3d.generate_3d ~outdir:tmpdir [ s ];
@@ -140,7 +140,9 @@ let test_generate_c () =
   needs_3d_exe ();
   begin
     let tmpdir = Filename.temp_dir "wire_3d_gen_c" "" in
-    let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
+    let s =
+      Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct
+    in
     Wire_3d.generate_3d ~outdir:tmpdir [ s ];
     Wire_3d.generate_c ~outdir:tmpdir [ s ];
     let c_path = Filename.concat tmpdir "TestSimple.c" in
@@ -172,7 +174,9 @@ let test_endianness_freestanding () =
   if Option.is_none (Wire_3d.locate_3d_exe ()) then ()
   else begin
     let tmpdir = Filename.temp_dir "wire_3d_endianness" "" in
-    let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
+    let s =
+      Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct
+    in
     Wire_3d.generate_3d ~outdir:tmpdir [ s ];
     Wire_3d.generate_c ~outdir:tmpdir [ s ];
     let header = read_file (Filename.concat tmpdir "EverParseEndianness.h") in
@@ -215,7 +219,7 @@ let test_endianness_freestanding () =
    another's with no diagnostic: the verified C then enforces the surviving
    spec while the OCaml side still parses with both. *)
 let schema_named name =
-  Wire.Everparse.Raw.project_struct ~mode:`Ffi
+  Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi
     (struct_ name [ field "x" uint8 ])
 
 let test_name_collision () =
@@ -266,7 +270,8 @@ let test_name_collision () =
    identifier subset before opening even an earlier schema's output file. *)
 let test_output_name_validation () =
   let schema name =
-    Wire.Everparse.Raw.of_module ~name ~module_:simple_module ~wire_size:3
+    Wire.Private.Everparse.Raw.of_module ~name ~module_:simple_module
+      ~wire_size:3
   in
   let valid = "mIxEd_Case9" in
   let invalid =
@@ -1061,7 +1066,7 @@ let compile_generated ?(run = true) codec dir =
   let schema = Everparse.project ~mode:`Ffi codec in
   Wire_3d.generate_3d ~outdir:dir [ schema ];
   Wire_3d.generate_c ~outdir:dir [ schema ];
-  let base = String.capitalize_ascii schema.Everparse.name in
+  let base = String.capitalize_ascii (Everparse.name schema) in
   let cmd =
     (* Compile with the exact strict-C11 flags the generated dune emits, so
        the e2e checks the validators under the same standard a downstream
@@ -1466,17 +1471,17 @@ let test_byte_span_subtraction () =
     ]
 
 let test_uses_wire_ctx () =
-  let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
+  let s = Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   Alcotest.(check bool)
     "schema_of_struct uses WireCtx" true
-    (Wire.Everparse.uses_wire_ctx s);
+    (Wire.Private.Everparse.uses_wire_ctx s);
   let raw =
-    Wire.Everparse.Raw.of_module ~name:"TestSimple" ~module_:simple_module
-      ~wire_size:3
+    Wire.Private.Everparse.Raw.of_module ~name:"TestSimple"
+      ~module_:simple_module ~wire_size:3
   in
   Alcotest.(check bool)
     "raw module without extern WireCtx" false
-    (Wire.Everparse.uses_wire_ctx raw)
+    (Wire.Private.Everparse.uses_wire_ctx raw)
 
 (* [locate_3d_exe] is the gate every EverParse-dependent case reads, so it is
    checked against the search it documents -- PATH, then the
@@ -1519,7 +1524,8 @@ let check_size ~name ~expected codec =
     expected codec_size;
   Alcotest.(check (option int))
     (Fmt.str "%s: schema.wire_size = %d" name expected)
-    (Some expected) schema.Everparse.wire_size
+    (Some expected)
+    (Private.Everparse.wire_size schema)
 
 let pack_four_u8 label ta tb tc td =
   let fa = Field.v "a" ta in
@@ -1621,10 +1627,13 @@ let test_projection_sizes () =
    schema name like [rpmsg_endpoint_info] that exercises the split. *)
 let test_projection_filenames () =
   let s =
-    Everparse.Raw.struct_ "rpmsg_endpoint_info"
-      [ Everparse.Raw.field "v" uint8; Everparse.Raw.field "id" uint16be ]
+    Private.Everparse.Raw.struct_ "rpmsg_endpoint_info"
+      [
+        Private.Everparse.Raw.field "v" uint8;
+        Private.Everparse.Raw.field "id" uint16be;
+      ]
   in
-  let schema = Everparse.Raw.project_struct ~mode:`Ffi s in
+  let schema = Private.Everparse.Raw.project_struct ~mode:`Ffi s in
   let tmpdir = Filename.temp_dir "wire_3d_filenames" "" in
   Wire_3d.generate_dune ~outdir:tmpdir ~package:"pkg" [ schema ];
   let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
@@ -1761,8 +1770,8 @@ let arith_codecs =
         (fun i -> Char.chr (int_of_string ("0x" ^ String.sub hex (2 * i) 2)))
     in
     let ok =
-      match Codec.validate c buf 0 with
-      | Ok () -> Codec.size_at c buf 0 = Ok (Bytes.length buf)
+      match Codec.validate c buf ~off:0 with
+      | Ok () -> Codec.size_at c buf ~off:0 = Ok (Bytes.length buf)
       | Error _ -> false
       | exception Invalid_argument _ -> false
     in

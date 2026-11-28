@@ -44,9 +44,9 @@ val show_code : 'a Wire.Private.Types.typ -> string option
 
 val reference : 'r Wire.Codec.t -> string -> bytes -> int -> string
 (** [reference c name buf off] reads the field [name] of [c] at [off] in [buf]
-    with the reader {!Wire.Codec.get} stages, and shows its value as
-    {!show_code} shows a generated getter's: an integer in decimal, a byte array
-    quoted. The reader's error is raised as {!Refused}. *)
+    with the reader {!Wire.Private.Gen.with_field_reader} stages, and shows its
+    value as {!show_code} shows a generated getter's: an integer in decimal, a
+    byte array quoted. The reader's error is raised as {!Refused}. *)
 
 val codecs : (string * Fuzz_gen.packed) list
 (** [codecs] is the codecs the backend compares: the {!Diff_codecs.candidates}
@@ -66,8 +66,8 @@ val check : string -> Fuzz_gen.packed -> t -> bytes -> unit
     codec on [buf] at several offsets: decode and validate give the same value
     or the same error, encode writes the same bytes or raises the same error
     into buffers around the record, and [check] with its accessors agrees with
-    {!Wire.Codec.validate} then {!Wire.Codec.get}. Fails with {!Alcobar.failf}.
-*)
+    {!Wire.Codec.validate} then the decoder's reader. Fails with
+    {!Alcobar.failf}. *)
 
 val report : string -> (string * Fuzz_gen.packed * string) list -> bool
 (** [report name refused] prints how many of the sampled {!codecs}, and of the
@@ -152,7 +152,7 @@ val of_scan_case : Diff_codecs.scan_case -> reference
 
 val of_sampled : string -> Fuzz_gen.packed -> reference
 (** [of_sampled label p] states the top-level integer fields of [p]'s codec,
-    read by the reader {!Wire.Codec.get} stages. *)
+    read by the reader {!Wire.Private.Gen.with_field_reader} stages. *)
 
 val check_scan :
   ?oracle:Diff_codecs.c_oracle ->

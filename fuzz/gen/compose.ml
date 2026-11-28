@@ -17,7 +17,7 @@ open Columns
 
 type any = Any : { g : 'a t; size : int option; label : string } -> any
 
-let fixed_size g = Wire.Codec.size g.codec
+let fixed_size g = Wire.Codec.fixed_size g.codec
 
 (* Flat records as composition leaves: one per fast-path shape, so each
    shape is drawn whole rather than hoped for. *)

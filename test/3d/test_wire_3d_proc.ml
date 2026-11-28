@@ -1,7 +1,7 @@
 (* Tests for wire_3d.ml: starting EverParse and the job pools. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 
 let simple_struct =
   struct_ "TestSimple" [ field "version" uint8; field "length" uint16be ]
@@ -314,7 +314,7 @@ let test_spawned_3d_same_c () =
       ~executable:Sys.file_exists
     |> Option.get
   in
-  let s = Wire.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
+  let s = Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   let generated run =
     let outdir = Filename.temp_dir "wire_3d_spawned" "" in
     Fun.protect

@@ -429,38 +429,34 @@ let check_sampler_nesting () =
     (fun (what, ok) -> if not ok then Alcobar.failf "sampler nesting: %s" what)
     checks
 
-(* How many registry entries the per-field properties actually reach. Staging an
-   accessor is allowed to refuse -- a field shape with no staged accessor is a
-   documented gap, not a failure -- so a change to [addressed], to the registry
-   or to the accessor API could turn every per-field property into a silent
-   no-op without one test going red. Pin the floor. *)
+(* How many registry entries the per-field properties actually reach. Resolving
+   a field in a view is allowed to refuse -- a field an input parameter places
+   is a documented gap, not a failure -- so a change to [addressed], to the
+   registry or to the views could turn every per-field property into a silent
+   no-op without one test going red. Pin the floor. Whether a write lands is
+   decided per sample, on the bytes it writes over. *)
 let field_reach () =
-  let reach (readable, writable, multi) (_, Pack g) =
+  let reach (readable, multi) (_, Pack g) =
     let a = addressed g in
     let readable_field fc =
       match fc with Field_check f -> Option.is_some (stage_get a f.field)
     in
-    let writable_field fc =
-      match fc with Field_check f -> Option.is_some (stage_set a f.field)
-    in
-    (* [set] takes no env, so the write properties skip a codec that binds one;
-       locality needs two fields to play one off against the other. *)
+    (* The write properties skip a codec that binds an env; locality needs two
+       fields to play one off against the other. *)
     let env_free = Option.is_none g.env in
     ( (if List.exists readable_field a.achecks then readable + 1 else readable),
-      (if env_free && List.exists writable_field a.achecks then writable + 1
-       else writable),
       if env_free && List.compare_length_with a.achecks 1 > 0 then multi + 1
       else multi )
   in
-  List.fold_left reach (0, 0, 0) registry
+  List.fold_left reach (0, 0) registry
 
 let check_field_reach () =
-  let readable, writable, multi = field_reach () in
-  if readable < 120 || writable < 115 || multi < 15 then
+  let readable, multi = field_reach () in
+  if readable < 120 || multi < 15 then
     Alcobar.failf
-      "per-field properties reach %d readable, %d writable and %d multi-field \
-       registry entries out of %d"
-      readable writable multi (List.length registry)
+      "per-field properties reach %d readable and %d multi-field registry \
+       entries out of %d"
+      readable multi (List.length registry)
 
 (* Every fast path [Codec] can select must be selected by some codec the
    fuzzer draws -- a registry entry, a composition leaf or a fixed-seed sample

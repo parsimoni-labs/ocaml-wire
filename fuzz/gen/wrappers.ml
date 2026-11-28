@@ -220,9 +220,9 @@ let bit inner =
     Alcobar.map
       Alcobar.[ Alcobar.bool ]
       (fun b ->
-        let sz = Wire.Codec.encoded_size codec b in
+        let sz = Wire.Codec.size codec b in
         let buf = Bytes.create sz in
-        Wire.Codec.encode codec b buf 0;
+        Wire.Codec.encode codec b buf ~off:0;
         (b, buf))
   in
   {
@@ -467,7 +467,7 @@ let finite_float64 =
       (fun v ->
         let v = if Float.is_finite v then v else 0.0 in
         let buf = Bytes.create 8 in
-        Wire.Codec.encode codec v buf 0;
+        Wire.Codec.encode codec v buf ~off:0;
         (v, buf))
   in
   let adversarial =
@@ -822,9 +822,9 @@ let opt_dyn_span_positive codec =
           (if present then Some (Wire.UInt16.v v) else None),
           String.make tail_len '\x00' )
       in
-      let sz = Wire.Codec.encoded_size codec value in
+      let sz = Wire.Codec.size codec value in
       let buf = Bytes.create sz in
-      Wire.Codec.encode codec value buf 0;
+      Wire.Codec.encode codec value buf ~off:0;
       (value, buf))
 
 (* Dynamic-gate optional at a *runtime* offset. [optional_dynamic] keeps its
@@ -864,8 +864,8 @@ let optional_dyn_after_span =
   in
   (* Every slot of the shape #262 lived in: a span at a runtime size, an
      optional at a runtime offset behind it, and a greedy tail. Addressing them
-     one at a time is what turns [Codec.get] loose on an attacker-supplied
-     [len] and [Codec.set] loose next to a neighbour whose offset moves. *)
+     one at a time is what turns [View.read] loose on an attacker-supplied
+     [len] and [View.set] loose next to a neighbour whose offset moves. *)
   let fields =
     [
       slot "gate" f_gate gate_of;
@@ -929,8 +929,8 @@ let union_span_positive codec =
         | _ -> Unknown (Wire.UInt8.v tag, Wire.UInt8.v (v land 0xff))
       in
       let value = (String.make span_len 'x', body, Wire.UInt8.v tail) in
-      let buf = Bytes.create (Wire.Codec.encoded_size codec value) in
-      Wire.Codec.encode codec value buf 0;
+      let buf = Bytes.create (Wire.Codec.size codec value) in
+      Wire.Codec.encode codec value buf ~off:0;
       (value, buf))
 
 (* A union switching on a tag that is not next to it: a length-prefixed span
@@ -1068,8 +1068,8 @@ let casetype_tagged name tag lift cases =
                 (fun (s : env_strategy) -> s.positive (Wire.Codec.env codec))
                 env_strategy
             in
-            let buf = Bytes.create (Wire.Codec.encoded_size codec v) in
-            Wire.Codec.encode ?env codec v buf 0;
+            let buf = Bytes.create (Wire.Codec.size codec v) in
+            Wire.Codec.encode ?env codec v buf ~off:0;
             (v, buf)))
   in
   (* Compare two casetype values through the case each projects to, using that

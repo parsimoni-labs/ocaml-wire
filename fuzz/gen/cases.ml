@@ -28,14 +28,18 @@ let check_positive_stream ~validate label a g (sample, (other, other_bs))
   check_mutated_fast_general label ?env a g noise bs;
   check_cold_warm label "positive" ?env a g bs;
   check_encode_paths label "positive" ?env a g value;
-  if Option.is_none g.env then check_set_paths label a other bs
+  check_window label "positive" ?env a bs;
+  if Option.is_none g.env then begin
+    check_set_paths label a other bs;
+    check_fold label a bs ~copies:3
+  end
 
 (* Every component of a rejection's root-to-leaf field path must name a field
    the codec declares somewhere in its schema. An empty path is valid for a
    top-level or anonymous failure; an invented name sends the caller to bytes
    that do not exist. *)
 let check_rejection_names label kind ?env a g bs =
-  match Wire.Codec.decode ?env g.codec bs 0 with
+  match Wire.Codec.decode ?env g.codec bs ~off:0 with
   | Ok _ | (exception Invalid_argument _) -> ()
   | Error e ->
       List.iter
@@ -50,7 +54,8 @@ let check_rejection_names label kind ?env a g bs =
 let check_safety_stream ~validate label a g kind ?env ~interloper ~noise bs =
   check_decode_safety label kind ?env g bs;
   check_rejection_names label kind ?env a g bs;
-  check_direct_codec_agree label kind g bs;
+  check_embedded_agree label kind a g bs;
+  check_window label kind ?env a bs;
   check_offset_invariance (Fmt.str "%s %s" label kind) ?env a g noise bs;
   check_frame_extent label kind ?env g noise bs;
   check_short_prefix label kind ?env g bs;
@@ -69,7 +74,7 @@ let check_hostile_stream label a g ?env = function
   | None -> ()
   | Some value ->
       if pure_value g value then
-        check_direct_codec_encode_agree label "hostile" g value;
+        check_embedded_encode_agree label "hostile" a g value;
       check_encode_safety label ?env g value;
       check_encode_paths label "hostile" ?env a g value
 
@@ -303,7 +308,11 @@ let check_nested_positive label noise
     check_mutated_fast_general label ?env a g noise bs;
     check_cold_warm label "positive" ?env a g bs;
     check_encode_paths label "positive" ?env a g value;
-    if Option.is_none g.env then check_set_paths label a other bs
+    check_window label "positive" ?env a bs;
+    if Option.is_none g.env then begin
+      check_set_paths label a other bs;
+      check_fold label a bs ~copies:2
+    end
   with Failure m -> Alcobar.failf "%s raised: %s" label m
 
 let check_nested_bytes label kind noise (NB (g, comp, bs, mk)) =
@@ -312,7 +321,8 @@ let check_nested_bytes label kind noise (NB (g, comp, bs, mk)) =
   let env = Option.map (fun f -> f (Wire.Codec.env g.codec)) mk in
   check_decode_safety label kind ?env g bs;
   check_validate_safety label kind ?env g bs;
-  check_direct_codec_agree label kind g bs;
+  check_embedded_agree label kind a g bs;
+  check_window label kind ?env a bs;
   check_field_reads label kind ?env a g bs;
   check_offset_invariance (Fmt.str "%s %s" label kind) ?env a g noise bs;
   check_frame_extent label kind ?env g noise bs;
@@ -380,64 +390,6 @@ let validate_agrees_cases label depth =
         check "adversarial" adversarial);
   ]
 
-(* Round-trip through {!Wire.of_string} / {!Wire.to_string}: the typ-level
-   API, distinct from [Codec.encode/decode]. Skipped for codecs that take a
-   [Param.env] since the direct entry points don't thread one. *)
-let direct_cases label g =
-  if Option.is_some g.env then []
-  else
-    let pos_case =
-      Alcobar.test_case
-        (label ^ " of_string/to_string positive")
-        Alcobar.[ g.positive ]
-        (fun (value, bs) ->
-          let s = string_of_bytes bs in
-          (match Wire.of_string g.typ s with
-          | Ok decoded ->
-              if not (g.equal decoded value) then
-                Alcobar.failf "%s direct decode mismatch" label
-          | Error _ -> Alcobar.failf "%s direct decode failed" label);
-          let out = Wire.to_string g.typ value in
-          if out <> s then Alcobar.failf "%s direct reencode mismatch" label)
-    in
-    let safety kind stream =
-      Alcobar.test_case
-        (label ^ " of_string " ^ kind)
-        Alcobar.[ stream ]
-        (fun bs ->
-          match Wire.of_string g.typ (string_of_bytes bs) with
-          | Ok _ | Error _ -> ()
-          | exception Invalid_argument _ ->
-              Alcobar.failf "%s direct %s crashed decoder" label kind)
-    in
-    [ pos_case; safety "random" g.random; safety "adversarial" g.adversarial ]
-
-(* Round-trip through {!Wire.of_reader} / {!Wire.to_writer}: streaming
-   entry points. Same env restriction as {!direct_cases}. *)
-let streaming_cases label g =
-  if Option.is_some g.env then []
-  else
-    let pos_case =
-      Alcobar.test_case
-        (label ^ " of_reader/to_writer positive")
-        Alcobar.[ g.positive ]
-        (fun (value, bs) ->
-          let reader = Bytesrw.Bytes.Reader.of_bytes bs in
-          (match Wire.of_reader g.typ reader with
-          | Ok decoded ->
-              if not (g.equal decoded value) then
-                Alcobar.failf "%s streaming decode mismatch" label
-          | Error _ -> Alcobar.failf "%s streaming decode failed" label);
-          let buf = Buffer.create (Bytes.length bs) in
-          let writer = Bytesrw.Bytes.Writer.of_buffer buf in
-          Wire.to_writer g.typ value writer;
-          Bytesrw.Bytes.Writer.write_eod writer;
-          let out = Buffer.contents buf in
-          if out <> string_of_bytes bs then
-            Alcobar.failf "%s streaming reencode mismatch" label)
-    in
-    [ pos_case ]
-
 (* Exercises {!Wire.Codec.validate}: validation-only path that should
    accept positives and reject (without crashing) random/adversarial.
    When the codec references [Param.input], positives pull the env from
@@ -485,7 +437,7 @@ let reject_cases label g =
   in
   let check_reject bs build_env =
     let env = Some (build_env (Wire.Codec.env g.codec)) in
-    match Wire.Codec.decode ?env g.codec bs 0 with
+    match Wire.Codec.decode ?env g.codec bs ~off:0 with
     | Ok _ -> Alcobar.failf "%s decoder accepted input it should reject" label
     | Error _ -> ()
     | exception Invalid_argument _ -> Alcobar.failf "%s decoder crashed" label
@@ -572,7 +524,7 @@ let span_fault_case label (Span_fault (name, x)) =
             Bytes.make 1 (Char.chr byte);
           ]
       in
-      check "decode" pad data byte (Wire.Codec.decode codec buf pad);
-      check "validate" pad data byte (Wire.Codec.validate codec buf pad))
+      check "decode" pad data byte (Wire.Codec.decode codec buf ~off:pad);
+      check "validate" pad data byte (Wire.Codec.validate codec buf ~off:pad))
 
 let span_fault_cases label = List.map (span_fault_case label) span_faults

@@ -4,7 +4,7 @@
     arity mismatches, syntax errors, and type errors in the generated code. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
@@ -704,7 +704,7 @@ let diff_stub ppf (D { module_; codec; _ }) =
   Fmt.pf ppf
     "(let module S = Stubs.%s.Make (Stub_codecs.%s) in@\n\
     \     fun b off -> Result.map ignore (S.parse b off))"
-    (Wire_stubs.module_name (Wire.Everparse.Raw.struct_of_codec codec))
+    (Wire_stubs.module_name (Wire.Private.Everparse.Raw.struct_of_codec codec))
     module_
 
 let diff_main =
@@ -780,14 +780,14 @@ let test_e2e_differential () =
    are caught precisely. *)
 
 let pp_action_form = function
-  | Wire.Everparse.No_action -> "none"
+  | Wire.Private.Everparse.No_action -> "none"
   | On_act -> ":act"
   | On_success -> ":on-success"
 
 let expected_action_form ~named ~is_bitfield =
-  if not named then Wire.Everparse.No_action
-  else if is_bitfield then Wire.Everparse.On_act
-  else Wire.Everparse.On_success
+  if not named then Wire.Private.Everparse.No_action
+  else if is_bitfield then Wire.Private.Everparse.On_act
+  else Wire.Private.Everparse.On_success
 
 (* Invariant 1: every named field in the output module carries an action
    whose form matches the field's kind (bitfield -> :act, otherwise
@@ -795,23 +795,27 @@ let expected_action_form ~named ~is_bitfield =
 let check_action_forms codec =
   let schema = Wire.Everparse.project ~mode:`Ffi codec in
   let ep =
-    match Wire.Everparse.entrypoint_struct schema with
+    match Wire.Private.Everparse.entrypoint_struct schema with
     | Some st -> st
-    | None -> Alcotest.failf "%s: no entrypoint struct" schema.name
+    | None ->
+        Alcotest.failf "%s: no entrypoint struct" (Wire.Everparse.name schema)
   in
   List.iter
     (fun (name, is_bitfield, form) ->
       let expected =
         expected_action_form ~named:(Option.is_some name) ~is_bitfield
       in
-      if not (Wire.Everparse.equal_field_action_form form expected) then
-        Alcotest.failf "%s field %s: expected %s, got %s" schema.name
+      if not (Wire.Private.Everparse.equal_field_action_form form expected) then
+        Alcotest.failf "%s field %s: expected %s, got %s"
+          (Wire.Everparse.name schema)
           (Option.value name ~default:"<anon>")
           (pp_action_form expected) (pp_action_form form))
-    (Wire.Everparse.field_action_forms ep)
+    (Wire.Private.Everparse.field_action_forms ep)
 
 let visitor_field_names s =
-  List.map (fun f -> f.Wire.Everparse.name) (Wire.Everparse.visitor_fields s)
+  List.map
+    (fun f -> f.Wire.Private.Everparse.name)
+    (Wire.Private.Everparse.visitor_fields s)
 
 (* Invariant 2: [visitor_fields] enumerates exactly the named fields of the
    source struct in declaration order, with consecutive indices starting at
@@ -819,15 +823,15 @@ let visitor_field_names s =
    generator. *)
 let check_visitor_completeness codec =
   let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let source = Option.get schema.source in
-  let expected = Wire.Everparse.Raw.field_names source in
+  let source = Option.get (Wire.Private.Everparse.source schema) in
+  let expected = Wire.Private.Everparse.Raw.field_names source in
   let got = visitor_field_names schema in
   Alcotest.(check (list string))
     "visitor_fields matches named source fields" expected got;
   let idxs =
     List.map
-      (fun f -> f.Wire.Everparse.idx)
-      (Wire.Everparse.visitor_fields schema)
+      (fun f -> f.Wire.Private.Everparse.idx)
+      (Wire.Private.Everparse.visitor_fields schema)
   in
   let expected_idxs = List.init (List.length idxs) Fun.id in
   Alcotest.(check (list int)) "indices consecutive from 0" expected_idxs idxs
@@ -837,7 +841,7 @@ let check_visitor_completeness codec =
 let check_setter_scoping codec_a codec_b =
   let sa = Wire.Everparse.project ~mode:`Ffi codec_a in
   let sb = Wire.Everparse.project ~mode:`Ffi codec_b in
-  let names s = List.map fst (Wire.Everparse.visitor_setters s) in
+  let names s = List.map fst (Wire.Private.Everparse.visitor_setters s) in
   let na = names sa in
   let nb = names sb in
   let intersection =
@@ -847,8 +851,9 @@ let check_setter_scoping codec_a codec_b =
     "no shared setter names across schemas" [] intersection;
   List.iter
     (fun n ->
-      if not (String.starts_with ~prefix:sa.name n) then
-        Alcotest.failf "setter %s missing schema prefix %s" n sa.name)
+      if not (String.starts_with ~prefix:(Wire.Everparse.name sa) n) then
+        Alcotest.failf "setter %s missing schema prefix %s" n
+          (Wire.Everparse.name sa))
     na
 
 (* Invariant 4: every setter appears in visitor_setters, and every setter in
@@ -856,21 +861,24 @@ let check_setter_scoping codec_a codec_b =
    drift between what visitor_fields claims and what the 3D module declares. *)
 let check_setter_declarations codec =
   let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let declared_externs = Wire.Everparse.extern_fn_names schema in
+  let declared_externs = Wire.Private.Everparse.extern_fn_names schema in
   List.iter
     (fun (setter, _) ->
       if not (List.mem setter declared_externs) then
         Alcotest.failf
           "visitor_setters claims %s but module has no Extern_fn for it" setter)
-    (Wire.Everparse.visitor_setters schema);
+    (Wire.Private.Everparse.visitor_setters schema);
   List.iter
     (fun f ->
-      let setter = f.Wire.Everparse.setter in
-      if not (List.mem_assoc setter (Wire.Everparse.visitor_setters schema))
+      let setter = f.Wire.Private.Everparse.setter in
+      if
+        not
+          (List.mem_assoc setter
+             (Wire.Private.Everparse.visitor_setters schema))
       then
         Alcotest.failf "field %s references setter %s not in visitor_setters"
-          f.Wire.Everparse.name setter)
-    (Wire.Everparse.visitor_fields schema)
+          f.Wire.Private.Everparse.name setter)
+    (Wire.Private.Everparse.visitor_fields schema)
 
 (* Test fixtures. Each codec exercises a specific combination so invariants
    1-4 cover mixed/pure/byte/constrained/action scenarios. *)
@@ -974,8 +982,8 @@ let test_e2e_output_parse () =
     let dir = Filename.temp_dir "wire_e2e_output" "" in
     (* 1. Build a codec *)
     let codec = Stub_codecs.Test_parse.codec in
-    let s = Wire.Everparse.Raw.struct_of_codec codec in
-    let name = Wire.Everparse.Raw.struct_name s in
+    let s = Wire.Private.Everparse.Raw.struct_of_codec codec in
+    let name = Wire.Private.Everparse.Raw.struct_name s in
     (* 2. Generate 3D with output pattern and run EverParse *)
     let schema = Wire.Everparse.project ~mode:`Ffi codec in
     Wire.Everparse.write ~mode:`Ffi ~outdir:dir [ schema ];
@@ -1124,7 +1132,7 @@ let test_e2e_nested_wide () =
     in
     let frame = Bytes.of_string "\001\x81\x23\x45\x67\x89\xab\xcd\xef\007" in
     let expected =
-      match Codec.decode codec frame 0 with
+      match Codec.decode codec frame ~off:0 with
       | Ok (_, (w, _)) -> Fmt.str "%Lx" (UInt64.to_int64 w)
       | Error e -> Alcotest.failf "decode: %a" Error.pp e
     in

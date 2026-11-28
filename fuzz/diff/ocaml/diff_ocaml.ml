@@ -100,7 +100,7 @@ let specialisable c =
   s.params = []
   && Option.fold ~none:true ~some:expr_ok s.where
   && List.for_all field_ok s.fields
-  && Option.is_some (Wire.Codec.size c)
+  && Option.is_some (Wire.Codec.fixed_size c)
 
 (* A refusal is expected of a codec outside that set, and of one whose field
    names would spell the same OCaml name twice. *)
@@ -162,7 +162,7 @@ let outcome f =
   | exception Refused e -> Fmt.str "parse error %a" Wire.Error.pp e
   | exception Invalid_argument m -> "invalid " ^ m
 
-(* The reader [Codec.get] stages for a field, its value shown. *)
+(* The decoder's reader of a field, its value shown. *)
 let reference codec name =
   let k typ read =
     match show typ with
@@ -192,7 +192,7 @@ type case = {
 let views_at case c ~what m buf off =
   let expected =
     outcome (fun () ->
-        ok (Wire.Codec.validate c buf off);
+        ok (Wire.Codec.validate c buf ~off);
         String.concat ","
           (List.map (fun name -> List.assoc name case.refs buf off) m.reads))
   in
@@ -205,7 +205,7 @@ let views_at case c ~what m buf off =
         match m.checked buf off with
         | true, reads -> String.concat "," reads
         | false, _ ->
-            ok (Wire.Codec.validate c buf off);
+            ok (Wire.Codec.validate c buf ~off);
             "")
   in
   same case.label (what "check then each read") expected checked
@@ -215,11 +215,11 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
   let c = Fuzz_gen.codec g in
   let decoded =
     outcome (fun () ->
-        Wire.Codec.to_string c (ok (Wire.Codec.decode c buf off)))
+        Wire.Codec.to_string c (ok (Wire.Codec.decode c buf ~off)))
   in
   let validated =
     outcome (fun () ->
-        ok (Wire.Codec.validate c buf off);
+        ok (Wire.Codec.validate c buf ~off);
         "")
   in
   let m = case.m in
@@ -237,7 +237,7 @@ let reads_at case (Fuzz_gen.Pack g) buf off =
 let encodes_at case (Fuzz_gen.Pack g) buf off =
   let c = Fuzz_gen.codec g in
   let size = Wire.Codec.min_size c in
-  match Wire.Codec.decode c buf off with
+  match Wire.Codec.decode c buf ~off with
   | Error _ | (exception Invalid_argument _) -> ()
   | Ok v ->
       let canonical = Wire.Codec.to_string c v in
@@ -248,7 +248,7 @@ let encodes_at case (Fuzz_gen.Pack g) buf off =
               f out off;
               Bytes.to_string out)
         in
-        let expected = run (fun out off -> Wire.Codec.encode c v out off) in
+        let expected = run (fun out off -> Wire.Codec.encode c v out ~off) in
         same case.label
           (Fmt.str "encode into %d bytes at offset %d" len off)
           expected
@@ -269,7 +269,7 @@ let valid case (Fuzz_gen.Pack g) buf =
   let c = Fuzz_gen.codec g in
   let expected =
     outcome (fun () ->
-        ok (Wire.Codec.validate c buf 0);
+        ok (Wire.Codec.validate c buf ~off:0);
         String.concat ","
           (List.map (fun name -> List.assoc name case.refs buf 0) case.m.reads))
   in
@@ -386,7 +386,7 @@ let of_scan_case (Diff_codecs.Scan c) =
     }
 
 (* A sampled codec's reference: its top-level integer fields, each read by
-   the reader [Codec.get] stages. *)
+   the decoder's reader. *)
 let rec is_int : type a. a T.typ -> bool = function
   | T.Uint8 | T.Int8 | T.Uint16 _ | T.Int16 _ | T.Uint32 _ | T.Int32 _
   | T.Bits _ ->
@@ -440,22 +440,22 @@ let pp_result pp_ok =
 (* The value of a frame as the codec decodes it, written back by its
    encoder, or its error. *)
 let codec_value codec frame =
-  match Wire.Codec.decode codec frame 0 with
+  match Wire.Codec.decode codec frame ~off:0 with
   | Error e -> Error e
   | Ok x ->
-      (* [Codec.encoded_size] takes no size a field gives a region, so the
+      (* [Codec.size] takes no size a field gives a region, so the
          codec's record is measured where it encoded it. *)
       let out = Bytes.make (Bytes.length frame) '\000' in
-      Wire.Codec.encode codec x out 0;
+      Wire.Codec.encode codec x out ~off:0;
       Result.map
         (fun n -> Bytes.sub_string out 0 n)
-        (Wire.Codec.size_at codec out 0)
+        (Wire.Codec.size_at codec out ~off:0)
 
 let same_result ok a b = Result.equal ~ok ~error:Wire.Error.equal a b
 
 (* The module's record of a frame against the codec's: the same bytes written
    back, or the same error. The codec cannot encode a record whose region a
-   field sizes ([Codec.encoded_size] asks for an env): the module's bytes
+   field sizes ([Codec.size] asks for an env): the module's bytes
    must then decode with the codec, to as many bytes as the frame's. *)
 let check_decoded ~name codec frame got =
   match (codec_value codec frame, got) with
@@ -465,8 +465,9 @@ let check_decoded ~name codec frame got =
           Alcobar.failf "%s: the module refuses %S" name (Bytes.to_string frame)
       | Ok s ->
           if
-            Wire.Codec.size_at codec frame 0 <> Ok (String.length s)
-            || Result.is_error (Wire.Codec.decode codec (Bytes.of_string s) 0)
+            Wire.Codec.size_at codec frame ~off:0 <> Ok (String.length s)
+            || Result.is_error
+                 (Wire.Codec.decode codec (Bytes.of_string s) ~off:0)
           then
             Alcobar.failf "%s: on %S the module writes back %S" name
               (Bytes.to_string frame) s)
@@ -485,7 +486,8 @@ let check_decoded ~name codec frame got =
    with the codec's. *)
 let check_values ~name codec v frame =
   check_decoded ~name codec frame (v.decode frame 0);
-  let want = Wire.Codec.validate codec frame 0 and got = v.validate frame 0 in
+  let want = Wire.Codec.validate codec frame ~off:0
+  and got = v.validate frame 0 in
   if not (same_result (fun () () -> true) want got) then
     Alcobar.failf "%s: on %S the codec validates %a, the module %a" name
       (Bytes.to_string frame) (pp_result Fmt.nop) want (pp_result Fmt.nop) got
@@ -506,7 +508,6 @@ let values_scan ~name ~codec ~fields ~full v =
 (* The views, checked on each frame against [Codec.View.check] on the frame's
    bytes alone and against the scanner's own outputs, every one of them. *)
 let view_scan (type r) ~name ~(codec : r Wire.Codec.t) ~fields ~full view =
-  let module V = (val Wire.Codec.View.codec codec) in
   let scan buf off len =
     let got = view buf off len in
     let accepted =
@@ -515,8 +516,7 @@ let view_scan (type r) ~name ~(codec : r Wire.Codec.t) ~fields ~full view =
       | Some frame -> (
           match Wire_runtime.Buf.v frame with
           | Wire_runtime.Buf.Any b ->
-              Wire.Codec.View.ok
-                (Wire.Codec.View.check V.codec b (Wire_runtime.Buf.length b) 0))
+              Wire.Codec.View.is_ok (Wire.Codec.View.check codec b ~off:0))
     in
     if accepted <> Option.is_some got then
       Alcobar.failf "%s: Codec.View.check %s the frame, the generated check %s"
@@ -553,7 +553,7 @@ let show_snapshot =
          (list ~sep:comma (pair ~sep:(any "=") string int))))
 
 let expected (Reference r) b =
-  match Wire.Codec.decode r.codec b 0 with
+  match Wire.Codec.decode r.codec b ~off:0 with
   | Error _ -> None
   | Ok v -> Some (r.project b v)
 
@@ -598,7 +598,7 @@ let scan_oracle (Reference r as ref_) oracle bounded value buf off len =
       let consumed =
         match (bounded, value) with
         | Some b, Some _ -> (
-            match Wire.Codec.size_at r.codec b 0 with
+            match Wire.Codec.size_at r.codec b ~off:0 with
             | Ok n -> n
             | Error _ -> -1)
         | _ -> -1
@@ -710,7 +710,7 @@ let codec_agrees (Reference r) ~general bounded value =
   scan_same r.label "the general decoder" show_snapshot value slow;
   let validated =
     Option.fold ~none:false
-      ~some:(fun b -> Result.is_ok (Wire.Codec.validate r.codec b 0))
+      ~some:(fun b -> Result.is_ok (Wire.Codec.validate r.codec b ~off:0))
       bounded
   in
   scan_same r.label "Codec.validate" string_of_bool (Option.is_some value)
@@ -721,7 +721,7 @@ let check_scan ?oracle ?strides ?(expand = true) (Reference r as ref_) backends
   let general =
     let c = Testing.general r.codec in
     fun b ->
-      match Wire.Codec.decode c b 0 with
+      match Wire.Codec.decode c b ~off:0 with
       | Error _ -> None
       | Ok v -> Some (r.project b v)
   in

@@ -17,7 +17,7 @@
 let module_name g =
   Wire_stubs.module_name
     (Option.get
-       (Wire.Everparse.entrypoint_struct
+       (Wire.Private.Everparse.entrypoint_struct
           (Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g))))
 
 let schema_of (_, Fuzz_gen.Pack g) =
@@ -42,8 +42,8 @@ let generate_schemas schema_dir schemas =
    C at all. *)
 let value_reader label (Fuzz_gen.Pack g as p) ppf =
   let kinds =
-    Wire.Everparse.Raw.field_kinds
-      (Wire.Everparse.Raw.struct_of_codec (Fuzz_gen.codec g))
+    Wire.Private.Everparse.Raw.field_kinds
+      (Wire.Private.Everparse.Raw.struct_of_codec (Fuzz_gen.codec g))
     |> List.mapi (fun i (name, kind) -> (i, name, kind))
   in
   let compared = Diff_codecs.compared_fields p in
@@ -52,7 +52,7 @@ let value_reader label (Fuzz_gen.Pack g as p) ppf =
   in
   let int64_of (i, name, kind) =
     match kind with
-    | Wire.Everparse.Raw.Int -> Fmt.str "Int64.of_int a%d" i
+    | Wire.Private.Everparse.Raw.Int -> Fmt.str "Int64.of_int a%d" i
     | Int64 -> Fmt.str "a%d" i
     | Float32 | Float64 | Bool | String | Unit ->
         Fmt.failwith
@@ -148,7 +148,7 @@ let fixed schema_dir =
    integer view, so neither is compared. *)
 let scalar_members (schema : Wire.Everparse.t) =
   List.filter_map
-    (fun (f : Wire.Everparse.visitor_field) ->
+    (fun (f : Wire.Private.Everparse.visitor_field) ->
       let bits =
         match f.c_type with
         | "uint8_t" -> Some 8
@@ -161,7 +161,7 @@ let scalar_members (schema : Wire.Everparse.t) =
       | Some bits when not (String.ends_with ~suffix:"SetBytes" f.setter) ->
           Some (f.name, bits)
       | _ -> None)
-    (Wire.Everparse.visitor_fields schema)
+    (Wire.Private.Everparse.visitor_fields schema)
 
 (* Each structured case through its FFI projection: the stub runs the verified
    validator with a zeroed default visitor, as the generated stubs do, and copies
@@ -178,15 +178,15 @@ let pp_scan_stub ppf i (schema : Wire.Everparse.t) members =
     "  if (!scan_frame(buffer, offset, length, &data, &len)) return \
      Val_long(-1);@\n";
   Fmt.pf ppf "  %sFields f;@\n  memset(&f, 0, sizeof f);@\n"
-    (Wire_3d.everparse_name schema.name);
+    (Wire_3d.everparse_name (Wire.Everparse.name schema));
   Fmt.pf ppf
     "  uint64_t end = %s((WIRECTX *) &f, NULL, scan_error, data, len, 0);@\n"
-    (Wire_3d.validator_name schema.name);
+    (Wire_3d.validator_name (Wire.Everparse.name schema));
   Fmt.pf ppf "  if (!scan_ok(end, len)) return Val_long(-1);@\n";
   List.iteri
     (fun k (member, _, _) ->
       Fmt.pf ppf "  Field(out, %d) = Val_long((intnat) f.%s);@\n" k
-        (Wire.Everparse.visitor_member member))
+        (Wire.Private.Everparse.visitor_member member))
     members;
   Fmt.pf ppf "  return Val_long((intnat) end);@\n}@\n"
 
@@ -202,7 +202,7 @@ let pp_standalone_stub ppf i (schema : Wire.Everparse.t) =
     "  if (!scan_frame(buffer, offset, length, &data, &len)) return \
      Val_long(-1);@\n";
   Fmt.pf ppf "  uint64_t end = %s(NULL, scan_error, data, len, 0);@\n"
-    (Wire_3d.validator_name schema.name);
+    (Wire_3d.validator_name (Wire.Everparse.name schema));
   Fmt.pf ppf "  if (!scan_ok(end, len)) return Val_long(-1);@\n";
   Fmt.pf ppf "  return Val_long((intnat) end);@\n}@\n"
 
@@ -210,7 +210,8 @@ let pp_standalone_stub ppf i (schema : Wire.Everparse.t) =
    validator links next to the FFI one. *)
 let standalone codec =
   let name =
-    "Standalone" ^ Wire.Everparse.Raw.(struct_name (struct_of_codec codec))
+    "Standalone"
+    ^ Wire.Private.Everparse.Raw.(struct_name (struct_of_codec codec))
   in
   Wire.Everparse.project ~mode:`Standalone (Wire.Codec.rename name codec)
 
@@ -295,9 +296,10 @@ let scanners schema_dir =
   Fmt.pf ppf "#include \"EverParse.h\"\n";
   List.iter
     (fun (_, (ffi : Wire.Everparse.t), (standalone : Wire.Everparse.t), _) ->
-      let base = String.capitalize_ascii ffi.name in
+      let base = String.capitalize_ascii (Wire.Everparse.name ffi) in
       Fmt.pf ppf "#include \"%s_Fields.h\"\n#include \"%s.h\"\n" base base;
-      Fmt.pf ppf "#include \"%s.h\"\n" (String.capitalize_ascii standalone.name))
+      Fmt.pf ppf "#include \"%s.h\"\n"
+        (String.capitalize_ascii (Wire.Everparse.name standalone)))
     all;
   Fmt.pf ppf
     {|

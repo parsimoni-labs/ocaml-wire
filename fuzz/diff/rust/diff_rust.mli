@@ -29,11 +29,11 @@ val check : string -> Fuzz_gen.packed -> case -> bytes -> unit
 (** [check label p m buf] compares [m], generated from [p]'s codec of constant
     size, with the codec on [buf] at offsets from 0 to past its end: validate
     and decode give the same error or the same record, the check and each
-    accessor read what {!Wire.Codec.validate} and {!Wire.Codec.get} read, encode
-    writes the same bytes into buffers around the record or both refuse, the
-    setters rebuild a flat record, and at the last offsets a [usize] holds every
-    decoder finds the buffer too short and the last setter the field past it.
-    Errors compare exactly, offset included. Fails with {!Alcobar.failf}. *)
+    accessor read what {!Wire.Codec.validate} and the decoder's readers read,
+    encode writes the same bytes into buffers around the record or both refuse,
+    the setters rebuild a flat record, and at the last offsets a [usize] holds
+    every decoder finds the buffer too short and the last setter the field past
+    it. Errors compare exactly, offset included. Fails with {!Alcobar.failf}. *)
 
 val raw : string -> 'r Wire.Codec.t -> case -> 'r -> unit
 (** [raw label c m v] compares [m], generated from [c] of constant size, with

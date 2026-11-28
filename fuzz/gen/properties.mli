@@ -9,16 +9,6 @@ val positive_env : 'a t -> Wire.Param.env option
 (** [positive_env g] is the env the positive stream of [g] binds, if [g] needs
     one. *)
 
-val check_direct_codec_agree : string -> string -> 'a t -> bytes -> unit
-(** [check_direct_codec_agree label kind g bs] requires {!Wire.of_string} and
-    {!Wire.Codec.decode} to reach the same verdict on [bs]. Skipped when [g]
-    binds a [Param.env]. *)
-
-val check_direct_codec_encode_agree : string -> string -> 'a t -> 'a -> unit
-(** [check_direct_codec_encode_agree label kind g v] requires {!Wire.to_bytes}
-    and {!Wire.Codec.encode} to refuse the same values and write the same bytes.
-*)
-
 val check_positive : string -> 'a t -> 'a * bytes -> unit
 (** [check_positive label g (v, bs)] checks a positive: decode, size, the env
     requirement and encode all agree with [(v, bs)]. *)
@@ -60,30 +50,39 @@ type 'r addressed = {
   anames : string list;
   ggeneral : 'r Wire.Codec.t;
   ageneral : 'r Wire.Codec.t;
+  aembed : 'r Wire.Codec.t option;
+  aown : bool;
 }
-(** A gen's codec with the fields {!Wire.Codec.get} and {!Wire.Codec.set} can
-    address. *)
+(** A gen's codec with the fields its views can address, the same with its fast
+    paths off, and a record gen's codec embedded as the one field of a record.
+*)
 
 val addressed : 'a t -> 'a addressed
 (** [addressed g] is [g]'s record fields, or the one-field wrapper of a leaf. *)
+
+val check_embedded_agree :
+  string -> string -> 'a addressed -> 'a t -> bytes -> unit
+(** [check_embedded_agree label kind a g bs] requires the codec of a record gen
+    and the same codec embedded in a one-field record to reach the same verdict
+    on [bs]. Skipped for a leaf, and when [g] binds a [Param.env]. *)
+
+val check_embedded_encode_agree :
+  string -> string -> 'a addressed -> 'a t -> 'a -> unit
+(** [check_embedded_encode_agree label kind a g v] requires the two encoders of
+    {!check_embedded_agree} to refuse the same values and write the same bytes.
+*)
 
 val stage_get :
   ?env:Wire.Param.env ->
   'a addressed ->
   ('b, 'a) Wire.Codec.field ->
   (bytes -> int -> ('b, Wire.Error.t) result) option
-(** [stage_get ?env a field] is the staged reader of [field], or [None] where
-    the accessor API has none. *)
-
-val stage_set :
-  'a addressed ->
-  ('b, 'a) Wire.Codec.field ->
-  (bytes -> int -> 'b -> unit) option
-(** [stage_set a field] is the staged writer of [field], or [None] where the
-    accessor API has none. *)
+(** [stage_get ?env a field] reads [field] through the view of the record at an
+    offset, or answers the error of a record its check refuses. [None] where
+    {!Wire.Codec.View.field} refuses the field. *)
 
 val check_fields :
-  string -> 'a addressed -> 'b t -> 'a * Bytes.t -> 'a -> 'a option -> unit
+  string -> 'a addressed -> 'a t -> 'a * Bytes.t -> 'a -> 'a option -> unit
 (** [check_fields label a g (v, bs) other hostile] checks every per-field
     accessor property on one positive, writing [other] and [hostile] over it. *)
 
@@ -95,8 +94,18 @@ val check_field_reads :
   'a t ->
   bytes ->
   unit
-(** [check_field_reads label kind ?env a g bs] requires every [get] to be safe
-    on bytes validate accepts and to agree with decode where it accepts. *)
+(** [check_field_reads label kind ?env a g bs] requires every view read to be
+    safe on bytes validate accepts and to agree with decode where it accepts. *)
+
+val check_window :
+  string -> string -> ?env:Wire.Param.env -> 'a addressed -> bytes -> unit
+(** [check_window label kind ?env a bs] requires [View.check ~len] to agree with
+    [validate] of the window, for the windows the record declares, a byte less
+    and the whole buffer. *)
+
+val check_fold : string -> 'a addressed -> bytes -> copies:int -> unit
+(** [check_fold label a bs ~copies] requires [View.fold] over [copies] records
+    [bs] back to back to read what decode reads of each. *)
 
 val noise_gen : bytes Alcobar.gen
 (** [noise_gen] generates the short byte strings prepended and appended by the
@@ -202,8 +211,8 @@ val check_encode_paths :
     general and a cold codec, and checks they agree. *)
 
 val check_set_paths : string -> 'a addressed -> 'a -> bytes -> unit
-(** [check_set_paths label c v buf] sets each field on the fast and the general
-    codec, from the same buffer, and checks they agree. *)
+(** [check_set_paths label c v buf] sets each field through a view on the fast
+    and the general codec, from the same buffer, and checks they agree. *)
 
 val check_fast_general_core :
   string ->

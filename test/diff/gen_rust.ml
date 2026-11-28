@@ -178,7 +178,7 @@ let case ~group ~structured ~id label c =
       (fun (_, (f : P.field)) -> (ident f.name, "set_" ^ ident f.name))
       (P.settable all.root)
   in
-  let fixed = Option.is_some (Wire.Codec.size c) in
+  let fixed = Option.is_some (Wire.Codec.fixed_size c) in
   let flat =
     fixed && Diff_ocaml.specialisable c
     && List.length settable = List.length (Wire.Private.Gen.to_struct c).fields

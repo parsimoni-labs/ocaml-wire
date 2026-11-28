@@ -38,22 +38,21 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     Encode safety is the mirror of decode crash-safety: a hostile value must
     either be refused with [Invalid_argument] or encode to bytes that decode
     back to an equal value, never to bytes the codec's own decoder rejects.
-    Every stream also cross-checks the typ-level entry points against the codec
-    ones: {!Wire.of_string} and {!Wire.Codec.decode} must reach the same
-    accept/reject verdict on the same bytes (and the same value where both
-    accept), and {!Wire.to_bytes} and {!Wire.Codec.encode} must refuse the same
-    values and write the same bytes. A refinement one path enforces and the
-    other drops shows up here rather than in the generated C.
+    Every stream of a record gen also cross-checks the codec against the same
+    codec embedded as the one field of a record: the two decoders must reach the
+    same accept/reject verdict on the same bytes (and the same value where both
+    accept), and the two encoders must refuse the same values and write the same
+    bytes. A refinement one path enforces and the other drops shows up here
+    rather than in the generated C.
 
     A positive also has to agree about its own size, under whatever env it
-    needs. {!Wire.Codec.encoded_size} measures the value and must answer the
-    encoded length with an env bound and without one; {!Wire.Codec.size_at}
-    measures the buffer, so a parametric field's width comes out of the env, and
-    with one bound it must span exactly the canonical encoding. Without one, a
-    codec that reads an input param must refuse: decode, validate and [size_at]
-    all raise rather than resolve the unbound param to 0 and measure a
-    param-sized field as empty, which would read as a valid short record instead
-    of an error.
+    needs. {!Wire.Codec.size} measures the value and must answer the encoded
+    length with an env bound and without one; {!Wire.Codec.size_at} measures the
+    buffer, so a parametric field's width comes out of the env, and with one
+    bound it must span exactly the canonical encoding. Without one, a codec that
+    reads an input param must refuse: decode, validate and [size_at] all raise
+    rather than resolve the unbound param to 0 and measure a param-sized field
+    as empty, which would read as a valid short record instead of an error.
 
     Every rejection also has to say which field it is about, and mean it: each
     name on a parse error's field path must be a field the codec declares
@@ -61,16 +60,18 @@ val test_cases : ?validate:bool -> string -> 'a t -> Alcobar.test_case list
     failure has no field to name), a name that is not in the schema is not: it
     sends the caller to bytes that do not exist.
 
-    Every stream is also read and written one field at a time through
-    {!Wire.Codec.get} and {!Wire.Codec.set}, which are built from separate
-    constructions to the record decoder and encoder. Per field: [get] must read
-    back what the encoder wrote and what [decode] made of the same bytes; [set]
-    must either refuse a value outright, leaving the buffer untouched, or write
-    one [get] reads back unchanged; writing back a value [get] just returned
-    must not move a byte; writing every field into a zeroed buffer must
-    reproduce what [encode] writes; a value [set] refuses must be one [encode]
-    refuses too; and, in a fixed-size record, setting one field must not change
-    what any other field reads.
+    Every stream is also read and written one field at a time through the views
+    of {!Wire.Codec.View}, whose fields are resolved separately from the record
+    decoder and encoder. Per field: a view must read back what the encoder wrote
+    and what [decode] made of the same bytes; [View.set] must either refuse a
+    value outright, leaving the buffer untouched, or write one the view reads
+    back unchanged; writing back a value the view just read must not move a
+    byte; writing every field of [value] over another positive must reproduce
+    what [encode] writes of [value]; a value [View.set] refuses must be one
+    [encode] refuses too; and, in a fixed-size record, setting one field must
+    not change what any other field reads. [View.check ~len] must agree with
+    [validate] of the window, and a fold over records back to back must read
+    what [decode] reads of each.
 
     On top of that each stream is transformed in ways the answer must not depend
     on. Prepending [k] arbitrary bytes and reading the frame at offset [k] must
@@ -155,21 +156,11 @@ val construction_guard_cases : string -> Alcobar.test_case list
 
 val api_cases : string -> Alcobar.test_case list
 (** [api_cases label] exercises Wire API surfaces that are not naturally covered
-    by value round-trips over one typ: [Codec.get] / [set] accessors, slice
+    by value round-trips over one typ: views read and written in place, slice
     navigation, batch bitfield extraction, custom sequence maps, direct struct
     validators, metadata helpers, [Wire.size], [Codec.pp_value], and cheap
     Everparse / Raw projection helpers. File-writing projection helpers are
     guarded to run once per process so repeated fuzz loops stay fast. *)
-
-val direct_cases : string -> 'a t -> Alcobar.test_case list
-(** [direct_cases label g] round-trips a gen through {!Wire.of_string} and
-    {!Wire.to_string} (the typ-level API). Skipped when [g] needs a [Param.env],
-    since those direct entry points don't thread one. *)
-
-val streaming_cases : string -> 'a t -> Alcobar.test_case list
-(** [streaming_cases label g] round-trips a gen through {!Wire.of_reader} and
-    {!Wire.to_writer} (streaming Bytesrw entry points). Same env restriction as
-    {!direct_cases}. *)
 
 val validate_cases : string -> 'a t -> Alcobar.test_case list
 (** [validate_cases label g] exercises {!Wire.Codec.validate}: positives must
@@ -274,12 +265,11 @@ val afl_everparse_excluded : string list
 
 val entry_point_cases : string -> Alcobar.test_case list
 (** [entry_point_cases label] round-trips the alternate entry points
-    ([of_string] / [of_bytes] / [of_reader] / [to_string] / [to_bytes] /
-    [to_writer] / [validate]) over a {!registry} gen picked at random each
-    sample, so they cover the whole registry instead of a pinned subset. Random
-    and adversarial streams check that the direct decoder does not crash and
-    reaches the same verdict as {!Wire.Codec.decode}. Direct checks skip codecs
-    that bind a [Param.env]. *)
+    ([Codec.to_string], [Codec.to_bytes], a codec embedded as a field,
+    [validate]) over a {!registry} gen picked at random each sample, so they
+    cover the whole registry instead of a pinned subset. Random and adversarial
+    streams check that the embedded decoder reaches the same verdict as
+    {!Wire.Codec.decode}. Skips codecs that bind a [Param.env]. *)
 
 val sized_cases : string -> Alcobar.test_case list
 (** [sized_cases group] round-trips a two-field length/data codec whose data
@@ -289,8 +279,7 @@ val sized_cases : string -> Alcobar.test_case list
     length/region codec whose {!Wire.nested}, {!Wire.nested_at_most} or
     {!Wire.zeroterm_at_most} region is sized by the length field. Regression
     coverage for cross-field size expressions that read an unusual size-source
-    field, and for {!Wire.Codec.encoded_size} reading such a size from the
-    value. *)
+    field, and for {!Wire.Codec.size} reading such a size from the value. *)
 
 val span_fault_cases : string -> Alcobar.test_case list
 (** [span_fault_cases label] requires a check refusing a field after a
