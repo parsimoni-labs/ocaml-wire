@@ -3,11 +3,6 @@
 open Wire
 open Wire.Private.Everparse.Raw
 
-(* A case that shells out to EverParse skips when [3d.exe] is absent, as in
-   [Test_wire_3d]. *)
-let needs_3d_exe () =
-  if Option.is_none (Wire_3d.locate_3d_exe ()) then Alcotest.skip ()
-
 (* Binary mode: on Windows a text channel drops each CR, so it yields fewer
    bytes than [in_channel_length] counts. *)
 let read_file path = In_channel.with_open_bin path In_channel.input_all
@@ -210,7 +205,7 @@ let test_field_optional_byte_array () =
    extraction here: rendering alone would not catch an invalid casetype or
    dependent repeat in the generated F*. *)
 let test_optional_length_prefixed_group_projects () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   begin
     let f_ext_len = Field.v "ext_items_len" uint8 in
     let extensions =
@@ -253,7 +248,7 @@ let test_optional_length_prefixed_group_projects () =
    and raises if EverParse rejects the module, so this pins the shape rather
    than only its rendering. *)
 let test_bare_uint64_projects () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   begin
     let codec =
       Codec.v "BareUint64"
@@ -276,7 +271,7 @@ let test_bare_uint64_projects () =
    [generate_c] runs [3d.exe] and raises if the .3d is rejected, so this is the
    regression guard. *)
 let test_nested_field_projects () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   begin
     let inner =
       Codec.v "NInner"
@@ -310,7 +305,7 @@ let test_nested_field_projects () =
    is a byte region of its declared size, and of the binary codec a DER value
    holds under a containing. *)
 let test_der_regions_project () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let framed = Asn1_modules.framed in
   (match Wire_3d.batch_check [ Everparse.project framed ] with
   | Ok () -> ()
@@ -534,7 +529,7 @@ let test_visitor_names () =
    constraint reads it, and [typeof] reaches the C, where GNU C and C23 read
    it as a keyword; both validate and compile once escaped. *)
 let test_keyword_fields_e2e () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let f_end = field "end" uint8 in
   let s =
     struct_ "KwEnd"

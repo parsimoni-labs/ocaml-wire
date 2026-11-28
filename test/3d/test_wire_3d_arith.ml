@@ -3,9 +3,6 @@
 
 open Wire
 
-let needs_3d_exe () =
-  if Option.is_none (Wire_3d.locate_3d_exe ()) then Alcotest.skip ()
-
 (* Values stored into outputs of each width: a [uint16] that an earlier
    refinement bounds below 256 narrowed into a [uint8], an increment guarded by
    an [if], [sizeof this] into a [uint32] and a [uint8] widened into a
@@ -38,7 +35,7 @@ let assign_codec =
       ]
 
 let test_assignments () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let line = Agree.corpus_line "AssignNarrow" assign_codec in
   Agree.differential_ok ~name:"assignspec" ~package:"assign-doc"
     ~corpus:
@@ -104,7 +101,7 @@ let out64_codec =
       ]
 
 let test_wide_outputs () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let inputs =
     [
       "0000000000000005";
@@ -149,7 +146,7 @@ let sizeof_codec =
       ]
 
 let test_sizeof_this () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let line = Agree.corpus_line "SizeofThis" sizeof_codec in
   let expected _ hex =
     let env = Codec.env sizeof_codec in
@@ -205,7 +202,7 @@ let bits_act_codec =
       ]
 
 let test_bits_act () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let line = Agree.corpus_line "BitsAct" bits_act_codec in
   let expected _ hex =
     let env = Codec.env bits_act_codec in
@@ -237,7 +234,7 @@ let per_byte_codec =
       ]
 
 let test_per_byte () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let line = Agree.corpus_line "PerByteWide" per_byte_codec in
   Agree.differential_ok ~name:"perbytespec" ~package:"per-byte-doc"
     ~corpus:
@@ -285,7 +282,7 @@ let opt_map_codec =
       ]
 
 let test_optional_region () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let line = Agree.corpus_line "OptRegionMul" opt_region_codec in
   let line_map = Agree.corpus_line "OptRegionMap" opt_map_codec in
   Agree.differential_ok ~name:"optregionspec" ~package:"opt-region-doc"

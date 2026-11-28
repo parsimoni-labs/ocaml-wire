@@ -8,13 +8,6 @@ let simple_struct =
 
 let simple_module = module_ [ typedef ~entrypoint:true simple_struct ]
 
-(* Everything below that shells out to EverParse needs [3d.exe]. Reporting those
-   cases as [OK] when the binary is absent would print a green tick for an
-   assertion that never ran, so they skip instead: the four default [dune
-   runtest] lanes have no EverParse and must say so. *)
-let needs_3d_exe () =
-  if Option.is_none (Wire_3d.locate_3d_exe ()) then Alcotest.skip ()
-
 let test_everparse_name () =
   (* All-caps names get lowercased with first letter capitalized *)
   Alcotest.(check string) "CLCW -> Clcw" "Clcw" (Wire_3d.everparse_name "CLCW");
@@ -137,7 +130,7 @@ let test_ensure_dir () =
 let read_file path = In_channel.with_open_text path In_channel.input_all
 
 let test_generate_c () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   begin
     let tmpdir = Filename.temp_dir "wire_3d_gen_c" "" in
     let s =
@@ -171,48 +164,43 @@ let test_generate_c () =
    Apple, which is the OS-less cross target the standalone C archive exists to
    serve. *)
 let test_endianness_freestanding () =
-  if Option.is_none (Wire_3d.locate_3d_exe ()) then ()
-  else begin
-    let tmpdir = Filename.temp_dir "wire_3d_endianness" "" in
-    let s =
-      Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct
-    in
-    Wire_3d.generate_3d ~outdir:tmpdir [ s ];
-    Wire_3d.generate_c ~outdir:tmpdir [ s ];
-    let header = read_file (Filename.concat tmpdir "EverParseEndianness.h") in
-    let has sub = Re.execp (Re.compile (Re.str sub)) header in
-    Alcotest.(check bool)
-      "byte order comes from the compiler" true (has "__BYTE_ORDER__");
-    Alcotest.(check bool)
-      "byte swapping uses compiler builtins" true (has "__builtin_bswap32");
-    (* The [#error] fallthrough stays as the last resort for a compiler that
+  Gate.needs_3d_exe ();
+  let tmpdir = Filename.temp_dir "wire_3d_endianness" "" in
+  let s = Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
+  Wire_3d.generate_3d ~outdir:tmpdir [ s ];
+  Wire_3d.generate_c ~outdir:tmpdir [ s ];
+  let header = read_file (Filename.concat tmpdir "EverParseEndianness.h") in
+  let has sub = Re.execp (Re.compile (Re.str sub)) header in
+  Alcotest.(check bool)
+    "byte order comes from the compiler" true (has "__BYTE_ORDER__");
+  Alcotest.(check bool)
+    "byte swapping uses compiler builtins" true (has "__builtin_bswap32");
+  (* The [#error] fallthrough stays as the last resort for a compiler that
        exposes neither an OS nor [__BYTE_ORDER__]; what matters is that a
        freestanding GCC or Clang target no longer reaches it. Compile one to
        prove it, undefining the two OS macros the header keys on. Skip the
        compile where the host's own system headers do not survive those
        undefines: the text assertions above still stand. *)
-    let write path contents =
-      Out_channel.with_open_bin path (fun oc ->
-          Out_channel.output_string oc contents)
-    in
-    write (Filename.concat tmpdir "probe.c") "#include <stdint.h>\n";
-    write
-      (Filename.concat tmpdir "freestanding.c")
-      "#include \"EverParseEndianness.h\"\n\
-       uint32_t swap(uint32_t x);\n\
-       uint32_t swap(uint32_t x) { return be32toh(x); }\n";
-    let compile file =
-      Fmt.kstr Sys.command
-        "cd %s && cc -std=c11 -U__APPLE__ -U__linux__ -I . -c %s -o %s > %s \
-         2>&1"
-        (Filename.quote tmpdir) file Filename.null Filename.null
-    in
-    let freestanding_host = compile "probe.c" = 0 in
-    let status = if freestanding_host then compile "freestanding.c" else 0 in
-    ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
-    if freestanding_host then
-      Alcotest.(check int) "compiles for a target with no OS endian.h" 0 status
-  end
+  let write path contents =
+    Out_channel.with_open_bin path (fun oc ->
+        Out_channel.output_string oc contents)
+  in
+  write (Filename.concat tmpdir "probe.c") "#include <stdint.h>\n";
+  write
+    (Filename.concat tmpdir "freestanding.c")
+    "#include \"EverParseEndianness.h\"\n\
+     uint32_t swap(uint32_t x);\n\
+     uint32_t swap(uint32_t x) { return be32toh(x); }\n";
+  let compile file =
+    Fmt.kstr Sys.command
+      "cd %s && cc -std=c11 -U__APPLE__ -U__linux__ -I . -c %s -o %s > %s 2>&1"
+      (Filename.quote tmpdir) file Filename.null Filename.null
+  in
+  let freestanding_host = compile "probe.c" = 0 in
+  let status = if freestanding_host then compile "freestanding.c" else 0 in
+  ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
+  if freestanding_host then
+    Alcotest.(check int) "compiles for a target with no OS endian.h" 0 status
 
 (* Both the [.3d] file name and the C identifier are many-to-one mangles of
    the codec name, so a collision has one codec's artifacts overwrite
@@ -507,7 +495,7 @@ let test_generate_dune_standalone_context_policy () =
     (List.length host_gated >= 1)
 
 let test_generate_standalone () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   begin
     let tmpdir = Filename.temp_dir "wire_3d_gen_doc" "" in
     Wire_3d.generate_standalone ~outdir:tmpdir ~package:"my-pkg"
@@ -589,7 +577,7 @@ let diff_param_codec =
     [ Codec.( $ ) f_length fst; Codec.( $ ) f_data snd ]
 
 let test_doc_differential () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"protospec" ~package:"demo-doc"
     ~corpus:(`Fuzz 400)
     [
@@ -603,13 +591,13 @@ let test_doc_differential_no_params () =
   (* Regression: an all-non-parameterized package must still compile. The agree
      harness must not emit an unused [parse_params] helper (a -Werror under the
      strict flags) when no codec takes parameters. *)
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"plainspec" ~package:"plain-doc"
     ~corpus:(`Fuzz 100)
     [ Wire_3d.pack diff_enum_codec; Wire_3d.pack diff_range_codec ]
 
 let test_doc_differential_nested_regions () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"nestedspec" ~package:"nested-doc"
     ~corpus:
       (`Lines
@@ -658,7 +646,7 @@ let diff_msb_array_codec =
     Codec.[ Field.v "items" (array ~len:(int 2) (codec inner)) $ Fun.id ]
 
 let test_doc_differential_msb_sub_codec () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"msbspec" ~package:"msb-doc"
     ~corpus:
       (`Lines
@@ -672,7 +660,7 @@ let test_doc_differential_msb_sub_codec () =
     [ Wire_3d.pack diff_msb_field_codec; Wire_3d.pack diff_msb_array_codec ]
 
 let test_doc_differential_region_cardinality () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"invariantspec" ~package:"invariant-doc"
     ~corpus:
       (`Lines
@@ -729,7 +717,7 @@ let diff_opt_at_most_codec =
       Wire.nested_at_most ~size t)
 
 let test_doc_differential_span_and_scalar_regions () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let lines name c cases =
     List.map (fun (hex, ok) -> Agree.corpus_line name c hex ok) cases
   in
@@ -782,7 +770,7 @@ let test_doc_differential_span_and_scalar_regions () =
    symbol. This runs the platform's real link step on CI (macOS and Linux). Needs
    3d.exe for the C. *)
 let test_archive_hides_raw_validators () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   begin
     let name = "symspec" and package = "sym-doc" in
     let codec =
@@ -849,7 +837,7 @@ let diff_signed_codec =
   Codec.v "SignedMsg" (fun v -> v) [ Codec.( $ ) f (fun v -> v) ]
 
 let test_doc_differential_signed () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"signedspec" ~package:"signed-doc"
     ~corpus:(`Fuzz 256)
     [ Wire_3d.pack diff_signed_codec ]
@@ -904,7 +892,7 @@ let diff_union_bits_codec =
       ]
 
 let test_doc_differential_union () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"unionspec" ~package:"union-doc"
     ~corpus:(`Fuzz 400)
     [ Wire_3d.pack diff_union_codec; Wire_3d.pack diff_union_bits_codec ]
@@ -919,7 +907,7 @@ let diff_large_payload_codec =
     [ Codec.( $ ) (Field.v "data" (byte_array ~size:(int 8192))) (fun d -> d) ]
 
 let test_doc_differential_large_payload () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"sharedspec" ~package:"shared-doc"
     ~corpus:(`Fuzz 40)
     [ Wire_3d.pack diff_large_payload_codec ]
@@ -934,7 +922,7 @@ let diff_caps_name_codec =
     [ Codec.( $ ) (Field.v "v" uint8) (fun v -> v) ]
 
 let test_doc_differential_caps_name () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"spacewire" ~package:"space-wire"
     ~corpus:(`Fuzz 40)
     [ Wire_3d.pack diff_caps_name_codec ]
@@ -946,7 +934,7 @@ let test_doc_differential_caps_name () =
    exact boundary: the 2-byte RangeMsg accepts exactly-sized input and rejects
    both one byte over and one byte short. *)
 let test_doc_differential_trailing_bytes () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"trailspec" ~package:"trail-doc"
     ~corpus:
       (`Lines [ "RangeMsg - 0102 1"; "RangeMsg - 010203 0"; "RangeMsg - 01 0" ])
@@ -957,7 +945,7 @@ let test_doc_differential_trailing_bytes () =
    the verdict. A non-hex character or an odd digit count refuses the corpus
    with exit 2 instead of feeding a wrong byte to the validator. *)
 let test_doc_differential_hex () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.with_agree ~name:"hexspec" ~package:"hex-doc"
     [ Wire_3d.pack diff_range_codec ]
     (fun run ->
@@ -1001,7 +989,7 @@ let diff_wrapped_param_codec =
     [ Codec.( $ ) f_v (fun v -> v) ]
 
 let test_doc_differential_wrapped_param () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   Agree.differential_ok ~name:"limitspec" ~package:"limit-doc"
     ~corpus:
       (`Lines
@@ -1089,7 +1077,7 @@ let compile_only name codec = (name, compile_generated ~run:false codec)
 (* Each scenario in a {!Wire_3d.pool} job; a failure names every scenario that
    failed, with its EverParse or compiler diagnostic. *)
 let check_scenarios scenarios =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   match Wire_3d.pool scenarios with
   | Ok _ -> ()
   | Error failed -> Alcotest.failf "%s" failed
@@ -1483,8 +1471,9 @@ let test_uses_wire_ctx () =
     "raw module without extern WireCtx" false
     (Wire.Private.Everparse.uses_wire_ctx raw)
 
-(* [locate_3d_exe] is the gate every EverParse-dependent case reads, so it is
-   checked against the search it documents -- PATH, then the
+(* [locate_3d_exe] is what [Gate.needs_3d_exe] reads, with [BUILD_EVERPARSE=1],
+   to find the [3d.exe] an EverParse-dependent case runs, so it is checked
+   against the search it documents -- PATH, then the
    [~/.local/everparse/bin] fallback -- resolved here independently of
    [Wire_3d]'s own lookup. *)
 let test_locate_3d_exe () =
@@ -1807,7 +1796,7 @@ let arith_codecs =
         [ "00000000"; "b504f333"; "b504f334"; "ffffffff" ] )
 
 let test_arith_differential () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let codecs, lines = arith_codecs in
   Agree.differential_ok ~name:"arithspec" ~package:"arith-doc"
     ~corpus:(`Lines lines) codecs
