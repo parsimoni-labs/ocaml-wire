@@ -22,7 +22,7 @@ let checked () =
   let buf = bytes_of [ 0x45; 0; 20; 64; 17 ] in
   match Wire_runtime.Buf.v buf with
   | Wire_runtime.Buf.Any b ->
-      let c = S_checked.check b ~off:0 in
+      let c = S_checked.check b (Wire_runtime.Buf.length b) ~off:0 in
       let v = S_checked.get c in
       check "checked: valid read"
         ((S_checked.proto b v :> int) = 17 && S_checked.ihl b v = 5)

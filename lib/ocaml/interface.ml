@@ -281,10 +281,11 @@ let pp_views ppf r ~accessor =
      @\n"
     r.codec r.codec;
   pp_val target ppf "check"
-    (arrows [ named b; "off:int"; "'b check" ])
+    (arrows [ named b; Fmt.str "'b %s.length" b.brand; "off:int"; "'b check" ])
     (Fmt.str
-       "[check b ~off] is the check of the record at [off], whose %d bytes \
-        must lie in [b]. It never raises and allocates nothing: a negative \
+       "[check b length ~off] is the check of the record at [off], whose %d \
+        bytes must lie in [b], where [length] is [Wire.Buf.length b], read \
+        once per buffer. It never raises and allocates nothing: a negative \
         [off] or a record [b] does not hold is refused."
        r.size);
   pp_val target ppf "is_ok" "'b check -> bool"

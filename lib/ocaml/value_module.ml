@@ -889,8 +889,9 @@ let ml_record ppf t r =
    bytes for a codec of constant size. *)
 let root_check t ~stop =
   match t.V.size with
-  | Some _ -> "check b ~off"
-  | None -> Fmt.str "check b ~off ~len:(%s - off)" stop
+  | Some _ -> "check b (Wire_runtime.Buf.length b) ~off"
+  | None ->
+      Fmt.str "check b (Wire_runtime.Buf.length b) ~off ~len:(%s - off)" stop
 
 (* [encode], which checks what it wrote: to its end, or over the record's
    own bytes for a codec of constant size, whose end is not bound. *)

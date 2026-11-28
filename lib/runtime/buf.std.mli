@@ -9,11 +9,17 @@
 type 'b t = private bytes
 (** The type of a buffer named ['b]. *)
 
+type 'b length = private int
+(** The length of the buffer named ['b], read once. *)
+
 (** A buffer under a fresh name. *)
 type any = Any : 'b t -> any [@@unboxed]
 
 val v : bytes -> any
 (** [v buf] is [buf] under a name of its own. *)
+
+val length : 'b t -> 'b length
+(** [length b] is the length of [b]. *)
 
 val pp : Format.formatter -> 'b t -> unit
 (** [pp] prints a buffer's length, not its bytes. *)

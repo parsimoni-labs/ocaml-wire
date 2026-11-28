@@ -35,7 +35,7 @@ let heap = Bytes.of_string packet
 (* A view of the header: one check, then reads with none of their own. *)
 let view () =
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.v heap in
-  let c = G_ipv4.check n ~off:0 in
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) ~off:0 in
   if G_ipv4.is_ok c then
     let v = G_ipv4.get c in
     Wire_runtime.UInt8.to_int (G_ipv4.ttl n v)
@@ -54,7 +54,7 @@ let test_view () =
 let[@inline] folded b =
   let module G = G_ipv4_record in
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.v b in
-  let c = G.check n ~off:0 in
+  let c = G.check n (Wire_runtime.Buf.length n) ~off:0 in
   if G.is_ok c then
     let v = G.get c in
     (G.versionihl n v :> int)
@@ -68,7 +68,7 @@ let[@inline] folded b =
 let local_closure () =
   let local_ bias = ref 1 in
   let (Wire_runtime.Buf.Any n) = Wire_runtime.Buf.v heap in
-  let c = G_ipv4.check n ~off:0 in
+  let c = G_ipv4.check n (Wire_runtime.Buf.length n) ~off:0 in
   let read v =
     !bias
     + (G_ipv4.versionihl n v :> int)

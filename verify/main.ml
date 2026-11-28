@@ -95,20 +95,21 @@ let accessors ctx =
     ctx.globals []
   |> List.sort_uniq String.compare
 
-(* A record module: [is_valid buf off], [check b ~off] and every accessor
-   behind a check. *)
+(* A record module: [is_valid buf off], [check b len ~off] and every
+   accessor behind a check, [len] the length of [b] as [Buf.length] reads
+   it. *)
 let record ~spec ~bound ctx =
-  let viewed = [ b; Int_input "off" ] in
-  let window = ("off", "Bytes.length b - off") in
-  let checked = "check b ~off" in
+  let viewed = [ b; Int_input "len"; Int_input "off" ] in
+  let pre = "len = Bytes.length b" and window = ("off", "len - off") in
+  let checked = "check b len ~off" in
   entry ~spec ~bound ~inputs:[ buf; Int_input "off" ]
     ~window:("off", "Bytes.length buf - off")
     "is_valid" "is_valid buf off"
-  :: entry ~spec ~bound ~inputs:viewed ~window "check"
+  :: entry ~pre ~spec ~bound ~inputs:viewed ~window "check"
        (Fmt.str "is_ok (%s)" checked)
   :: List.map
        (fun v ->
-         entry ~bound ~inputs:viewed ~window (v ^ " after check")
+         entry ~pre ~bound ~inputs:viewed ~window (v ^ " after check")
            (Fmt.str "let c = %s in if is_ok c then %s b (get c) else 0" checked
               v))
        (accessors ctx)

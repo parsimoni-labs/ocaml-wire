@@ -546,9 +546,10 @@ let[@inline always] check_record ~buf ~base ~stop ~off =
     if (f3_ether_type : int) = 2048 then check_ipv4 ~buf ~base ~stop ~off
     else off
 
-let[@inline always] check (b : 'b Wire_runtime.Buf.t) ~off ~len : 'b check =
+let[@inline always] check (b : 'b Wire_runtime.Buf.t)
+    (length : 'b Wire_runtime.Buf.length) ~off ~len : 'b check =
   let buf = (b : _ Wire_runtime.Buf.t :> bytes) in
-  let length = Bytes.length buf in
+  let length = (length : _ Wire_runtime.Buf.length :> int) in
   if off < 0 || off > length - len then -1
   else
     let base = off in
@@ -1836,13 +1837,17 @@ let is_valid buf off =
   off >= 0
   &&
   match Wire_runtime.Buf.v buf with
-  | Wire_runtime.Buf.Any b -> is_ok (check b ~off ~len:(Bytes.length buf - off))
+  | Wire_runtime.Buf.Any b ->
+      is_ok
+        (check b (Wire_runtime.Buf.length b) ~off ~len:(Bytes.length buf - off))
 
 let decode buf ~off =
   if off < 0 then Wire_runtime.Errors.negative_offset off;
   match Wire_runtime.Buf.v buf with
   | Wire_runtime.Buf.Any b ->
-      let c = check b ~off ~len:(Bytes.length buf - off) in
+      let c =
+        check b (Wire_runtime.Buf.length b) ~off ~len:(Bytes.length buf - off)
+      in
       if is_ok c then Ok (of_view b (get c)) else first_error buf off
 
 let validate buf ~off =
@@ -1854,8 +1859,9 @@ let encode (r : t) buf ~off =
   let stop = encode_at ~write:true r buf off in
   match Wire_runtime.Buf.v buf with
   | Wire_runtime.Buf.Any b ->
-      if not (is_ok (check b ~off ~len:(stop - off))) then
-        invalid_arg (codec_name ^ ": the record does not pass its own checks")
+      if
+        not (is_ok (check b (Wire_runtime.Buf.length b) ~off ~len:(stop - off)))
+      then invalid_arg (codec_name ^ ": the record does not pass its own checks")
 
 let[@inline never] window_error buf off len =
   let length = Bytes.length buf in
@@ -1875,7 +1881,8 @@ let window_ok buf off len =
   && len <= Bytes.length buf - off
   &&
   match Wire_runtime.Buf.v buf with
-  | Wire_runtime.Buf.Any b -> is_ok (check b ~off ~len)
+  | Wire_runtime.Buf.Any b ->
+      is_ok (check b (Wire_runtime.Buf.length b) ~off ~len)
 
 let[@inline never] slot_error buf ~stride =
   let n = Bytes.length buf / stride in

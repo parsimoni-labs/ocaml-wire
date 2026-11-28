@@ -183,8 +183,11 @@
   #562, #566, @samoht)
 
 - A generated module meets `Wire_ocaml.FIXED` or `VARIABLE` under the names of
-  `Codec.View`: `check b ~off` (and `~len`), `is_ok`, `get`, an accessor and
-  `set_<field>` per field (#442, #492, #493, #562, #566, #571, #PR, @samoht)
+  `Codec.View`: `check b length ~off` (and `~len`), `is_ok`, `get`, an accessor
+  and `set_<field>` per field. `check` takes the buffer's length,
+  `Wire.Buf.length b`, which a loop reads once per buffer: ocamlopt does not
+  hoist `Bytes.length` out of the loop (#442, #492, #493, #562, #566, #571,
+  #PR, @samoht)
 
 - A generated module has its own record, with the codec's `validate`,
   `decode`, `encode`, `size` and errors, and a fixed one `write buf ~off

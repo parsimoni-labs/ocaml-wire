@@ -1132,6 +1132,8 @@ let pp_val ?(portable = true) ~target ppf name typ doc =
 let named target =
   "'b Wire_runtime.Buf.t" ^ if target = `OxCaml then " @ local" else ""
 
+let length = "'b Wire_runtime.Buf.length"
+
 let pp_types ppf ~codec =
   Fmt.pf ppf
     "type 'b view = private int@\n\
@@ -1230,18 +1232,20 @@ let mli ?(values = fun _ _ -> ()) ppf ~target t =
   | None ->
       pp_val ~target ppf "check"
         (String.concat " -> "
-           [ named target; "off:int"; "len:int"; "'b check" ])
-        "[check b ~off ~len] is the check of the record at [off] in the [len] \
-         bytes there, as [Wire.Codec.View.check] makes it. It never raises and \
-         allocates nothing: a window [b] does not hold is refused."
+           [ named target; length; "off:int"; "len:int"; "'b check" ])
+        "[check b length ~off ~len] is the check of the record at [off] in the \
+         [len] bytes there, as [Wire.Codec.View.check] makes it, where \
+         [length] is [Wire.Buf.length b], read once per buffer. It never \
+         raises and allocates nothing: a window [b] does not hold is refused."
   | Some size ->
       pp_val ~target ppf "check"
-        (String.concat " -> " [ named target; "off:int"; "'b check" ])
+        (String.concat " -> " [ named target; length; "off:int"; "'b check" ])
         (Fmt.str
-           "[check b ~off] is the check of the record at [off], whose %d bytes \
-            must lie in [b], as [Wire.Codec.View.check] makes it. It never \
-            raises and allocates nothing: a negative [off] or a record [b] \
-            does not hold is refused."
+           "[check b length ~off] is the check of the record at [off], whose \
+            %d bytes must lie in [b], as [Wire.Codec.View.check] makes it, \
+            where [length] is [Wire.Buf.length b], read once per buffer. It \
+            never raises and allocates nothing: a negative [off] or a record \
+            [b] does not hold is refused."
            size));
   pp_ok_get_val ~target ppf;
   List.iter (pp_member_val ~target ~t ppf t.root) t.root.members;

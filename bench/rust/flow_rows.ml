@@ -68,9 +68,9 @@ let flow_codec buf (offs : int array) _ =
 (* wire.ocaml, linked headers: the record modules of the fixed headers, and
    the harness making the checks that link them, the bounds against the
    capture ending at [cap] included. *)
-let view_ports b ~cap o proto =
+let view_ports b len ~cap o proto =
   if proto = 6 then
-    let c = G_tcp.check b ~off:o in
+    let c = G_tcp.check b len ~off:o in
     if not (G_tcp.is_ok c) then -1
     else
       let t = G_tcp.get c in
@@ -81,7 +81,7 @@ let view_ports b ~cap o proto =
   else if proto = 17 then
     if o + 8 > cap then -1
     else
-      let c = G_udp.check b ~off:o in
+      let c = G_udp.check b len ~off:o in
       if not (G_udp.is_ok c) then -1
       else
         let u = G_udp.get c in
@@ -89,9 +89,9 @@ let view_ports b ~cap o proto =
         lor UInt16.to_int (G_udp.dst_port b u)
   else 0
 
-let view_ipv4 b ~cap o =
+let view_ipv4 b len ~cap o =
   if o + 20 <= cap then
-    let c = G_ipv4.check b ~off:o in
+    let c = G_ipv4.check b len ~off:o in
     if G_ipv4.is_ok c then
       let ip = G_ipv4.get c in
       let hlen = (G_ipv4.ihl b ip :> int) * 4
@@ -101,7 +101,7 @@ let view_ipv4 b ~cap o =
         let ports =
           if G_ipv4.flags b ip land 1 <> 0 || G_ipv4.fragment_offset b ip <> 0
           then 0
-          else view_ports b ~cap (o + hlen) proto
+          else view_ports b len ~cap (o + hlen) proto
         in
         if ports >= 0 then
           Flow_table.add4
@@ -109,13 +109,13 @@ let view_ipv4 b ~cap o =
             ~dst:(UInt32.to_int (G_ipv4.dst_addr b ip))
             ~proto ~ports ~bytes:total
 
-let view_ipv6 b ~cap o =
+let view_ipv6 b len ~cap o =
   if o + 40 <= cap then
-    let c = G_ipv6.check b ~off:o in
+    let c = G_ipv6.check b len ~off:o in
     if G_ipv6.is_ok c then
       let ip = G_ipv6.get c in
       let proto = UInt8.to_int (G_ipv6.next_header b ip) in
-      let ports = view_ports b ~cap (o + 40) proto in
+      let ports = view_ports b len ~cap (o + 40) proto in
       if ports >= 0 then
         Flow_table.add6
           ~s0:(UInt32.to_int (G_ipv6.src0 b ip))
@@ -129,20 +129,21 @@ let view_ipv6 b ~cap o =
           ~proto ~ports
           ~bytes:(40 + UInt16.to_int (G_ipv6.payload_length b ip))
 
-let view_frame b o caplen =
+let view_frame b len o caplen =
   let cap = o + caplen in
   if caplen >= 14 then
-    let c = G_eth.check b ~off:o in
+    let c = G_eth.check b len ~off:o in
     if G_eth.is_ok c then
       let ty = UInt16.to_int (G_eth.ether_type b (G_eth.get c)) in
-      if ty = 0x0800 then view_ipv4 b ~cap (o + 14)
-      else if ty = 0x86dd then view_ipv6 b ~cap (o + 14)
+      if ty = 0x0800 then view_ipv4 b len ~cap (o + 14)
+      else if ty = 0x86dd then view_ipv6 b len ~cap (o + 14)
 
 let flow_view buf (offs : int array) (lens : int array) =
   match Wire_runtime.Buf.v buf with
   | Wire_runtime.Buf.Any b ->
+      let len = Wire_runtime.Buf.length b in
       for i = 0 to Array.length offs - 1 do
-        view_frame b offs.(i) lens.(i)
+        view_frame b len offs.(i) lens.(i)
       done
 
 (* wire.ocaml check/view: the views the scanner of [Packet_stack.capture]
@@ -201,8 +202,8 @@ let check_ipv6 b ip =
     ~ports
     ~bytes:(40 + (S.Stack_ipv6.payload_length b ip :> int))
 
-let check_frame b o caplen =
-  let c = S.check b ~off:o ~len:caplen in
+let check_frame b len o caplen =
+  let c = S.check b len ~off:o ~len:caplen in
   if S.is_ok c then
     let v = S.get c in
     let k4 = S.ipv4 b v in
@@ -214,8 +215,9 @@ let check_frame b o caplen =
 let flow_check buf (offs : int array) (lens : int array) =
   match Wire_runtime.Buf.v buf with
   | Wire_runtime.Buf.Any b ->
+      let len = Wire_runtime.Buf.length b in
       for i = 0 to Array.length offs - 1 do
-        check_frame b offs.(i) lens.(i)
+        check_frame b len offs.(i) lens.(i)
       done
 
 (* wire.ocaml fold: the fold of [Packet_stack.capture] over the frames of the

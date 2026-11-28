@@ -150,7 +150,7 @@ v}
 {@ocaml skip[
 let apid_of buf ~off =
   let (Buf.Any b) = Buf.v buf in
-  let c = Space_packet.check b ~off in
+  let c = Space_packet.check b (Buf.length b) ~off in
   if Space_packet.is_ok c then Some (Space_packet.apid b (Space_packet.get c))
   else None
 
@@ -161,12 +161,15 @@ let routes buf =
       counts)
 ]}
 
-Switching is a one-to-one rename:
+The generated [check] takes the buffer's length, which a loop reads once per
+buffer with {!Wire.Buf.length}: read in each check, it would cost nine
+instructions per record that ocamlopt does not hoist out of the loop.
+Otherwise switching is a one-to-one rename:
 
 {table
   {tr {th Interpreted ([wire])} {th Generated ([Space_packet])}}
   {tr {td [View.field packet apid]} {td none: the module has it built in}}
-  {tr {td [View.check packet b ~off]} {td [Space_packet.check b ~off]}}
+  {tr {td [View.check packet b ~off]} {td [Space_packet.check b (Buf.length b) ~off]}}
   {tr {td [View.is_ok c], [View.get c]}
       {td [Space_packet.is_ok c], [Space_packet.get c]}}
   {tr {td [View.read b v apid_f]} {td [Space_packet.apid b v]}}
@@ -193,12 +196,14 @@ interpreted fold's fields are a list, a value, and reach [f] positionally.
 
 A program can give the interpreted form the generated module's functions,
 with the same arguments and labels, so that one line switches between the
-two; its fold labels the fields it hands [f], as the generated one does:
+two; its [check] takes the length the generated one takes and leaves it
+unread, as [View.check] reads it, and its fold labels the fields it hands
+[f], as the generated one does:
 
 {@ocaml[
 module P = struct
   let apid_f = View.field packet apid
-  let check b ~off = View.check packet b ~off
+  let check b (_ : _ Buf.length) ~off = View.check packet b ~off
   let is_ok = View.is_ok
   let get = View.get
 
@@ -213,7 +218,7 @@ end
 (* [module P = Space_packet] runs it on the generated form. *)
 let apid_of buf ~off =
   let (Buf.Any b) = Buf.v buf in
-  let c = P.check b ~off in
+  let c = P.check b (Buf.length b) ~off in
   if P.is_ok c then Some (P.apid b (P.get c)) else None
 ]}
 
@@ -272,7 +277,8 @@ hold it: [StackIPv4] is [Eth.Stack_ipv4].
 
 {@ocaml skip[
 let retag b ~off =
-  let c = Eth.check b ~off ~len:(Bytes.length (b :> bytes) - off) in
+  let length = Buf.length b in
+  let c = Eth.check b length ~off ~len:((length :> int) - off) in
   if Eth.is_ok c then begin
     let c4 = Eth.ipv4 b (Eth.get c) in
     if Eth.Stack_ipv4.is_ok c4 then begin

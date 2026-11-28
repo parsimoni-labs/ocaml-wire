@@ -654,7 +654,7 @@ let test_mapped () =
   | () -> Alcotest.fail "a different map of the same shape was accepted"
   | exception Invalid_argument _ -> ()
 
-(* In the buffer named [b], [check b ~off] passes exactly when
+(* In the buffer named [b], [check b len ~off] passes exactly when
    [Codec.validate] accepts the record at [off], and each accessor
    [<field> b v] of the view [get] makes then reads what [Codec.decode]
    reads at [off]: in a module with views and in one with fields under
@@ -688,7 +688,7 @@ let test_view () =
       u16 frag ^ "," ^ i32 src)
     ~check:(fun buf off ->
       let (Buf.Any b) = Buf.v buf in
-      let c = G_ipv4.check b ~off in
+      let c = G_ipv4.check b (Buf.length b) ~off in
       if G_ipv4.is_ok c then
         let v = G_ipv4.get c in
         Some (u16 (G_ipv4.frag b v) ^ "," ^ i32 (G_ipv4.src b v))
@@ -697,7 +697,7 @@ let test_view () =
     ~expect:(fun (_, _, _, _, proto) -> string_of_int (UInt8.to_int proto))
     ~check:(fun buf off ->
       let (Buf.Any b) = Buf.v buf in
-      let c = G_checked.check b ~off in
+      let c = G_checked.check b (Buf.length b) ~off in
       if G_checked.is_ok c then
         Some
           (string_of_int (UInt8.to_int (G_checked.proto b (G_checked.get c))))
@@ -708,7 +708,7 @@ let test_view () =
       Fmt.str "%d %ld %s %b %d" len addr (proto p) flag rest)
     ~check:(fun buf off ->
       let (Buf.Any b) = Buf.v buf in
-      let c = G_mapped.check b ~off in
+      let c = G_mapped.check b (Buf.length b) ~off in
       if G_mapped.is_ok c then
         let v = G_mapped.get c in
         Fmt.kstr Option.some "%d %ld %s %b %d" (G_mapped.len b v)
@@ -721,7 +721,7 @@ let test_view () =
 let test_failed_views () =
   let short = Bytes.make 3 '\xff' in
   let (Buf.Any b) = Buf.v short in
-  let c = G_ipv4.check b ~off:0 in
+  let c = G_ipv4.check b (Buf.length b) ~off:0 in
   Alcotest.(check bool) "failed" false (G_ipv4.is_ok c);
   Alcotest.(check bool)
     "get refuses" true
@@ -730,7 +730,7 @@ let test_failed_views () =
     | exception Invalid_argument _ -> true);
   let off_end = Bytes.make 40 '\x45' in
   let (Buf.Any b) = Buf.v off_end in
-  let at off = G_ipv4.check b ~off in
+  let at off = G_ipv4.check b (Buf.length b) ~off in
   Alcotest.(check bool) "negative offset" false (G_ipv4.is_ok (at (-1)));
   Alcotest.(check bool) "past the end" false (G_ipv4.is_ok (at 21));
   (* A record with no check of its own (Eth, 14 bytes) tests no sign of its
@@ -740,7 +740,7 @@ let test_failed_views () =
       Alcotest.(check bool)
         (Fmt.str "no check, at %d" off)
         ok
-        (G_eth.is_ok (G_eth.check b ~off)))
+        (G_eth.is_ok (G_eth.check b (Buf.length b) ~off)))
     [
       (min_int, false);
       (-14, false);
@@ -787,7 +787,8 @@ let test_oxcaml () =
     (fun s -> Alcotest.(check bool) s true (contains src s))
     [
       "let[@inline][@zero_alloc] is_valid";
-      "let[@inline always] check (b : 'b Wire_runtime.Buf.t @ local) ~off";
+      "let[@inline always] check (_b : 'b Wire_runtime.Buf.t @ local) (length \
+       : 'b Wire_runtime.Buf.length) ~off";
       "let[@inline always] src (b : 'b Wire_runtime.Buf.t @ local) (v : 'b \
        view)";
       "[@zero_alloc assume error] fail";

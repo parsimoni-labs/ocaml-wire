@@ -7,9 +7,9 @@
     its accessor, with [set_<field>] beside it; and the module has at most one
     fold, its fields named when the module is generated. Switching from one form
     to the other is a rename: [View.check packet b ~off] is
-    [Space_packet.check b ~off], [View.read b v apid_f] is
-    [Space_packet.apid b v]. {{!modules}The generated module} gives the
-    signatures every module meets.
+    [Space_packet.check b len ~off], where [len] is [Wire.Buf.length b], read
+    once per buffer; [View.read b v apid_f] is [Space_packet.apid b v].
+    {{!modules}The generated module} gives the signatures every module meets.
 
     The module states each offset as a constant, so the compiler sees
     straight-line loads and stores, and a field at a constant place is one load.
@@ -210,9 +210,10 @@ end
 module type FIXED = sig
   include S
 
-  val check : 'b Wire.Buf.t -> off:int -> 'b check
-  (** [check b ~off] is the check of the record at [off] in [b]. It never raises
-      and allocates nothing: a negative [off] or a record [b] does not hold is
+  val check : 'b Wire.Buf.t -> 'b Wire.Buf.length -> off:int -> 'b check
+  (** [check b length ~off] is the check of the record at [off] in [b], where
+      [length] is [Wire.Buf.length b], read once per buffer. It never raises and
+      allocates nothing: a negative [off] or a record [b] does not hold is
       refused. *)
 end
 
@@ -221,9 +222,11 @@ end
 module type VARIABLE = sig
   include S
 
-  val check : 'b Wire.Buf.t -> off:int -> len:int -> 'b check
-  (** [check b ~off ~len] is the check of the record at [off] in the [len] bytes
-      there. It never raises and allocates nothing: a window [b] does not hold
+  val check :
+    'b Wire.Buf.t -> 'b Wire.Buf.length -> off:int -> len:int -> 'b check
+  (** [check b length ~off ~len] is the check of the record at [off] in the
+      [len] bytes there, where [length] is [Wire.Buf.length b], read once per
+      buffer. It never raises and allocates nothing: a window [b] does not hold
       is refused. *)
 end
 

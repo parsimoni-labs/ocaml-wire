@@ -29,21 +29,28 @@ end
 module type FIXED = sig
   include S_LOCAL
 
-  val check : 'b Wire.Buf.t @ local -> off:int -> 'b check
+  val check :
+    'b Wire.Buf.t @ local -> 'b Wire.Buf.length -> off:int -> 'b check
 end
 
 (* A module of a codec of constant size that walks its record. *)
 module type FIXED_WALK = sig
   include Wire_ocaml.S
 
-  val check : 'b Wire.Buf.t @ local -> off:int -> 'b check
+  val check :
+    'b Wire.Buf.t @ local -> 'b Wire.Buf.length -> off:int -> 'b check
 end
 
 (* A module of a codec of variable size. *)
 module type VARIABLE = sig
   include Wire_ocaml.S
 
-  val check : 'b Wire.Buf.t @ local -> off:int -> len:int -> 'b check
+  val check :
+    'b Wire.Buf.t @ local ->
+    'b Wire.Buf.length ->
+    off:int ->
+    len:int ->
+    'b check
 end
 
 (* Records of constant size. *)

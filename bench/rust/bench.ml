@@ -391,14 +391,14 @@ let codec_packet ~avail acc b o =
 
 (* {2 wire.ocaml: the generated view, then a read per field}
 
-   The buffer is named once ([Buf.v]); then [check b ~off] checks a header
-   at [off] once and [get] turns the answer into a proof that only [b]'s
-   accessors accept, as wire.rust's
+   The buffer is named once ([Buf.v]) and its length read once; then
+   [check b len ~off] checks a header at [off] once and [get] turns the
+   answer into a proof that only [b]'s accessors accept, as wire.rust's
    [Valid::at] does; each accessor [<field> b v] is then one load with no
    bounds check, and the proof is an [int], so nothing is allocated. *)
 
-let view_tcp base acc b o ~payload =
-  let c = G_tcp.check b ~off:o in
+let view_tcp base acc b len o ~payload =
+  let c = G_tcp.check b len ~off:o in
   if not (G_tcp.is_ok c) then base
   else
     let t = G_tcp.get c in
@@ -413,8 +413,8 @@ let view_tcp base acc b o ~payload =
         ~win:(UInt16.to_int (G_tcp.window b t))
         ~flags:(G_tcp.flags b t) ~off
 
-let view_udp base acc b o ~payload =
-  let c = G_udp.check b ~off:o in
+let view_udp base acc b len o ~payload =
+  let c = G_udp.check b len ~off:o in
   if not (G_udp.is_ok c) then base
   else
     let u = G_udp.get c in
@@ -426,8 +426,8 @@ let view_udp base acc b o ~payload =
         ~dp:(UInt16.to_int (G_udp.dst_port b u))
         ~len:ulen
 
-let view_ipv4 base acc b o ~avail =
-  let c = G_ipv4.check b ~off:o in
+let view_ipv4 base acc b len o ~avail =
+  let c = G_ipv4.check b len ~off:o in
   if not (G_ipv4.is_ok c) then base
   else
     let ip = G_ipv4.get c in
@@ -448,17 +448,18 @@ let view_ipv4 base acc b o ~avail =
       else
         let payload = tlen - hlen in
         match proto with
-        | 6 -> view_tcp base acc b (o + hlen) ~payload
-        | 17 -> view_udp base acc b (o + hlen) ~payload
+        | 6 -> view_tcp base acc b len (o + hlen) ~payload
+        | 17 -> view_udp base acc b len (o + hlen) ~payload
         | _ -> acc
 
-let view_packet ~avail acc b o =
-  let c = G_eth.check b ~off:o in
+let view_packet ~avail acc b len o =
+  let c = G_eth.check b len ~off:o in
   if not (G_eth.is_ok c) then acc
   else
     let e = G_eth.get c in
     let ty = UInt16.to_int (G_eth.ether_type b e) in
-    if ty = ipv4 then view_ipv4 acc (acc + ty) b (o + 14) ~avail else acc + ty
+    if ty = ipv4 then view_ipv4 acc (acc + ty) b len (o + 14) ~avail
+    else acc + ty
 
 let oxcaml =
   match Sys.ocaml_release.extra with Some (_, "ox") -> true | _ -> false
@@ -575,9 +576,10 @@ let codec_linked ~stride buf =
 
 let view_linked ~stride buf =
   let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
   let acc = ref 0 in
   for i = 0 to (Bytes.length buf / stride) - 1 do
-    acc := view_packet ~avail:(stride - 14) !acc b (i * stride)
+    acc := view_packet ~avail:(stride - 14) !acc b len (i * stride)
   done;
   !acc
 

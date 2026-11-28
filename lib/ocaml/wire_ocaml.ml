@@ -192,13 +192,14 @@ end
 module type FIXED = sig
   include S
 
-  val check : 'b Wire.Buf.t -> off:int -> 'b check
+  val check : 'b Wire.Buf.t -> 'b Wire.Buf.length -> off:int -> 'b check
 end
 
 module type VARIABLE = sig
   include S
 
-  val check : 'b Wire.Buf.t -> off:int -> len:int -> 'b check
+  val check :
+    'b Wire.Buf.t -> 'b Wire.Buf.length -> off:int -> len:int -> 'b check
 end
 
 module type FOLD = sig

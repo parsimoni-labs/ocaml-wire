@@ -13,7 +13,7 @@ let widths = [| 4; 4; 8; 3; 5; 6; 2 |]
 (* The fields of the record at [off] in [b], through its view: a record of
    [G] has no check, so one that fits passes. *)
 let per_record b off =
-  let v = G.get (G.check b ~off) in
+  let v = G.get (G.check b (Buf.length b) ~off) in
   [
     G.a b v;
     G.b b v;

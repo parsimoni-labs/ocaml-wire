@@ -12,6 +12,7 @@ module Buf = Wire_runtime.Buf
    time. *)
 let clcw buf =
   let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
   let words = Bytes.length buf / C.min_size in
   let one = V.v 1 and ff = V.v 0xFF in
   (* The report before word 0 is 255, so word 0 expects 0. *)
@@ -33,7 +34,7 @@ let clcw buf =
   let anomalies = ref (!i - V.sum !good) in
   let expected = ref ((V.get !prev 3 + 1) land 0xFF) in
   while (not !stopped) && !i < words do
-    let c = C.check b ~off:(!i * C.min_size) in
+    let c = C.check b len ~off:(!i * C.min_size) in
     if C.is_ok c then begin
       let v = C.get c in
       let report = C.reportvalue b v in

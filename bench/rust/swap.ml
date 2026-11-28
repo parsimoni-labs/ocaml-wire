@@ -1,16 +1,16 @@
 (* The header modules of the swap rows: the modules Wire_ocaml generates from
    the codecs of [Headers], or the interpreted form over the same codecs,
    given the generated modules' names as doc/api.mld shows: the same check,
-   [is_ok], [get] and accessors, each field resolved once, when first read,
-   so that the program starts where the interpreted views are not yet
-   implemented. *)
+   which leaves the length it takes unread, [is_ok], [get] and accessors,
+   each field resolved once, when first read, so that the program starts
+   where the interpreted views are not yet implemented. *)
 
 module V = Wire.Codec.View
 
 module Interpreted = struct
   module Eth = struct
     let type_ = lazy (V.field Headers.eth Headers.eth_type)
-    let check b ~off = V.check Headers.eth b ~off
+    let check b (_ : _ Wire.Buf.length) ~off = V.check Headers.eth b ~off
     let is_ok = V.is_ok
     let get = V.get
     let ether_type b v = V.read b v (Lazy.force type_)
@@ -27,7 +27,7 @@ module Interpreted = struct
     let protocol_ = lazy (V.field Headers.ipv4 Headers.ipv4_protocol)
     let src_ = lazy (V.field Headers.ipv4 Headers.ipv4_src)
     let dst_ = lazy (V.field Headers.ipv4 Headers.ipv4_dst)
-    let check b ~off = V.check Headers.ipv4 b ~off
+    let check b (_ : _ Wire.Buf.length) ~off = V.check Headers.ipv4 b ~off
     let is_ok = V.is_ok
     let get = V.get
     let ihl b v = V.read b v (Lazy.force ihl_)
@@ -43,7 +43,7 @@ module Interpreted = struct
     let data_offset_ = lazy (V.field Headers.tcp Headers.tcp_data_offset)
     let src_port_ = lazy (V.field Headers.tcp Headers.tcp_src_port)
     let dst_port_ = lazy (V.field Headers.tcp Headers.tcp_dst_port)
-    let check b ~off = V.check Headers.tcp b ~off
+    let check b (_ : _ Wire.Buf.length) ~off = V.check Headers.tcp b ~off
     let is_ok = V.is_ok
     let get = V.get
     let data_offset b v = V.read b v (Lazy.force data_offset_)
@@ -54,7 +54,7 @@ module Interpreted = struct
   module Udp = struct
     let src_port_ = lazy (V.field Headers.udp Headers.udp_src_port)
     let dst_port_ = lazy (V.field Headers.udp Headers.udp_dst_port)
-    let check b ~off = V.check Headers.udp b ~off
+    let check b (_ : _ Wire.Buf.length) ~off = V.check Headers.udp b ~off
     let is_ok = V.is_ok
     let get = V.get
     let src_port b v = V.read b v (Lazy.force src_port_)

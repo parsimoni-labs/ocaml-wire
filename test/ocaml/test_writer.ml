@@ -60,7 +60,7 @@ let test_fixed () =
     in
     match Buf.v buf with
     | Buf.Any b ->
-        let c = G_checked.check b ~off in
+        let c = G_checked.check b (Buf.length b) ~off in
         Alcotest.(check bool) "check" valid (G_checked.is_ok c);
         Alcotest.(check bool) "fold" valid (Option.is_some folded);
         if valid then begin
@@ -132,28 +132,28 @@ let test_accessors () =
     ~read:(fun buf ->
       ok (G_ipv4.validate buf ~off:0);
       let (Buf.Any b) = Buf.v buf in
-      let v = G_ipv4.get (G_ipv4.check b ~off:0) in
+      let v = G_ipv4.get (G_ipv4.check b (Buf.length b) ~off:0) in
       [ u16 (G_ipv4.frag b v); i32 (G_ipv4.src b v); u32 (G_ipv4.dst b v) ]);
   viewed ~fix:fix_checked Schemas.checked
     ~get:(fun (_, _, _, _, proto) -> [ string_of_int (UInt8.to_int proto) ])
     ~read:(fun buf ->
       ok (G_checked.validate buf ~off:0);
       let (Buf.Any b) = Buf.v buf in
-      let v = G_checked.get (G_checked.check b ~off:0) in
+      let v = G_checked.get (G_checked.check b (Buf.length b) ~off:0) in
       [ string_of_int (UInt8.to_int (G_checked.proto b v)) ]);
   viewed Schemas.mixed
     ~get:(fun (_, _, _, _, _, f, _, h) -> [ i32 f; string_of_int h ])
     ~read:(fun buf ->
       ok (G_mixed.validate buf ~off:0);
       let (Buf.Any b) = Buf.v buf in
-      let v = G_mixed.get (G_mixed.check b ~off:0) in
+      let v = G_mixed.get (G_mixed.check b (Buf.length b) ~off:0) in
       [ i32 (G_mixed.f b v); string_of_int (G_mixed.h b v) ]);
   viewed Schemas.eth
     ~get:(fun (_, src, _) -> [ src ])
     ~read:(fun buf ->
       ok (G_eth.validate buf ~off:0);
       let (Buf.Any b) = Buf.v buf in
-      let v = G_eth.get (G_eth.check b ~off:0) in
+      let v = G_eth.get (G_eth.check b (Buf.length b) ~off:0) in
       [ G_eth.src b v ])
 
 (* The module of [c] for the OCaml target, with no fold ([ml]) or with a
@@ -210,7 +210,7 @@ let test_setters () =
     let buf, off = input () in
     match Buf.v buf with
     | Buf.Any b ->
-        let c = G_checked.check b ~off in
+        let c = G_checked.check b (Buf.length b) ~off in
         if G_checked.is_ok c then begin
           let v = G_checked.get c in
           let before = fields b v in

@@ -934,11 +934,12 @@ let pp_fold_step s m =
   pp_step_within s m;
   pp_fold_step_index s ~within:(within s) ~m
 
-(* [check b ~off ~len], the walk of [fold] with no output, which answers
-   [off] for a record it accepts and [-1] otherwise, in the length of [b] it
-   reads once. A codec of constant [size] takes no window: [check b ~off]
-   walks the record over its [size] bytes, which the bounds fold into one
-   test. *)
+(* [check b length ~off ~len], the walk of [fold] with no output, which
+   answers [off] for a record it accepts and [-1] otherwise, in the length of
+   [b] its caller read once: ocamlopt does not hoist [Bytes.length] out of the
+   caller's loop. A codec of constant [size] takes no window:
+   [check b length ~off] walks the record over its [size] bytes, which the
+   bounds fold into one test. *)
 let pp_check ?size s =
   let unboxed = s.m.num = Unboxed in
   let s =
@@ -959,22 +960,17 @@ let pp_check ?size s =
       ~accept:(fun w -> pf w "off@\n");
     Format.pp_print_flush ppf ();
     let body = Buffer.contents body in
-    let reads = mentions "buf" body || mentions "length" body in
-    let b = if reads then "b" else "_b" in
+    let reads = mentions "buf" body in
     Fmt.pf s.ppf
-      "let[@inline always] check (%s : 'b Wire_runtime.Buf.t%s) %s : 'b check =@\n"
-      b
+      "let[@inline always] check (%s : 'b Wire_runtime.Buf.t%s) (length : 'b \
+       Wire_runtime.Buf.length) %s : 'b check =@\n"
+      (if reads then "b" else "_b")
       (if unboxed then " @ local" else "")
       (if Option.is_some size then "~off" else "~off ~len");
-    (* [buf] is named only for a walk that reads it, which the probe below
-       looks for. *)
-    if mentions "buf" body then
-      Fmt.pf s.ppf
-        "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n\
-         let length = Bytes.length buf in@\n"
-    else if reads then
-      Fmt.pf s.ppf
-        "let length = Bytes.length (b : _ Wire_runtime.Buf.t :> bytes) in@\n";
+    if reads then
+      Fmt.pf s.ppf "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n";
+    Fmt.pf s.ppf
+      "let length = (length : _ Wire_runtime.Buf.length :> int) in@\n";
     Option.iter (Fmt.pf s.ppf "let len = %d in@\n") size;
     Fmt.pf s.ppf "%s@\n" body
   in
@@ -1102,8 +1098,10 @@ let pp_fold_errors ppf ~size =
      go 0@\n\
      @\n"
     (match size with
-    | Some n -> Fmt.str "len >= %d && is_ok (check b ~off)" n
-    | None -> "is_ok (check b ~off ~len)")
+    | Some n ->
+        Fmt.str "len >= %d && is_ok (check b (Wire_runtime.Buf.length b) ~off)"
+          n
+    | None -> "is_ok (check b (Wire_runtime.Buf.length b) ~off ~len)")
 
 (* The fold of records back to back: a record of constant size through the
    frame loop over slots of that size, any other one at a time. *)

@@ -1,7 +1,8 @@
 (* The application logic over the generated OCaml, as a user of the
    generated modules writes it, on OCaml and on OxCaml alike: each buffer is
-   named once, each record checked once ([check], at its offset, as
-   [Codec.View.check] takes one) and then read through its accessors, plain checked indexing, and
+   named once and its length read once, each record checked once ([check], at
+   its offset, as [Codec.View.check] takes one) and then read through its
+   accessors, plain checked indexing, and
    a record that fails its check ends the loop, as the Rust rows' [break]
    does. A record is written by [write], which takes its fields' values and
    tests the range of each bitfield. A record's size is the generated
@@ -16,13 +17,14 @@ module C = G_clcw
 
 let routing buf n =
   let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
   let hdr = P.min_size in
   let total = Bytes.length buf in
   let counts = Array.make 4 0 in
   let off = ref 0 and i = ref 0 in
   while !i < n do
     if !off + hdr > total then off := 0;
-    let c = P.check b ~off:!off in
+    let c = P.check b len ~off:!off in
     if P.is_ok c then begin
       let v = P.get c in
       let route = Routing_workload.route_of_apid (P.apid b v) in
@@ -44,6 +46,7 @@ let packet b h c =
 let gateway buf =
   let open Gateway_workload in
   let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
   let hdr = F.min_size and pkt_size = P.min_size + 64 in
   let data_field_size = cadu_size - hdr in
   let frames = Bytes.length buf / cadu_size in
@@ -51,7 +54,7 @@ let gateway buf =
   let frame = ref 0 and ok = ref true in
   while !ok && !frame < frames do
     let base = !frame * cadu_size in
-    let c = F.check b ~off:base in
+    let c = F.check b len ~off:base in
     ok := F.is_ok c;
     if !ok then begin
       let f = F.get c in
@@ -60,7 +63,7 @@ let gateway buf =
       let data_end = base + hdr + data_field_size in
       let off = ref (base + hdr + fhp) in
       while !ok && !off + pkt_size <= data_end do
-        let c = P.check b ~off:!off in
+        let c = P.check b len ~off:!off in
         ok := P.is_ok c;
         checksum := packet b !checksum c;
         off := !off + pkt_size
@@ -72,6 +75,7 @@ let gateway buf =
 
 let restamp buf n out =
   let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
   let hdr = P.min_size in
   let total = Bytes.length buf in
   (* Each route's next sequence count, wrapped as the Rust rows' [& 0x3FFF]
@@ -80,7 +84,7 @@ let restamp buf n out =
   let off = ref 0 and i = ref 0 in
   while !i < n do
     if !off + hdr > total then off := 0;
-    let c = P.check b ~off:!off in
+    let c = P.check b len ~off:!off in
     if P.is_ok c then begin
       let v = P.get c in
       let apid = P.apid b v in
@@ -136,10 +140,11 @@ let report n out =
 
 let clcw buf =
   let (Buf.Any b) = Buf.v buf in
+  let len = Buf.length b in
   let words = Bytes.length buf / C.min_size in
   let anomalies = ref 0 and expected = ref 0 and i = ref 0 in
   while !i < words do
-    let c = C.check b ~off:(!i * C.min_size) in
+    let c = C.check b len ~off:(!i * C.min_size) in
     if C.is_ok c then begin
       let v = C.get c in
       let report = C.reportvalue b v in

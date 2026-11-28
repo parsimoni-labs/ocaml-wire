@@ -426,9 +426,15 @@ type 'b check = private int
 (** The type for the answers of a check of a record of [EthernetStack] in the
     buffer named ['b]. *)
 
-val check : 'b Wire_runtime.Buf.t -> off:int -> len:int -> 'b check
-(** [check b ~off ~len] is the check of the record at [off] in the [len] bytes
-    there, as [Wire.Codec.View.check] makes it. It never raises and allocates
+val check :
+  'b Wire_runtime.Buf.t ->
+  'b Wire_runtime.Buf.length ->
+  off:int ->
+  len:int ->
+  'b check
+(** [check b length ~off ~len] is the check of the record at [off] in the [len]
+    bytes there, as [Wire.Codec.View.check] makes it, where [length] is
+    [Wire.Buf.length b], read once per buffer. It never raises and allocates
     nothing: a window [b] does not hold is refused. *)
 
 val is_ok : 'b check -> bool

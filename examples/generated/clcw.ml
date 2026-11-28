@@ -19,8 +19,9 @@ type 'b check = int
 let[@inline always] check_record ~stop ~off =
   if (stop : int) < 4 then -1 else off
 
-let[@inline always] check (b : 'b Wire_runtime.Buf.t) ~off : 'b check =
-  let length = Bytes.length (b : _ Wire_runtime.Buf.t :> bytes) in
+let[@inline always] check (_b : 'b Wire_runtime.Buf.t)
+    (length : 'b Wire_runtime.Buf.length) ~off : 'b check =
+  let length = (length : _ Wire_runtime.Buf.length :> int) in
   let len = 4 in
   if off > length - len then -1
   else

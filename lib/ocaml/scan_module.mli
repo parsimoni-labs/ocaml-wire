@@ -71,9 +71,10 @@ val walks :
     over [plan]: with [fold], {!step}, its [_frames] and [_index], which take
     [~f] and [~invalid] after [~init] and call [f] with the [args] of [fold] in
     order where a record passes and [invalid] where it does not. Then [check]:
-    [check b ~off ~len], or [check b ~off] for a codec of constant [size]. Each
-    function it writes is named apart from [taken], which it adds to. [decide]
-    is given each decision the walks take, in the order it writes them. *)
+    [check b length ~off ~len], or [check b length ~off] for a codec of constant
+    [size]. Each function it writes is named apart from [taken], which it adds
+    to. [decide] is given each decision the walks take, in the order it writes
+    them. *)
 
 val pp_fold : Format.formatter -> name:string -> size:int option -> unit
 (** [pp_fold ppf ~name ~size] writes [fold] of the module [name], whose records

@@ -45,7 +45,7 @@ let test_views () =
   let ip = Option.get p.ipv4 and tcp = Option.get (Option.get p.ipv4).tcp in
   match Buf.v frame with
   | Buf.Any b -> (
-      let c = C.check b ~off:0 ~len:54 in
+      let c = C.check b (Buf.length b) ~off:0 ~len:54 in
       Alcotest.(check bool) "accepted" true (C.is_ok c);
       let v = C.get c in
       Alcotest.(check int)
@@ -75,13 +75,13 @@ let test_views () =
         (C.Stack_udp_header.is_ok (C.Captured_ipv4.udp b i));
       Alcotest.(check bool)
         "short frame" false
-        (C.is_ok (C.check b ~off:0 ~len:53));
+        (C.is_ok (C.check b (Buf.length b) ~off:0 ~len:53));
       Alcotest.(check bool)
         "past the buffer" false
-        (C.is_ok (C.check b ~off:1 ~len:54));
+        (C.is_ok (C.check b (Buf.length b) ~off:1 ~len:54));
       Alcotest.check_raises "get of a failed check"
         (Invalid_argument "CapturedStack.get: the check failed") (fun () ->
-          ignore (C.get (C.check b ~off:(-1) ~len:54)));
+          ignore (C.get (C.check b (Buf.length b) ~off:(-1) ~len:54)));
       (* A setter of a nested record writes it in place, as the codec reads
          it back, and the bitfields beside it keep their bits. *)
       let t = C.Stack_tcp.get (C.Captured_ipv4.tcp b i) in
@@ -112,7 +112,7 @@ let test_views_rewritten () =
     let frame = capture_frame () in
     match Buf.v frame with
     | Buf.Any b ->
-        let c = C.check b ~off:0 ~len:54 in
+        let c = C.check b (Buf.length b) ~off:0 ~len:54 in
         Alcotest.(check bool) (name ^ ": accepted") true (C.is_ok c);
         let v = C.get c in
         write frame;
@@ -172,7 +172,7 @@ let test_views_moved_field () =
   Bytes.set_uint8 buf 8 7;
   match Buf.v buf with
   | Buf.Any b ->
-      let c = S_sized.check b ~off:0 ~len:9 in
+      let c = S_sized.check b (Buf.length b) ~off:0 ~len:9 in
       Alcotest.(check bool) "accepted" true (S_sized.is_ok c);
       let v = S_sized.get c in
       Alcotest.(check bool) "body" true (S_sized.body_present b v);

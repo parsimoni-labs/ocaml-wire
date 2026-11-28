@@ -869,7 +869,8 @@ let pp_view_check ~src ppf ~name =
     "type 'b view = int@\n\
      type 'b check = int@\n\
      @\n\
-     let[@inline always] check (b : 'b Wire_runtime.Buf.t%s) ~off : 'b check =@\n\
+     let[@inline always] check (b : 'b Wire_runtime.Buf.t%s) (_ : 'b \
+     Wire_runtime.Buf.length) ~off : 'b check =@\n\
     \  if is_valid (b : _ Wire_runtime.Buf.t :> bytes) off then off else -1@\n\
      @\n\
      let failed = Invalid_argument %S@\n\

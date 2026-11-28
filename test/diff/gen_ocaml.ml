@@ -75,7 +75,8 @@ let pp_ops ppf fields =
     \          Result.map (fun () ->@\n\
     \              match Wire_runtime.Buf.v b with@\n\
     \              | Wire_runtime.Buf.Any bb ->@\n\
-    \                  let v = M.get (M.check bb ~off:0) in@\n\
+    \                  let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
+     ~off:0) in@\n\
     \                  [ %a ])@\n\
     \            (M.validate b ~off:0));@\n\
     \      view =@\n\
@@ -83,14 +84,15 @@ let pp_ops ppf fields =
     \          Result.map (fun () ->@\n\
     \              match Wire_runtime.Buf.v b with@\n\
     \              | Wire_runtime.Buf.Any bb ->@\n\
-    \                  let v = M.get (M.check bb ~off:o) in@\n\
+    \                  let v = M.get (M.check bb (Wire_runtime.Buf.length bb) \
+     ~off:o) in@\n\
     \                  [ %a ])@\n\
     \            (M.validate b ~off:o));@\n\
     \      checked =@\n\
     \        (fun b o ->@\n\
     \          match Wire_runtime.Buf.v b with@\n\
     \          | Wire_runtime.Buf.Any bb ->@\n\
-    \              let c = M.check bb ~off:o in@\n\
+    \              let c = M.check bb (Wire_runtime.Buf.length bb) ~off:o in@\n\
     \              if M.is_ok c then@\n\
     \                let v = M.get c in@\n\
     \                (true, [ %a ])@\n\
@@ -242,11 +244,12 @@ let pp_view_backend ppf ~m ~codec ~ls c =
      it: on the frame's own bytes. *)
   let frame, check =
     match Wire.Codec.fixed_size c with
-    | None -> ("", Fmt.str "%s.check bb ~off:o ~len:n" m)
+    | None ->
+        ("", Fmt.str "%s.check bb (Wire_runtime.Buf.length bb) ~off:o ~len:n" m)
     | Some _ ->
         ( "if o < 0 || n < 0 || n > Bytes.length b - o then None else let b = \
            Bytes.sub b o n in ",
-          Fmt.str "%s.check bb ~off:0" m )
+          Fmt.str "%s.check bb (Wire_runtime.Buf.length bb) ~off:0" m )
   in
   Fmt.pf ppf
     "%s Diff_ocaml.view_scan ~name:%S ~codec:%s ~fields:[%a] ~full:%a (fun b o \

@@ -110,8 +110,9 @@ Beyond `wire.mli`:
   `locate_3d_exe` stay.
 - `Wire_stubs` (lib/stubs/wire_stubs.mli): 10 of 12 become internal;
   `packed_codec` gives way to `Wire_3d.packed`.
-- `wire.runtime`: `Buf.length` (type and value) and `Buf.local`
-  (lib/runtime/buf.std.mli:12-24) go; `Unchecked` (16), `Errors` (19),
+- `wire.runtime`: `Buf.local` (lib/runtime/buf.std.mli:21-22) goes, and
+  `Buf.length` stays, which the generated `check` takes (question 3);
+  `Unchecked` (16), `Errors` (19),
   `Arith` (10), `Target` and each carrier's `le`, `be`, `set_*`, `unsafe_*`
   and `int_eq` are hidden, since only generated code calls them.
 
@@ -252,6 +253,22 @@ and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
    always names it; it is gone again for a check that reads nothing (space
    packet, TM frame, CLCW, Ethernet), which leaves 64. Only `check` taking
    the length, the column (a) above, removes the other 8.
+
+   **Ruled (orchestrator, 2026-11-28):** the generated `check` takes the
+   buffer's length again, `check b length ~off` for a codec of constant size
+   and `check b length ~off ~len` for one of variable size, where `length`
+   is `Wire.Buf.length b`, of type `'b Buf.length`, which a loop reads once
+   per buffer. `'b` names one buffer and bytes never shrink, so a
+   `'b Buf.length` cannot be wrong, and taking it is as memory-safe as
+   reading `Bytes.length` in each check. The interpreted `View.check` still
+   reads the length itself. With it, the routing loop's path of one accepted
+   packet is 56 instructions again, the same code as main's but for the
+   offset of one global; the gateway and CLCW loops are main's instruction
+   for instruction (`otool -tV` of `Loops`, OCaml 5.4.1, arm64). The
+   dynamic count of this shape is column (a) of the first table above, taken
+   on main; it was not retaken on this tree, since counting needs
+   `/usr/bin/time -l` outside the sandbox. The Rust `check` takes a slice,
+   whose length is part of the reference, so it is unchanged.
 
 4. **Positional visitor fields swap silently** when two of them share a type:
    `~f:(fun acc seq_count apid -> ...)` over `[ apid; seq_count ]` type-checks.
