@@ -65,22 +65,23 @@
       [size(r)], the bytes [encode] writes. Each record a field holds has its
       [Record] and [size]. A [Record] literal names each field, as the labels of
       the OCaml [write] do, so [encode] takes the place of [write].
-    - Each fold [f] the module declares ({!fold}): the trait [f::Visitor], with
-      [valid(&mut self, o1, ..., on)], each output of its Rust type, a presence
-      a [bool], and [invalid(&mut self)]; [f(v, buf, off, len)], one frame;
-      [f_frames(v, buf, off, len, stride)], the [len / stride] frames of
+    - Each fold [f] the module declares ({!val-fold}): the trait [f::Visitor],
+      with [valid(&mut self, o1, ..., on)], each output of its Rust type, a
+      presence a [bool], and [invalid(&mut self)]; [f(v, buf, off, len)], one
+      frame; [f_frames(v, buf, off, len, stride)], the [len / stride] frames of
       [stride] bytes at [off]; and [f_index(v, buf, offs, lens)], the frames of
       [lens[i]] bytes at [offs[i]]. The fold is generic over the visitor, so the
       compiler calls it directly and inlines it.
     - [Error], the codec's error ({!Wire.Error.t}): [at], the absolute offset of
       the failing field; [field], the [Path] of field names to it; and [kind], a
-      [Kind] with a variant per {!Wire.Error.kind}. A decoder answers the error
-      the codec answers on the same bytes. An encoder refuses what the codec's
-      encoder refuses: a value its field cannot hold is [Kind::ValueOutOfRange],
-      a size, a presence or a where clause the values break a failed constraint
-      at the field, a buffer too short [Kind::UnexpectedEof], and bytes that
-      fail their own checks once written the error of those checks. [Error]
-      implements [Display] and [core::error::Error]. *)
+      [Kind] with a variant per {!Wire.Error.type-kind}. A decoder answers the
+      error the codec answers on the same bytes. An encoder refuses what the
+      codec's encoder refuses: a value its field cannot hold is
+      [Kind::ValueOutOfRange], a size, a presence or a where clause the values
+      break a failed constraint at the field, a buffer too short
+      [Kind::UnexpectedEof], and bytes that fail their own checks once written
+      the error of those checks. [Error] implements [Display] and
+      [core::error::Error]. *)
 
 (** {1:module The module of a codec} *)
 
@@ -90,8 +91,8 @@ type fold
 val fold : ?outputs:string list -> string -> fold
 (** [fold ?outputs name] is the fold [name], which checks the record of a frame
     and hands [outputs] (default: every one, {!Wire_ocaml.outputs}) to its
-    visitor, as {!Wire_ocaml.fold} does; the others are not read unless a check
-    needs them, and every check still runs. *)
+    visitor, as {!Wire_ocaml.val-fold} does; the others are not read unless a
+    check needs them, and every check still runs. *)
 
 type t
 (** The type for the module generated from a codec. *)

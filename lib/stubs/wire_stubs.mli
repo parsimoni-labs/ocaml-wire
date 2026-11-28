@@ -73,9 +73,8 @@ val check_names : Wire.Everparse.Raw.struct_ -> unit
 val to_c_stubs : Wire.Everparse.Raw.struct_ list -> string
 (** Generate C stubs that call the EverParse validators directly.
 
-    @raise Invalid_argument
-      naming both codecs when two names fold to one stub name, as [foo] and
-      [FOO] do. *)
+    Raises [Invalid_argument] naming both codecs when two names fold to one stub
+    name, as [foo] and [FOO] do. *)
 
 val build_codec_archive :
   ?cflags:string list -> schema_dir:string -> archive:string -> unit -> unit
@@ -94,9 +93,8 @@ val to_ml_stubs : Wire.Everparse.Raw.struct_ list -> string
     names, holding its record type [t] and its functor [Make], which checks no
     digest.
 
-    @raise Invalid_argument
-      naming both codecs when two names give one stub, as [foo] and [FOO] do, or
-      naming a codec whose name gives no module. *)
+    Raises [Invalid_argument] naming both codecs when two names give one stub,
+    as [foo] and [FOO] do, or naming a codec whose name gives no module. *)
 
 val to_ml_stub : Wire.Everparse.Raw.struct_ -> string
 (** Generate the contents of a standalone OCaml module, its record type [t] and

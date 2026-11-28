@@ -1,6 +1,6 @@
 (** Unsigned 32-bit integer.
 
-    Backed by {!Optint.t}: an unboxed native [int] on a 64-bit host, a boxed
+    Backed by [Optint.t]: an unboxed native [int] on a 64-bit host, a boxed
     [int32] where the native [int] is narrower. This is what lets a value with
     bit 31 set survive decoding on js_of_ocaml / wasm_of_ocaml, where a plain
     [int] would drop it. *)

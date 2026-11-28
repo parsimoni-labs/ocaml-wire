@@ -1,7 +1,7 @@
 (** Signed 32-bit integer.
 
-    Abstract, and deliberately not {!Optint.t} even though that is the carrier:
-    a 32-bit unsigned value uses the same carrier, and the two must not be
+    Abstract, and deliberately not [Optint.t] even though that is the carrier: a
+    32-bit unsigned value uses the same carrier, and the two must not be
     interchangeable. Where the native [int] is narrower than 32 bits [Optint.t]
     is [Int32], whose inherited comparison is signed and so wrong for the
     unsigned view; keeping each side behind its own type stops one being read
