@@ -32,7 +32,7 @@ let[@inline] i32 ~le buf off =
   let w = get32u buf off in
   Int32.to_int (if Sys.big_endian = le then swap32 w else w)
 
-let[@inline] u32 ~le buf off = i32 ~le buf off land 0xFFFF_FFFF
+let[@inline] u32 ~le buf off = i32 ~le buf off land UInt32.mask32
 let[@inline] cast : type a. (a, int) Type.eq -> int -> a = fun Type.Equal x -> x
 
 let scalar_read : type a. a scalar -> bytes -> int -> a =
