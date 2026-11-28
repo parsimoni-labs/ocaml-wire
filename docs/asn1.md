@@ -17,7 +17,7 @@ ocaml-x509's `lib/`.
 - An ASN.1 type `'a Asn1.t` describes the DER bytes of OCaml values `'a`, once.
 - A SEQUENCE or SET is a record: its components are `Field.t` values bound with `Codec.( $ )`, as in `Codec.v`, and `Asn1.codec` gives its `Codec.t`.
 - Values: `Codec.decode` and `Codec.encode` copy the whole value; bad bytes are an `Error`, never an exception.
-- Views: `Codec.View.check` runs the DER validator once (never raises, allocates nothing), then `ok` and `get`; a component is read in place with `checked_field`, a SEQUENCE OF folded with `Asn1.fold`. DER lengths move every offset, so nothing is set in place.
+- Views: `Codec.View.check` runs the DER validator once and never raises (the everparse-asn1 C allocates nothing; the interpreted check allocates), then `ok` and `get`; a component is read in place with `checked_field`, a SEQUENCE OF folded with `Asn1.fold`. DER lengths move every offset, so nothing is set in place.
 - One description, two backends: a DER part nests in a binary codec, and a binary part in DER, as a byte region the other backend validates.
 - A shape no backend expresses is refused when it is built, with `Invalid_argument`.
 
@@ -129,6 +129,7 @@ rest are X.680's or EverParse's: `default`, `size`, `alternative` (X.680),
 | `null`, `oid`, `octet_string` | `NULL`, `OBJECT IDENTIFIER`, `OCTET STRING` | `()`, arcs below 2^32, bytes |
 | `bit_string` | `BIT STRING` | unused count, octets (`spec/ASN1.Spec.Content.BITSTRING.fst:32`) |
 | `utf8_string` ... `bmp_string` | the string type | content octets, alphabet checked |
+| `videotex_string`, `graphic_string`, `general_string`, `object_descriptor` | the string type | content octets, unchecked |
 | `utc_time`, `generalized_time` | `UTCTime`, `GeneralizedTime` | characters, format checked |
 | `relative_oid` | `RELATIVE-OID` | one or more arcs below 2^32 (`spec/ASN1.Spec.Content.OIDU32.fst:59-61`) |
 | `date` | `DATE` | `YYYYMMDD`, year 1582 to 9999 (`spec/ASN1.Spec.Time.fst:197-200`) |
@@ -172,6 +173,13 @@ handed over as a byte region:
 - **Interpreted.** `Codec.validate` on the outer codec calls the inner
   codec's own validator on the region; one answer either way.
 
+Only the interpreted handover is built. `Asn1.project` of a binary codec
+holding DER prints the module of the DER types it holds, and of a
+`containing` of DER prints `OCTET STRING (CONTAINING U)`, but
+`Everparse.project` of such a binary codec still raises `Invalid_argument`
+("an ASN.1 component has no 3D projection"): the extern above, and the glue
+of binary in DER, are not generated yet.
+
 `Everparse.project c` is a binary codec's 3D schema, DER regions handed over;
 it raises `Invalid_argument` on a DER codec. `Asn1.project m c` is the ASN.1
 module of a DER codec, or of the DER types a binary codec holds;
@@ -197,7 +205,7 @@ Invariants, "One answer"). Encoders write DER only.
 | named bits, no trailing 0 (11.2.2) | not checked (`asn1.rst:622-625`) | n/a |
 | DEFAULT omitted (11.5) | parser refuses (`spec/ASN1.Spec.Sequence.fst:32-36`), writer omits (`README:105-106`) | no DEFAULT |
 | SET components in tag order (10.3) | `spec/ASN1.Spec.SetComponents.fst:4-10` | sorts on encode (`asn_ber_der.ml:422-431`) |
-| SET OF sorted (11.6) | `spec/ASN1.Spec.Raw.fst:13-14,655-668` | sorts on encode (`asn_ber_der.ml:433-441`), not on decode (`:222`) |
+| SET OF sorted (11.6) | `spec/ASN1.Spec.Set.fst:308-339` | sorts on encode (`asn_ber_der.ml:433-441`), not on decode (`:222`) |
 | minimal OID subidentifiers (8.19) | `spec/ASN1.Spec.Content.OIDU32.fst:20-21` | `asn_prim.ml:230` |
 | RELATIVE-OID non-empty (8.20.2) | `spec/ASN1.Spec.Content.OIDU32.fst:59-61` | no RELATIVE-OID |
 | IRI labels (8.21, 8.22; X.660 7.5) | `spec/ASN1.Spec.IRI.fst:34-58` | no IRI types |
@@ -207,6 +215,10 @@ Wire does not check 11.2.2 either, so it agrees with the C; it offers no
 named-bit type until that is settled (Q6).
 
 ## The C API the stubs bind
+
+Not generated yet: `Wire_asn1` runs everparse-asn1 and leaves its C
+uncompiled; `c_name`, `generate_dune`, `pack`, `generate_corpus` and
+`generate_agree` raise. The design they follow:
 
 Per root `T` (`README:83-126`): `validate_T(slice, &off)` succeeds exactly
 when the spec parser does; `parse_T` copies nothing; `write_T(x, out, &pos)`
@@ -228,10 +240,13 @@ agree on every input both accept; a reject only asn1-combinators misses is
 allowed in the classes the table above marks (BOOLEAN, BIT STRING padding,
 SET OF order, DEFAULT present), each with a vector proving it. Inputs: the
 certificates of ocaml-x509's tests; the corpus EverParse ran (14620
-certificates and 6154 CRLs, `asn1.rst:688-689`), likely
-`src/ASN1/evaluation/data.zip`, not opened here; and EverParse's vectors in
+certificates and 6154 CRLs, `asn1.rst:688-689`); and EverParse's vectors in
 `share/everparse/tests/asn1/difftest/vectors/`, whose verdicts cite X.690 and
 never come from a parser (`src/ASN1/difftest/README.md:16-26`).
+
+Today wire's codec alone reads them: `test/test_asn1.ml` runs all 325 of
+EverParse's vectors and two of ocaml-x509's certificates. The C and
+asn1-combinators readers wait for `generate_agree`.
 
 ## Refused when built
 
@@ -246,16 +261,26 @@ The combinators raise `Invalid_argument`, each refusal unit-tested, on:
 - a run of OPTIONAL/DEFAULT components whose tags meet each other or the next
   (`spec/ASN1.Base.fst:479-496`), which everparse-asn1 only finds in F*
   (`README:502-504`);
-- DEFAULT on a non-primitive, an OID or under a constrained EXPLICIT INTEGER
-  (`README:464-467,496-498`);
+- DEFAULT on a non-primitive, an OID, a RELATIVE-OID or under a constrained
+  EXPLICIT INTEGER (`README:464-467,495-498`);
+- a DATE, TIME-OF-DAY, DATE-TIME, OID-IRI or RELATIVE-OID-IRI DEFAULT or key
+  that is not a DER value of its type, which has no literal
+  (`README:431-434`);
 - SIZE on a SEQUENCE OF other than `1..MAX`, which `?non_empty` is
   (`README:499-500`); SIZE that is not one range or reaches 65536
   (`README:460-461,487`);
 - a `defined_by` key that is OPTIONAL, constrained, after its component, in
-  another SEQUENCE, or a second table in one SEQUENCE (`asn1.rst:648-652`);
+  another SEQUENCE, or a second table in one SEQUENCE (`asn1.rst:648-652`), and
+  a RELATIVE-OID key, which has no literal (`README:308-309,435`);
 - an OID arc or tag number of 2^32 or more (`spec/ASN1.Spec.Content.OIDU32.fst`,
-  `spec/ASN1.Spec.IdentifierU32.fst`), a UNIVERSAL 0 tag
-  (`spec/ASN1.Syntax.fst:10-12`);
+  `spec/ASN1.Spec.IdentifierU32.fst`), a UNIVERSAL 0 or 15 tag
+  (`spec/ASN1.Syntax.fst:10-12`, `spec/ASN1.Base.fst:444-452`);
+- a UNIVERSAL tag on an encoding of the other form than DER gives its type
+  (constructed only for 8, 11, 16, 17, 29 and above 36), or IMPLICIT on a
+  terminal type other than the one it numbers: F* refuses the
+  implementation module of such a schema, whose writers require well-formed
+  identifiers (Error 228 on its `ok_` obligation,
+  `spec/ASN1.Spec.Conformance.fst:351-394`, `spec/ASN1.Base.fst:440-457`);
 - `keep_bytes` on a CHOICE alternative, a DEFAULT component or a
   `defined_by` key or component (`README:234-240`);
 - a DER codec in a binary record outside `nested ~size`;
@@ -271,43 +296,40 @@ The combinators raise `Invalid_argument`, each refusal unit-tested, on:
 
 REAL, extension markers and BER have no combinator at all.
 
-## Building everparse-asn1
+## Checking with everparse-asn1
 
-`make asn1-tool` at the EverParse root builds `bin/everparse-asn1.exe`
-(`README:31-34`, `Makefile:117-119`). The front end is plain OCaml with no
-library dependency (`src/ASN1/tool/ocaml/everparse-asn1/dune`), so a copy of
-`src/ASN1/tool` builds with dune in wire's own switch (OCaml 5.4.1), once
-`Z3Version.ml` is written as `src/ASN1/tool/Makefile:16-18` writes it:
+EverParse's binary package holds `bin/everparse-asn1.exe` with the F*, Z3
+5.3.0 and the verified ASN.1, LowParse and Pulse libraries it needs under
+`$EVERPARSE_HOME` (`README:69-78`), which defaults to the package's own
+prefix. For each module it writes two F* modules, has F* verify both, then
+extracts the C of the second (`Main.ml:145-173`); `--fstar_only` stops before
+F*. `Wire_asn1.run` runs it that way on each schema, in parallel, F* given a
+larger Custard budget as for 3d.exe (the C extraction of `Constructs` stops on
+the default one, Error 365), and fails unless F* reports "All verification
+conditions discharged" for both modules.
 
-```
-$ cp -R $EVERPARSE/src/ASN1/tool $D/tool
-$ echo 'let z3_version = "5.3.0"' > $D/tool/ocaml/everparse-asn1/Z3Version.ml
-$ dune build --root $D/tool/ocaml
-Entering directory '$D/tool/ocaml'
-Leaving directory '$D/tool/ocaml'
-```
+`make asn1`, that is `BUILD_EVERPARSE=1 dune build @test/asn1/runtest` with
+the tool in `PATH`, does so for every module of `test/asn1`, then compiles
+each extracted `.c` with the flags of EverParse's own e2e test (`-std=c11
+-Wall -Wextra -Werror -Wno-type-limits -Wno-unused-variable -O1`). With
+everparse-asn1 v2026.11.13, three modules at a time:
 
-`--fstar_only` stops after parsing, elaborating and writing the F* modules
-(`Main.ml:102-145`), which needs no F*. Verifying them needs F*, Z3 5.3.0
-(`lib/everparse/z3-version.Makefile:1`) and the verified ASN.1, LowParse and
-Pulse libraries under `$EVERPARSE_HOME` (`README:69-78`, `Makefile:104-115`),
-which `~/.local/everparse` does not have. `make asn1` hands every module
-`test/asn1/gen_asn.ml` writes to `everparse-asn1.exe --fstar_only --root ...`
-(`$EVERPARSE_ASN1`, else `PATH`, else `~/.local/everparse/bin`), and fails on
-the first one it refuses:
+| Module | Types | Verdict | Wall time |
+|---|---|---|---|
+| `SPKI` | the running example | verified, C compiles | 109 s |
+| `Constructs` | every construct of the table above | verified, C compiles | 1935 s |
+| `Names` | a root that is not a SEQUENCE or SET | verified, C compiles | 30 s |
+| `KeptRoot` | a root keeping its bytes | verified, C compiles | 32 s |
+| `Clash` | names to sanitise | verified, C compiles | 137 s |
+| `X509Lite` | EverParse's `X509Lite.asn` | verified, C compiles | 464 s |
+| `Times` | the times, IRIs and RELATIVE-OID | verified, C compiles | 94 s |
+| `Wrapped` | DER under `containing` | verified, C compiles | 53 s |
+| `Framed` | the DER a binary codec holds | verified, C compiles | 95 s |
+| `Rfc5280Spki` | `examples/x509` SubjectPublicKeyInfo | verified, C compiles | 112 s |
+| `Rfc5280` | `examples/x509` Certificate | verified, C compiles | 1022 s |
 
-```
-$ EVERPARSE_ASN1=$D/tool/ocaml/_build/default/everparse-asn1/Main.exe make asn1
-Clash: --root Clash
-Constructs: --root Constructs
-KeptRoot: --root KeptRoot
-Names: --root Names
-SPKI: --root SubjectPublicKeyInfo
-X509Lite: --root Cert
-Wrote out/Clash/Clash.fst and out/Clash/Clash.Impl.fst
-...
-Wrote out/X509Lite/X509Lite.fst and out/X509Lite/X509Lite.Impl.fst
-```
+The whole run took 1948 s. F* verifies each pair of modules in seconds to
+minutes; the C extraction takes most of the time.
 
 ## Open questions
 
