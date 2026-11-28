@@ -1013,7 +1013,7 @@ module View = struct
             | exception exn when Types.is_parse_error exn -> None)
         | None -> None)
     | Casetype _ | Union _ | Struct _ | Type_ref _ | Qualified_ref _ | Codec _
-    | Der _ ->
+    | Der _ | Cbor _ ->
         None
 
   (* A read that answers [zero] where its field has left the buffer, or

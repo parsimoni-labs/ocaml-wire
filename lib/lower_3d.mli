@@ -126,14 +126,19 @@ val optional_region : 'a typ -> bool
     under an optional stays behind a gate and a named wrapper rather than
     becoming a byte-budget list. *)
 
-val is_der_struct : struct_ -> bool
-(** [is_der_struct s] is [true] when [s] is the struct of a DER codec, one
-    [Asn1.codec] makes: a field of it is an ASN.1 component. *)
+val backend : struct_ -> [ `Der | `Cbor ] option
+(** [backend s] is [Some `Der] when [s] is the struct of a DER codec, one
+    [Asn1.codec] makes, a field of it an ASN.1 component; [Some `Cbor] when it
+    is a CBOR codec's, one [Cbor.codec] makes; [None] for a binary codec's. *)
 
-val is_der_value : 'a typ -> bool
-(** [is_der_value t] is [true] when [t] is a DER codec, seen through [Map]. A
-    [nested ~size] region holding one projects to 3D as a byte region of that
-    size, whose DER everparse-asn1 checks. *)
+val backend_value : 'a typ -> [ `Der | `Cbor ] option
+(** [backend_value t] is the {!backend} of [t] when [t] is a codec, seen through
+    [Map]. *)
+
+val byte_region : 'a typ -> bool
+(** [byte_region t] is [true] when [t] is a DER or CBOR codec, seen through
+    [Map]: a [nested ~size] region holding one projects to 3D as a byte region
+    of that size, whose content everparse-asn1 or evercddl checks. *)
 
 val primitive_region : 'a typ -> (int expr * packed_typ * int * bool) option
 (** [primitive_region t] is the size, element, element width and at-most flag of

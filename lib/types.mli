@@ -71,6 +71,10 @@ type _ codec_ref = ..
 type _ der = ..
 (** A DER component, which the ASN.1 module extends. Internal use. *)
 
+type _ cbor = ..
+(** A member of a CBOR map or array record, which the CBOR module extends.
+    Internal use. *)
+
 type 'r walk = {
   wvalue : cursor -> 'r;
       (** The record at the cursor's {!field-wpos}, within its {!field-wend}:
@@ -468,6 +472,9 @@ and _ typ =
       -> 'seq typ  (** Repeated elements filling a byte budget. *)
   | Der : 'a der -> 'a typ
       (** A component of an ASN.1 SEQUENCE or SET, which only the ASN.1 module
+          reads. *)
+  | Cbor : 'a cbor -> 'a typ
+      (** A member of a CBOR map or array record, which only the CBOR module
           reads. *)
 
 and ('a, 'k) case_branch =
@@ -977,9 +984,14 @@ val union :
     bytes. It is a field decoration, made through {!Field.union}. Raises
     [Invalid_argument] when [tag] has no integer view. *)
 
-val is_der_struct : struct_ -> bool
-(** [is_der_struct s] is [true] when [s] is the struct of a DER codec, one
-    [Asn1.codec] makes: a field of it is an ASN.1 component. *)
+val backend : struct_ -> [ `Der | `Cbor ] option
+(** [backend s] is [Some `Der] when [s] is the struct of a DER codec, one
+    [Asn1.codec] makes, a field of it an ASN.1 component; [Some `Cbor] when it
+    is a CBOR codec's, one [Cbor.codec] makes; [None] for a binary codec's. *)
+
+val backend_value : 'a typ -> [ `Der | `Cbor ] option
+(** [backend_value t] is the {!backend} of [t] when [t] is a codec, seen through
+    {!constructor-Map}. *)
 
 val split_string_casetype_fields : struct_ -> struct_
 (** [split_string_casetype_fields s] rewrites each {!constructor:Casetype} field

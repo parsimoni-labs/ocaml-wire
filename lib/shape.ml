@@ -203,87 +203,112 @@ let reject_duplicate_field_names name fields =
       | Some field -> Hashtbl.add seen field ())
     fields
 
-(* Whether a type holds an ASN.1 component, under any wrapper a binary codec
-   reads through. *)
-let rec has_der : type a. a Types.typ -> bool = function
-  | Types.Der _ -> true
-  | Types.Map { inner; _ } -> has_der inner
-  | Types.Where { inner; _ } -> has_der inner
-  | Types.Optional { inner; _ } -> has_der inner
-  | Types.Optional_or { inner; _ } -> has_der inner
-  | Types.Enum { base; _ } -> has_der base
-  | Types.Apply { typ; _ } -> has_der typ
-  | Types.Array { elem; _ } -> has_der elem
-  | Types.Repeat { elem; _ } -> has_der elem
-  | Types.Single_elem { elem; _ } -> has_der elem
-  | Types.Casetype { tag; cases; _ } -> has_der tag || cases_have_der cases
-  | Types.Union { cases; _ } -> cases_have_der cases
-  | _ -> false
+(* The ASN.1 component or CBOR member a type holds, if any, under any wrapper a
+   binary codec reads through. *)
+let rec member_in : type a. a Types.typ -> [ `Der | `Cbor ] option = function
+  | Types.Der _ -> Some `Der
+  | Types.Cbor _ -> Some `Cbor
+  | Types.Map { inner; _ } -> member_in inner
+  | Types.Where { inner; _ } -> member_in inner
+  | Types.Optional { inner; _ } -> member_in inner
+  | Types.Optional_or { inner; _ } -> member_in inner
+  | Types.Enum { base; _ } -> member_in base
+  | Types.Apply { typ; _ } -> member_in typ
+  | Types.Array { elem; _ } -> member_in elem
+  | Types.Repeat { elem; _ } -> member_in elem
+  | Types.Single_elem { elem; _ } -> member_in elem
+  | Types.Casetype { tag; cases; _ } -> (
+      match member_in tag with Some m -> Some m | None -> cases_member cases)
+  | Types.Union { cases; _ } -> cases_member cases
+  | _ -> None
 
-and cases_have_der : type a k. (a, k) Types.case_branch list -> bool =
+and cases_member : type a k.
+    (a, k) Types.case_branch list -> [ `Der | `Cbor ] option =
  fun cases ->
-  List.exists
-    (fun (Types.Case_branch { cb_inner; _ }) -> has_der cb_inner)
+  List.find_map
+    (fun (Types.Case_branch { cb_inner; _ }) -> member_in cb_inner)
     cases
 
-(* A component of [Asn1.sequence] has a DER tag and length, which a binary
-   record has no reader for and 3D no type for. *)
+(* A component of [Asn1.sequence] has a DER tag and length, and a member of
+   [Cbor.record] or [Cbor.tuple] a CBOR head and a place its record decides:
+   a binary record has no reader for either, and 3D no type. *)
 let reject_der_fields name fields =
   List.iter
     (fun (Types.Field f) ->
-      if has_der f.field_typ then
-        Fmt.invalid_arg
-          "Codec.v %s: field %s holds an ASN.1 component, which only \
-           Asn1.sequence and Asn1.set read; a DER value enters a binary record \
-           as nested ~size (codec (Asn1.codec t))"
-          name
-          (Option.value ~default:"<anon>" f.field_name))
+      let field = Option.value ~default:"<anon>" f.field_name in
+      match member_in f.field_typ with
+      | None -> ()
+      | Some `Der ->
+          Fmt.invalid_arg
+            "Codec.v %s: field %s holds an ASN.1 component, which only \
+             Asn1.sequence and Asn1.set read; a DER value enters a binary \
+             record as nested ~size (codec (Asn1.codec t))"
+            name field
+      | Some `Cbor ->
+          Fmt.invalid_arg
+            "Codec.v %s: field %s holds a CBOR member, which only Cbor.record \
+             and Cbor.tuple read; a CBOR value enters a binary record as \
+             nested ~size (codec (Cbor.codec t))"
+            name field)
     fields
 
-(* Whether a type holds a DER codec anywhere but as the whole of a [nested]
+(* The DER or CBOR codec a type holds anywhere but as the whole of a [nested]
    region, under the wrappers a value passes through. *)
-let rec der_outside_nested : type a. nested:bool -> a Types.typ -> bool =
+let rec outside_nested : type a.
+    nested:bool -> a Types.typ -> [ `Der | `Cbor ] option =
  fun ~nested -> function
   | Types.Codec { codec_struct; _ } ->
-      (not nested) && Types.is_der_struct codec_struct
+      if nested then None else Types.backend codec_struct
   | Types.Single_elem { elem; at_most; _ } ->
-      der_outside_nested ~nested:(not at_most) elem
-  | Types.Map { inner; _ } -> der_outside_nested ~nested inner
-  | Types.Where { inner; _ } -> der_outside_nested ~nested inner
-  | Types.Optional { inner; _ } -> der_outside_nested ~nested:false inner
-  | Types.Optional_or { inner; _ } -> der_outside_nested ~nested:false inner
-  | Types.Apply { typ; _ } -> der_outside_nested ~nested:false typ
-  | Types.Array { elem; _ } -> der_outside_nested ~nested:false elem
-  | Types.Repeat { elem; _ } -> der_outside_nested ~nested:false elem
-  | Types.Casetype { cases; _ } -> cases_der_outside_nested cases
-  | Types.Union { cases; _ } -> cases_der_outside_nested cases
-  | _ -> false
+      outside_nested ~nested:(not at_most) elem
+  | Types.Map { inner; _ } -> outside_nested ~nested inner
+  | Types.Where { inner; _ } -> outside_nested ~nested inner
+  | Types.Optional { inner; _ } -> outside_nested ~nested:false inner
+  | Types.Optional_or { inner; _ } -> outside_nested ~nested:false inner
+  | Types.Apply { typ; _ } -> outside_nested ~nested:false typ
+  | Types.Array { elem; _ } -> outside_nested ~nested:false elem
+  | Types.Repeat { elem; _ } -> outside_nested ~nested:false elem
+  | Types.Casetype { cases; _ } -> cases_outside_nested cases
+  | Types.Union { cases; _ } -> cases_outside_nested cases
+  | _ -> None
 
-and cases_der_outside_nested : type a k. (a, k) Types.case_branch list -> bool =
+and cases_outside_nested : type a k.
+    (a, k) Types.case_branch list -> [ `Der | `Cbor ] option =
  fun cases ->
-  List.exists
+  List.find_map
     (fun (Types.Case_branch { cb_inner; _ }) ->
-      der_outside_nested ~nested:false cb_inner)
+      outside_nested ~nested:false cb_inner)
     cases
 
-(* A DER value has a length of its own, which 3D cannot read: a binary record
-   hands it the region [nested ~size] bounds, and the DER validator must
-   consume all of it (docs/asn1.md, Backend selection). *)
-let reject_der_outside_nested name fields =
+(* A DER or CBOR value has a length of its own, which 3D cannot read: a binary
+   record hands it the region [nested ~size] bounds, and the DER or CBOR
+   validator must consume all of it (docs/asn1.md and docs/cbor.md, Backend
+   selection). *)
+let reject_outside_nested name fields =
   List.iter
     (fun (Types.Field f) ->
-      if der_outside_nested ~nested:false f.field_typ then
-        Fmt.invalid_arg
-          "Codec.v %s: field %s holds a DER codec outside nested ~size; a DER \
-           value enters a binary record as nested ~size (codec (Asn1.codec \
-           t)), which hands its validator exactly the region it must consume"
-          name
-          (Option.value ~default:"<anon>" f.field_name))
+      let field = Option.value ~default:"<anon>" f.field_name in
+      match outside_nested ~nested:false f.field_typ with
+      | None -> ()
+      | Some `Der ->
+          Fmt.invalid_arg
+            "Codec.v %s: field %s holds a DER codec outside nested ~size; a \
+             DER value enters a binary record as nested ~size (codec \
+             (Asn1.codec t)), which hands its validator exactly the region it \
+             must consume"
+            name field
+      | Some `Cbor ->
+          Fmt.invalid_arg
+            "Codec.v %s: field %s holds a CBOR codec outside nested ~size; a \
+             CBOR value enters a binary record as nested ~size (codec \
+             (Cbor.codec t)), which hands its validator exactly the region it \
+             must consume"
+            name field)
     fields
 
 let reject_invalid_codec_shape ?where name fields =
   reject_der_fields name fields;
-  reject_der_outside_nested name fields;
+  reject_outside_nested name fields;
   reject_duplicate_field_names name fields;
   reject_greedy_not_last name fields;
   reject_zeroterm_with_sibling name fields;

@@ -5,6 +5,7 @@
   wire.runtime
   test_helpers
   rfc5280
+  rfc9052
   asn1_vectors
   cbor_vectors
   alcotest

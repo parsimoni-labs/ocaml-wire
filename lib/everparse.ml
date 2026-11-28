@@ -273,12 +273,12 @@ let flattens ~direct_ok (c : Types.struct_) =
 
 (* Whether a field's type embeds a codec on a path the visitor flattens.
    [direct_ok] says whether a codec directly at this position may be
-   flattened (see [flattens]). A DER codec is a byte region to 3D, with no
-   field of its own to flatten. *)
+   flattened (see [flattens]). A DER or CBOR codec is a byte region to 3D,
+   with no field of its own to flatten. *)
 let rec embeds : type a. direct_ok:bool -> a Types.typ -> bool =
  fun ~direct_ok -> function
   | Types.Codec { codec_struct; _ } ->
-      (not (Types.is_der_struct codec_struct))
+      Option.is_none (Types.backend codec_struct)
       && flattens ~direct_ok codec_struct
   | Types.Optional { present = Types.Bool false; _ } -> false
   | Types.Optional { inner; _ } -> embeds ~direct_ok:true inner
@@ -420,7 +420,7 @@ and thread : type a.
  fun w ~direct_ok ~path typ ->
   match typ with
   | Types.Codec c
-    when (not (Types.is_der_struct c.codec_struct))
+    when Option.is_none (Types.backend c.codec_struct)
          && flattens ~direct_ok c.codec_struct ->
       let codec_name =
         if Hashtbl.find_opt w.uses c.codec_name = Some 1 then c.codec_name

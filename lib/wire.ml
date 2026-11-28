@@ -58,7 +58,7 @@ let rec typ_returns_slice : type a. a typ -> bool = function
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
   | Float32 _ | Float64 _ | Uint_var _ | Bits _ | Unit | All_bytes | All_zeros
   | Zeroterm | Zeroterm_at_most _ | Byte_array _ | Byte_array_where _ | Struct _
-  | Type_ref _ | Qualified_ref _ | Der _ ->
+  | Type_ref _ | Qualified_ref _ | Der _ | Cbor _ ->
       false
 
 let struct_returns_slice s =
@@ -209,6 +209,7 @@ module UInt8 = UInt8
 module Buf = Buf
 module UInt16 = UInt16
 module Asn1 = Asn1
+module Cbor = Cbor
 module Ascii = Ascii
 
 module Private = struct
