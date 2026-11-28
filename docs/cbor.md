@@ -361,9 +361,9 @@ classes the table marks (floats, bignums), each with a vector proving it.
 
 Inputs:
 
-- the COSE_Sign1 messages of ocaml-cose's tests: the cose-wg examples in
-  `test/fixtures/` (`ecdsa-sig-01.json` is the cose-wg example ECDSA-01) and the
-  pycose traces in `test/interop/pycose/traces/sign1.csv`;
+- the COSE_Sign1 messages of ocaml-cose's tests: its cose-wg examples and
+  its pycose traces; `test/test_cbor.ml:cose_traces` carries the cose-wg
+  example ECDSA-01 and the 14 pycose messages;
 - EverParse's COSE interop (`src/cose/interop/test.py`) generates its
   messages with pycose at test time and commits none, so it contributes the
   recipe, not vectors;
@@ -373,8 +373,8 @@ Inputs:
   of them `invalid` and 24 `_nondet`, refused by the deterministic API, and
   206 UTF-8 rows, with verdicts from the C and from Python cbor2
   (`cbor_tests.py:1-20`); `test/cbor_vectors` carries them;
-- RFC 8949 Appendix A, as ocaml-cbor's tests carry it
-  (`test/test_cbor.ml:206`, `test/test_value.ml:639`): every item is valid
+- RFC 8949 Appendix A, as ocaml-cbor's test vectors carry it, copied in
+  `test/cbor_vectors/cbor_vectors.ml:appendix_a`: every item is valid
   CBOR, and the deterministic readers must refuse exactly the floats and the
   indefinite lengths among them, 34 of the 81 items. No item of Appendix A
   has a head in a non-preferred form.
@@ -438,14 +438,15 @@ choice (`:342-345`, only `&(name: type)` parses) and two controls
 
 ## Running everparse-cddl from the prefix
 
-The prefix built from `v2026.11.13` holds `bin/everparse-cddl.exe`,
-`bin/fstar.exe`, `bin/krml`, Z3 5.3.0 under `lib/fstar/z3-5.3.0`, the
-checked CBOR and CDDL libraries under `lib/everparse/`, `CBORDet.o`, and the
-headers under `include/everparse`. The tool parses the `.cddl` files given,
-writes an F* module, verifies it with F*, extracts it through KaRaMeL to C,
-and compiles `M.c` (`Main.ml:283-425`). The postlude, which defines `int`,
-`tstr`, `any` and the other prelude names, is not implicit: it is passed as
-an input (`src/cose/Makefile:13-16`):
+The prefix built from `v2026.11.13`, `$EVERPARSE_HOME` below, holds
+`$EVERPARSE_HOME/bin/everparse-cddl.exe` with `fstar.exe` and `krml` beside
+it, Z3 5.3.0 under `$EVERPARSE_HOME/lib/fstar/z3-5.3.0`, the checked CBOR and
+CDDL libraries and `CBORDet.o` under `$EVERPARSE_HOME/lib/everparse`, and the
+headers under `$EVERPARSE_HOME/include/everparse`. The tool parses the
+`.cddl` files given, writes an F* module, verifies it with F*, extracts it
+through KaRaMeL to C, and compiles `M.c` (`Main.ml:283-425`). The postlude,
+which defines `int`, `tstr`, `any` and the other prelude names, is not
+implicit: it is passed as an input (`src/cose/Makefile:13-16`):
 
 ```
 everparse-cddl.exe --mname M --odir OUT --tmpdir TMP \
@@ -554,7 +555,7 @@ The bar is ASN.1's: an interpreted codec that agrees with the C, and a
 | C3 interpreted codec | `lib/cbor.ml` decode, validate, encode, `containing` handover, views; `examples/cose/` with the running example and COSE_Key; the COSE probes with the verdicts of evercddl's C | done |
 | C4 CDDL printer | `lib/cbor_cddl.ml` behind `Cbor.project`, `pp`, `write`; `test/cbor` pins the text of COSE_Sign1, COSE_Key and one module per construct | done |
 | C5 evercddl pipeline | `lib/cbor/wire_cbor.ml(i)` (locate the tool, pass the postlude), the `BUILD_EVERPARSE` rule of `test/cbor` running every module of `Cbor_modules` in full (`make cbor`) | done |
-| C6 differential and fuzz | `test/diff/` three readers, `fuzz/fuzz_cbor.ml` (Alcobar: arbitrary and mutated COSE_Sign1), and the C harness replaying the COSE vectors | after 2.0 |
+| C6 differential and fuzz | `test/diff/` three readers, an Alcobar fuzz test of arbitrary and mutated COSE_Sign1, and the C harness replaying the COSE vectors | after 2.0 |
 
 Also after 2.0: stubs binding the C (the API above is their target) and
 the handover glue they carry, so `Codec.View.check` and `Codec.decode` run
