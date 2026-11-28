@@ -297,7 +297,7 @@ let test_set_same_tag_other_flag () =
 
 (* [n] BOOLEAN components [[0]] to [[n - 1]], with the constructor that
    ignores them. *)
-type fields = Fields : 'f * ('f, unit) Codec.fields -> fields
+type fields = Fields : 'f * ('f, unit, unit) Codec.fields -> fields
 
 let rec bools i n =
   if i = n then Fields ((), Codec.[])

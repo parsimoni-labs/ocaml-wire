@@ -10,13 +10,12 @@ open Alcobar
    bytes its value writes, DER having one encoding per value. *)
 let check_bytes (type a) name (c : a Codec.t) s =
   let b = Bytes.of_string s in
-  let validated = Result.is_ok (Codec.validate c b 0) in
-  let module V = (val Codec.View.codec c) in
+  let validated = Result.is_ok (Codec.validate c b ~off:0) in
   let (Buf.Any vb) = Buf.v b in
-  let checked = Codec.View.ok (Codec.View.check V.codec vb (Buf.length vb) 0) in
+  let checked = Codec.View.is_ok (Codec.View.check c vb ~off:0) in
   if validated <> checked then
     failf "%s: validate %b, View.check %b" name validated checked;
-  match Codec.decode ~consume:`All c b 0 with
+  match Codec.decode ~consume:`All c b ~off:0 with
   | Error _ -> ()
   | Ok v ->
       if not validated then
@@ -95,7 +94,7 @@ let certificate serial cn key ext critical kind : Rfc5280.certificate =
 let test_built serial cn key ext critical kind =
   let c = Rfc5280.certificate_codec in
   let s = Codec.to_string c (certificate serial cn key ext critical kind) in
-  match Codec.decode ~consume:`All c (Bytes.of_string s) 0 with
+  match Codec.decode ~consume:`All c (Bytes.of_string s) ~off:0 with
   | Error e -> failf "a written certificate is refused: %a" Error.pp e
   | Ok v ->
       if not (String.equal s (Codec.to_string c v)) then

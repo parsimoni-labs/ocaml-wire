@@ -17,7 +17,7 @@ ocaml-x509's `lib/`.
 - An ASN.1 type `'a Asn1.t` describes the DER bytes of OCaml values `'a`, once.
 - A SEQUENCE or SET is a record: its components are `Field.t` values bound with `Codec.( $ )`, as in `Codec.v`, and `Asn1.codec` gives its `Codec.t`.
 - Values: `Codec.decode` and `Codec.encode` copy the whole value; bad bytes are an `Error`, never an exception.
-- Views: `Codec.View.check` runs the DER validator once and never raises (the everparse-asn1 C allocates nothing; the interpreted check allocates), then `ok` and `get`; a component is read in place with `checked_field`, a SEQUENCE OF folded with `Asn1.fold`. DER lengths move every offset, so nothing is set in place.
+- Views: `Codec.View.check` runs the DER validator once and never raises (the everparse-asn1 C allocates nothing; the interpreted check allocates), then `is_ok` and `get`; a component is read in place with `View.read` of a field made once by `View.field`, a SEQUENCE OF folded with `Asn1.fold`. DER lengths move every offset, so nothing is set in place.
 - One description, two backends: a DER part nests in a binary codec, and a binary part in DER, as a byte region the other backend validates.
 - A shape no backend expresses is refused when it is built, with `Invalid_argument`.
 
@@ -227,7 +227,7 @@ writes right to left, answering `JIT_OK`, `JIT_INVALID` or `JIT_NO_SPACE`;
 README). Lists: `L_iter_start`, `L_iter_next`, `L_length`, `L_nth`
 (`README:128-166`); components: `T_seq_start`, `T_seq_next`, `T_c_get`
 (`README:174-205`). The stubs bind `Codec.View.check` to `validate_T`,
-`checked_field` to `T_seq_*`, `Asn1.fold` to `L_iter_*`, `Codec.decode` to
+`View.read` to `T_seq_*`, `Asn1.fold` to `L_iter_*`, `Codec.decode` to
 `parse_T`, `Codec.encode` to `write_T`.
 
 ## The differential oracle

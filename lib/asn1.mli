@@ -211,13 +211,13 @@ val default : string -> 'a -> 'a t -> 'a Field.t
     other than OBJECT IDENTIFIER and RELATIVE-OID, possibly under one EXPLICIT
     tag, and on a time or IRI [v] that is not a DER value of [t]. *)
 
-val sequence : string -> 'f -> ('f, 'r) Codec.fields -> 'r t
+val sequence : string -> 'f -> ('f, 'r, 'r) Codec.Defs.t -> 'r t
 (** [sequence name make fields] is the SEQUENCE [name] of [fields]. Raises
     [Invalid_argument] on a field not made by this module, a repeated name, and
     a run of OPTIONAL or DEFAULT components whose tags overlap each other or the
     next component's. *)
 
-val set : string -> 'f -> ('f, 'r) Codec.fields -> 'r t
+val set : string -> 'f -> ('f, 'r, 'r) Codec.Defs.t -> 'r t
 (** [set name make fields] is the SET [name] of [fields]. Raises
     [Invalid_argument] as {!sequence} does, on two components with one tag, and
     on more than 64 components. *)
@@ -293,13 +293,13 @@ val map : decode:('w -> 'a) -> encode:('a -> 'w) -> 'w t -> 'a t
 
 val codec : 'a t -> 'a Codec.t
 (** [codec t] is the codec of the DER encoding of [t]. A view of it reads each
-    component through {!Codec.View.checked_field}, and sets none in place. *)
+    component through {!Codec.View.field}, and sets none in place. *)
 
 val fold :
-  ('c, 'r) Codec.View.codec ->
-  ('a list, 'r) Codec.field ->
+  'r Codec.t ->
+  ('a list, 'r) Codec.def ->
   'b Buf.t ->
-  ('b, 'c) Codec.View.t ->
+  ('b, 'r) Codec.View.t ->
   init:'acc ->
   f:('acc -> 'a -> 'acc) ->
   'acc

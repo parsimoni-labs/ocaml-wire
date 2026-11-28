@@ -316,16 +316,12 @@ let test_framed () =
     "roots" [ "SubjectPublicKeyInfo" ] (Asn1.roots s);
   Alcotest.(check (list string))
     "no binary under a containing" []
-    (List.map
-       (fun (s : Everparse.t) -> s.name)
-       (Asn1.contained Asn1_modules.framed))
+    (List.map Everparse.name (Asn1.contained Asn1_modules.framed))
 
 let test_wrapped () =
   Alcotest.(check (list string))
     "the binary contents only" [ "Payload" ]
-    (List.map
-       (fun (s : Everparse.t) -> s.name)
-       (contained Asn1_modules.wrapped))
+    (List.map Everparse.name (contained Asn1_modules.wrapped))
 
 let check_module name t ~roots expected () =
   let s = projected name t in
@@ -348,18 +344,14 @@ let test_deterministic () =
 (* -- The binary codecs under a containing -- *)
 
 let test_contained () =
-  let names =
-    List.map
-      (fun (s : Everparse.t) -> s.name)
-      (contained Asn1_modules.constructs)
-  in
+  let names = List.map Everparse.name (contained Asn1_modules.constructs) in
   Alcotest.(check (list string))
     "binary contents"
     [ "Payload"; "Kept_word_contents" ]
     names;
   Alcotest.(check (list string))
     "none in SPKI" []
-    (List.map (fun (s : Everparse.t) -> s.name) (contained Asn1_modules.spki))
+    (List.map Everparse.name (contained Asn1_modules.spki))
 
 (* A codec held twice is one schema. *)
 let test_contained_once () =
@@ -371,7 +363,7 @@ let test_contained_once () =
   in
   Alcotest.(check (list string))
     "one schema" [ "Payload" ]
-    (List.map (fun (s : Everparse.t) -> s.name) (Asn1.contained (Asn1.codec t)))
+    (List.map Everparse.name (Asn1.contained (Asn1.codec t)))
 
 (* -- What the projection refuses -- *)
 

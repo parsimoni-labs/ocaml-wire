@@ -1107,7 +1107,17 @@ let reject_misplaced_tables name comps =
             name kname cname
       | Some _ -> ())
 
-let sequence name make fields =
+(* The components of a SEQUENCE or SET: fields of the record, not paths. *)
+let record_fields ~combinator name defs =
+  match Codec.fields_of_defs defs with
+  | fields -> fields
+  | exception Invalid_argument _ ->
+      Fmt.invalid_arg
+        "Wire.Asn1.%s %S: a path names a field of a layer, not a component"
+        combinator name
+
+let sequence name make defs =
+  let fields = record_fields ~combinator:"sequence" name defs in
   let comps = components ~combinator:"sequence" name fields in
   reject_repeated_names ~combinator:"sequence" name comps;
   reject_misplaced_tables name comps;
@@ -1119,7 +1129,8 @@ let sequence name make fields =
    spec/ASN1.Base.fst:522-539), and no [defined_by] (asn1.rst:648). *)
 let set_limit = 64
 
-let set name make fields =
+let set name make defs =
+  let fields = record_fields ~combinator:"set" name defs in
   let comps = components ~combinator:"set" name fields in
   reject_repeated_names ~combinator:"set" name comps;
   let n = List.length comps in

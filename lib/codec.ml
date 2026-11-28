@@ -1013,7 +1013,7 @@ module View = struct
             | exception exn when Types.is_parse_error exn -> None)
         | None -> None)
     | Casetype _ | Union _ | Struct _ | Type_ref _ | Qualified_ref _ | Codec _
-      ->
+    | Der _ ->
         None
 
   (* A read that answers [zero] where its field has left the buffer, or
@@ -1147,10 +1147,39 @@ module View = struct
                         out_of_buffer f.name)
             | exception Invalid_argument _ -> none))
 
+  let[@inline never] changed codec name =
+    Fmt.invalid_arg
+      "Codec.View.read: field %S of codec %S no longer decodes: its bytes \
+       changed after the check"
+      name codec
+
+  (* A field of a codec whose bytes another module reads ([opaque]): that
+     module's reader, which a check of the record let decode, and no write,
+     since its lengths move every offset. *)
+  let component (type a r) (codec : r codec) (c : r components)
+      (f : (a, r) Codec_repr.field) : (a, r) rfield =
+    match c.find f with
+    | None ->
+        Fmt.invalid_arg "Codec.View.field: field %S does not belong to codec %S"
+          f.name codec.name
+    | Some read ->
+        {
+          rd =
+            Get
+              (fun buf r ->
+                match read buf r with
+                | Ok x -> x
+                | Error _ -> changed codec.name f.name);
+          wr = (fun _ _ _ -> no_place codec.name f.name);
+        }
+
   let resolve (type a r) (codec : r codec) (f : (a, r) Codec_repr.field) :
       (a, r) rfield =
-    let access = field_access ~op:"Codec.View.field" codec f in
-    { rd = resolve_read codec f access; wr = resolve_write codec f access }
+    match codec.components with
+    | Some c -> component codec c f
+    | None ->
+        let access = field_access ~op:"Codec.View.field" codec f in
+        { rd = resolve_read codec f access; wr = resolve_write codec f access }
 
   let[@inline] read b r f = Codec_view.read f.rd (b : _ Buf.t :> bytes) r
   let[@inline] set b r f x = f.wr (b : _ Buf.t :> bytes) r x

@@ -986,9 +986,9 @@ let rec list_elem : type a. int -> a list t -> (a t * int) option =
   | Explicit { inner; _ } -> list_elem (depth + 1) inner
   | _ -> None
 
-let fold (type a r c) (v : (c, r) Codec.View.codec)
-    (l : (a list, r) Codec.field) =
-  let codec = Codec.View.record_codec v in
+let fold (type a r) (codec : r Codec.t) (l : (a list, r) Codec.def) =
+  (* A path's type is an option, never a list: a list is a field. *)
+  let (Codec.Def l) = l in
   let not_a_list () =
     Fmt.invalid_arg
       "Wire.Asn1.fold: field %S of codec %S is not a SEQUENCE OF or SET OF \

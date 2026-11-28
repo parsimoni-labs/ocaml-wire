@@ -94,13 +94,12 @@ let to_hex s =
    consumes in full. Nothing raises. *)
 let verdict (type a) (c : a Codec.t) s =
   let b = Bytes.of_string s in
-  let decoded = Codec.decode ~consume:`All c b 0 in
-  let module V = (val Codec.View.codec c) in
+  let decoded = Codec.decode ~consume:`All c b ~off:0 in
   let (Buf.Any vb) = Buf.v b in
-  let checked = Codec.View.ok (Codec.View.check V.codec vb (Buf.length vb) 0) in
-  let validated = Result.is_ok (Codec.validate c b 0) in
+  let checked = Codec.View.is_ok (Codec.View.check c vb ~off:0) in
+  let validated = Result.is_ok (Codec.validate c b ~off:0) in
   let consumed =
-    match Codec.size_at c b 0 with
+    match Codec.size_at c b ~off:0 with
     | Ok n -> n = String.length s
     | Error _ -> false
   in
@@ -232,7 +231,7 @@ let test_rule_oid () =
   (* 1.2.4294967295, 2^32 - 1, read as a UInt32 on every target (Q7). *)
   let max = of_hex "06062a8fffffff7f" in
   accepts oid_c max;
-  (match Codec.decode oid_c (Bytes.of_string max) 0 with
+  (match Codec.decode oid_c (Bytes.of_string max) ~off:0 with
   | Ok o ->
       Alcotest.(check string) "2^32 - 1" "1.2.4294967295" (Asn1.Oid.to_string o)
   | Error e -> Alcotest.failf "%a" Error.pp e);
@@ -241,7 +240,7 @@ let test_rule_oid () =
 (* [c] writes [v] as bytes that read back as [v]. *)
 let round_trip (type a) (testable : a Alcotest.testable) (c : a Codec.t) v =
   let s = Codec.to_string c v in
-  match Codec.decode ~consume:`All c (Bytes.of_string s) 0 with
+  match Codec.decode ~consume:`All c (Bytes.of_string s) ~off:0 with
   | Ok v' -> Alcotest.check testable (to_hex s) v v'
   | Error e -> Alcotest.failf "%s: refused (%a)" (to_hex s) Error.pp e
 
@@ -259,7 +258,7 @@ let test_rule_relative_oid () =
   refuses c (of_hex "0d069080808000");
   refuses c (of_hex "2d03010203");
   refuses c (of_hex "0603010203");
-  (match Codec.decode c (Bytes.of_string (of_hex "0d058fffffff7f")) 0 with
+  (match Codec.decode c (Bytes.of_string (of_hex "0d058fffffff7f")) ~off:0 with
   | Ok r ->
       Alcotest.(check string)
         "2^32 - 1" "4294967295"
@@ -461,7 +460,7 @@ let test_keep_bytes () =
   let a = Asn1.required "a" (Asn1.keep_bytes Asn1.integer) in
   let b = Asn1.required "b" Asn1.bool in
   let c = Asn1.codec (Asn1.sequence "K" mk (pair a b)) in
-  match Codec.decode c (Bytes.of_string (of_hex "30060201050101ff")) 0 with
+  match Codec.decode c (Bytes.of_string (of_hex "30060201050101ff")) ~off:0 with
   | Ok ((v, bytes), true) ->
       Alcotest.(check string) "value" "\x05" v;
       Alcotest.(check string) "bytes" "020105" (to_hex bytes);
@@ -476,7 +475,7 @@ let test_defined_by () =
   accepts c rsa_null;
   let ed = of_hex "300506032b6570" in
   accepts c ed;
-  (match Codec.decode c (Bytes.of_string ed) 0 with
+  (match Codec.decode c (Bytes.of_string ed) ~off:0 with
   | Ok { params = Absent; _ } -> ()
   | _ -> Alcotest.fail "id-Ed25519 has no parameters");
   (* rsaEncryption with no NULL, Ed25519 with one, an unknown key. *)
@@ -568,7 +567,7 @@ let fido_der =
        ])
 
 let decode_exn c s =
-  match Codec.decode ~consume:`All c (Bytes.of_string s) 0 with
+  match Codec.decode ~consume:`All c (Bytes.of_string s) ~off:0 with
   | Ok v -> v
   | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
@@ -629,16 +628,16 @@ let test_truncations () =
   let b = Bytes.of_string cacert_der in
   for n = 0 to Bytes.length b - 1 do
     let cut = Bytes.sub b 0 n in
-    match Codec.decode Rfc5280.certificate_codec cut 0 with
+    match Codec.decode Rfc5280.certificate_codec cut ~off:0 with
     | Ok _ -> Alcotest.failf "a certificate cut at %d decodes" n
     | Error _ -> ()
   done;
   for i = 0 to Bytes.length b - 1 do
     let flipped = Bytes.copy b in
     Bytes.set flipped i (Char.chr (Char.code (Bytes.get b i) lxor 0xFF));
-    (match Codec.decode Rfc5280.certificate_codec flipped 0 with
+    (match Codec.decode Rfc5280.certificate_codec flipped ~off:0 with
     | Ok _ | Error _ -> ());
-    match Codec.validate Rfc5280.certificate_codec flipped 0 with
+    match Codec.validate Rfc5280.certificate_codec flipped ~off:0 with
     | Ok () | Error _ -> ()
   done
 
@@ -660,51 +659,44 @@ let ints_record =
 
 let ints = (true, [ "\x01"; "\x02"; "\x03" ], [ "\x05"; "\x04" ], [ "m" ])
 
-(* A component read in place, through Codec.get and View.checked_field. *)
-let test_checked_field () =
+(* A component read in place through its view: a check, then View.read of a
+   field made once by View.field. *)
+let test_view_field () =
   let c, a, l, s, m = ints_record in
   let bytes = Bytes.of_string (Codec.to_string c ints) in
-  Alcotest.(check (result bool reject))
-    "get a" (Ok true) (Codec.get c a bytes 0);
-  (match Codec.get c s bytes 0 with
-  | Ok v -> Alcotest.(check (list string)) "get s" [ "\x04"; "\x05" ] v
-  | Error e -> Alcotest.failf "get s: %a" Error.pp e);
-  (match Codec.get c m bytes 0 with
-  | Ok v -> Alcotest.(check (list string)) "get m" [ "m" ] v
-  | Error e -> Alcotest.failf "get m: %a" Error.pp e);
-  let module V = (val Codec.View.codec c) in
-  let read_l = Codec.View.checked_field V.codec l in
   let (Buf.Any b) = Buf.v bytes in
-  let v = Codec.View.get (Codec.View.check V.codec b (Buf.length b) 0) in
-  (match Codec.View.read read_l b v with
-  | Ok l -> Alcotest.(check int) "checked_field l" 3 (List.length l)
-  | Error e -> Alcotest.failf "checked_field l: %a" Error.pp e);
-  (* Bytes written after the check: the read answers their error. *)
-  Bytes.set bytes 4 '\x02';
-  Alcotest.(check bool)
-    "written after" true
-    (Result.is_error (Codec.View.read read_l b v));
-  rejects ~msg:"sets no field in place" (fun () -> Codec.set c a bytes 0 false);
+  let k = Codec.View.check c b ~off:0 in
+  Alcotest.(check bool) "checked" true (Codec.View.is_ok k);
+  let v = Codec.View.get k in
+  let read f = Codec.View.read b v (Codec.View.field c f) in
+  Alcotest.(check bool) "read a" true (read a);
+  Alcotest.(check (list string)) "read s" [ "\x04"; "\x05" ] (read s);
+  Alcotest.(check (list string)) "read m" [ "m" ] (read m);
+  let field_l = Codec.View.field c l in
+  Alcotest.(check int) "read l" 3 (List.length (Codec.View.read b v field_l));
+  (* A DER length moves every later offset: no component is set in place. *)
+  rejects ~msg:"has no constant place" (fun () ->
+      Codec.View.set b v (Codec.View.field c a) false);
   let other = Asn1.required "other" Asn1.bool in
   rejects ~msg:"does not belong to codec" (fun () ->
-      Codec.get c Codec.(other $ fun _ -> true))
+      Codec.View.field c Codec.(other $ fun _ -> true));
+  (* Bytes written after the check that no longer decode are misuse. *)
+  Bytes.set bytes 4 '\x02';
+  rejects ~msg:"no longer decodes" (fun () -> Codec.View.read b v field_l)
 
 let test_fold () =
   let c, _, l, s, m = ints_record in
-  let module V = (val Codec.View.codec c) in
   let (Buf.Any b) = Buf.v (Bytes.of_string (Codec.to_string c ints)) in
-  let k = Codec.View.check V.codec b (Buf.length b) 0 in
-  Alcotest.(check bool) "checked" true (Codec.View.ok k);
+  let k = Codec.View.check c b ~off:0 in
+  Alcotest.(check bool) "checked" true (Codec.View.is_ok k);
   let v = Codec.View.get k in
-  let sum =
-    Asn1.fold V.codec l b v ~init:0 ~f:(fun acc x -> acc + Char.code x.[0])
-  in
+  let sum = Asn1.fold c l b v ~init:0 ~f:(fun acc x -> acc + Char.code x.[0]) in
   Alcotest.(check int) "SEQUENCE OF" 6 sum;
   let order =
-    Asn1.fold V.codec s b v ~init:[] ~f:(fun acc x -> Char.code x.[0] :: acc)
+    Asn1.fold c s b v ~init:[] ~f:(fun acc x -> Char.code x.[0] :: acc)
   in
   Alcotest.(check (list int)) "SET OF in DER order" [ 5; 4 ] order;
-  rejects ~msg:"is not a SEQUENCE OF or SET OF" (fun () -> Asn1.fold V.codec m)
+  rejects ~msg:"is not a SEQUENCE OF or SET OF" (fun () -> Asn1.fold c m)
 
 (* -- Nesting -- *)
 
@@ -731,29 +723,30 @@ let test_der_in_binary () =
     Bytes.blit_string body 0 b 2 (String.length body);
     b
   in
-  (match Codec.decode c (frame n spki_bytes) 0 with
+  (match Codec.decode c (frame n spki_bytes) ~off:0 with
   | Ok (_, v) -> Alcotest.(check string) "key" "k" (snd v.key)
   | Error e -> Alcotest.failf "framed SPKI: %a" Error.pp e);
   Alcotest.(check bool)
     "validate" true
-    (Result.is_ok (Codec.validate c (frame n spki_bytes) 0));
+    (Result.is_ok (Codec.validate c (frame n spki_bytes) ~off:0));
   (* A bad inner region: BIT STRING with 8 unused bits. *)
   let bad = Bytes.of_string spki_bytes in
   Bytes.set bad (n - 2) '\x08';
   Alcotest.(check bool)
     "bad inner refused" true
-    (Result.is_error (Codec.validate c (frame n (Bytes.to_string bad)) 0));
+    (Result.is_error (Codec.validate c (frame n (Bytes.to_string bad)) ~off:0));
   Alcotest.(check bool)
     "bad inner decode refused" true
-    (Result.is_error (Codec.decode c (frame n (Bytes.to_string bad)) 0));
+    (Result.is_error (Codec.decode c (frame n (Bytes.to_string bad)) ~off:0));
   (* A region one byte longer than the DER value. *)
   Alcotest.(check bool)
     "region not consumed" true
-    (Result.is_error (Codec.validate c (frame (n + 1) (spki_bytes ^ "\x00")) 0));
+    (Result.is_error
+       (Codec.validate c (frame (n + 1) (spki_bytes ^ "\x00")) ~off:0));
   (* A region that cuts the DER value. *)
   Alcotest.(check bool)
     "region cut" true
-    (Result.is_error (Codec.validate c (frame (n - 1) spki_bytes) 0))
+    (Result.is_error (Codec.validate c (frame (n - 1) spki_bytes) ~off:0))
 
 let test_der_outside_nested () =
   let der = codec (Asn1.codec Asn1.bool) in
@@ -1037,7 +1030,7 @@ let suite =
       Alcotest.test_case "der: no exception on cut or flipped bytes" `Quick
         test_truncations;
       Alcotest.test_case "fold" `Quick test_fold;
-      Alcotest.test_case "checked_field" `Quick test_checked_field;
+      Alcotest.test_case "view field" `Quick test_view_field;
       Alcotest.test_case "nesting: DER in binary" `Quick test_der_in_binary;
       Alcotest.test_case "nesting: DER outside nested" `Quick
         test_der_outside_nested;
