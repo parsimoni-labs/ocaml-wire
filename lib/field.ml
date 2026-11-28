@@ -24,14 +24,19 @@ let reject_no_int64_slot ~combinator name typ =
       "Wire.Field.%s: field %S does not have a full-width int64 validation slot"
       combinator name
 
-(* A DER component has no integer view and no action hook: [Asn1] reads it,
-   and would drop either. *)
+(* A DER component or a CBOR member has no integer view and no action hook:
+   [Asn1] or [Cbor] reads it, and would drop either. *)
 let reject_refined_der name typ ~refined =
   match typ with
   | Types.Der _ when refined ->
       Fmt.invalid_arg
         "Wire.Field.v: field %S is an ASN.1 component, which takes no \
          constraint and no action: DER has no expression over its components"
+        name
+  | Types.Cbor _ when refined ->
+      Fmt.invalid_arg
+        "Wire.Field.v: field %S is a CBOR member, which takes no constraint \
+         and no action: CDDL has no expression over its members"
         name
   | _ -> ()
 

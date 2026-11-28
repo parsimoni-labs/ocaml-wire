@@ -1,0 +1,40 @@
+(library
+ (name cbor_modules)
+ (modules cbor_modules)
+ (libraries wire))
+
+(test
+ (name test)
+ (modules test)
+ (libraries wire cbor_modules alcotest fmt re))
+
+(executable
+ (name print)
+ (modules print)
+ (libraries wire cbor_modules))
+
+(executable
+ (name verify)
+ (modules verify)
+ (libraries wire.3d wire.cbor cbor_modules))
+
+; With BUILD_EVERPARSE=1, evercddl checks every module of Cbor_modules in full
+; (make cbor), with no --admit: F* verifies the module it writes for each, each
+; run says so ("All verification conditions discharged" and "EverCDDL
+; succeeded!", which Wire_cbor.run_everparse requires), and the C it extracts
+; compiles with -Wall -Werror. everparse-cddl.exe is found in PATH or
+; ~/.local/everparse/bin, and the postlude.cddl it reads under EVERPARSE_HOME,
+; by default the prefix it is installed in.
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (= %{env:BUILD_EVERPARSE=} "1"))
+ (deps
+  verify.exe
+  (env_var PATH)
+  (env_var EVERPARSE_HOME)
+  (env_var WIRE_3D_JOBS))
+ (action
+  (bash
+   "rm -rf out && mkdir out; ./verify.exe out > verify.log 2>&1; rc=$?; for f in out/*.cddl; do m=$(basename \"$f\" .cddl); tail -n 1 \"out/$m.log\" 2>/dev/null || echo \"$m: not run\"; done; [ $rc -eq 0 ] || { cat verify.log; exit 1; }; for f in out/*.cddl; do m=$(basename \"$f\" .cddl); grep -qE \"^$m: verified in [0-9]+s$\" \"out/$m.log\" || exit 1; [ -f \"out/$m.c\" ] || { echo \"$m: no C\"; exit 1; }; done")))

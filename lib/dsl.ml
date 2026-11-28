@@ -70,6 +70,7 @@ type _ codec_ref = ..
 
 (* A DER component, which [Asn1] extends: its type is [Asn1]'s own. *)
 type _ der = ..
+type _ cbor = ..
 
 type 'r walk = {
   wvalue : cursor -> 'r;
@@ -403,6 +404,7 @@ and _ typ =
     }
       -> 'seq typ
   | Der : 'a der -> 'a typ
+  | Cbor : 'a cbor -> 'a typ
 
 and ('a, 'k) case_branch =
   | Case_branch : {
@@ -747,7 +749,7 @@ let rec int_of : type a. a typ -> a -> int option =
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
   | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
   | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
-  | Optional_or _ | Repeat _ | Der _ ->
+  | Optional_or _ | Repeat _ | Der _ | Cbor _ ->
       None
 
 (* Whether every value of a carrier fits the native int, so its integer view
@@ -837,7 +839,7 @@ let rec int_of_exn : type a. a typ -> a -> int =
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
   | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
   | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
-  | Optional_or _ | Repeat _ | Der _ ->
+  | Optional_or _ | Repeat _ | Der _ | Cbor _ ->
       not_an_integer ()
 
 (* The other direction: the value a type carries for a given integer. The
@@ -867,7 +869,7 @@ let rec of_int : type a. a typ -> int -> a =
   | Unit | All_bytes | All_zeros | Zeroterm | Zeroterm_at_most _ | Array _
   | Byte_array _ | Byte_array_where _ | Byte_slice _ | Casetype _ | Union _
   | Struct _ | Type_ref _ | Qualified_ref _ | Codec _ | Optional _
-  | Optional_or _ | Repeat _ | Der _ ->
+  | Optional_or _ | Repeat _ | Der _ | Cbor _ ->
       not_an_integer ()
 
 (* The value [typ] carries for the 64-bit pattern [n], for a type a native int
@@ -1093,7 +1095,8 @@ let rec nz : type a. a typ -> bool = function
       || List.for_all (fun (Case_branch { cb_inner; _ }) -> nz cb_inner) cases
   | Union { cases; _ } ->
       List.for_all (fun (Case_branch { cb_inner; _ }) -> nz cb_inner) cases
-  | Type_ref _ | Qualified_ref _ | Der _ -> false (* opaque: be conservative *)
+  | Type_ref _ | Qualified_ref _ | Der _ | Cbor _ ->
+      false (* opaque: be conservative *)
 
 and struct_nz (s : struct_) =
   List.exists (fun (Field f) -> nz f.field_typ) s.fields

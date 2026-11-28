@@ -1,0 +1,3 @@
+(library
+ (name rfc9052)
+ (libraries wire))

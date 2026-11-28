@@ -1577,11 +1577,17 @@ and record_binaries : type r. r record -> (string * binary) list =
             cases)
     components
 
+let contents ~path s =
+  match whole s with Some (Pack t) -> Some (binaries ~path t) | None -> None
+
 (* A binary codec projects as [Everparse.project] projects it; any other
-   binary type as a struct of one field, named by its path. *)
+   binary type as a struct of one field, named by its path. A CBOR codec under
+   a [containing] is Cbor.project's, which reads it through [contents]
+   (docs/cbor.md, Backend selection). *)
 let schemas_of types =
   let found =
     List.concat_map (fun (base, Pack t) -> binaries ~path:base t) types
+    |> List.filter (fun (_, Binary t) -> Types.backend_value t <> Some `Cbor)
   in
   let id (path, Binary t) =
     match t with

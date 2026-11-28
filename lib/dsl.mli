@@ -77,6 +77,10 @@ type _ codec_ref = ..
 type _ der = ..
 (** A DER component, which the ASN.1 module extends. Internal use. *)
 
+type _ cbor = ..
+(** A member of a CBOR map or array record, which the CBOR module extends.
+    Internal use. *)
+
 type 'r walk = {
   wvalue : cursor -> 'r;
       (** The record at the cursor's {!field-wpos}, within its {!field-wend}:
@@ -414,6 +418,9 @@ and _ typ =
       -> 'seq typ  (** Repeated elements filling a byte budget. *)
   | Der : 'a der -> 'a typ
       (** A component of an ASN.1 SEQUENCE or SET, which only the ASN.1 module
+          reads. *)
+  | Cbor : 'a cbor -> 'a typ
+      (** A member of a CBOR map or array record, which only the CBOR module
           reads. *)
 
 and ('a, 'k) case_branch =

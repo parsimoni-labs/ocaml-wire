@@ -23,7 +23,8 @@
   codec_struct
   codec_words
   scan_outputs
-  der)
+  der
+  cbor_cddl)
  (flags
   (:standard -open Wire_runtime))
  (libraries bytesrw fmt optint wire.runtime))

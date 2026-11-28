@@ -8,6 +8,7 @@ make test               # dune runtest
 make test-wasm          # test/wasm under node via wasm_of_ocaml (needs wasm_of_ocaml, node)
 make 3d                 # validate all schemas with EverParse (needs everparse-3d.exe)
 make asn1               # verify the test/asn1 modules with everparse-asn1 (needs everparse-asn1.exe)
+make cbor               # verify the test/cbor modules with evercddl (needs everparse-cddl.exe)
 make prove              # F* proves the scanners proofs/fstar-gen lists (needs EverParse)
 make verify             # Z3 checks the generated code against 3d.exe (needs EverParse, z3)
 make bench              # EverParse C vs OCaml (needs everparse-3d.exe)
@@ -37,6 +38,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 - `lib/` -- core `wire` library: DSL types, Everparse codegen, Codec (parse/encode)
 - `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run everparse-3d.exe, generate C tests)
 - `lib/asn1/` -- `wire.asn1` sublibrary: everparse-asn1 pipeline (write .asn, run everparse-asn1.exe, generate C tests); the `Wire.Asn1` DSL itself is in `lib/`
+- `lib/cbor/` -- `wire.cbor` sublibrary: evercddl pipeline (write .cddl, run everparse-cddl.exe); the experimental `Wire.Cbor` DSL itself is in `lib/`
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
 - `lib/runtime/` -- `wire.runtime` sublibrary: what a generated OCaml module links instead of `wire` (`Buf`, `Error`, the integer carriers)
 - `lib/ocaml/` -- `wire.ocaml` sublibrary: the generated form of a codec, an OCaml (or OxCaml) module with its check, views, values and fold
@@ -44,6 +46,7 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 - `lib/diff/` -- `wire.diff` sublibrary: differential test infrastructure
 - `test/stubs/` -- Wire_stubs test suite (compile + EverParse e2e tests)
 - `test/asn1/` -- the `.asn` modules of `Wire.Asn1` types: expect tests, and the everparse-asn1 check `make asn1` runs
+- `test/cbor/` -- the `.cddl` modules of `Wire.Cbor` types: expect tests, and the evercddl check `make cbor` runs
 - `examples/` -- protocol definitions as Wire DSL examples
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
   - `examples/net/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo
