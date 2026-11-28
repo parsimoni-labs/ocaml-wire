@@ -8,7 +8,8 @@ tags or OID arcs, no OPTIONAL decided by peeking at a tag and no SET OF
 ordering; everparse-asn1 is EverParse's verified front end for exactly those.
 
 EverParse paths are from its root at `49875441c`, with `README` for
-`src/ASN1/tool/README.md`, `asn1.rst` for `doc/asn1.rst` and `spec/` for
+`src/ASN1/tool/README.md`, `asn1.rst` for
+[doc/asn1.rst](https://github.com/project-everest/everparse/blob/49875441c3215aa3712529dbfbbe7b6ac1c36c0b/doc/asn1.rst) and `spec/` for
 `lib/everparse/asn1/spec/`; `asn*.ml*` are asn1-combinators' `src/`, `x509/`
 ocaml-x509's `lib/`.
 
@@ -162,7 +163,9 @@ handed over as a byte region:
 - **DER in binary.** A field `codec (Asn1.codec t)` of a `Codec.v` record
   must sit under `nested ~size:e` (else `Codec.v` raises): 3D sees
   `UINT8 f[:byte-size e]` whose `:on-success` action passes `field_ptr` and
-  `e` to an extern (`doc/3d-lang.rst:558,587-597`) that `Wire_asn1` writes as
+  `e` to an extern (EverParse's
+  [doc/3d-lang.rst](https://github.com/project-everest/everparse/blob/49875441c3215aa3712529dbfbbe7b6ac1c36c0b/doc/3d-lang.rst),
+  lines 558 and 587-597) that `Wire_asn1` writes as
   `validate_T(slice, &off) && off == e`, the full-consumption idiom of
   `share/everparse/tests/asn1/tool/small_test.c:139-143`.
 - **Binary in DER.** `containing c` projects to `OCTET STRING`, since
@@ -338,7 +341,8 @@ minutes; the C extraction takes most of the time.
   extensions, against `L_iter_next`'s zero-copy element parse.
 - **Q2** Whether a 3D byte array's `:on-success` can call a `UINT8` extern on
   `field_ptr`; if not, DER-in-binary uses post-validation glue too. Settled:
-  it can. The pointer is bound with `var` first, as `doc/GetFieldPtr.3d`
+  it can. The pointer is bound with `var` first, as EverParse's
+  [doc/GetFieldPtr.3d](https://github.com/project-everest/everparse/blob/49875441c3215aa3712529dbfbbe7b6ac1c36c0b/doc/GetFieldPtr.3d)
   does, and the length passed is a `UINT32` (a `UINT32BE` field is refused,
   "Argument type mismatch, expected UINT32 whereas len has type UINT32BE",
   and so is its cast; a `UINT16BE` field cast with `(UINT32)` is accepted):
