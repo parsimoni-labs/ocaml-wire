@@ -158,38 +158,55 @@ everparse-asn1 names C types (`README:244-245`); every tag carries its keyword.
 
 A codec built by `Asn1` is a DER codec; any other is a binary codec. Each
 projects to its own backend, and a codec of one kind nested in the other is
-handed over as a byte region:
+handed over as a byte region, which each backend checks for its part:
 
 - **DER in binary.** A field `codec (Asn1.codec t)` of a `Codec.v` record
-  must sit under `nested ~size:e` (else `Codec.v` raises): 3D sees
-  `UINT8 f[:byte-size e]` whose `:on-success` action passes `field_ptr` and
-  `e` to an extern (EverParse's
-  [doc/3d-lang.rst](https://github.com/project-everest/everparse/blob/49875441c3215aa3712529dbfbbe7b6ac1c36c0b/doc/3d-lang.rst),
-  lines 558 and 587-597) that `Wire_asn1` writes as
+  must sit under `nested ~size:e` (else `Codec.v` raises). `Everparse.project`
+  emits it as `UINT8 f[:byte-size e]`, so 3D checks the framing: the `e`
+  bytes are there and the record's other fields hold around them.
+  `Asn1.project m c` is the module of `t`, so everparse-asn1 checks that the
+  region is one DER value of `t`. For `test/asn1`'s `Framed`, a `UINT16BE len`
+  then the SubjectPublicKeyInfo of the running example under it, 3D sees
+
+  ```
+  entrypoint
+  typedef struct WireFramed
+  {
+     UINT16BE len;
+     UINT8 key[:byte-size len];
+  } Framed;
+  ```
+
+  and everparse-asn1 the module of `SubjectPublicKeyInfo`. In the `` `Ffi ``
+  mode the visitor receives the region's offset, from which a caller runs
   `validate_T(slice, &off) && off == e`, the full-consumption idiom of
   `share/everparse/tests/asn1/tool/small_test.c:139-143`.
 - **Binary in DER.** `containing c` projects to `OCTET STRING`, since
-  everparse-asn1 has no extern hook (`README:437-481` lists none). The
-  generated check runs `validate_T`, then the 3D validator of `c` on exactly
-  the content slice of each such component (reached with `T_seq_*`,
-  `README:174-205`), and accepts iff all accept.
+  everparse-asn1 has no extern hook (`README:437-481` lists none), so
+  everparse-asn1 checks the DER around the content and its length.
+  `Asn1.contained` is the 3D schema of each such `c`, projected on its own,
+  so 3D checks the content. A caller runs `validate_T`, then the 3D validator
+  of `c` on exactly the content slice of each such component (reached with
+  `T_seq_*`, `README:174-205`), and accepts iff all accept.
 - **Interpreted.** `Codec.validate` on the outer codec calls the inner
   codec's own validator on the region; one answer either way.
 
-Only the interpreted handover is built. `Asn1.project` of a binary codec
-holding DER prints the module of the DER types it holds, and of a
-`containing` of DER prints `OCTET STRING (CONTAINING U)`, but
-`Everparse.project` of such a binary codec still raises `Invalid_argument`
-("an ASN.1 component has no 3D projection"): the extern above, and the glue
-of binary in DER, are not generated yet.
-
-`Everparse.project c` is a binary codec's 3D schema, DER regions handed over;
-it raises `Invalid_argument` on a DER codec. `Asn1.project m c` is the ASN.1
-module of a DER codec, or of the DER types a binary codec holds;
+`Everparse.project c` is a binary codec's 3D schema, DER regions as byte
+regions; it raises `Invalid_argument` on a DER codec. `Asn1.project m c` is
+the ASN.1 module of a DER codec, or of the DER types a binary codec holds;
 `Asn1.contained c` is the 3D schemas of the binary codecs a DER codec holds.
-3d.exe and F* check each 3D schema (`make 3d`), everparse-asn1's F* proofs
-each ASN.1 module, tag ambiguity included (`README:8-27`). The handover glue
-is unverified C, which the differential test covers.
+3d.exe and F* check each 3D schema (`make 3d`; `test/3d` verifies `Framed`'s
+and that of the binary codec `Wrapped` holds), everparse-asn1's F* proofs
+each ASN.1 module, tag ambiguity included (`README:8-27`).
+
+Not generated yet: the C that joins the two verdicts into one. For DER in
+binary it is the `:on-success` action of Q2, which passes `field_ptr` and `e`
+to an extern (EverParse's
+[doc/3d-lang.rst](https://github.com/project-everest/everparse/blob/49875441c3215aa3712529dbfbbe7b6ac1c36c0b/doc/3d-lang.rst),
+lines 558 and 587-597) that `Wire_asn1` writes as the call to `validate_T`
+above; for binary in DER, the walk over the contents. Until then each
+backend's validator runs on its own part, and the caller composes them. The
+glue will be unverified C, which the differential test covers.
 
 ## DER rules and who enforces them
 

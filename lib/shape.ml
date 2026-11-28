@@ -240,20 +240,12 @@ let reject_der_fields name fields =
           (Option.value ~default:"<anon>" f.field_name))
     fields
 
-(* A DER codec is the codec [Asn1.codec] makes: its one field is the root of
-   an ASN.1 type. *)
-let is_der_struct (s : Types.struct_) =
-  List.exists
-    (fun (Types.Field f) ->
-      match f.field_typ with Types.Der _ -> true | _ -> false)
-    s.fields
-
 (* Whether a type holds a DER codec anywhere but as the whole of a [nested]
    region, under the wrappers a value passes through. *)
 let rec der_outside_nested : type a. nested:bool -> a Types.typ -> bool =
  fun ~nested -> function
   | Types.Codec { codec_struct; _ } ->
-      (not nested) && is_der_struct codec_struct
+      (not nested) && Types.is_der_struct codec_struct
   | Types.Single_elem { elem; at_most; _ } ->
       der_outside_nested ~nested:(not at_most) elem
   | Types.Map { inner; _ } -> der_outside_nested ~nested inner

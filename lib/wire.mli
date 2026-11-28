@@ -1405,7 +1405,9 @@ module Everparse : sig
 
   val project : ?mode:mode -> 'r Codec.t -> t
   (** [project ~mode c] is the 3D schema of [c] ([mode] defaults to
-      [`Standalone]). *)
+      [`Standalone]). A DER value [c] holds under [nested ~size] is a byte
+      region of that size, whose DER {!Asn1.project} hands to everparse-asn1.
+      Raises [Invalid_argument] if [c] is an {!Asn1.codec}. *)
 
   val name : t -> string
   (** [name s] is the name of the schema [s], the name of its codec. *)

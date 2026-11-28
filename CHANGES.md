@@ -151,7 +151,8 @@
 - `Wire.Asn1`, experimental: ASN.1 DER types in the same description as
   binary codecs, decoded, validated and encoded by `Asn1.codec`, and
   projected by `Asn1.project` to the `.asn` modules everparse-asn1 verifies
-  (`Wire_asn1.run`). Its API will break in 2.1.0 (#PR, @samoht)
+  (`Wire_asn1.run`). A binary codec holding DER projects to 3D with the DER
+  as a byte region of its size. Its API will break in 2.1.0 (#PR, @samoht)
 
 - `Wire.Codec.View`: `check c b ~off` checks a record once and never raises,
   `is_ok` and `get` make it a view, and `read` and `set` a field made once by

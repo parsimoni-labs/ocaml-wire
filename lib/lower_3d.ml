@@ -660,6 +660,16 @@ let index_bound_elt : type a. a typ -> (string * bool expr) option =
       Some (elt_var, Lt (Ref (I, elt_var), Int bound))
   | _ -> None
 
+let is_der_struct (s : struct_) =
+  List.exists
+    (fun (Field f) -> match f.field_typ with Der _ -> true | _ -> false)
+    s.fields
+
+let rec is_der_value : type a. a typ -> bool = function
+  | Codec { codec_struct; _ } -> is_der_struct codec_struct
+  | Map { inner; _ } -> is_der_value inner
+  | _ -> false
+
 let primitive_region : type a.
     a typ -> (int expr * packed_typ * int * bool) option = function
   | Single_elem { size; elem; at_most } ->
@@ -921,6 +931,8 @@ let rec collect_casetype_decls : type a.
          enum type (declared by [enum_decls]); a wider or big-endian one renders
          through the synthesised refined-element struct, declared here. *)
       if closed_enum_elem_wide elem then emit_enum_elem_struct seen acc elem
+  (* Bytes to 3D, the DER in them is everparse-asn1's to check. *)
+  | Single_elem { elem; at_most = false; _ } when is_der_value elem -> ()
   | Single_elem { elem; _ } as typ ->
       extract elem;
       emit_single_elem seen acc typ elem

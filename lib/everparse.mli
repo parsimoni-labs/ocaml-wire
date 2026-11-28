@@ -139,7 +139,8 @@ type mode = [ `Ffi | `Standalone ]
 
 val project : ?mode:mode -> 'r Codec.t -> t
 (** [project ?mode codec] projects [codec] to a 3D schema; [mode] defaults to
-    [`Standalone]. The struct-level and raw entry points live in {!Raw}. *)
+    [`Standalone]. A DER value under [nested ~size] is a byte region of that
+    size. The struct-level and raw entry points live in {!Raw}. *)
 
 val entrypoint_struct : t -> struct_ option
 (** [entrypoint_struct s] returns the entrypoint typedef struct in the schema's

@@ -977,6 +977,10 @@ val union :
     bytes. It is a field decoration, made through {!Field.union}. Raises
     [Invalid_argument] when [tag] has no integer view. *)
 
+val is_der_struct : struct_ -> bool
+(** [is_der_struct s] is [true] when [s] is the struct of a DER codec, one
+    [Asn1.codec] makes: a field of it is an ASN.1 component. *)
+
 val split_string_casetype_fields : struct_ -> struct_
 (** [split_string_casetype_fields s] rewrites each {!constructor:Casetype} field
     of [s] whose tag is not an int-shaped typ into two adjacent byte fields: the
