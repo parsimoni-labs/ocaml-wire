@@ -517,6 +517,26 @@ let framed : framed Codec.t =
   in
   Codec.v "Framed" (fun len key -> (len, key)) Codec.[ len $ fst; key $ snd ]
 
+(* The same, held only when its flag is set. *)
+type opt_framed = UInt8.t * UInt16.t * spki option
+
+let opt_framed : opt_framed Codec.t =
+  let flag = Field.v "flag" uint8 in
+  let len = Field.v "len" uint16be in
+  let key =
+    Field.optional "key"
+      ~present:Expr.(Field.ref flag <> int 0)
+      (nested ~size:(Field.ref len) (codec (Asn1.codec spki)))
+  in
+  Codec.v "OptFramed"
+    (fun flag len key -> (flag, len, key))
+    Codec.
+      [
+        (flag $ fun (f, _, _) -> f);
+        (len $ fun (_, l, _) -> l);
+        (key $ fun (_, _, k) -> k);
+      ]
+
 (* An OCTET STRING holding a DER value, as X.509's extnValue holds its
    extension. *)
 let wrapped =

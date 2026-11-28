@@ -40,6 +40,13 @@ type framed
 val framed : framed Codec.t
 (** [framed] is a binary record holding {!val-spki}'s DER under its length. *)
 
+type opt_framed
+(** The type for records of {!val-opt_framed}. *)
+
+val opt_framed : opt_framed Codec.t
+(** [opt_framed] is {!val-framed} with the DER present only when a flag is set.
+*)
+
 val wrapped : packed
 (** [wrapped] holds a DER value and a binary record under [containing]. *)
 
