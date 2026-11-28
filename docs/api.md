@@ -208,6 +208,38 @@ and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
    `View.check` reads the length itself, with `?len` for a window, as
    lib/wire.mli states; no interpreted row was counted for this question.
 
+   **Measured on the merged tree (lane api-merge, 2026-11-28).** The same rows
+   on main (`8334c9ec`) as it is and on `api-2.0`, where every generated
+   `check` reads `Bytes.length` itself and no accessor on a view reads it,
+   each built with `--profile=bench` (OCaml 5.4.1, and OxCaml 5.4.0-ox9 in a
+   build directory of its own), both on the inputs `api-2.0`'s
+   `bench/apps/bench.exe inputs DIR 100000 100000 100000` writes and on the
+   first 1,000,000 MAWI packets. Counted once each by `sh bench/count.sh` as
+   above, while other builds ran on the machine, so the cycles are noisy and
+   the instructions are what to read. Main and `api-2.0` differ in more than
+   the length: the loops of bench/apps and bench/rust call each module's new
+   names. Every row gives the same result on both. Instructions (cycles) per
+   item:
+
+   | Row | OCaml 5.4.1, main | OCaml 5.4.1, `api-2.0` | OxCaml, main | OxCaml, `api-2.0` |
+   |---|---:|---:|---:|---:|
+   | routing run, `wire.ocaml` | 45.3 (10.0) | 58.3 (10.8) | 41.2 (12.0) | 36.7 (8.8) |
+   | routing write, `wire.ocaml` | 110.3 (25.0) | 119.6 (24.9) | 82.8 (25.0) | 84.9 (23.4) |
+   | gateway run, `wire.ocaml` | 744.2 (187.2) | 936.1 (205.4) | 598.0 (155.8) | 664.3 (201.9) |
+   | gateway write, `wire.ocaml` | 979.3 (142.2) | 993.4 (179.8) | 593.0 (120.9) | 598.1 (102.0) |
+   | clcw run, `wire.ocaml` | 45.5 (8.1) | 55.7 (12.5) | 41.8 (8.6) | 44.0 (7.4) |
+   | clcw write, `wire.ocaml` | 72.6 (14.3) | 71.6 (7.8) | 60.0 (9.0) | 60.5 (10.7) |
+   | `wire.ocaml check/view, accessors` | 326.2 (294.0) | 355.6 (326.6) | 259.2 (248.7) | 277.2 (283.9) |
+   | `wire.ocaml check/view, accessors, parse only` | 238.8 (67.0) | 270.3 (69.9) | 173.8 (47.7) | 192.5 (55.7) |
+
+   On OCaml 5.4.1 the reading rows take 9 to 29% more instructions on
+   `api-2.0` (routing run 29%, gateway run 26%, CLCW run 22%, the flow rows 9
+   and 13%) and the writing rows 1 to 8%; on OxCaml gateway run and the flow
+   rows take 7 to 11% more, CLCW run 5%, the writing rows 1 to 3%, and routing
+   run 11% fewer. This agrees with the patched count above, save gateway run
+   on OCaml (936 against 881), and is beyond noise on both compilers. The
+   interface is unchanged by this count: the decision is the orchestrator's.
+
 4. **Positional visitor fields swap silently** when two of them share a type:
    `~f:(fun acc seq_count apid -> ...)` over `[ apid; seq_count ]` type-checks.
    Labelled arguments would catch it but cannot be shared with the
