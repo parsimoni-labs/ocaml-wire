@@ -226,6 +226,7 @@ module Private = struct
   module Testing = Codec.Testing
   module Names = Names
   module Layout = Record_layout
+  module Cbor_det = Cbor_det
 
   type packed = Field.packed =
     | Named : 'a Field.t -> packed

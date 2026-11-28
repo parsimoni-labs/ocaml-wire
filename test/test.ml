@@ -53,4 +53,5 @@ let () =
       Test_layout.suite;
       Test_asn1_syntax.suite;
       Test_asn1.suite;
+      Test_cbor_det.suite;
     ]

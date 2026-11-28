@@ -1878,6 +1878,7 @@ module Private : sig
   module Shape = Shape
   module Names = Names
   module Layout = Record_layout
+  module Cbor_det = Cbor_det
 
   (** A named or an anonymous field, whatever its type. *)
   type packed = Named : 'a Field.t -> packed | Anon : 'a Field.anon -> packed

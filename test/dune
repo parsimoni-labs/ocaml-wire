@@ -6,6 +6,7 @@
   test_helpers
   rfc5280
   asn1_vectors
+  cbor_vectors
   alcotest
   re
   bytesrw
