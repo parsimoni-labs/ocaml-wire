@@ -3,7 +3,12 @@
    ([Wire_ocaml.to_ml]) are one tree up to the token table below. Both texts are read by the OCaml parser,
    since the bodies of the F* functions keep to the F* that is also OCaml,
    into [tree], the OCaml side through the table, with in place each
-   function the OCaml cuts out of the walk; the trees must be equal. *)
+   function the OCaml cuts out of the walk; the trees must be equal. The
+   OCaml fold calls its arguments [f] and [invalid] where the F* calls the
+   visitor [S] by name, [f] with each field labelled and in its carrier:
+   both calls are read as [S.valid] and [S.invalid] of the outputs they
+   hand, in order ([handed]), and [f]'s labels are checked against the
+   paths of the fold. *)
 
 open Asttypes
 open Parsetree
@@ -254,6 +259,61 @@ let hints side e =
     (fun a -> not (side.ocaml && a.attr_name.txt = "nontail"))
     e.pexp_attributes
 
+(* The continuations a fold takes as its arguments [f] and [invalid], which
+   the F* calls as its visitor [S] by name: an argument [~f] or [~invalid]
+   passed on is outside the tree. *)
+let continuation = function
+  | ( Labelled ("f" | "invalid"),
+      { pexp_desc = Pexp_ident { txt = Lident _; _ }; _ } ) ->
+      true
+  | _ -> false
+
+(* What the OCaml hands [f] for an output and the F* hands [S.valid]: the
+   variables it reads, in order. The carrier conversions and the options of
+   the OCaml, [Some], [None] and [if p then Some v else None], are not in the
+   F*, which hands the presence [p] and the value [v] as outputs of their
+   own; nor is the F*'s [P.to_int64] of a value held as [int64_u]. A presence
+   the walk knows is a literal in the F*, which the OCaml folds into the
+   option: it is left out of the F*, and the value of an absent field, which
+   the F* hands as [0], is the OCaml's [None]. *)
+let conversions = [ "Int64.to_int"; "U.to_int"; "P.to_int64"; "cast" ]
+
+let rec outputs_of tree side e =
+  match e.pexp_desc with
+  | Pexp_construct ({ txt = Lident "Some"; _ }, Some x) ->
+      outputs_of tree side x
+  | Pexp_construct ({ txt = Lident "None"; _ }, None) -> [ Int "0" ]
+  | Pexp_ifthenelse
+      ( c,
+        { pexp_desc = Pexp_construct ({ txt = Lident "Some"; _ }, Some x); _ },
+        Some
+          { pexp_desc = Pexp_construct ({ txt = Lident "None"; _ }, None); _ }
+      ) ->
+      tree side c :: outputs_of tree side x
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, args)
+    when let f = ident txt in
+         List.mem f conversions || String.ends_with ~suffix:".unsafe_of_int" f
+    ->
+      outputs_of tree side (snd (List.nth args (List.length args - 1)))
+  | _ -> [ tree side e ]
+
+(* The outputs of a call of [f], each variable once, where the first field
+   that reads it hands it, as [S.valid] takes its outputs in their order;
+   [()] for none. *)
+let handed tree side fields =
+  let seen = Hashtbl.create 8 in
+  let keep = function
+    | Id x when is_variable x ->
+        if Hashtbl.mem seen x then false
+        else (
+          Hashtbl.replace seen x ();
+          true)
+    | _ -> true
+  in
+  match List.filter keep (List.concat_map (outputs_of tree side) fields) with
+  | [] -> [ Id "()" ]
+  | outputs -> outputs
+
 let rec tree side e =
   if hints side e <> [] then
     fail_outside "the attribute of %a" Pprintast.expression e;
@@ -286,8 +346,42 @@ let rec tree side e =
         ] )
     when side.ocaml && List.mem op comparisons ->
       App (Id ("P.int64_" ^ List.assoc op infix), [ tree side a; tree side b ])
+  | Pexp_apply
+      ( { pexp_desc = Pexp_ident { txt = Lident "f"; _ }; _ },
+        (Nolabel, acc) :: fields )
+    when side.ocaml ->
+      side.calls := ("f", Nolabel :: List.map fst fields) :: !(side.calls);
+      App (Id "S.valid", tree side acc :: handed tree side (List.map snd fields))
+  | Pexp_apply
+      ( { pexp_desc = Pexp_ident { txt = Lident "invalid"; _ }; _ },
+        [ (Nolabel, acc) ] )
+    when side.ocaml ->
+      App (Id "S.invalid", [ tree side acc ])
+  | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, args)
+    when (not side.ocaml) && ident txt = "S.valid" -> (
+      side.calls := ("S.valid", List.map fst args) :: !(side.calls);
+      match args with
+      | (_, acc) :: outputs ->
+          let settled = function
+            | {
+                pexp_desc =
+                  Pexp_construct ({ txt = Lident ("true" | "false"); _ }, None);
+                _;
+              } ->
+                true
+            | _ -> false
+          in
+          App
+            ( Id "S.valid",
+              tree side acc
+              :: handed tree side
+                   (List.filter
+                      (fun e -> not (settled e))
+                      (List.map snd outputs)) )
+      | [] -> fail_outside "S.valid applied to nothing")
   | Pexp_apply _ ->
       let f, args = spine e [] in
+      let args = List.filter (fun a -> not (continuation a)) args in
       (match f.pexp_desc with
       | Pexp_ident { txt; _ } ->
           side.calls := (ident txt, List.map fst args) :: !(side.calls)
@@ -435,10 +529,12 @@ let ocaml_defs side text =
           let params, body =
             match pvb_expr.pexp_desc with
             | Pexp_function (params, None, Pfunction_body body) ->
-                ( List.map
+                ( List.filter_map
                     (fun p ->
                       match p.pparam_desc with
-                      | Pparam_val (label, None, pat) -> (label, param_name pat)
+                      | Pparam_val (Labelled ("f" | "invalid"), None, _) -> None
+                      | Pparam_val (label, None, pat) ->
+                          Some (label, param_name pat)
                       | _ -> fail_outside "a parameter of %s" name)
                     params,
                   body )
@@ -549,7 +645,7 @@ let same what a b =
 
 (* Dropping a label keeps the argument's position: a named function's
    application carries the labels its definition declares, in order, and
-   [valid]'s those of the outputs, the scanner's fields in order. *)
+   [f]'s those of the fold's fields, in the order of their paths. *)
 let pp_labels =
   Fmt.(
     list ~sep:sp (fun ppf -> function
@@ -567,16 +663,8 @@ let labels ~outputs defs calls =
   let declared f =
     match List.find_opt (fun d -> d.name = f) defs with
     | Some d -> Some (List.map fst d.params)
-    | None when f = "S.valid" ->
-        Some
-          (Nolabel
-          ::
-          (if outputs = [] then [ Nolabel ]
-           else List.map (fun o -> Labelled o) outputs))
-    | None when f = "valid" ->
-        Some
-          (if outputs = [] then [ Nolabel ]
-           else List.map (fun o -> Labelled o) outputs)
+    | None when f = "f" ->
+        Some (Nolabel :: List.map (fun o -> Labelled o) outputs)
     | None -> None
   in
   List.iter
@@ -725,17 +813,27 @@ type walks = {
 
 type texts = { stock : walks; ox : walks }
 
+(* The path of every integer field of [c], each under the records that hold
+   it: the fields of a fold that reads them all. *)
+let paths c =
+  let rec go prefix (view : Wire_ocaml.view) =
+    List.concat_map
+      (function
+        | Wire_ocaml.Int { name; _ } -> [ prefix ^ name ]
+        | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
+        | Bool _ | Bytes _ -> [])
+      view.members
+  in
+  go "" (Wire_ocaml.views c)
+
 let texts c =
   match Wire_ocaml.fstar ~codec:"M" c with
   | exception Invalid_argument _ -> None
   | files ->
       let walks target ox =
         let file name = List.assoc_opt ("M." ^ ox ^ name ^ ".fst") files in
-        let folds = Wire_ocaml.[ fold "fold_step" ] in
         {
-          ocaml =
-            Wire_ocaml.(
-              to_ml ~visitors:[ ("fold_step", "s.ml") ] (v ~target ~folds c));
+          ocaml = Wire_ocaml.(to_ml (v ~target ~fold:(paths c) c));
           step = Option.get (file "Step");
           frames = Option.get (file "Frames");
           index = file "Index";
@@ -743,7 +841,8 @@ let texts c =
       in
       Some { stock = walks `OCaml ""; ox = walks `OxCaml "Ox" }
 
-let outputs c = List.map fst (Wire_ocaml.outputs c)
+(* The labels [f] takes the fields of [paths c] with, in order. *)
+let outputs c = List.map (String.map (function '.' -> '_' | c -> c)) (paths c)
 
 (* Whether the walks of [w] agree with their F*: the step functions and the
    walks of a frame of their loops. *)
@@ -821,8 +920,21 @@ let suite =
       Alcotest.test_case "mutant comparison" `Quick
         (mutant ~from:"((bw1 : int64) < 69L)" ~into:"((bw1 : int64) <= 69L)");
       Alcotest.test_case "mutant label" `Quick
-        (mutant ~from:"init ~version:f1_version ~ihl:f2_ihl"
-           ~into:"init ~ihl:f1_version ~version:f2_ihl");
+        (mutant
+           ~from:
+             "init ~version:(Int64.to_int f1_version) ~ihl:(Int64.to_int \
+              f2_ihl)"
+           ~into:
+             "init ~ihl:(Int64.to_int f1_version) ~version:(Int64.to_int \
+              f2_ihl)");
+      Alcotest.test_case "mutant field" `Quick
+        (mutant
+           ~from:
+             "init ~version:(Int64.to_int f1_version) ~ihl:(Int64.to_int \
+              f2_ihl)"
+           ~into:
+             "init ~version:(Int64.to_int f2_ihl) ~ihl:(Int64.to_int \
+              f1_version)");
       Alcotest.test_case "OxCaml mutant literal" `Quick
         (mutant ~ox:true ~from:"(U.add base #9L)" ~into:"(U.add base #10L)");
       Alcotest.test_case "OxCaml mutant comparison" `Quick
@@ -830,13 +942,17 @@ let suite =
            ~into:"(U.compare stop #20L <= 0)");
       Alcotest.test_case "index mutant label" `Quick
         (mutant ~index:true
-           ~from:"S.valid current ~version:f1_version ~ihl:f2_ihl"
-           ~into:"S.valid current ~ihl:f1_version ~version:f2_ihl");
+           ~from:
+             "f current ~version:(Int64.to_int f1_version) ~ihl:(Int64.to_int \
+              f2_ihl)"
+           ~into:
+             "f current ~ihl:(Int64.to_int f1_version) ~version:(Int64.to_int \
+              f2_ihl)");
       Alcotest.test_case "OxCaml index mutant shift" `Quick
         (mutant ~ox:true ~index:true ~all:true
            ~from:"let f1_version = (U.shift_right_logical bw1 4)"
            ~into:"let f1_version = (U.shift_right_logical bw1 3)");
       Alcotest.test_case "OxCaml mutant conversion" `Quick
-        (mutant ~ox:true ~from:"~version:(U.to_int64 f1_version)"
-           ~into:"~version:(U.to_int64 f2_ihl)");
+        (mutant ~ox:true ~from:"~version:(U.to_int f1_version)"
+           ~into:"~version:(U.to_int f2_ihl)");
     ] )

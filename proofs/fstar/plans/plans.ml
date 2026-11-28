@@ -14,14 +14,22 @@ module P = Wire_ocaml.Plan
 module T = Wire.Private.Types
 module L = Wire.Private.Layout
 
-(* The decisions of the module of [c] with the fold [fold], whose visitor is
-   [Step]. *)
-let decisions ?target c =
-  P.decisions ?target
-    ~folds:Wire_ocaml.[ fold "fold" ]
-    ~visitors:[ ("fold", "step.ml") ]
-    c
+(* The path of every integer field of [c], each under the records that hold
+   it: the fields of a fold that reads them all. *)
+let paths c =
+  let rec go prefix (view : Wire_ocaml.view) =
+    List.concat_map
+      (function
+        | Wire_ocaml.Int { name; _ } -> [ prefix ^ name ]
+        | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
+        | Bool _ | Bytes _ -> [])
+      view.members
+  in
+  go "" (Wire_ocaml.views c)
 
+(* The decisions of the module of [c] with a fold of every integer field,
+   whose walks are [fold_step], [fold_step_frames] and [fold_step_index]. *)
+let decisions ?target c = P.decisions ?target ~fold:(paths c) c
 let ids : (string, int) Hashtbl.t = Hashtbl.create 64
 let next = ref 1
 
@@ -704,7 +712,8 @@ let frame_loop_walks ~found run ~name ~need ~short =
     when not
            (List.exists
               (function
-                | P.Walk { name = "fold"; known; _ } -> known = 0 | _ -> false)
+                | P.Walk { name = "fold_step"; known; _ } -> known = 0
+                | _ -> false)
               run) ->
       Fmt.kstr found "frame loop %s walks short frames by no fold" name
   | _ -> ()
