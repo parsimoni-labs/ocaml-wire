@@ -47,8 +47,8 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
   - `examples/net/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo
 - `bench/` -- benchmarks using schemas from `examples/`
-  - `bench/demo/` -- field-level codec benchmark (EverParse C validation vs FFI vs OCaml `Codec.get`/`Codec.set`)
-  - `bench/clcw/` -- CLCW polling loop, uses `Codec.Word`
+  - `bench/demo/` -- field-level codec benchmark (EverParse C validation vs FFI vs OCaml `Codec.View.check`, then `Codec.View.read` or `Codec.View.set` of the field)
+  - `bench/clcw/` -- CLCW polling loop: `Codec.View.check` of each word, its fields read with `Codec.View.read`
   - `bench/routing/` -- APID demux throughput
   - `bench/gateway/` -- TM frame reassembly
   - `bench/apps/` -- the routing, gateway and CLCW workloads in Wire.Codec, generated OCaml/OxCaml, generated Rust and crates
@@ -178,13 +178,12 @@ measures the trick, not the library, and its win belongs in the generator.
 **Application benchmarks** (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
-does the same work as a user would, in the terms of docs/api.md: the
-interpreted view loop for the `Wire.Codec` rows (`Codec.View.check`, `is_ok`
-and `get` once per header, `Codec.View.read` per field and `Codec.View.set`
-per field written in place), the same loop over the generated module for the
-generated rows (`check`, `is_ok`, `get`, an accessor per field, `set_<field>`
-and `write`), and a fold with its visitor `~f` where the workload is one pass
-over many records.
+does the same work with the codec's views, as a user would:
+`Codec.View.check`, `is_ok` and `get` once per header, then `Codec.View.read`
+of a field made once by `Codec.View.field`, and `Codec.encode` of the record
+per header written. The generated rows run the same loop over the generated
+module (`check`, `is_ok`, `get`, an accessor per field, and `write` per
+header written).
 
 **Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one
 exception to the three tiers: it measures the code generators against
