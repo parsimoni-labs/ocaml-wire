@@ -45,8 +45,9 @@ val build_bf_writer :
 
 val build_bf_accessor_writer :
   Types.bitfield_base -> int -> int -> int -> bytes -> int -> int -> unit
-(** [build_bf_accessor_writer] replaces a bitfield in place for {!Codec.set}: it
-    checks the value's range and the base word's span before writing. *)
+(** [build_bf_accessor_writer] replaces a bitfield in place for
+    {!Codec.View.set}: it checks the value's range and the base word's span
+    before writing. *)
 
 val build_bf_clear : Types.bitfield_base -> int -> bytes -> int -> unit
 (** [build_bf_clear base byte_off buf off] zeroes the base word at

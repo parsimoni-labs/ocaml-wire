@@ -1015,16 +1015,17 @@ The NEON lanes rows, on OxCaml, count 10.4 / 1.0 (clcw) and 7.1 / 1.2
 
 ### One loop, interpreted or generated (`make bench-flow-swap`)
 
-Code written against a generated module's views runs on its interpreted
-twin, the functor Wire_ocaml writes beside it over the codec value.
-`bench/rust/flow_swap.ml` is one flow counter written so: its header modules
-are those of `swap.ml`, and its one line `module H = Swap.Generated` picks
-them; the dune rules build the interpreted rows from the same file with that
-line replaced by `module H = Swap.Interpreted`, and the parse-only rows by
-making `Flow_sum` the sink. Each side is one line per header,
-`module Ipv4 = G_ipv4` or
-`module Ipv4 = G_ipv4_codec.Make (struct type r = Headers.ipv4 let codec = Headers.ipv4 end)`,
-with the same accessors (`ihl`, `src_addr`, ...) reading the types the codec
+Code written against a generated module's views runs on the interpreted
+form once a module gives `Codec.View` the generated module's names, as
+doc/api.mld shows. `bench/rust/flow_swap.ml` is one flow counter written
+so: its header modules are those of `swap.ml`, and its one line
+`module H = Swap.Generated` picks them; the dune rules build the interpreted
+rows from the same file with that line replaced by
+`module H = Swap.Interpreted`, and the parse-only rows by making `Flow_sum`
+the sink. On the generated side each header is one line,
+`module Ipv4 = G_ipv4`; on the interpreted side a module of `check`,
+`is_ok`, `get` and the same accessors (`ihl`, `src_addr`, ...), each a
+`Codec.View.read` of a field resolved once, reading the types the codec
 declares.
 
 Per frame the loop checks Ethernet, IPv4 (its options skipped by IHL) and

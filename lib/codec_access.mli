@@ -1,5 +1,5 @@
 (** How a single field is read and written in place: the staged readers and
-    writers of {!Codec.get} and {!Codec.set}. Internal to {!Codec}. *)
+    writers of {!Codec.get} and {!Codec.View.set}. Internal to {!Codec}. *)
 
 val build_staged_reader :
   'a Types.typ ->

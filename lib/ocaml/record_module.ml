@@ -820,10 +820,10 @@ let pp_encode ~src ppf fields =
   Fmt.pf ppf "let encode t %s ~off = write buf ~off %s@\n" src.buf
     (labelled fields (List.map (fun f -> "t." ^ f.label) fields))
 
-(* [Get.<field> buf off] reads one field as [Codec.get] does, with the same
-   bounds-checked load: the compiler's check jumps to a handler that does not
-   return, so nothing is kept live across it, and an offset out of range raises
-   what [Codec.get] raises. A closed enum's value is then checked to be a case. *)
+(* The accessor of a module no walk covers reads one field with a
+   bounds-checked load at its constant offset: the compiler's check jumps to a
+   handler that does not return, so nothing is kept live across it. A closed
+   enum's value is then checked to be a case. *)
 let checked_load ~src ~off ~bytes ~endian =
   match bytes with
   | 1 -> Fmt.str "(%s.get_uint8 buf (off + %d))" src.checked off

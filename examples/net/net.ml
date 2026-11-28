@@ -4,8 +4,8 @@
     (20B) or UDP (8B)
 
     All payload fields use [byte_slice] for zero-copy sub-slicing. Individual
-    header fields are accessed via [Codec.get] without allocating intermediate
-    records. *)
+    header fields are read in place through [Codec.View] without allocating
+    intermediate records. *)
 
 open Wire
 module Slice = Bytesrw.Bytes.Slice

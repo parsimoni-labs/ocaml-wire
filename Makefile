@@ -228,8 +228,8 @@ bench-flow: $(BENCH_FLOW_TRACE)
 	@_build/default/bench/rust/bench.exe report $(BENCH_FLOW)/*.txt
 
 # The swap rows of bench-flow alone: one flow counter (bench/rust/flow_swap.ml)
-# written against the header modules wire.ocaml generates or their
-# interpreted twins, on OCaml and on each switch of
+# written against the header modules wire.ocaml generates or the
+# interpreted form under their names (bench/rust/swap.ml), on OCaml and on each switch of
 # BENCH_SWITCHES, with smoltcp making the same checks, each with the table
 # (corpus mawi swap) and without it (mawi swap parse). Each row is timed as
 # in bench-flow, into _build/bench-flow/swap/, then counted by bench/count.sh,

@@ -350,7 +350,7 @@ and build_field_encoder_ctx : type a.
   | Single_elem { size = Int n; elem; at_most } ->
       let enc = build_field_encoder_ctx elem in
       fun runtime -> single_elem_region ~at_most n elem (enc runtime)
-  (* Mirror of the reader's statically gated optionals, so [Codec.set] can
+  (* Mirror of the reader's statically gated optionals, so [Codec.View.set] can
      write the field [Codec.get] can read. Presence is fixed at construction:
      present writes the inner in place, absent writes nothing. An [optional]
      handed [None] while its gate says present writes nothing either, which is
@@ -824,7 +824,7 @@ let rec build_immediate_encoder : type a.
       Some (bits_field_encoder ~width ~base ~bit_order)
   | _ -> None
 
-(* The [Codec.set] writer of a field at [field_off], one closure for a
+(* The [Codec.View.set] writer of a field at [field_off], one closure for a
    fixed-width integer: a bounds check, then one store. *)
 let rec build_immediate_setter : type a.
     a typ -> int -> (bytes -> int -> a -> unit) option =

@@ -169,7 +169,7 @@ let build_bf_writer base byte_off shift width =
         Bitfield.set_u32_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
 
-(* The [Codec.set] writer, one closure per base. It range-checks like
+(* The [Codec.View.set] writer, one closure per base. It range-checks like
    {!build_bf_writer}: masking here is the one silent truncation no later check
    can catch, because the masked result is a legal field value that
    [Codec.get] and [validate] both accept. [set] promises the buffer is

@@ -54,7 +54,7 @@ let be buf off : t =
 
 let low16 v = Carrier.to_int (Carrier.logand v mask16)
 
-(* Every encoder path -- typ-level, compiled field, [Codec.set] -- writes a
+(* Every encoder path, [Codec.encode] and [Codec.View.set] alike, writes a
    uint32 through here, so the width check belongs here too. *)
 let set_le buf off v =
   check_encode v;

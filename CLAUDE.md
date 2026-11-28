@@ -38,8 +38,9 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 - `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run everparse-3d.exe, generate C tests)
 - `lib/asn1/` -- `wire.asn1` sublibrary: everparse-asn1 pipeline (write .asn, run everparse-asn1.exe, generate C tests); the `Wire.Asn1` DSL itself is in `lib/`
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
-- `lib/ocaml/` -- `wire.ocaml` sublibrary: a fixed-size codec written out as OCaml (or OxCaml)
-- `lib/rust/` -- `wire.rust` sublibrary: the same codec written out as dependency-free Rust
+- `lib/runtime/` -- `wire.runtime` sublibrary: what a generated OCaml module links instead of `wire` (`Buf`, `Error`, the integer carriers)
+- `lib/ocaml/` -- `wire.ocaml` sublibrary: the generated form of a codec, an OCaml (or OxCaml) module with its check, views, values and fold
+- `lib/rust/` -- `wire.rust` sublibrary: the same module written out as dependency-free Rust
 - `lib/diff/` -- `wire.diff` sublibrary: differential test infrastructure
 - `test/stubs/` -- Wire_stubs test suite (compile + EverParse e2e tests)
 - `test/asn1/` -- the `.asn` modules of `Wire.Asn1` types: expect tests, and the everparse-asn1 check `make asn1` runs
@@ -83,7 +84,7 @@ A shape no backend can express is rejected when it is built, never
 half-supported in OCaml: the combinator raises `Invalid_argument` with a
 message naming the shape and the reason, and every rejection has a unit
 test asserting it. The reject predicate mirrors the handler's supported
-set (`Field.is_repeat_case_body` mirrors `Codec.read_elem`). Before
+set (`Field.is_repeat_case_body` mirrors `Codec_elem.read_elem`). Before
 extending an element handler to a new shape, check that the shape
 projects in that position (as a repeat element, not only standalone).
 

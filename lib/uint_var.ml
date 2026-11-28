@@ -47,7 +47,7 @@ let read endian buf off size =
 let byte_at v i =
   Int64.to_int (Int64.logand (Int64.shift_right_logical v (8 * i)) 0xFFL)
 
-(* Every encoder path -- typ-level, compiled field, [Codec.set] -- writes a
+(* Every encoder path, [Codec.encode] and [Codec.View.set] alike, writes a
    [uint] or [uint_var] through here, so the width check belongs here too. *)
 let write endian buf off size v =
   UInt63.check_encode ~size v;

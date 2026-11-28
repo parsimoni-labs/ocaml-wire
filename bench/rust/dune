@@ -102,7 +102,7 @@
 (rule
  (copy flow_rows.mli flow_rows_keys.mli))
 
-;; flow_swap.ml over the interpreted twins of the header modules, by replacing
+;; flow_swap.ml over the interpreted form of the header modules, by replacing
 ;; the one line that picks them, and both over the sink Flow_sum, as for flow_rows.ml.
 
 (rule

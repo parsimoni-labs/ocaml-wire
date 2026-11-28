@@ -46,26 +46,26 @@ a prefix of them.
    before every field that reads one. In any other order the read keeps the
    caller's values and each sub-codec checks itself where it is read.
 
-`validate` runs the frame and the checks. `get` frames one field and reads
-it. `encode` writes the fields and, when the codec has constraints, runs the
-checks on what it wrote.
+`validate` runs the frame and the checks. `encode` writes the fields and,
+when the codec has constraints, runs the checks on what it wrote.
 
 `View.check` runs the frame and the checks, as `validate` does, and keeps
-the record's offset instead of its error. A field of a view is then read
-with no bounds check when it lies at a fixed offset inside `min_size` and
-has no action. On a target whose `int` holds 63 bits, an unsigned
-big-endian integer or bitfield in a frame of at least 8 bytes is read inline,
+the record's offset instead of its error. `View.field` resolves a field once,
+as data: where its bytes lie in the record and how to read them
+(`Codec_view.read`). A read of a view tests that the field's bytes lie in the
+buffer and answers the field's zero where they do not, so it never leaves the
+buffer. On a target whose `int` holds 63 bits, an unsigned big-endian
+integer or bitfield in a frame of at least 8 bytes is read inline, one test,
 one 8-byte load, a shift and a mask; in a frame of 4 to 7 bytes it is read
-from a 4-byte word by one call. Any other field is one call, and a field that
-`get` reads with a check is read with that check.
+from a 4-byte word by one call. Any other field is one call.
 
 A codec of variable size, or one whose checks are more than word tests, is
 checked by its walk in check mode: the same plan as the walk that decodes
 it, the same frame, tests, spans, gates and regions in field order, with no
 value built and no field read but those a check, a size or a gate reads.
-`View.enter` then reaches a sub-record of a view without checking it again:
+`View.sub` then reaches a sub-record of a view without checking it again:
 the walk of the record around it finds where it starts, or that its gate
-leaves it absent, and `enter` tests only that the sub-record's frame lies in
+leaves it absent, and `sub` tests only that the sub-record's frame lies in
 the buffer, so its fields read in place as those of any view. The walk goes
 past a span or a region by its size, with no test of its bounds, which the
 check made, and walks only a sub-codec that measures itself. A record whose
@@ -80,15 +80,15 @@ codec is built, so no input can break it.
 - **Unchecked reads stay in the frame.** A read without a bounds check is
   created only for a field whose offset and width are constants of the
   schema, with `0 <= offset` and `offset + width <= min_size` at the point
-  the field is added (`Codec.field_read`, `Codec.View.field`), and a view
-  is made only of a record whose frame lies in the buffer (`Codec.View.check`,
-  `Codec.View.enter`).
+  the field is added (`Codec_repr.field_read`), and a view is made only of
+  a record whose frame lies in the buffer (`Codec.View.check`,
+  `Codec.View.sub`).
 - **The frame only grows.** `min_size` never decreases as fields are added,
   and never exceeds `Sys.max_string_length`, so the frame check cannot
-  overflow (`Codec.add_min_size`). A codec whose fields, sub-codecs
+  overflow (`Codec_seal.add_min_size`). A codec whose fields, sub-codecs
   included, always hold more bytes than a buffer can is refused when it is
   compiled. A negative or oversized literal size is
-  refused when its type is built (`Types.literal_size`).
+  refused when its type is built (`Dsl.literal_size`).
 - **Bytes never choose an unchecked offset.** An offset that depends on the
   data (after a variable-size field, or set by a parameter) is always read
   with a check.
@@ -100,27 +100,24 @@ codec is built, so no input can break it.
   overflow.
 - **Input never raises `Invalid_argument`.** Bad bytes give a parse error;
   `Invalid_argument` is for misuse of the API (a negative offset, a missing
-  `env`). A reader that takes its record's offset from the caller, such as
-  `Codec.get` or `Get.<field>_word`, answers a buffer that cuts the bytes it
-  reads with the end of input of the first field cut, as `Codec.get` answers
-  it for that field, and raises only on a negative offset. `Codec.Word.check` refuses such a buffer and a negative offset, and
-  `Codec.Word.error` answers the error `Codec.get` answers.
+  `env`). A check takes its record's offset from the caller and refuses a
+  negative offset and a record the buffer cuts (`Codec.View.check`, the
+  generated `check`); `validate` and `decode` answer a buffer that cuts the
+  record with the end of input of the first field cut, and raise only on a
+  negative offset.
 - **Bytes rewritten after a check are input.** A read of a checked record
-  (a view's accessor) reads its bytes again with no check of their own, and
-  never raises on them. A generated module whose record has a field under a
-  map has no views: `Get.<field>` frames the field at each read and answers
-  `('a, Wire.Error.t) result`, its value or the error the map gives a value
-  it refuses, such as a lookup index past its table, at the field's offset
-  and under its name, as `Codec.get` answers it. No value is made up for it:
-  a map's type has no absent value.
+  (a view's accessor, `Codec.View.read`) reads its bytes again with no check
+  of their own, and never raises on them but for a field under a map whose
+  decoder refuses the value they now hold, such as a lookup index past its
+  table: no value is made up for it, since a map's type has no absent value,
+  and the read raises without leaving the buffer.
   A field those bytes move out of the buffer, placed again after a span,
   reads as absent, as an optional field they turn off does: 0 for an
   integer, `false` for a presence, an empty slice or string for bytes. The
-  accessor keeps its type, in a scanner's views and in the interpreted twin
-  alike, so a generated view still reads it with no allocation. Through
-  `Codec.View`
-  such a field is a `checked_field`, whose read answers its error, and
-  `Codec.View.enter` refuses a sub-record those bytes move.
+  accessor keeps its type, in the generated views and through `Codec.View`
+  alike, so a generated view still reads it with no allocation.
+  `Codec.View.sub`, and the accessor of a field that holds a record, refuse a
+  sub-record those bytes move.
 - **Field order.** Reads and checks run in declaration order, so the error
   names the first bad field. The walk `decode` runs on a record without
   parameters reports the same error as the check pass: it checks the frame,
@@ -142,45 +139,39 @@ spans whose size an expression gives, optional fields (gates), sized windows
 (regions) and where clauses, in the order the codec checks them, over
 variables unique in the plan. One walk over the plan writes every function
 that checks a record: `check`, `validate`, the decoders and the function
-that finds the codec's error, and each fold the module declares
-(`Wire_ocaml.fold`), for a codec of any shape in scope. One writer
+that finds the codec's error, and the fold the module declares
+(`Wire_ocaml.v ~fold`), for a codec of any shape in scope. One writer
 (`Writer`) puts them in one module per codec, whatever its shape: the walks,
 the check and the views of every codec the walk covers, and the members of a
 fixed record of named scalars (its record, decoder and labelled `write`)
 where the codec is one. The views read the fields, with no second check nor
 second read beside them. A fixed record the walk does not cover, one with a
-field under a map, has no views and reads each field with `Get.<field> buf
-off`, a bounds-checked load at a constant offset. `Wire_ocaml.v` declares
-the module, `Wire_ocaml.main` writes it, one dune rule per module.
+field under a map, has views all the same: its `check` is the record's
+validation answering a view, and each accessor reads its field with a
+bounds-checked load at its constant offset, through the map's decoder.
+`Wire_ocaml.v` declares the module, `Wire_ocaml.main` writes it, one dune
+rule per module.
 
-A fold `n` calls its visitor by name (`n`, `n_frames`, `n_index`): the
-visitor is a source file the generation rule names
-(`--visitor n=%{dep:flow_step.ml}`), whose module the generator derives from
-the file, so dune rebuilds the module when the visitor changes and no module
-path is typed by hand; a fold no visitor names is refused. OCaml without
-flambda never inlines a function passed as an argument, nor a function whose
-body defines a closure, so a fold takes no consumer as an argument:
-`n_frames` rejects a frame with no closure of its own, and every fold calls
-its visitor with no closure call. It allocates nothing per frame where the
-compiler inlines the visitor and the runtime's loads, which the release
-profile does across units. OCaml without flambda
-inlines the visitor's `valid` only when its body defines no function, a
-partial application or a primitive used as a value included; otherwise each
-call boxes the `int64` values it is passed. A visitor in its own unit states
-its accumulator's type on `invalid`: OxCaml defaults an unannotated
-parameter's layout to a value when the unit is compiled.
+The fold takes its consumer as an argument, `~f`, and hands it the fields
+`Wire_ocaml.v ~fold` names, each labelled by its path and in its accessor's
+type, an option where the field may be absent. Its walks, `fold_step` for
+one record, `fold_step_frames` for slots and `fold_step_index` for an index
+of frames, are `[@inline always]` and `fold` itself `[@inline]`; they hold
+the fields as `int64` (`int64_u` on OxCaml) and convert each to its
+accessor's type only where they call `f`. OCaml without flambda never
+inlines a function passed as an argument, nor a function whose body defines
+a closure: on stock OCaml each record the fold accepts is one indirect call
+of `f`, and each present optional field a `Some` allocated for it. OxCaml
+inlines `f` where it inlines `fold`. The runtime's loads are inlined across
+units by the release profile.
 
-The interpreted twin of a module, the unit `<name>_codec` beside it, is a
-functor over the codec value: `Make (C)` reads `C.codec` as the module reads
-its bytes, each field through `Codec.View` by its place in the codec's field
-list, checked against the type the module reads, after a check of the
-codec's digest. It has the module's views, accessors and setters, `min_size`,
-`validate` and folds, under the interface the module has for the OCaml
-target, and links `wire`; the generated module links `wire.runtime` only.
-A field `Codec.View` has no reader for, an optional field behind a gate its
-record's bytes decide, is read from the record's outputs.
+The interpreted form has the same concepts under the same names, so code
+written against a generated module's views runs on `Codec.View` once a
+module gives `Codec.View` those names, as [doc/api.mld](../doc/api.mld)
+shows; `bench/rust/swap.ml` does so for the headers of the flow benchmark
+(`make bench-flow-swap`).
 
-Their loop over frames is unrolled four times, then walks the remaining
+The fold's loop over slots is unrolled four times, then walks the remaining
 frames one by one. OCaml polls for signals and other domains once per loop
 iteration, so the unrolled loop polls once per four frames. An iteration
 computes where its four frames start and loads, for each, the fields in its
@@ -193,7 +184,8 @@ it with one branch. On OCaml the loop over frames too short for it is a
 function of its own, called once per batch, so that its variables take no
 register from the main loop.
 
-A fold's `n_index` cannot compute where a frame starts: each start is a load
+The fold over an index of frames (`fold_step_index`) cannot compute where a
+frame starts: each start is a load
 from the index, and only the frame's length says which of its bytes may be
 read. Its loop is pipelined one frame deep instead, two frames an iteration.
 Before it walks a frame, it loads the next frame's offset and length, tests
@@ -208,15 +200,14 @@ a trace whose kind of packet changes from frame to frame, a mispredicted
 branch of one frame then leaves the next frame's choices waiting for no load
 of the index or of the frame.
 
-A scanner also writes the views of its codec, beside the folds. `check b
-length ~off ~len` is the walk of `fold` with no output: it answers `off` for
-a record it accepts and a negative `int` otherwise, so it accepts exactly
-what `fold` accepts, and `Codec.View.check` on the frame's bytes. A codec of
-constant size takes no window, `check b length off`, the form of
-`Codec.View.check`, whose bounds fold into one test of `off` against
-`length - size`; `ok` tests
-the answer and `get` makes it a `'b view`, an `int` only the accessors of the
-buffer named `'b` take. Each named integer field is an accessor named after
+The module also has the views of its codec. `check b length ~off ~len` is
+the walk of the fold with no output: it answers `off` for a record it
+accepts and a negative `int` otherwise, so it accepts exactly what the fold
+accepts, and `Codec.View.check` on the window's bytes. `length` is
+`Wire.Buf.length b`, which a loop reads once per buffer. A codec of constant
+size takes no window, `check b length ~off`, whose bounds fold into one test
+of `off` against `length - size`; `is_ok` tests the answer and `get` makes
+it a `'b view`, an `int` only the accessors of the buffer named `'b` take. Each named integer field is an accessor named after
 it, each optional field that holds no record a presence `<name>_present`,
 and each field that holds a record an accessor that answers a check of that
 record's module, one module per codec, named after it (`CapturedIPv4` is
@@ -233,9 +224,8 @@ the check that gave the view made. Bytes written after the check are input
 the accessors read again, and no accessor raises on them: a sub-record they
 move is refused, an optional field they turn off is absent (0), and a field
 they move out of the buffer reads as absent too (0, `false`, an empty slice
-or string). No read leaves the buffer. `Codec.View.field` takes only a field
-a view reads with no check; `Codec.View.checked_field` reads any other as
-`Codec.get` does, and answers its error.
+or string). No read leaves the buffer, and `Codec.View.read` answers the
+same.
 The conditions read their bitfields through the bitfield's word, so that
 tests of bits of one word are one masked test, as in the check; fields that
 share a 64-bit word at a constant offset are read from one load of it, and
@@ -255,7 +245,8 @@ a 32-bit one a `UInt32.t` through a proof the module binds once where ints
 have more than 32 bits, a bitfield an `int`; a named field of bytes is a
 slice of the buffer or a copy. An integer or a bitfield in the leading prefix
 also has `set_<field>`, one store, or a load and a store of a bitfield's
-word, with no check of the record's constraints, as `Codec.set` makes none.
+word, with no check of the record's constraints, as `Codec.View.set` makes
+none.
 
 A codec the walk covers whose record is not one of named scalars at
 constant offsets has its values written beside the views (`Value_module`):
@@ -297,7 +288,7 @@ The invariants above hold for the generated code as follows.
   int. A bound is compared with the terms shared by its position and its size
   cancelled, so the IPv4 payload check is `total_length <= stop - 14`.
   Positions are relative to the window, so adding the window's offset to
-  reach a byte cannot overflow, and a short frame in `fold_frames` cannot
+  reach a byte cannot overflow, and a short frame in `fold_step_frames` cannot
   borrow bytes from the next. The generator adds the codec's constant
   offsets and sizes with saturating arithmetic, capped at
   `Sys.max_string_length + 1`. No buffer is that long, so a prefix that ends
@@ -307,8 +298,8 @@ The invariants above hold for the generated code as follows.
   so no entry tests `off > Bytes.length buf`. Where the walk starts with the
   bound check of a prefix, that check rejects a negative `len`, so the entry
   tests `off < 0` and that bound only; the frame loops test `len < 0` too,
-  and raise `Invalid_argument` instead of rejecting. A fold's `n_index` makes the
-  same test for each frame of its index, against the buffer's length read
+  and raise `Invalid_argument` instead of rejecting. `fold_step_index` makes
+  the same test for each frame of its index, against the buffer's length read
   once before its loop, and checks once that its two arrays have the same
   length, so that the loop reads both without a bound check. It loads a
   frame's fields ahead only once that test, and a length of at least the
@@ -339,7 +330,7 @@ The invariants above hold for the generated code as follows.
   to the function after the field. Realistic codecs nest no deeper, and
   OCaml without flambda specialises each path over such bindings. A deeper
   output is a mutable local: bound once to its absent value where the walk
-  starts, in each frame for `fold_frames`, and assigned where its field is
+  starts, in each frame for `fold_step_frames`, and assigned where its field is
   present, so an absent field writes nothing for it and the function after
   one does not take it. An output is thus written by at most four optional
   fields, and the code grows linearly with their number, nested or not,
@@ -360,31 +351,31 @@ The invariants above hold for the generated code as follows.
   range test of the word: the IPv4 version and header length are one byte in
   `[0x45, 0x4f]`.
 
-On OCaml, the step functions hold each field value as an
+On OCaml, the fold's walks hold each field value as an
 `int64` and each position as an `int`. The other functions hold both as
 `int`, and on OxCaml every function holds both as `int64_u`.
 
 The stock compiler tags an `int`, so each field taken out of a word and each
 operation on it costs an instruction or two for the tag. An `int64` that is
 bound with `let` and passed only to primitives and inlined functions stays
-in a register, neither boxed nor tagged. The consumer's `valid` takes its
-integer outputs as `int64` on both targets, so one consumer compiles for
-either. They are unboxed where the compiler inlines `valid`, and boxed, so
-allocated, where it calls `valid` out of line. A word the runtime loads is unboxed where the load is inlined.
-Dune's dev profile compiles `wire.runtime` with `-opaque`, which prevents
-that, so each word allocates there.
+in a register, neither boxed nor tagged. No `int64` crosses the call to `f`,
+which takes each field in its accessor's type. A word the runtime loads is
+unboxed where the load is inlined. Dune's dev profile compiles
+`wire.runtime` with `-opaque`, which prevents that, so each word allocates
+there.
 
 A position stays an `int` because a load takes one. A size stays the `int64`
 it is computed as, and so does a window whose length is a size. Only the end
 of a span narrows it to an `int`. The `int64` holds the codec's 63-bit value
-sign-extended, with the arithmetic of the `int64_u` on OxCaml, so the step
-functions accept, reject and hand out what `fold` does.
+sign-extended, with the arithmetic of the `int64_u` on OxCaml, so the fold
+accepts, rejects and hands out what the codec does.
 
 Where ints have 32 bits or fewer (js_of_ocaml, wasm_of_ocaml), an `int64` is
-a heap value. The step functions allocate at each operation there and run
-slower than `fold`, with the same answers, which the node tests check.
+a heap value. The fold's walks allocate at each operation there and run
+slower than on a 64-bit target, with the same answers, which the node tests
+check.
 
-The step functions on OCaml also share one word load between prefixes. A
+The fold's walks on OCaml also share one word load between prefixes. A
 64-bit word loaded at a constant offset of the window serves every later
 prefix whose fields it holds, such as the Ethernet type and the start of the
 IPv4 header. A word is loaded only inside the bytes the last bound check
@@ -395,7 +386,7 @@ A region that starts at one term plus a constant, such as the TCP header at
 each of its loads, so the term reaches a load by one addition. A load that
 reads a byte through a wider one never starts before the region's first byte.
 
-The check and the folds of the module `Wire_rust` writes walk the same
+The check and the fold of the module `Wire_rust` writes walk the same
 plan in Rust, from `Wire_ocaml.Plan`, which hands them the same decisions.
 A window is a slice of exactly its bytes: a prefix is checked by
 `split_first_chunk`, whose array its loads index at constant offsets, and a
@@ -431,14 +422,14 @@ in `@verify/equivalence`, every answer equal to the EverParse
 specification's. It also shows that the scanner makes no check it could do
 without: each check is taken out in turn, and the code without it must read
 out of bounds or raise on some input (the check is needed for safety), or
-answer differently from the code with it (needed for semantics). `fold` and
-`frames_record` answer accept or reject; `fold_frames`, given any
-arguments, answers whether it raises `Invalid_argument`, which is what its
-argument checks decide. Runtest classifies every check of these three on
-OCaml, 28 in all, and fails if one is redundant or undecided, or if it
-finds none. `@verify/classify` does the same for the step scanner, and on
-OxCaml for `fold`, `frames_record` and their step forms; the argument
-checks of the OxCaml frame loops, written by the same code as on OCaml, are
-not classified there. The classifier does not show that a loop ends, so
+answer differently from the code with it (needed for semantics).
+`fold_step` and `step_frames_record` answer accept or reject;
+`fold_step_frames`, given any arguments, answers whether it raises
+`Invalid_argument`, which is what its argument checks decide. Runtest
+classifies every check of these three on OCaml, and fails if one is
+redundant or undecided, or if it finds none. `@verify/classify` does the
+same on OxCaml for `fold_step` and `step_frames_record`; the argument checks
+of the OxCaml frame loop, written by the same code as on OCaml, are not
+classified there. The classifier does not show that a loop ends, so
 `stride <= 0` is needed because a negative stride must raise, not because
 a zero one would loop.
