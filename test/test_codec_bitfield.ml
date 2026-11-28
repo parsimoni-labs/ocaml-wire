@@ -197,7 +197,7 @@ let test_packed_bf_size () =
     Codec.v "Packed" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ]
   in
   Alcotest.(check int)
-    "encoded_size matches min_size" (Codec.min_size codec)
+    "Codec.size matches min_size" (Codec.min_size codec)
     (Codec.size codec (0, 0))
 
 type packed_bool_header = {
@@ -226,7 +226,7 @@ let test_packed_mapped_bf_size () =
     "min_size counts packed bool bitfield once" 6
     (Codec.min_size packed_bool_header_codec);
   Alcotest.(check int)
-    "encoded_size matches min_size" 6
+    "Codec.size matches min_size" 6
     (Codec.size packed_bool_header_codec value);
   let buf = Bytes.create 6 in
   Codec.encode packed_bool_header_codec value buf ~off:0;

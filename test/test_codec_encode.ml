@@ -1058,7 +1058,7 @@ let test_fixed_encode_allocates_nothing () =
         Alcotest.failf "%d encodes allocated %.0f words" n words
 
 (* A region sized by an earlier field of the record: encoding the decoded value
-   writes back the bytes, and [encoded_size] is what decode consumed. The size
+   writes back the bytes, and [Codec.size] is what decode consumed. The size
    comes from the record, not from a parameter, so neither needs an [env]. *)
 let region_roundtrip label codec input =
   let v = decode_ok (Codec.decode codec (Bytes.of_string input) ~off:0) in

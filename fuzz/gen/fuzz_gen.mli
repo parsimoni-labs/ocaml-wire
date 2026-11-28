@@ -117,7 +117,7 @@ val nested_cases : string -> int -> Alcobar.test_case list
     runs the same checks as {!test_cases}, including the per-field accessor
     properties, which reach the generated records' own fields, and the offset,
     framing and read-purity properties. This exercises compositions no curated
-    list enumerates, surfacing offset / [encoded_size] drift that only shows up
+    list enumerates, surfacing offset / [Codec.size] drift that only shows up
     when combinators nest. *)
 
 val validate_agrees_cases : string -> int -> Alcobar.test_case list

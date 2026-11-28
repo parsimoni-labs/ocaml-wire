@@ -166,7 +166,7 @@ let test_repeat_primitive () =
     (List.map UInt16.to_int r.values)
 
 (* [Codec.size] counts a [Field.repeat]'s elements, including under a
-   dynamic byte budget, so a buffer sized from [encoded_size] holds the whole
+   dynamic byte budget, so a buffer sized from [Codec.size] holds the whole
    encoding. *)
 let test_repeat_size_of_value () =
   let v =

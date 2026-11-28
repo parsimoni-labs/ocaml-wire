@@ -14,12 +14,12 @@ let positive_env g =
   | None -> None
 
 (* Round-trip one positive sample: decode the canonical bytes back to the
-   value, then re-encode into a buffer sized from [encoded_size] and require
-   the two to agree. Sizing from [encoded_size] (rather than from the
+   value, then re-encode into a buffer sized from [Codec.size] and require
+   the two to agree. Sizing from [Codec.size] (rather than from the
    canonical bytes) drives the value-driven size for every combinator,
    including ones whose [positive] bytes are hand-assembled (casetype,
-   nested_at_most) and so never otherwise exercise [encode] / [encoded_size].
-   A wrong [encoded_size] then shows up here as a mismatch -- or, if it
+   nested_at_most) and so never otherwise exercise [encode] / [Codec.size].
+   A wrong [Codec.size] then shows up here as a mismatch -- or, if it
    under-counts, as an [encode] overrun -- rather than silently. *)
 let check_positive_decode label g value bs env =
   match Wire.Codec.decode ?env g.codec bs ~off:0 with
@@ -39,16 +39,16 @@ let input_param_names g =
 let check_positive_size label g value bs env =
   let sz = Wire.Codec.size g.codec value in
   if sz <> Bytes.length bs then
-    Alcobar.failf "%s encoded_size = %d but canonical encoding is %d" label sz
+    Alcobar.failf "%s Codec.size = %d but canonical encoding is %d" label sz
       (Bytes.length bs);
-  (* [encoded_size] measures the value, not the buffer, so it answers without
+  (* [Codec.size] measures the value, not the buffer, so it answers without
      an env; threading one must not change the answer. *)
   match env with
   | None -> sz
   | Some env ->
       let with_env = Wire.Codec.size ~env g.codec value in
       if with_env <> sz then
-        Alcobar.failf "%s encoded_size = %d with an env bound, %d without" label
+        Alcobar.failf "%s Codec.size = %d with an env bound, %d without" label
           with_env sz;
       sz
 
@@ -167,7 +167,7 @@ let hostile_encoding label ?env g value =
   | sz -> (
       match Bytes.create sz with
       | exception Invalid_argument _ ->
-          Alcobar.failf "%s encode safety: encoded_size returned %d" label sz
+          Alcobar.failf "%s encode safety: Codec.size returned %d" label sz
       | buf -> (
           match Wire.Codec.encode ?env g.codec value buf ~off:0 with
           | exception Invalid_argument _ -> None

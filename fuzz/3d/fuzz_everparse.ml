@@ -435,11 +435,11 @@ let accepted_agrees g codec env b =
       | exception Invalid_argument m ->
           Fmt.kstr
             (fun s -> Some s)
-            "encoded_size refused an accepted record: %s" m
+            "Codec.size refused an accepted record: %s" m
       | sz when not (Int.equal sz len) ->
           Fmt.kstr
             (fun s -> Some s)
-            "encoded_size answers %d for a %d byte record" sz len
+            "Codec.size answers %d for a %d byte record" sz len
       | sz -> reencodes g codec env v sz)
 
 (* A rejected record: the offset is a real position, and a failure about one

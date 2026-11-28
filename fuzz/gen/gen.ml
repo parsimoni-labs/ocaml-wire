@@ -162,7 +162,7 @@ let triple_fields (name_a, f_a) (name_b, f_b) (name_c, f_c) =
   let proj_c (_, _, c) = c in
   [ slot name_a f_a proj_a; slot name_b f_b proj_b; slot name_c f_c proj_c ]
 
-(* The canonical bytes for [v]: a buffer sized by [encoded_size] then
+(* The canonical bytes for [v]: a buffer sized by [Codec.size] then
    filled by [encode]. *)
 let encode_via_codec codec v =
   let sz = Wire.Codec.size codec v in
