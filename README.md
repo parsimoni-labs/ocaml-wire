@@ -154,7 +154,7 @@ If OCaml needs to call the generated C validators, generate FFI stubs:
 ```ocaml
 let stubs () =
   Wire_stubs.generate ~schema_dir:"schemas" ~outdir:"."
-    [ Wire_stubs.C codec ]
+    [ Wire_3d.pack codec ]
 ```
 
 Every schema comes from a codec: a construct with no codec equivalent has no

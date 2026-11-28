@@ -5,5 +5,5 @@
 
 let () =
   let outdir = if Array.length Sys.argv > 1 then Sys.argv.(1) else "." in
-  Wire_3d.ensure_dir outdir;
+  Wire_3d.Private.ensure_dir outdir;
   Wire_asn1.run ~quiet:false ~outdir Asn1_modules.all

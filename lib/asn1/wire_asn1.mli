@@ -8,8 +8,8 @@
 
 val tool : unit -> string option
 (** [tool ()] is the path of [everparse-asn1.exe], found as [everparse-3d.exe]
-    is ({!Wire_3d.tool}): in [PATH], then in [~/.local/everparse/bin]. [None]
-    when it is in neither. *)
+    is ({!Wire_3d.locate_3d_exe}): in [PATH], then in [~/.local/everparse/bin].
+    [None] when it is in neither. *)
 
 val c_name : string -> string
 (** [c_name t] is the C identifier everparse-asn1 gives the ASN.1 type [t]:
@@ -18,14 +18,15 @@ val c_name : string -> string
 val run_everparse :
   ?quiet:bool -> outdir:string -> Wire.Asn1.schema list -> unit
 (** [run_everparse ?quiet ~outdir ss] runs everparse-asn1 on the [.asn] file of
-    each schema of [ss] in [outdir], with its [--root] types, each in a
-    {!Wire_3d.pool} job, and copies into [outdir] the F* modules it writes and
-    the C it extracts from them, [<M>.c] and [<M>.h], uncompiled. F* verifies
-    both modules of each schema, with the F*, Z3 and verified libraries under
-    [EVERPARSE_HOME], which defaults to the prefix the tool is installed in.
-    Each job's output, its last line [<name>: verified in <n>s], is shown as
-    {!Wire_3d.run_everparse} shows it: only for a failed job if [quiet] (the
-    default), else for every job once all have succeeded.
+    each schema of [ss] in [outdir], with its [--root] types, each in a job of
+    the pool {!Wire_3d.run} runs EverParse in, and copies into [outdir] the F*
+    modules it writes and the C it extracts from them, [<M>.c] and [<M>.h],
+    uncompiled. F* verifies both modules of each schema, with the F*, Z3 and
+    verified libraries under [EVERPARSE_HOME], which defaults to the prefix the
+    tool is installed in. Each job's output, its last line
+    [<name>: verified in <n>s], is shown as {!Wire_3d.run} shows it: only for a
+    failed job if [quiet] (the default), else for every job once all have
+    succeeded.
 
     Raises [Failure] if the tool is missing, or naming each schema it refuses or
     F* does not verify, with its output. *)
@@ -38,7 +39,7 @@ val generate_dune :
   outdir:string -> package:string -> Wire.Asn1.schema list -> unit
 (** [generate_dune ~outdir ~package ss] writes [dune.inc] with the rules that
     regenerate and compile the C of [ss], the regeneration gated on the default
-    context, as [Wire_3d.generate_dune] does. *)
+    context, as the [dune.inc] of {!Wire_3d.main} does. *)
 
 type packed
 (** The type for codecs with their record type erased. *)

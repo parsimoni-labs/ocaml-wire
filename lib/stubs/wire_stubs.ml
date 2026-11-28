@@ -1,7 +1,6 @@
 (** OCaml FFI stub generation for EverParse-produced C validators. *)
 
-let ml_type_of = Wire.Private.ml_type_of
-let everparse_name = Wire_3d.everparse_name
+let everparse_name = Wire_3d.Private.everparse_name
 
 let pp_c_stub_error_handler ppf lower =
   Fmt.pf ppf
@@ -131,7 +130,7 @@ let check_codec_names structs =
 let pp_c_stub ppf (s : Wire.Private.Everparse.Raw.struct_) =
   let name = Wire.Private.Everparse.Raw.struct_name s in
   let ep = everparse_name name in
-  let validator = Wire_3d.validator_name name in
+  let validator = Wire_3d.Private.validator_name name in
   let lower = String.lowercase_ascii name in
   pp_c_stub_error_handler ppf lower;
   pp_c_stub_output ppf ~lower ~ep ~validator s
@@ -177,10 +176,11 @@ let to_c_stubs (structs : Wire.Private.Everparse.Raw.struct_ list) =
    includes only the headers and calls the validators across this link, so the
    per-codec shared types stay translation-unit-local and any set of codecs
    links. This runs at generation time, alongside the EverParse invocation that
-   produced the [.c]; the [cc]/[ar] calls mirror how [Wire_3d.run_everparse]
-   shells out to [3d.exe], keeping the build rule free of inline shell.
-   [test.c] (it has a [main]) and [<Name>Wrapper.c] (it needs a user-supplied
-   [<Name>EverParseError] the FFI path never provides) are skipped. *)
+   produced the [.c]; the [cc]/[ar] calls mirror how
+   [Wire_3d.Private.run_everparse] shells out to [3d.exe], keeping the build
+   rule free of inline shell. [test.c] (it has a [main]) and [<Name>Wrapper.c]
+   (it needs a user-supplied [<Name>EverParseError] the FFI path never provides)
+   are skipped. *)
 let build_codec_archive ?(cflags = []) ~schema_dir ~archive () =
   let is_codec_unit f =
     Filename.check_suffix f ".c"
@@ -433,15 +433,13 @@ let write_file path content =
   output_string oc content;
   close_out oc
 
-type packed_codec = C : _ Wire.Codec.t -> packed_codec
-
 let write ~schema_dir ~outdir entries =
   let structs = List.map fst entries in
   let schemas =
     List.map (Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi) structs
   in
-  Wire_3d.write_external_typedefs ~outdir:schema_dir schemas;
-  Wire_3d.write_fields ~outdir:schema_dir schemas;
+  Wire_3d.Private.write_external_typedefs ~outdir:schema_dir schemas;
+  Wire_3d.Private.write_fields ~outdir:schema_dir schemas;
   write_file (Filename.concat outdir "wire_ffi.c") (to_c_stubs structs);
   write_file (Filename.concat outdir "stubs.ml") (ml_stubs entries)
 
@@ -453,13 +451,24 @@ let check_names s =
   ignore
     (Wire.Private.Everparse.Raw.to_3d (Wire.Private.Everparse.module_ schema)
       : string);
-  Wire_3d.check_visitor_names schema;
+  Wire_3d.Private.check_visitor_names schema;
   check_labels s (Wire.Private.Everparse.Raw.field_kinds s)
 
 let generate ~schema_dir ~outdir codecs =
   write ~schema_dir ~outdir
     (List.map
-       (fun (C c) ->
+       (fun p ->
+         let (Wire_3d.Private.Pack c) = Wire_3d.Private.unpack p in
          ( Wire.Private.Everparse.Raw.struct_of_codec c,
            Some (Wire.Private.Gen.digest c) ))
        codecs)
+
+module Private = struct
+  let of_structs = of_structs
+  let check_names = check_names
+  let to_c_stubs = to_c_stubs
+  let to_ml_stubs = to_ml_stubs
+  let to_ml_stub = to_ml_stub
+  let module_name = module_name
+  let to_ml_stub_name = to_ml_stub_name
+end

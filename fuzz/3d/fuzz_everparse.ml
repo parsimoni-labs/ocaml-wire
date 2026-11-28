@@ -89,10 +89,10 @@ let sweep_schemas ~mode ~tag keep =
    file per schema and spells an enum field as its base type plus a membership
    refinement, the [`Standalone] one merges a family into one spec and spells it
    as the named 3D enum type. Running a [`Standalone] projection through the FFI
-   writer would verify a file nothing ever emits. [Wire_3d.batch_check] is the
-   FFI writer already, so [`Ffi] uses it and [`Standalone] gets the same
+   writer would verify a file nothing ever emits. [Wire_3d.Private.batch_check]
+   is the FFI writer already, so [`Ffi] uses it and [`Standalone] gets the same
    one-module-per-schema treatment over [Everparse.write ~mode:`Standalone],
-   which is what [Wire_3d.generate_3d_standalone] calls. *)
+   which is what [Wire_3d.Private.generate_standalone] calls. *)
 let standalone_check schemas =
   let job (s : Wire.Everparse.t) dir =
     Wire.Everparse.write ~mode:`Standalone ~outdir:dir
@@ -103,7 +103,8 @@ let standalone_check schemas =
     | Ok () -> ()
     | Error m -> failwith m
   in
-  Wire_3d.pool (List.map (fun s -> (Wire.Everparse.name s, job s)) schemas)
+  Wire_3d.Private.pool
+    (List.map (fun s -> (Wire.Everparse.name s, job s)) schemas)
   |> Result.map ignore
 
 let run check = function [] -> None | schemas -> Some (check schemas)
@@ -118,7 +119,7 @@ let sweeps =
   [
     sweep ~mode:`Standalone ~tag:"S" ~check:standalone_check ~name:"standalone"
       (fun name -> not (List.mem name no_3d_standalone));
-    sweep ~mode:`Ffi ~tag:"F" ~check:Wire_3d.batch_check ~name:"ffi"
+    sweep ~mode:`Ffi ~tag:"F" ~check:Wire_3d.Private.batch_check ~name:"ffi"
       (Fun.const true);
   ]
 
@@ -161,7 +162,7 @@ let extract_cases =
 (* {1 The generated C compiles}
 
    [3d.exe --batch] verifying a schema says nothing about the C wire ships.
-   After EverParse writes the parser, [Wire_3d.generate_c] rewrites the
+   After EverParse writes the parser, [Wire_3d.Private.generate_c] rewrites the
    [<Base>CheckWire<Codec>] wrapper's success tail to demand full consumption,
    and that rewrite is textual: it splices in a comparison naming a variable
    EverParse chose. When a future EverParse names it something else, the splice
@@ -200,18 +201,18 @@ let shell cmd =
 let c_compiles (Fuzz_gen.Pack g) =
   let outdir = Filename.temp_dir "wire_fuzz3d_cc" "" in
   Fun.protect
-    ~finally:(fun () -> Wire_3d.rm_rf outdir)
+    ~finally:(fun () -> Wire_3d.Private.rm_rf outdir)
     (fun () ->
       let name = "fuzzcc" in
-      Wire_3d.generate_standalone ~outdir ~name ~package:name
+      Wire_3d.Private.generate_standalone ~outdir ~name ~package:name
         [ Wire_3d.pack (Fuzz_gen.codec g) ];
       match sole_3d_base outdir with
       | [ file ] -> (
           let base = Filename.remove_extension file in
           let out, status =
             Fmt.kstr shell "cd %s && cc %s %s -c %s.c %sWrapper.c"
-              (Filename.quote outdir) Wire_3d.strict_cc_flags
-              Wire_3d.everparse_type_defines base base
+              (Filename.quote outdir) Wire_3d.Private.strict_cc_flags
+              Wire_3d.Private.everparse_type_defines base base
           in
           match status with Unix.WEXITED 0 -> Ok () | _ -> Error out)
       | files ->
@@ -243,12 +244,12 @@ let c_compile_cases =
 
 (* {1 Corpus oracle}
 
-   [Wire_3d.generate_corpus] is the differential's oracle: the verdict column it
-   writes is what the generated C validator is checked against. Nothing checked
-   the oracle itself, so a wrong verdict did not refuse, it disagreed, and the
-   disagreement was reported against the validator rather than against the
-   harness. Sweep the registry through it and replay every line against the
-   codec it claims to speak for.
+   [Wire_3d.Private.generate_corpus] is the differential's oracle: the verdict
+   column it writes is what the generated C validator is checked against.
+   Nothing checked the oracle itself, so a wrong verdict did not refuse, it
+   disagreed, and the disagreement was reported against the validator rather
+   than against the harness. Sweep the registry through it and replay every line
+   against the codec it claims to speak for.
 
    The replay is written out here rather than reusing [Wire_3d]'s own verdict,
    so the check does not lean on the code it is checking. It answers the same
@@ -274,7 +275,7 @@ let bytes_of_hex h =
 let corpus_lines codec =
   let buf = Buffer.create 4096 in
   let ppf = Fmt.with_buffer buf in
-  Wire_3d.generate_corpus ~count:corpus_count ppf [ Wire_3d.pack codec ];
+  Wire_3d.Private.generate_corpus ~count:corpus_count ppf [ Wire_3d.pack codec ];
   Format.pp_print_flush ppf ();
   Buffer.contents buf |> String.split_on_char '\n'
   |> List.filter_map (fun line ->
@@ -296,10 +297,10 @@ let input_params codec =
   | None -> []
 
 (* A registry codec's corpus and input parameters, computed once, when its
-   corpus cases are built, and shared by them. [Wire_3d.generate_corpus] draws
-   from a fixed seed, so the corpus is the same on every iteration; generating
-   it inside one spent Alcobar's per-iteration timeout, which a slow runner
-   crossed. *)
+   corpus cases are built, and shared by them. [Wire_3d.Private.generate_corpus]
+   draws from a fixed seed, so the corpus is the same on every iteration;
+   generating it inside one spent Alcobar's per-iteration timeout, which a slow
+   runner crossed. *)
 let corpora = Hashtbl.create 64
 
 let corpus label codec =

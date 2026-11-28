@@ -18,7 +18,7 @@ let corpus_magic_codec =
 let corpus_verdicts ?(count = 256) codecs =
   let buf = Buffer.create 4096 in
   let ppf = Fmt.with_buffer buf in
-  Wire_3d.generate_corpus ~count ppf codecs;
+  Wire_3d.Private.generate_corpus ~count ppf codecs;
   Format.pp_print_flush ppf ();
   Buffer.contents buf |> String.split_on_char '\n'
   |> List.filter_map (fun line ->
@@ -156,7 +156,7 @@ let corpus_short_length_codec =
 let test_corpus_lines_stay_small () =
   let buf = Buffer.create 4096 in
   let ppf = Fmt.with_buffer buf in
-  Wire_3d.generate_corpus ppf [ Wire_3d.pack corpus_short_length_codec ];
+  Wire_3d.Private.generate_corpus ppf [ Wire_3d.pack corpus_short_length_codec ];
   Format.pp_print_flush ppf ();
   let lines =
     Buffer.contents buf |> String.split_on_char '\n'
@@ -191,7 +191,7 @@ let corpus_param_span_codec =
 let corpus_lines ?(count = 128) codecs =
   let buf = Buffer.create 4096 in
   let ppf = Fmt.with_buffer buf in
-  Wire_3d.generate_corpus ~count ppf codecs;
+  Wire_3d.Private.generate_corpus ~count ppf codecs;
   Format.pp_print_flush ppf ();
   Buffer.contents buf |> String.split_on_char '\n'
   |> List.filter_map (fun line ->

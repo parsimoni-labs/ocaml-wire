@@ -476,7 +476,8 @@ let flatten schema (s : Types.struct_) =
   let slots = List.rev !(w.slots) in
   (* A path can spell a field's own name ([ip_src] beside [ip.src]): refuse it,
      as the visitor cannot hold both. Spellings that differ but fold alike are
-     refused where the visitor is written ([Wire_3d.check_visitor_names]). *)
+     refused where the visitor is written
+     ([Wire_3d.Private.check_visitor_names]). *)
   let seen = Hashtbl.create 16 in
   List.iter
     (fun sl ->
