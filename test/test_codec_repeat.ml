@@ -268,6 +268,22 @@ let test_repeat_variable_size_elements () =
   Alcotest.(check int) "item1.len" 3 (UInt8.to_int i1.len);
   Alcotest.(check string) "item1.data" "cde" i1.data
 
+(* The byte-budget loop sizes each element from its declaration, so a
+   [uint_var] whose width is an expression is refused where the field is
+   built, as is one of no width. *)
+let test_repeat_uint_var_width () =
+  let refused name size =
+    Alcotest.(check bool)
+      name true
+      (raises_invalid (fun () ->
+           Field.repeat "items" ~size:(int 4) (uint_var size)))
+  in
+  refused "no width" (sizeof empty);
+  refused "a parameter's width" (Param.expr (Param.input "w" uint8));
+  match Field.repeat "items" ~size:(int 4) (uint_var (int 2)) with
+  | _ -> ()
+  | exception Invalid_argument m -> Alcotest.failf "literal width: %s" m
+
 let suite =
   ( "codec_repeat",
     [
@@ -285,4 +301,6 @@ let suite =
       Alcotest.test_case "repeat: with trailer" `Quick test_repeat_with_trailer;
       Alcotest.test_case "repeat: variable size elements" `Quick
         test_repeat_variable_size_elements;
+      Alcotest.test_case "repeat: uint_var width" `Quick
+        test_repeat_uint_var_width;
     ] )
