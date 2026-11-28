@@ -19,8 +19,8 @@ C parser. Define the format, then:
 
 - **Name reusable fields** with `Field.v` and assemble records with `Codec`
 - **Check a record once, then read and write its fields in place** via
-  `Codec.View` -- zero-copy, with no allocation for the check, the view and an
-  integer field
+  `Codec.View` -- zero-copy, with no allocation for the view and an integer
+  field, nor for the check of a record of constant size
 - **Fold over many records** via `Codec.View.fold`, the fields it names read
   during each record's check
 - **Decode records** via `Codec.decode`, allocate validated encodings with

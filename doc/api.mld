@@ -88,8 +88,10 @@ field's reader and writer), and {!Wire.Codec.View.val-field} hands that out,
 plain data read with no lookup. A definition in two codecs is resolved in
 each, and a field that is only decoded or encoded needs just the definition.
 
-{!Wire.Codec.View.val-check} runs every check of the codec once. It never raises
-and allocates nothing: its answer is an immediate integer, and so is the view.
+{!Wire.Codec.View.val-check} runs every check of the codec once. It never raises,
+and for a codec of constant size allocates nothing: its answer is an immediate
+integer, and so is the view; a codec of variable size allocates the state of
+its walk.
 {!Wire.Codec.View.is_ok} says whether the record passed and
 {!Wire.Codec.View.get} makes the answer a view, as [Result.is_ok] and
 [Option.get] do; [get] of a refused check raises [Invalid_argument], since

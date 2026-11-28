@@ -1202,9 +1202,10 @@ module Codec : sig
 
       The buffer is named by a type, ['b] ({!Buf}), which a check and a view
       carry: a view is read and written only in the buffer it was checked in. A
-      check and a view are immediate integers, so {!View.val-check},
-      {!View.is_ok} and {!View.get} allocate nothing. Why a record was refused
-      is out of line: {!Codec.validate} answers its error.
+      check and a view are immediate integers, so {!View.is_ok} and {!View.get}
+      allocate nothing, nor does {!View.val-check} of a codec of constant size.
+      Why a record was refused is out of line: {!Codec.validate} answers its
+      error.
 
       The module [Wire_ocaml] generates from a codec has the same values under
       the same names, each field an accessor named after it:
@@ -1220,9 +1221,6 @@ module Codec : sig
     type ('b, 'r) check [@@immediate]
     (** The type for checks of a record ['r] in the buffer named ['b]. *)
 
-    (* Open question 3: [?len] stays unless the buffer's length read in
-       [check] counts beyond noise. *)
-
     val check :
       ?env:Param.env ->
       ?len:int ->
@@ -1237,17 +1235,16 @@ module Codec : sig
         actions run. [env] supplies the input parameters of [c], as for
         {!Codec.decode}.
 
-        [check] never raises on [b], [off] or [len] and allocates nothing: a
-        negative [off] or a window [b] does not hold is refused. Raises
-        [Invalid_argument] only on [env], as {!Codec.decode} does. *)
+        [check] never raises on [b], [off] or [len]: a negative [off] or a
+        window [b] does not hold is refused. It allocates nothing for a codec of
+        constant size; for a codec of variable size it allocates the state of
+        its walk, such as its cursor. Raises [Invalid_argument] only on [env],
+        as {!Codec.decode} does. *)
 
     val is_ok : ('b, 'r) check -> bool
     (** [is_ok k] is [true] iff the check [k] passed. *)
 
     (** {1:views Views} *)
-
-    (* Open question 1: a view does not carry its buffer unless a view that
-       does counts within noise on OCaml 5.4.1 and OxCaml. *)
 
     type ('b, 'r) t [@@immediate]
     (** The type for records ['r] that passed their check in the buffer named
@@ -1271,7 +1268,9 @@ module Codec : sig
         once per field, not once per record.
 
         Raises [Invalid_argument] if [f] is not one of the definitions [c] was
-        built from.
+        built from, and if its place in the record depends on an input parameter
+        of [c]: such a field has no place a view can read without the
+        parameter's value, so read it with {!Codec.decode}.
 
         {b Warning.} A field and a view are indexed by their record type, not by
         their codec. A field of another codec of the same record type is
@@ -1282,9 +1281,14 @@ module Codec : sig
     val read : 'b Buf.t -> ('b, 'r) t -> ('a, 'r) field -> 'a
     (** [read b v f] is the value of the field [f] in the record [v] of [b].
 
-        [read] never raises and never reads outside [b]. A field that bytes
-        written to [b] after the check move out of [b] reads as absent: [0] for
-        an integer, an empty slice or string for bytes. *)
+        [read] never reads outside [b], and never raises on bytes that passed
+        the check of [v]. A field that bytes written to [b] after the check move
+        out of [b] reads as absent: [0] for an integer, an empty slice or string
+        for bytes. Raises [Invalid_argument] only when bytes written after the
+        check leave the field no longer decoding: one moved out of [b] whose
+        type has no such zero, as a map whose decoder refuses its wire zero, or
+        a component of an {!Asn1} codec its bytes no longer encode. That is
+        misuse, and the read still stays in [b]. *)
 
     val set : 'b Buf.t -> ('b, 'r) t -> ('a, 'r) field -> 'a -> unit
     (** [set b v f x] writes [x] in place as the field [f] of the record [v] of
@@ -1305,7 +1309,8 @@ module Codec : sig
     val layer : 'r codec -> ('s, 'r) codec_layer -> ('s, 'r) layer
     (** [layer c l] is {!val-field} for a layer: the layer [l] as {!Codec.v}
         resolved it in [c]. Raises [Invalid_argument] if [l] is not one of the
-        definitions [c] was built from. *)
+        definitions [c] was built from, if its place depends on an input
+        parameter of [c], and if the codec it holds has parameters. *)
 
     val sub : 'b Buf.t -> ('b, 'r) t -> ('s, 'r) layer -> ('b, 's) check
     (** [sub b v l] is the check of the record the layer [l] holds in the record
@@ -1318,8 +1323,9 @@ module Codec : sig
 
     (** {1:folds Folds} *)
 
-    (* Open question 4: the visitor takes the fields positionally, in the
-       order of the list, as the constructor of [Codec.v] takes them. *)
+    (* The visitor takes the fields positionally, in the order of the list,
+       as the constructor of [Codec.v] takes them: the list is a value, and
+       cannot carry labels (docs/api.md, question 4). *)
 
     val fold :
       ?env:Param.env ->
