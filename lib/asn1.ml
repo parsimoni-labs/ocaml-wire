@@ -1262,34 +1262,6 @@ let assign p ~base ~body ~text ~directives =
         List.rev_append (List.map (fun d -> d tname) directives) p.directives;
       tname
 
-let prim_type : type a. a prim -> string = function
-  | Bool -> "BOOLEAN"
-  | Integer -> "INTEGER"
-  | Bounded_integer { min; max } -> Fmt.str "INTEGER (%Ld..%Ld)" min max
-  | Enumerated ns ->
-      Fmt.str "ENUMERATED { %s }"
-        (String.concat ", "
-           (List.map (fun (n, i) -> Fmt.str "%s(%d)" n i) (enum_names ns)))
-  | Null -> "NULL"
-  | Oid -> "OBJECT IDENTIFIER"
-  | Bit_string -> "BIT STRING"
-  | Octet_string -> "OCTET STRING"
-  | Chars Utf8 -> "UTF8String"
-  | Chars Printable -> "PrintableString"
-  | Chars Ia5 -> "IA5String"
-  | Chars Numeric -> "NumericString"
-  | Chars Visible -> "VisibleString"
-  | Chars Teletex -> "TeletexString"
-  | Chars Videotex -> "VideotexString"
-  | Chars Graphic -> "GraphicString"
-  | Chars General -> "GeneralString"
-  | Chars Object_descriptor -> "ObjectDescriptor"
-  | Chars Bmp -> "BMPString"
-  | Chars Universal_chars -> "UniversalString"
-  | Relative_oid -> "RELATIVE-OID"
-  | Time k -> time_keyword k
-  | Iri k -> iri_keyword k
-
 let rec kept_inner : type a. a t -> packed option = function
   | Keep_bytes t -> Some (Pack t)
   | Map { inner; _ } -> kept_inner inner
@@ -1319,7 +1291,7 @@ let case_name l i =
 let rec ty : type a. printer -> path:string -> indent:int -> a t -> string =
  fun p ~path ~indent t ->
   match t with
-  | Prim q -> prim_type q
+  | Prim _ -> Fmt.to_to_string Asn1_syntax.pp t
   | Any -> "ANY"
   | Size { min; max; inner } ->
       Fmt.str "%s (SIZE (%d..%d))" (ty p ~path ~indent inner) min max

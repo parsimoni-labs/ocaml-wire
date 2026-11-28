@@ -456,6 +456,9 @@ val iri_ok : iri -> string -> bool
 val iri_keyword : iri -> string
 (** [iri_keyword k] is the [.asn] keyword of [k]. *)
 
+val pp : Format.formatter -> 'a t -> unit
+(** [pp] prints a type in [.asn] notation, a SEQUENCE or SET by its name. *)
+
 val literal : oid:(Oid.t -> string) -> 'a t -> 'a -> (string, string) result
 (** [literal ~oid t v] is the [.asn] literal of the value [v] of [t], or why it
     has none. [oid] names an OBJECT IDENTIFIER value. *)

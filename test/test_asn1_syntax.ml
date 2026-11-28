@@ -363,11 +363,25 @@ let test_defined_by_case_meets_optional () =
           ])
 
 let test_default_on_constructed () =
-  rejects ~msg:"DEFAULT on a constructed type" (fun () ->
-      Asn1.default "d" [] (Asn1.sequence_of Asn1.integer))
+  rejects ~msg:"DEFAULT on a constructed type or ANY, here SEQUENCE OF INTEGER"
+    (fun () -> Asn1.default "d" [] (Asn1.sequence_of Asn1.integer));
+  let name = Asn1.implicit 0 (Asn1.size ~min:1 ~max:8 Asn1.utf8_string) in
+  let c =
+    Asn1.choice
+      [
+        Asn1.alternative "flag" Asn1.bool ~inject:Either.left
+          ~project:Either.find_left;
+        Asn1.alternative "name" name ~inject:Either.right
+          ~project:Either.find_right;
+      ]
+  in
+  rejects
+    ~msg:
+      "here CHOICE { flag BOOLEAN, name [0] IMPLICIT UTF8String (SIZE (1..8)) }"
+    (fun () -> Asn1.default "d" (Either.Left true) c)
 
 let test_default_on_any () =
-  rejects ~msg:"DEFAULT on a constructed type or ANY" (fun () ->
+  rejects ~msg:"DEFAULT on a constructed type or ANY, here ANY" (fun () ->
       Asn1.default "d" "\x05\x00" Asn1.any)
 
 let test_default_on_oid () =

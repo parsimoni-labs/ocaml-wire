@@ -730,6 +730,63 @@ let iri_keyword = function
   | Oid_iri -> "OID-IRI"
   | Relative_oid_iri -> "RELATIVE-OID-IRI"
 
+let prim_type : type a. a prim -> string = function
+  | Bool -> "BOOLEAN"
+  | Integer -> "INTEGER"
+  | Bounded_integer { min; max } -> Fmt.str "INTEGER (%Ld..%Ld)" min max
+  | Enumerated ns ->
+      Fmt.str "ENUMERATED { %s }"
+        (String.concat ", "
+           (List.map (fun (n, i) -> Fmt.str "%s(%d)" n i) (enum_names ns)))
+  | Null -> "NULL"
+  | Oid -> "OBJECT IDENTIFIER"
+  | Bit_string -> "BIT STRING"
+  | Octet_string -> "OCTET STRING"
+  | Chars Utf8 -> "UTF8String"
+  | Chars Printable -> "PrintableString"
+  | Chars Ia5 -> "IA5String"
+  | Chars Numeric -> "NumericString"
+  | Chars Visible -> "VisibleString"
+  | Chars Teletex -> "TeletexString"
+  | Chars Videotex -> "VideotexString"
+  | Chars Graphic -> "GraphicString"
+  | Chars General -> "GeneralString"
+  | Chars Object_descriptor -> "ObjectDescriptor"
+  | Chars Bmp -> "BMPString"
+  | Chars Universal_chars -> "UniversalString"
+  | Relative_oid -> "RELATIVE-OID"
+  | Time k -> time_keyword k
+  | Iri k -> iri_keyword k
+
+let rec pp : type a. a t Fmt.t =
+ fun ppf -> function
+  | Prim q -> Fmt.string ppf (prim_type q)
+  | Any -> Fmt.string ppf "ANY"
+  | Size { min; max; inner } -> Fmt.pf ppf "%a (SIZE (%d..%d))" pp inner min max
+  | Implicit { tag; inner } -> Fmt.pf ppf "%a IMPLICIT %a" pp_tag tag pp inner
+  | Explicit { tag; inner } -> Fmt.pf ppf "%a EXPLICIT %a" pp_tag tag pp inner
+  | Sequence (Record { name; _ }) | Set (Record { name; _ }) ->
+      Fmt.string ppf (ident ~upper:true name)
+  | Sequence_of { non_empty; elem } -> pp_list ppf "SEQUENCE" non_empty elem
+  | Set_of { non_empty; elem } -> pp_list ppf "SET" non_empty elem
+  | Choice alts ->
+      let names =
+        unique_idents (List.map (fun (Alternative a) -> a.name) alts)
+      in
+      let alt ppf (Alternative a, n) = Fmt.pf ppf "%s %a" n pp a.typ in
+      Fmt.pf ppf "CHOICE { %a }"
+        (Fmt.list ~sep:(Fmt.any ", ") alt)
+        (List.combine alts names)
+  | Keep_bytes inner -> pp ppf inner
+  | Map { inner; _ } -> pp ppf inner
+  | Containing c -> Fmt.pf ppf "OCTET STRING (CONTAINING %a)" Types.pp_typ c
+
+and pp_list : type a. Format.formatter -> string -> bool -> a t -> unit =
+ fun ppf kw non_empty elem ->
+  Fmt.pf ppf "%s %sOF %a" kw
+    (if non_empty then "SIZE (1..MAX) " else "")
+    pp elem
+
 (* A time literal. everparse-asn1 reads UTCTime and GeneralizedTime as their
    DER contents, and DATE, TIME-OF-DAY and DATE-TIME in the extended format
    ("YYYY-MM-DD", "hh:mm:ss", "YYYY-MM-DDThh:mm:ss", README:431-434), which
@@ -884,8 +941,9 @@ let rec check_default : type a. string -> explicit:bool -> a t -> a -> unit =
   | Any | Sequence _ | Set _ | Sequence_of _ | Set_of _ | Choice _
   | Containing _ ->
       fail
-        "DEFAULT on a constructed type or ANY; everparse-asn1 supports DEFAULT \
-         on terminal types only (README:464-467,496-498)"
+        "DEFAULT on a constructed type or ANY, here %a; everparse-asn1 \
+         supports DEFAULT on terminal types only (README:464-467,496-498)"
+        pp t
 
 let default name v t =
   check_default name ~explicit:false t v;
