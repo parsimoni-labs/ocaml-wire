@@ -166,6 +166,10 @@
   buffer, back to back, in `~stride` slots or in `~offs ~lens` frames, and
   hand `f` the fields named, `None` under an absent layer (#PR, @samoht)
 
+- `Wire.Cbor` (experimental, its API will break in 2.1.0): deterministic CBOR
+  as CDDL rules in one description with binary and DER codecs; `wire.cbor`
+  runs evercddl, which verifies them (docs/cbor.md, #PR, @samoht)
+
 - `Wire_ocaml.fstar`: an F* proof that a fold of a generated scanner, and
   the walk of a frame of its loops, accepts what the parser EverParse writes
   for the codec accepts, and hands its visitor the same values, for records
