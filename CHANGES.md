@@ -52,6 +52,10 @@
   EverParse's 3D compiler, or `None` where `has_3d_exe ()` was `false`
   (#570, @samoht)
 
+- `Wire_3d` is `packed`, `pack`, `run`, `main`, `parse_3d`, `locate_3d_exe`
+  and `Wire_stubs` is `generate`, `build_codec_archive`; the rest is internal.
+  Write `Wire_3d.pack c` for `Wire_stubs.C c` (#PR, @samoht)
+
 - `Wire_3d.fork_pool` is `Wire_3d.pool`, which gives each job a directory of
   its own and answers each job's log (#575, @samoht)
 

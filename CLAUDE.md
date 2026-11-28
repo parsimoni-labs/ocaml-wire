@@ -163,7 +163,7 @@ All C code generation flows through `Wire.Everparse` (no duplication):
 1. `Everparse.project codec` -- project a codec to a 3D schema (with extern callbacks for field extraction)
 2. `Everparse.write ~outdir [ schema ]` -- write `.3d` files
 3. `Wire_3d.run ~outdir [ schema ]` -- invoke EverParse to produce C parsers
-4. `Wire_stubs.generate ~schema_dir ~outdir [ C codec ]` -- generate OCaml FFI bindings
+4. `Wire_stubs.generate ~schema_dir ~outdir [ Wire_3d.pack codec ]` -- generate OCaml FFI bindings
 
 How the standalone C archive builds in every dune context, and how many
 codecs share one library, is in [docs/projection.md](docs/projection.md#generated-c).

@@ -236,8 +236,8 @@ let test_optional_length_prefixed_group_projects () =
     in
     let dir = Filename.temp_dir "wire_3d_optional_group" "" in
     let schema = Everparse.project ~mode:`Ffi codec in
-    Wire_3d.generate_3d ~outdir:dir [ schema ];
-    Wire_3d.generate_c ~outdir:dir [ schema ];
+    Wire_3d.Private.generate_3d ~outdir:dir [ schema ];
+    Wire_3d.Private.generate_c ~outdir:dir [ schema ];
     Alcotest.(check bool)
       "C generated for conditional group" true
       (Sys.file_exists (Filename.concat dir "ProjectedTransferSegment.c"))
@@ -257,8 +257,8 @@ let test_bare_uint64_projects () =
     in
     let dir = Filename.temp_dir "wire_3d_bare_uint64" "" in
     let schema = Everparse.project ~mode:`Ffi codec in
-    Wire_3d.generate_3d ~outdir:dir [ schema ];
-    Wire_3d.generate_c ~outdir:dir [ schema ];
+    Wire_3d.Private.generate_3d ~outdir:dir [ schema ];
+    Wire_3d.Private.generate_c ~outdir:dir [ schema ];
     Alcotest.(check bool)
       "C generated for bare uint64" true
       (Sys.file_exists (Filename.concat dir "BareUint64.c"))
@@ -292,9 +292,9 @@ let test_nested_field_projects () =
     in
     let dir = Filename.temp_dir "wire_3d_nested" "" in
     let s = Everparse.project ~mode:`Ffi codec in
-    Wire_3d.generate_3d ~outdir:dir [ s ];
+    Wire_3d.Private.generate_3d ~outdir:dir [ s ];
     (* Runs 3d.exe; raises if EverParse rejects the generated .3d. *)
-    Wire_3d.generate_c ~outdir:dir [ s ];
+    Wire_3d.Private.generate_c ~outdir:dir [ s ];
     Alcotest.(check bool)
       "C generated for nested fields" true
       (Sys.file_exists (Filename.concat dir "NestedProj.c"))
@@ -307,25 +307,27 @@ let test_nested_field_projects () =
 let test_der_regions_project () =
   Gate.needs_3d_exe ();
   let framed = Asn1_modules.framed in
-  (match Wire_3d.batch_check [ Everparse.project framed ] with
+  (match Wire_3d.Private.batch_check [ Everparse.project framed ] with
   | Ok () -> ()
   | Error e -> Alcotest.failf "standalone Framed: %s" e);
-  (match Wire_3d.batch_check [ Everparse.project Asn1_modules.opt_framed ] with
+  (match
+     Wire_3d.Private.batch_check [ Everparse.project Asn1_modules.opt_framed ]
+   with
   | Ok () -> ()
   | Error e -> Alcotest.failf "standalone OptFramed: %s" e);
   (let (Asn1_modules.Packed t) = Asn1_modules.wrapped in
-   match Wire_3d.batch_check (Asn1.contained (Asn1.codec t)) with
+   match Wire_3d.Private.batch_check (Asn1.contained (Asn1.codec t)) with
    | Ok () -> ()
    | Error e -> Alcotest.failf "the binary Wrapped holds: %s" e);
   let ffi name codec =
     let dir = Filename.temp_dir "wire_3d_der" "" in
     Fun.protect
-      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      ~finally:(fun () -> Wire_3d.Private.rm_rf dir)
       (fun () ->
         Wire_3d.run ~outdir:dir [ Everparse.project ~mode:`Ffi codec ];
         let compile file =
           Fmt.kstr Sys.command "cc %s -I %s -c %s -o %s > %s 2>&1"
-            Wire_3d.strict_cc_flags (Filename.quote dir)
+            Wire_3d.Private.strict_cc_flags (Filename.quote dir)
             (Filename.quote (Filename.concat dir file))
             Filename.null Filename.null
         in
@@ -384,12 +386,12 @@ let test_extern_names_wrapped () =
   let fields_impl header =
     let dir = Filename.temp_dir "wire_3d_extern" "" in
     Fun.protect
-      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      ~finally:(fun () -> Wire_3d.Private.rm_rf dir)
       (fun () ->
         Out_channel.with_open_bin
           (Filename.concat dir (base ^ "_ExternalAPI.h"))
           (fun oc -> Out_channel.output_string oc header);
-        Wire_3d.write_fields ~outdir:dir [ schema ];
+        Wire_3d.Private.write_fields ~outdir:dir [ schema ];
         read_file (Filename.concat dir (base ^ "_Fields.c")))
   in
   Alcotest.(check bool)
@@ -434,12 +436,12 @@ let test_extern_names_by_name () =
   let dir = Filename.temp_dir "wire_3d_order" "" in
   let impl =
     Fun.protect
-      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      ~finally:(fun () -> Wire_3d.Private.rm_rf dir)
       (fun () ->
         Out_channel.with_open_bin
           (Filename.concat dir "Order_by_name_ExternalAPI.h") (fun oc ->
             Out_channel.output_string oc header);
-        Wire_3d.write_fields ~outdir:dir [ schema ];
+        Wire_3d.Private.write_fields ~outdir:dir [ schema ];
         read_file (Filename.concat dir "Order_by_name_Fields.c"))
   in
   List.iter
@@ -472,7 +474,7 @@ let test_extern_names_through_include () =
   let dir = Filename.temp_dir "wire_3d_include" "" in
   let impl =
     Fun.protect
-      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      ~finally:(fun () -> Wire_3d.Private.rm_rf dir)
       (fun () ->
         let write name text =
           Out_channel.with_open_bin (Filename.concat dir name) (fun oc ->
@@ -480,7 +482,7 @@ let test_extern_names_through_include () =
         in
         write "Included_ExternalAPI.h" "#include \"Included.h\"\n";
         write "Included.h" module_header;
-        Wire_3d.write_fields ~outdir:dir [ schema ];
+        Wire_3d.Private.write_fields ~outdir:dir [ schema ];
         read_file (Filename.concat dir "Included_Fields.c"))
   in
   List.iter
@@ -509,7 +511,7 @@ let test_fields_header_aliases () =
   let fields_header c_name =
     let dir = Filename.temp_dir "wire_3d_alias" "" in
     Fun.protect
-      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      ~finally:(fun () -> Wire_3d.Private.rm_rf dir)
       (fun () ->
         let header =
           String.concat ""
@@ -521,7 +523,7 @@ let test_fields_header_aliases () =
         in
         Out_channel.with_open_bin (Filename.concat dir "Renamed_ExternalAPI.h")
           (fun oc -> Out_channel.output_string oc header);
-        Wire_3d.write_fields ~outdir:dir [ schema ];
+        Wire_3d.Private.write_fields ~outdir:dir [ schema ];
         read_file (Filename.concat dir "Renamed_Fields.h"))
   in
   let v2026_10 name =
@@ -549,7 +551,7 @@ let visitor_of fields =
   in
   let dir = Filename.temp_dir "wire_3d_visitor" "" in
   Fun.protect
-    ~finally:(fun () -> Wire_3d.rm_rf dir)
+    ~finally:(fun () -> Wire_3d.Private.rm_rf dir)
     (fun () ->
       let api =
         String.concat ""
@@ -561,7 +563,7 @@ let visitor_of fields =
       in
       Out_channel.with_open_bin (Filename.concat dir "Kw_ExternalAPI.h")
         (fun oc -> Out_channel.output_string oc api);
-      Wire_3d.write_fields ~outdir:dir [ schema ];
+      Wire_3d.Private.write_fields ~outdir:dir [ schema ];
       let header = read_file (Filename.concat dir "Kw_Fields.h") in
       let source name text =
         let path = Filename.concat dir name in
@@ -649,7 +651,7 @@ let test_keyword_fields_e2e () =
       Wire_3d.run ~outdir:dir [ schema ];
       let compile file =
         Fmt.kstr Sys.command "cc %s -I %s -c %s -o %s > %s 2>&1"
-          Wire_3d.strict_cc_flags (Filename.quote dir)
+          Wire_3d.Private.strict_cc_flags (Filename.quote dir)
           (Filename.quote (Filename.concat dir file))
           Filename.null Filename.null
       in

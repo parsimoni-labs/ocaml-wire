@@ -12,10 +12,11 @@
     [fuzz/diff/].
 
     EverParse spends ~9s verifying each module; {!Wire_3d.run} overlaps the
-    modules in {!Wire_3d.pool}, whose concurrency [WIRE_3D_JOBS] caps. *)
+    modules in {!Wire_3d.Private.pool}, whose concurrency [WIRE_3D_JOBS] caps.
+*)
 
 let module_name g =
-  Wire_stubs.module_name
+  Wire_stubs.Private.module_name
     (Option.get
        (Wire.Private.Everparse.entrypoint_struct
           (Wire.Everparse.project ~mode:`Ffi (Fuzz_gen.codec g))))
@@ -28,7 +29,8 @@ let schema_of (_, Fuzz_gen.Pack g) =
    [.3d] file. *)
 let generate_schemas schema_dir schemas =
   Fmt.epr "diff-gen: generating %d validators, up to %d in parallel\n%!"
-    (List.length schemas) (Wire_3d.max_jobs ());
+    (List.length schemas)
+    (Wire_3d.Private.max_jobs ());
   match Wire_3d.run ~outdir:schema_dir schemas with
   | () -> None
   | exception (Failure msg | Invalid_argument msg) -> Some msg
@@ -111,7 +113,7 @@ let fixed schema_dir =
       exit 1);
   Wire_stubs.generate ~schema_dir ~outdir:"."
     (List.map
-       (fun (_, Fuzz_gen.Pack g) -> Wire_stubs.C (Fuzz_gen.codec g))
+       (fun (_, Fuzz_gen.Pack g) -> Wire_3d.pack (Fuzz_gen.codec g))
        Diff_codecs.included);
   (* Archive the per-codec validators so [wire_ffi.c] (headers only) links
      against them as separate translation units. *)
@@ -178,10 +180,10 @@ let pp_scan_stub ppf i (schema : Wire.Everparse.t) members =
     "  if (!scan_frame(buffer, offset, length, &data, &len)) return \
      Val_long(-1);@\n";
   Fmt.pf ppf "  %sFields f;@\n  memset(&f, 0, sizeof f);@\n"
-    (Wire_3d.everparse_name (Wire.Everparse.name schema));
+    (Wire_3d.Private.everparse_name (Wire.Everparse.name schema));
   Fmt.pf ppf
     "  uint64_t end = %s((WIRECTX *) &f, NULL, scan_error, data, len, 0);@\n"
-    (Wire_3d.validator_name (Wire.Everparse.name schema));
+    (Wire_3d.Private.validator_name (Wire.Everparse.name schema));
   Fmt.pf ppf "  if (!scan_ok(end, len)) return Val_long(-1);@\n";
   List.iteri
     (fun k (member, _, _) ->
@@ -202,7 +204,7 @@ let pp_standalone_stub ppf i (schema : Wire.Everparse.t) =
     "  if (!scan_frame(buffer, offset, length, &data, &len)) return \
      Val_long(-1);@\n";
   Fmt.pf ppf "  uint64_t end = %s(NULL, scan_error, data, len, 0);@\n"
-    (Wire_3d.validator_name (Wire.Everparse.name schema));
+    (Wire_3d.Private.validator_name (Wire.Everparse.name schema));
   Fmt.pf ppf "  if (!scan_ok(end, len)) return Val_long(-1);@\n";
   Fmt.pf ppf "  return Val_long((intnat) end);@\n}@\n"
 

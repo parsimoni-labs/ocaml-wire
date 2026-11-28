@@ -1,7 +1,7 @@
 (* The pipeline docs/cbor.md designs: run evercddl, EverParse's CDDL front
    end, on the .cddl modules of Wire.Cbor. *)
 
-let tool () = Wire_3d.tool "everparse-cddl.exe"
+let tool () = Wire_3d.Private.tool "everparse-cddl.exe"
 
 let not_found =
   "EverParse's everparse-cddl.exe not found in PATH or ~/.local/everparse/bin/"
@@ -69,16 +69,16 @@ let remove_subdirs dir =
       if Sys.is_directory p then remove p)
     (Sys.readdir dir)
 
-(* One schema in a {!Wire_3d.pool} job, in [dir], a directory of its own,
-   with no --admit: F* checks every proof of the module. The job copies the C
-   into [outdir], and the tool's output, its verdict last, as [<name>.log],
-   which outlives a failed run. *)
+(* One schema in a {!Wire_3d.Private.pool} job, in [dir], a directory of its
+   own, with no --admit: F* checks every proof of the module. The job copies
+   the C into [outdir], and the tool's output, its verdict last, as
+   [<name>.log], which outlives a failed run. *)
 let run_job ~exe ~postlude ~outdir s dir =
   let cddl = Wire.Cbor.filename s in
   let file = Filename.concat dir cddl in
   copy_file ~src:(Filename.concat outdir cddl) ~dst:file;
   let tmp = Filename.concat dir "tmp" in
-  Wire_3d.ensure_dir tmp;
+  Wire_3d.Private.ensure_dir tmp;
   let log = Filename.concat dir "everparse-cddl.log" in
   let start = Unix.gettimeofday () in
   let m = Wire.Cbor.name s in
@@ -123,7 +123,7 @@ let run_everparse ?(quiet = true) ~outdir ss =
     else outdir
   in
   match
-    Wire_3d.pool
+    Wire_3d.Private.pool
       (List.map (fun s -> (Wire.Cbor.name s, job ~exe ~postlude ~outdir s)) ss)
   with
   | Ok logs -> if not quiet then List.iter print_string logs

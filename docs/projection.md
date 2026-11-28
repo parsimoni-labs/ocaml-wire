@@ -162,8 +162,8 @@ flag is 1.
 
 ## Generated C
 
-The standalone archive (`lib<name>.a`, from
-`Wire_3d.generate_dune_standalone`) is a shipped deliverable linked into
+The standalone archive (`lib<name>.a`, from the `dune.inc` of
+``Wire_3d.main ~mode:`Standalone``) is a shipped deliverable linked into
 the target (Solo5, bare-metal flight software), so it builds in every
 dune context through that context's toolchain:
 `%{ocaml-config:c_compiler}`, the `ocaml-config` pack linker, and
@@ -179,11 +179,11 @@ the same entrypoint name collide and are separated with `Codec.rename`.
 headers share a translation unit is benign: it is only an opaque pointer
 cast back in each validator's own translation unit.
 
-Every EverParse run goes through `Wire_3d.pool`: one `.3d` module per job,
+Every EverParse run goes through one pool of jobs: one `.3d` module per job,
 each in a directory of its own (concurrent runs race on the intermediate
 files EverParse writes beside its output), with its output captured in a
 log of its own, which a failure reports under the module's name.
-`run_everparse` then copies the module's files into the output directory.
+The job then copies the module's files into the output directory.
 `WIRE_3D_JOBS` sets how many jobs run at once, by default the smaller of 4
 and the number of cores, since F* can approach 1 GB per process.
 

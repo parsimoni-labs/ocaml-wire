@@ -7,8 +7,8 @@
 
 val tool : unit -> string option
 (** [tool ()] is the path of [everparse-cddl.exe], found as [everparse-3d.exe]
-    is ({!Wire_3d.tool}): in [PATH], then in [~/.local/everparse/bin]. [None]
-    when it is in neither. *)
+    is ({!Wire_3d.locate_3d_exe}): in [PATH], then in [~/.local/everparse/bin].
+    [None] when it is in neither. *)
 
 val postlude : string -> string
 (** [postlude exe] is the [postlude.cddl] that defines the CDDL prelude names
@@ -18,13 +18,13 @@ val postlude : string -> string
 val run_everparse :
   ?quiet:bool -> outdir:string -> Wire.Cbor.schema list -> unit
 (** [run_everparse ?quiet ~outdir ss] runs evercddl in full on the [.cddl] file
-    of each schema of [ss] in [outdir], with the {!postlude}, each in a
-    {!Wire_3d.pool} job: F* verifies the module it writes, KaRaMeL extracts its
-    C, and [cc] compiles it with [-Wall -Werror]. The job copies [<M>.c] and
-    [<M>.h] into [outdir]. Each job's output, its last line
-    [<name>: verified in <n>s], is shown as {!Wire_3d.run_everparse} shows it:
-    only for a failed job if [quiet] (the default), else for every job once all
-    have succeeded.
+    of each schema of [ss] in [outdir], with the {!postlude}, each in a job of
+    the pool {!Wire_3d.run} runs EverParse in: F* verifies the module it writes,
+    KaRaMeL extracts its C, and [cc] compiles it with [-Wall -Werror]. The job
+    copies [<M>.c] and [<M>.h] into [outdir]. Each job's output, its last line
+    [<name>: verified in <n>s], is shown as {!Wire_3d.run} shows it: only for a
+    failed job if [quiet] (the default), else for every job once all have
+    succeeded.
 
     Raises [Failure] if the tool is missing, or naming each schema it refuses or
     F* does not verify, with its output. *)

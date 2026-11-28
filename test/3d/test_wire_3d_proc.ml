@@ -26,8 +26,8 @@ let with_fake_3d f =
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "PATH" (Option.value ~default:"" old_path);
-      Wire_3d.rm_rf outdir;
-      Wire_3d.rm_rf bindir)
+      Wire_3d.Private.rm_rf outdir;
+      Wire_3d.Private.rm_rf bindir)
     (fun () ->
       Out_channel.with_open_text exe (fun oc ->
           output_string oc
@@ -123,7 +123,7 @@ let test_spawn_keeps_cwd () =
       Alcotest.(check string) "the parent's cwd" here (Sys.getcwd ());
       List.iter
         (fun (name, outdir, runs, _) ->
-          Wire_3d.rm_rf outdir;
+          Wire_3d.Private.rm_rf outdir;
           Alcotest.(check int) (name ^ ": runs") 5 (List.length !runs);
           List.iter
             (Alcotest.check observation name (spawned ~here outdir))
@@ -197,7 +197,7 @@ let test_locate_3d_exe () =
 let test_locate_3d_exe_names () =
   let dir = Filename.temp_dir "wire_3d_names" "" in
   Fun.protect
-    ~finally:(fun () -> Wire_3d.rm_rf dir)
+    ~finally:(fun () -> Wire_3d.Private.rm_rf dir)
     (fun () ->
       let touch name =
         let path = Filename.concat dir name in
@@ -259,7 +259,7 @@ let test_pools_agree () =
           logs
   in
   check "in process" Wire_3d.Private.pool_in_process;
-  check "forked" Wire_3d.pool
+  check "forked" Wire_3d.Private.pool
 
 (* [WIRE_3D_JOBS] sets how many jobs run at once, and a value that is not a
    positive integer is refused rather than replaced. *)
@@ -270,17 +270,17 @@ let test_max_jobs () =
       Unix.putenv "WIRE_3D_JOBS" (Option.value ~default:"" old))
     (fun () ->
       Unix.putenv "WIRE_3D_JOBS" "1";
-      Alcotest.(check int) "WIRE_3D_JOBS=1" 1 (Wire_3d.max_jobs ());
+      Alcotest.(check int) "WIRE_3D_JOBS=1" 1 (Wire_3d.Private.max_jobs ());
       Unix.putenv "WIRE_3D_JOBS" "7";
-      Alcotest.(check int) "WIRE_3D_JOBS=7" 7 (Wire_3d.max_jobs ());
+      Alcotest.(check int) "WIRE_3D_JOBS=7" 7 (Wire_3d.Private.max_jobs ());
       Unix.putenv "WIRE_3D_JOBS" "";
       Alcotest.(check bool)
         "unset: at most 4" true
-        (Wire_3d.max_jobs () >= 1 && Wire_3d.max_jobs () <= 4);
+        (Wire_3d.Private.max_jobs () >= 1 && Wire_3d.Private.max_jobs () <= 4);
       List.iter
         (fun v ->
           Unix.putenv "WIRE_3D_JOBS" v;
-          match Wire_3d.max_jobs () with
+          match Wire_3d.Private.max_jobs () with
           | n -> Alcotest.failf "WIRE_3D_JOBS=%S: got %d" v n
           | exception Failure _ -> ())
         [ "0"; "-2"; "four" ])
@@ -298,9 +298,9 @@ let test_spawned_3d_same_c () =
   let generated run =
     let outdir = Filename.temp_dir "wire_3d_spawned" "" in
     Fun.protect
-      ~finally:(fun () -> Wire_3d.rm_rf outdir)
+      ~finally:(fun () -> Wire_3d.Private.rm_rf outdir)
       (fun () ->
-        Wire_3d.generate_3d ~outdir [ s ];
+        Wire_3d.Private.generate_3d ~outdir [ s ];
         run ~outdir;
         List.map
           (fun file -> read_file (Filename.concat outdir file))

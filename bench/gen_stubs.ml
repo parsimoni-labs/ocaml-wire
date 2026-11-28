@@ -97,12 +97,14 @@ let generate_stub_registry ppf structs projection_structs =
         \      let module S = %s.Make (C) in\n\
         \      { check = %s_check; ffi_parse = (fun b off -> ignore (S.parse_k \
          %s b off)); loop = %s_loop; projected_int = %s; projected_int64 = %s }\n"
-        name (Wire_stubs.module_name s) lower cont lower proj_int proj_int64)
+        name
+        (Wire_stubs.Private.module_name s)
+        lower cont lower proj_int proj_int64)
     structs;
   pr "  | name -> failwith (\"C_stubs: unknown schema \" ^ name)\n"
 
 let generate_ml oc =
-  output_string oc (Wire_stubs.to_ml_stubs structs);
+  output_string oc (Wire_stubs.Private.to_ml_stubs structs);
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
   List.iter
@@ -127,7 +129,7 @@ let generate_ml oc =
   Format.pp_print_flush ppf ()
 
 let generate_c oc =
-  output_string oc (Wire_stubs.to_c_stubs structs);
+  output_string oc (Wire_stubs.Private.to_c_stubs structs);
   let ppf = Format.formatter_of_out_channel oc in
   let pr fmt = Fmt.pf ppf fmt in
   pr "\n/* -- Timed C benchmark loops -- */\n\n";
@@ -135,8 +137,8 @@ let generate_c oc =
   List.iter
     (fun s ->
       let name = Wire.Private.Everparse.Raw.struct_name s in
-      let ep = Wire_3d.everparse_name name in
-      let validator = Wire_3d.validator_name name in
+      let ep = Wire_3d.Private.everparse_name name in
+      let validator = Wire_3d.Private.validator_name name in
       let lower = String.lowercase_ascii name in
       let n_fields = List.length (Wire.Private.Everparse.Raw.field_names s) in
       ignore n_fields;
@@ -185,13 +187,13 @@ let () =
     in
 
     (* 1. Generate .3d *)
-    Wire_3d.generate_3d ~outdir:schema_dir schemas;
+    Wire_3d.Private.generate_3d ~outdir:schema_dir schemas;
 
     (* 2. Run EverParse, then write default ExternalTypedefs + _Fields visitor *)
     let quiet = Sys.getenv_opt "EVERPARSE_VERBOSE" = None in
-    Wire_3d.run_everparse ~quiet ~outdir:schema_dir schemas;
-    Wire_3d.write_external_typedefs ~outdir:schema_dir schemas;
-    Wire_3d.write_fields ~outdir:schema_dir schemas;
+    Wire_3d.Private.run_everparse ~quiet ~outdir:schema_dir schemas;
+    Wire_3d.Private.write_external_typedefs ~outdir:schema_dir schemas;
+    Wire_3d.Private.write_fields ~outdir:schema_dir schemas;
 
     (* 3. Generate c_stubs.c *)
     let oc = open_out "c_stubs.c" in

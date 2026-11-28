@@ -10,7 +10,7 @@ let with_agree ~name ~package codecs f =
   Fun.protect
     ~finally:(fun () -> ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir))
     (fun () ->
-      Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
+      Wire_3d.Private.generate_standalone ~outdir:tmpdir ~name ~package codecs;
       let sh cmd =
         let ic = Fmt.kstr Unix.open_process_in "cd %s && %s 2>&1" tmpdir cmd in
         let output = In_channel.input_all ic in
@@ -22,7 +22,7 @@ let with_agree ~name ~package codecs f =
         (match corpus with
         | `Fuzz count ->
             let ppf = Format.formatter_of_out_channel oc in
-            Wire_3d.generate_corpus ~count ppf codecs
+            Wire_3d.Private.generate_corpus ~count ppf codecs
         | `Lines lines -> List.iter (fun l -> output_string oc (l ^ "\n")) lines);
         close_out oc;
         sh "./agree corpus"
@@ -31,8 +31,9 @@ let with_agree ~name ~package codecs f =
         Fmt.kstr sh
           "cc %s %s -c %s.c %sWrapper.c && ar rcs lib.a %s.o %sWrapper.o && cc \
            %s %s agree.c lib.a -o agree"
-          Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines base base base
-          base Wire_3d.strict_cc_flags Wire_3d.everparse_type_defines
+          Wire_3d.Private.strict_cc_flags Wire_3d.Private.everparse_type_defines
+          base base base base Wire_3d.Private.strict_cc_flags
+          Wire_3d.Private.everparse_type_defines
       with
       | Unix.WEXITED 0, _ -> f run
       | _, output ->

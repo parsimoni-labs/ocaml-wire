@@ -10,49 +10,55 @@ let simple_module = module_ [ typedef ~entrypoint:true simple_struct ]
 
 let test_everparse_name () =
   (* All-caps names get lowercased with first letter capitalized *)
-  Alcotest.(check string) "CLCW -> Clcw" "Clcw" (Wire_3d.everparse_name "CLCW");
+  Alcotest.(check string)
+    "CLCW -> Clcw" "Clcw"
+    (Wire_3d.Private.everparse_name "CLCW");
   Alcotest.(check string)
     "TMFrame -> Tmframe" "Tmframe"
-    (Wire_3d.everparse_name "TMFrame");
+    (Wire_3d.Private.everparse_name "TMFrame");
   (* A consecutive-capital run is collapsed wherever it occurs, not only at the
      start: the [OSF] run in the middle lowercases to [osf]. *)
   Alcotest.(check string)
     "SpaceOSFrame -> SpaceOsframe" "SpaceOsframe"
-    (Wire_3d.everparse_name "SpaceOSFrame");
+    (Wire_3d.Private.everparse_name "SpaceOSFrame");
   (* Each segment is capitalized: wire writes the .3d type with a capitalized
      name, so [myField] reaches EverParse as [MyField]. *)
-  Alcotest.(check string) "Foo -> Foo" "Foo" (Wire_3d.everparse_name "Foo");
+  Alcotest.(check string)
+    "Foo -> Foo" "Foo"
+    (Wire_3d.Private.everparse_name "Foo");
   Alcotest.(check string)
     "myField -> MyField" "MyField"
-    (Wire_3d.everparse_name "myField");
+    (Wire_3d.Private.everparse_name "myField");
   (* Single uppercase letter at start is not >=2 consecutive uppercase *)
   Alcotest.(check string)
     "Hello -> Hello" "Hello"
-    (Wire_3d.everparse_name "Hello");
+    (Wire_3d.Private.everparse_name "Hello");
   (* Underscore-separated: each segment normalized, underscores dropped *)
   Alcotest.(check string)
     "EP_Header -> EpHeader" "EpHeader"
-    (Wire_3d.everparse_name "EP_Header");
+    (Wire_3d.Private.everparse_name "EP_Header");
   Alcotest.(check string)
     "MC_Status_Reply -> McStatusReply" "McStatusReply"
-    (Wire_3d.everparse_name "MC_Status_Reply");
+    (Wire_3d.Private.everparse_name "MC_Status_Reply");
   Alcotest.(check string)
     "Foo_Bar -> FooBar" "FooBar"
-    (Wire_3d.everparse_name "Foo_Bar");
+    (Wire_3d.Private.everparse_name "Foo_Bar");
   (* A lowercase segment after an underscore is capitalized, so the identifier
      matches the [GrpcMessage] EverParse generates for a [Grpc_message] type. *)
   Alcotest.(check string)
     "Grpc_message -> GrpcMessage" "GrpcMessage"
-    (Wire_3d.everparse_name "Grpc_message");
+    (Wire_3d.Private.everparse_name "Grpc_message");
   Alcotest.(check string)
     "rpmsg_endpoint_info -> RpmsgEndpointInfo" "RpmsgEndpointInfo"
-    (Wire_3d.everparse_name "rpmsg_endpoint_info");
+    (Wire_3d.Private.everparse_name "rpmsg_endpoint_info");
   (* Empty string *)
-  Alcotest.(check string) "empty" "" (Wire_3d.everparse_name "");
+  Alcotest.(check string) "empty" "" (Wire_3d.Private.everparse_name "");
   (* A capital after a digit is lowercased, as EverParse does. *)
   List.iter
     (fun (name, expected) ->
-      Alcotest.(check string) name expected (Wire_3d.everparse_name name))
+      Alcotest.(check string)
+        name expected
+        (Wire_3d.Private.everparse_name name))
     [
       ("Foo2Bar", "Foo2bar");
       ("TPM2B", "Tpm2b");
@@ -65,7 +71,9 @@ let test_everparse_name () =
 let test_validator_name () =
   List.iter
     (fun (name, expected) ->
-      Alcotest.(check string) name expected (Wire_3d.validator_name name))
+      Alcotest.(check string)
+        name expected
+        (Wire_3d.Private.validator_name name))
     [
       ("Random18", "Random18ValidateWireRandom18");
       ("CLCW", "ClcwValidateWireClcw");
@@ -84,7 +92,7 @@ let test_pascal_case () =
     Alcotest.(check string)
       (input ^ " -> " ^ expected)
       expected
-      (Wire_3d.pascal_case input)
+      (Wire_3d.Private.pascal_case input)
   in
   check "tpm_check_TPM2B" "TpmCheckTpm2b";
   check "virtio_check_Virtq_desc" "VirtioCheckVirtqDesc";
@@ -101,7 +109,7 @@ let test_generate_3d_files () =
     Wire.Private.Everparse.Raw.of_module ~name:"TestSimple"
       ~module_:simple_module ~wire_size:3
   in
-  Wire_3d.generate_3d ~outdir:tmpdir [ s ];
+  Wire_3d.Private.generate_3d ~outdir:tmpdir [ s ];
   let path = Filename.concat tmpdir "TestSimple.3d" in
   Alcotest.(check bool) "3d file exists" true (Sys.file_exists path);
   Sys.remove path;
@@ -111,7 +119,7 @@ let test_schema_of_struct () =
   let s = Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
   (* generate_3d uses the schema -- check we can produce a .3d file *)
   let tmpdir = Filename.temp_dir "wire_3d_test2" "" in
-  Wire_3d.generate_3d ~outdir:tmpdir [ s ];
+  Wire_3d.Private.generate_3d ~outdir:tmpdir [ s ];
   let path = Filename.concat tmpdir "TestSimple.3d" in
   Alcotest.(check bool)
     "3d file from schema_of_struct" true (Sys.file_exists path);
@@ -121,7 +129,7 @@ let test_schema_of_struct () =
 let test_ensure_dir () =
   let tmpdir = Filename.temp_dir "wire_3d_ensure" "" in
   Unix.rmdir tmpdir;
-  Wire_3d.ensure_dir tmpdir;
+  Wire_3d.Private.ensure_dir tmpdir;
   Alcotest.(check bool) "dir created" true (Sys.file_exists tmpdir);
   Unix.rmdir tmpdir
 
@@ -136,8 +144,8 @@ let test_generate_c () =
     let s =
       Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct
     in
-    Wire_3d.generate_3d ~outdir:tmpdir [ s ];
-    Wire_3d.generate_c ~outdir:tmpdir [ s ];
+    Wire_3d.Private.generate_3d ~outdir:tmpdir [ s ];
+    Wire_3d.Private.generate_c ~outdir:tmpdir [ s ];
     let c_path = Filename.concat tmpdir "TestSimple.c" in
     Alcotest.(check bool) "C file generated" true (Sys.file_exists c_path);
     let ext_path = Filename.concat tmpdir "TestSimple_ExternalTypedefs.h" in
@@ -167,8 +175,8 @@ let test_endianness_freestanding () =
   Gate.needs_3d_exe ();
   let tmpdir = Filename.temp_dir "wire_3d_endianness" "" in
   let s = Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi simple_struct in
-  Wire_3d.generate_3d ~outdir:tmpdir [ s ];
-  Wire_3d.generate_c ~outdir:tmpdir [ s ];
+  Wire_3d.Private.generate_3d ~outdir:tmpdir [ s ];
+  Wire_3d.Private.generate_c ~outdir:tmpdir [ s ];
   let header = read_file (Filename.concat tmpdir "EverParseEndianness.h") in
   let has sub = Re.execp (Re.compile (Re.str sub)) header in
   Alcotest.(check bool)
@@ -222,9 +230,11 @@ let test_name_collision () =
               Alcotest.failf "%s: error %S does not mention %S" what msg sub)
           substrings
   in
-  let generate_3d schemas = Wire_3d.generate_3d ~outdir:tmpdir schemas in
+  let generate_3d schemas =
+    Wire_3d.Private.generate_3d ~outdir:tmpdir schemas
+  in
   let generate_dune schemas =
-    Wire_3d.generate_dune ~outdir:tmpdir ~package:"pkg" schemas
+    Wire_3d.Private.generate_dune ~outdir:tmpdir ~package:"pkg" schemas
   in
   (* [header] and [Header] both write [Header.3d]. *)
   rejects "same .3d file" generate_3d [ "header"; "Header" ]
@@ -237,7 +247,7 @@ let test_name_collision () =
   rejects "same C identifier" generate_3d [ "TMFrame"; "Tmframe" ]
     [ "\"TMFrame\""; "\"Tmframe\""; "Tmframe" ];
   rejects "same C identifier (visitor)"
-    (fun schemas -> Wire_3d.write_fields ~outdir:tmpdir schemas)
+    (fun schemas -> Wire_3d.Private.write_fields ~outdir:tmpdir schemas)
     [ "TMFrame"; "Tmframe" ] [ "Tmframe" ];
   rejects "post-digit C identifier" generate_3d [ "Foo2Bar"; "Foo2bar" ]
     [ "Foo2bar" ];
@@ -251,7 +261,7 @@ let test_name_collision () =
     "distinct names generate" true
     (Sys.file_exists (Filename.concat tmpdir "Alpha.3d")
     && Sys.file_exists (Filename.concat tmpdir "Beta.3d"));
-  Wire_3d.rm_rf tmpdir
+  Wire_3d.Private.rm_rf tmpdir
 
 (* Schema names become 3D module names, generated C identifiers, dune atoms,
    and output file basenames. Reject anything outside their common portable
@@ -278,7 +288,9 @@ let test_output_name_validation () =
   in
   let with_tmp f =
     let tmpdir = Filename.temp_dir "wire_3d_name" "" in
-    Fun.protect ~finally:(fun () -> Wire_3d.rm_rf tmpdir) (fun () -> f tmpdir)
+    Fun.protect
+      ~finally:(fun () -> Wire_3d.Private.rm_rf tmpdir)
+      (fun () -> f tmpdir)
   in
   let rejects mode name generate =
     with_tmp (fun outdir ->
@@ -333,17 +345,17 @@ let test_check_provenance () =
     Fmt.str "schema-blake2b-256: %s\neverparse: EverParse/3d vtest\n" digest
   in
   write stamp (stamp_of Digest.BLAKE256.(to_hex (file schema)));
-  Wire_3d.check_provenance ~outdir:tmpdir [ three_d ];
+  Wire_3d.Private.check_provenance ~outdir:tmpdir [ three_d ];
   write schema "entrypoint\ntypedef struct WireFoo\n{\n   UINT16 A;\n} Foo;\n";
   Alcotest.(check bool)
     "spec edited after generation is rejected" true
     (raises_failure (fun () ->
-         Wire_3d.check_provenance ~outdir:tmpdir [ three_d ]));
+         Wire_3d.Private.check_provenance ~outdir:tmpdir [ three_d ]));
   write stamp "everparse: EverParse/3d vtest\n";
   Alcotest.(check bool)
     "stamp without a recorded hash is rejected" true
     (raises_failure (fun () ->
-         Wire_3d.check_provenance ~outdir:tmpdir [ three_d ]));
+         Wire_3d.Private.check_provenance ~outdir:tmpdir [ three_d ]));
   ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir)
 
 let doc_codec name =
@@ -353,7 +365,7 @@ let test_generate_dune_standalone () =
   (* The doc pipeline emits a single-file [dune.inc]: the package name becomes a
      CamelCase module name and there is no FFI visitor or test harness. *)
   let tmpdir = Filename.temp_dir "wire_3d_dune_doc" "" in
-  Wire_3d.generate_dune_standalone ~outdir:tmpdir ~package:"my-pkg"
+  Wire_3d.Private.generate_dune_standalone ~outdir:tmpdir ~package:"my-pkg"
     [ Wire_3d.pack (doc_codec "Pkt") ];
   let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
   ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
@@ -412,7 +424,7 @@ let test_generate_dune_standalone () =
 let test_generate_dune_standalone_name_override () =
   (* [~name] sets the file base independently of the opam [~package]. *)
   let tmpdir = Filename.temp_dir "wire_3d_dune_name" "" in
-  Wire_3d.generate_dune_standalone ~name:"proto-spec" ~outdir:tmpdir
+  Wire_3d.Private.generate_dune_standalone ~name:"proto-spec" ~outdir:tmpdir
     ~package:"my-pkg"
     [ Wire_3d.pack (doc_codec "Pkt") ];
   let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
@@ -456,7 +468,7 @@ let test_generate_dune_standalone_context_policy () =
      are gated: regenerating the committed C from [3d.exe] and the [agree]
      differential test, which runs a built validator on the build machine. *)
   let tmpdir = Filename.temp_dir "wire_3d_dune_ctx" "" in
-  Wire_3d.generate_dune_standalone ~outdir:tmpdir ~package:"my-pkg"
+  Wire_3d.Private.generate_dune_standalone ~outdir:tmpdir ~package:"my-pkg"
     [ Wire_3d.pack (doc_codec "Pkt") ];
   let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
   ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
@@ -498,7 +510,7 @@ let test_generate_standalone () =
   Gate.needs_3d_exe ();
   begin
     let tmpdir = Filename.temp_dir "wire_3d_gen_doc" "" in
-    Wire_3d.generate_standalone ~outdir:tmpdir ~package:"my-pkg"
+    Wire_3d.Private.generate_standalone ~outdir:tmpdir ~package:"my-pkg"
       [ Wire_3d.pack (doc_codec "Pkt"); Wire_3d.pack (doc_codec "Pkt2") ];
     let exists f = Sys.file_exists (Filename.concat tmpdir f) in
     Alcotest.(check bool) "single merged .3d" true (exists "MyPkg.3d");
@@ -728,7 +740,9 @@ let test_doc_differential_span_and_scalar_regions () =
       Wire_3d.pack diff_opt_at_most_codec;
     ]
   in
-  let fuzzed = Fmt.str "%a" (Wire_3d.generate_corpus ~count:128) codecs in
+  let fuzzed =
+    Fmt.str "%a" (Wire_3d.Private.generate_corpus ~count:128) codecs
+  in
   Agree.differential_ok ~name:"regionspec" ~package:"region-doc"
     ~corpus:
       (`Lines
@@ -766,9 +780,9 @@ let test_doc_differential_span_and_scalar_regions () =
    [<Base>CheckWire<Codec>] wrappers, not the raw [<Base>Validate*] entry points
    whose EverParse-emitted preamble underflows on [StartPosition > InputLength].
    Build the archive exactly as the generated dune rule does for this platform
-   (via {!Wire_3d.archive_link_steps}) and assert [nm] shows no global [Validate]
-   symbol. This runs the platform's real link step on CI (macOS and Linux). Needs
-   3d.exe for the C. *)
+   (via {!Wire_3d.Private.archive_link_steps}) and assert [nm] shows no global
+   [Validate] symbol. This runs the platform's real link step on CI (macOS and
+   Linux). Needs 3d.exe for the C. *)
 let test_archive_hides_raw_validators () =
   Gate.needs_3d_exe ();
   begin
@@ -780,10 +794,10 @@ let test_archive_hides_raw_validators () =
     in
     let codecs = [ Wire_3d.pack codec ] in
     let tmpdir = Filename.temp_dir "wire_3d_sym_" "" in
-    Wire_3d.generate_standalone ~outdir:tmpdir ~name ~package codecs;
+    Wire_3d.Private.generate_standalone ~outdir:tmpdir ~name ~package codecs;
     let base = String.capitalize_ascii name in
     let archive = "lib" ^ String.lowercase_ascii base ^ ".a" in
-    let wrappers = Wire_3d.wrapper_symbols base codecs in
+    let wrappers = Wire_3d.Private.wrapper_symbols base codecs in
     let macos =
       let ic = Unix.open_process_in "uname -s" in
       let s = try input_line ic with End_of_file -> "" in
@@ -791,12 +805,12 @@ let test_archive_hides_raw_validators () =
       String.equal s "Darwin"
     in
     let compile =
-      Fmt.str "cc %s %s -c %s.c %sWrapper.c" Wire_3d.strict_cc_flags
-        Wire_3d.everparse_type_defines base base
+      Fmt.str "cc %s %s -c %s.c %sWrapper.c" Wire_3d.Private.strict_cc_flags
+        Wire_3d.Private.everparse_type_defines base base
     in
     let steps =
       compile
-      :: Wire_3d.archive_link_steps ~macos ~pack_linker:"ld -r -o"
+      :: Wire_3d.Private.archive_link_steps ~macos ~pack_linker:"ld -r -o"
            ~objcopy:"objcopy" ~ar:"ar" ~archive ~base ~wrappers
     in
     let run cmd =
@@ -1020,21 +1034,21 @@ let wrapper_src var =
 let test_wrapper_hardening_names_the_status_var () =
   List.iter
     (fun var ->
-      let hardened = Wire_3d.harden_wrapper_source (wrapper_src var) in
+      let hardened = Wire_3d.Private.harden_wrapper_source (wrapper_src var) in
       let want = Fmt.str "if (%s != (uint64_t) len)" var in
       if not (Re.execp (Re.compile (Re.str want)) hardened) then
         Alcotest.failf "hardened wrapper for %S lacks %S:\n%s" var want hardened)
     [ "result"; "ep_status" ]
 
 let test_wrapper_hardening_is_idempotent () =
-  let once = Wire_3d.harden_wrapper_source (wrapper_src "ep_status") in
+  let once = Wire_3d.Private.harden_wrapper_source (wrapper_src "ep_status") in
   Alcotest.(check string)
     "already hardened" once
-    (Wire_3d.harden_wrapper_source once)
+    (Wire_3d.Private.harden_wrapper_source once)
 
 let test_wrapper_hardening_refuses_unknown_shape () =
   match
-    Wire_3d.harden_wrapper_source
+    Wire_3d.Private.harden_wrapper_source
       "BOOLEAN WCheckW(uint8_t *base, uint32_t len) { return TRUE; }"
   with
   | _ -> Alcotest.fail "expected an unrecognized wrapper shape to be refused"
@@ -1052,15 +1066,15 @@ let test_wrapper_hardening_refuses_unknown_shape () =
    caps prefixes, mixed case) each exercise the pipeline end-to-end. *)
 let compile_generated ?(run = true) codec dir =
   let schema = Everparse.project ~mode:`Ffi codec in
-  Wire_3d.generate_3d ~outdir:dir [ schema ];
-  Wire_3d.generate_c ~outdir:dir [ schema ];
+  Wire_3d.Private.generate_3d ~outdir:dir [ schema ];
+  Wire_3d.Private.generate_c ~outdir:dir [ schema ];
   let base = String.capitalize_ascii (Everparse.name schema) in
   let cmd =
     (* Compile with the exact strict-C11 flags the generated dune emits, so
        the e2e checks the validators under the same standard a downstream
        caller would. *)
     Fmt.str "cd %s && cc %s -o test_bin test.c %s.c %s_Fields.c 2>&1%s"
-      (Filename.quote dir) Wire_3d.strict_cc_flags base base
+      (Filename.quote dir) Wire_3d.Private.strict_cc_flags base base
       (if run then " && ./test_bin" else "")
   in
   let ic = Unix.open_process_in cmd in
@@ -1074,11 +1088,11 @@ let compile_generated ?(run = true) codec dir =
 let compile_and_run name codec = (name, compile_generated codec)
 let compile_only name codec = (name, compile_generated ~run:false codec)
 
-(* Each scenario in a {!Wire_3d.pool} job; a failure names every scenario that
-   failed, with its EverParse or compiler diagnostic. *)
+(* Each scenario in a {!Wire_3d.Private.pool} job; a failure names every
+   scenario that failed, with its EverParse or compiler diagnostic. *)
 let check_scenarios scenarios =
   Gate.needs_3d_exe ();
-  match Wire_3d.pool scenarios with
+  match Wire_3d.Private.pool scenarios with
   | Ok _ -> ()
   | Error failed -> Alcotest.failf "%s" failed
 
@@ -1624,7 +1638,7 @@ let test_projection_filenames () =
   in
   let schema = Private.Everparse.Raw.project_struct ~mode:`Ffi s in
   let tmpdir = Filename.temp_dir "wire_3d_filenames" "" in
-  Wire_3d.generate_dune ~outdir:tmpdir ~package:"pkg" [ schema ];
+  Wire_3d.Private.generate_dune ~outdir:tmpdir ~package:"pkg" [ schema ];
   let dune_inc = read_file (Filename.concat tmpdir "dune.inc") in
   ignore (Fmt.kstr Sys.command "rm -rf %s" tmpdir);
   let contains_exact sub = Re.execp (Re.compile (Re.str sub)) dune_inc in

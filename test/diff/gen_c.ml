@@ -195,7 +195,7 @@ let generate_c_stubs ~schema_dir outdir schemas =
         param_args @ [ "NULL"; name ^ "_ErrorHandler"; "base"; "len"; "0" ]
       in
       pr "  uint64_t result = %s(%s);\n"
-        (Wire_3d.validator_name name)
+        (Wire_3d.Private.validator_name name)
         (String.concat ", " all_args);
       pr "  return EverParseIsSuccess(result);\n";
       pr "}\n\n")
@@ -396,8 +396,8 @@ let () =
           ~wire_size:rs.total_wire_size)
       schemas
   in
-  Wire_3d.generate_3d ~outdir:schema_dir wire_3d_schemas;
-  Wire_3d.run_everparse ~outdir:schema_dir wire_3d_schemas;
+  Wire_3d.Private.generate_3d ~outdir:schema_dir wire_3d_schemas;
+  Wire_3d.Private.run_everparse ~outdir:schema_dir wire_3d_schemas;
   (* Generate FFI stubs and test runner in current dir *)
   generate_c_stubs ~schema_dir "." schemas;
   generate_ml_stubs "." schemas;

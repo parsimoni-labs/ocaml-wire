@@ -512,10 +512,10 @@ COSE_Sign entry points, which the same object provides.
 `make cbor` (`BUILD_EVERPARSE=1 dune build @test/cbor/runtest`) writes the
 module of every codec of `test/cbor/cbor_modules.ml` with `print.exe` and
 runs `Wire_cbor.run` on them: evercddl in full on each, with no `--admit`, the
-postlude of its prefix as one more input, in `Wire_3d.pool` jobs. A module
-passes when the tool answers 0, F* prints "All verification conditions
-discharged" and evercddl "EverCDDL succeeded!", so its C compiled with
-`-Wall -Werror`. The rule fails on any other answer.
+postlude of its prefix as one more input, in the parallel jobs `Wire_3d.run`
+runs EverParse in. A module passes when the tool answers 0, F* prints "All
+verification conditions discharged" and evercddl "EverCDDL succeeded!", so its
+C compiled with `-Wall -Werror`. The rule fails on any other answer.
 
 Run on 2026-11-28 on macOS arm64 with the `v2026.11.13` prefix first in
 `PATH`, four jobs at once, beside a full `dune test` of this repository: rc 0
@@ -567,8 +567,9 @@ CBOR (Q11); `Wire_ocaml` and `Wire_rust` generation; a fold over arrays in a
 view; and SUIT, whose command sequences recurse (Q3).
 
 Every `BUILD_EVERPARSE` run pays F*'s verification of each module, so the
-rule checks one small module per construct plus the COSE ones, in
-`Wire_3d.pool` jobs (`WIRE_3D_JOBS`), and dune caches the result by content.
+rule checks one small module per construct plus the COSE ones, in the
+parallel jobs `Wire_3d.run` runs EverParse in (`WIRE_3D_JOBS`), and dune caches
+the result by content.
 
 ## Open questions
 

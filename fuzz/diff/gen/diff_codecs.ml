@@ -52,7 +52,7 @@ let string_of_exclusion = function
    a parameterised one needs an env the harness does not set up. *)
 let names_clash (Fuzz_gen.Pack g) =
   match
-    Wire_stubs.check_names
+    Wire_stubs.Private.check_names
       (Wire.Private.Everparse.Raw.struct_of_codec (Fuzz_gen.codec g))
   with
   | () -> false

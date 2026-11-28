@@ -6,7 +6,7 @@ module Raw = Wire.Private.Everparse.Raw
 (* Two emission paths matter and both should produce parseable 3D:
    - [Raw]: a hand-built struct or module written via [to_3d_file].
    - [Codec]: a Wire codec projected via [Wire.Everparse.project ~mode:`Ffi] and
-     [Wire_3d.generate_3d]. This path adds entrypoint params, output
+     [Wire_3d.Private.generate_3d]. This path adds entrypoint params, output
      types, and the [<Name>Set*] callbacks that the C validator uses. *)
 type case =
   | Raw of string * Raw.module_
@@ -122,14 +122,14 @@ let emit ~outdir = function
       name ^ ".3d"
   | Codec (_, codec) ->
       let s = Wire.Everparse.project ~mode:`Ffi codec in
-      Wire_3d.generate_3d ~outdir [ s ];
+      Wire_3d.Private.generate_3d ~outdir [ s ];
       Wire.Everparse.filename s
   | Doc (name, ts) ->
       Wire.Everparse.write ~mode:`Standalone ~outdir ~name ts;
       String.capitalize_ascii name ^ ".3d"
 
-(* A {!Wire_3d.pool} job: 3d.exe parses the case's [.3d], written in [dir], or
-   the job fails with EverParse's diagnostic and the [.3d]. *)
+(* A {!Wire_3d.Private.pool} job: 3d.exe parses the case's [.3d], written in
+   [dir], or the job fails with EverParse's diagnostic and the [.3d]. *)
 let validate case dir =
   let file = emit ~outdir:dir case in
   match Wire_3d.parse_3d ~outdir:dir file with
@@ -145,7 +145,8 @@ let validate case dir =
 
 let test_schemas () =
   match
-    Wire_3d.pool (List.map (fun case -> (case_name case, validate case)) cases)
+    Wire_3d.Private.pool
+      (List.map (fun case -> (case_name case, validate case)) cases)
   with
   | Ok _ -> ()
   | Error failed -> Alcotest.failf "EverParse rejected:\n%s" failed

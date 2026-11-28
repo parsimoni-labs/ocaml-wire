@@ -2,7 +2,7 @@
    everparse-asn1; the rest raises until it is implemented. *)
 
 let todo name = Fmt.invalid_arg "Wire_asn1.%s: not implemented" name
-let tool () = Wire_3d.tool "everparse-asn1.exe"
+let tool () = Wire_3d.Private.tool "everparse-asn1.exe"
 
 let not_found =
   "EverParse's everparse-asn1.exe not found in PATH or ~/.local/everparse/bin/"
@@ -71,12 +71,12 @@ let fstar_flags exe =
           let own = Filename.concat (Filename.dirname exe) "fstar.exe" in
           if Sys.file_exists own then own else "fstar.exe"
     in
-    [ "--fstar"; Wire_3d.fstar_wrapper fstar ]
+    [ "--fstar"; Wire_3d.Private.fstar_wrapper fstar ]
 
-(* One schema in a {!Wire_3d.pool} job, in [dir], a directory of its own:
-   F* writes its checked files beside the modules it verifies. The job copies
-   the F* modules and the C into [outdir], and the tool's output, its verdict
-   last, as [<name>.log], which outlives a failed run. *)
+(* One schema in a {!Wire_3d.Private.pool} job, in [dir], a directory of its
+   own: F* writes its checked files beside the modules it verifies. The job
+   copies the F* modules and the C into [outdir], and the tool's output, its
+   verdict last, as [<name>.log], which outlives a failed run. *)
 let job ~exe ~env ~outdir s dir =
   let asn = Wire.Asn1.filename s in
   let file = Filename.concat dir asn in
@@ -124,7 +124,7 @@ let run_everparse ?(quiet = true) ~outdir ss =
     else outdir
   in
   match
-    Wire_3d.pool
+    Wire_3d.Private.pool
       (List.map (fun s -> (Wire.Asn1.name s, job ~exe ~env ~outdir s)) ss)
   with
   | Ok logs -> if not quiet then List.iter print_string logs

@@ -36,8 +36,8 @@ let compile_ml_stub ml =
 
 (** Generate both to_ml_stub and to_ml_stubs, compile both, check agreement. *)
 let check_struct s =
-  let single = Wire_stubs.to_ml_stub s in
-  let multi = Wire_stubs.to_ml_stubs [ s ] in
+  let single = Wire_stubs.Private.to_ml_stub s in
+  let multi = Wire_stubs.Private.to_ml_stubs [ s ] in
   compile_ml_stub single;
   compile_ml_stub multi;
   Alcotest.(check bool)
@@ -177,7 +177,7 @@ let test_multiple_structs () =
   let s1 = struct_ "Foo" [ field "x" uint8 ] in
   let s2 = struct_ "Bar" [ field "y" uint16be ] in
   let s3 = param_struct "Baz" [ param "limit" uint8 ] [ field "z" uint32be ] in
-  let ml = Wire_stubs.to_ml_stubs [ s1; s2; s3 ] in
+  let ml = Wire_stubs.Private.to_ml_stubs [ s1; s2; s3 ] in
   compile_ml_stub ml;
   Alcotest.(check bool) "has foo" true (contains ~sub:"module Foo :" ml);
   Alcotest.(check bool) "has bar" true (contains ~sub:"module Bar :" ml);
@@ -190,7 +190,7 @@ let test_c_stubs_no_params () =
     struct_ "SimpleHeader"
       [ field "version" uint8; field "length" uint16; field "flags" uint8 ]
   in
-  let c = Wire_stubs.to_c_stubs [ s ] in
+  let c = Wire_stubs.Private.to_c_stubs [ s ] in
   Alcotest.(check bool)
     "has parse" true
     (contains ~sub:"caml_wire_simpleheader_parse" c);
@@ -208,7 +208,7 @@ let test_c_stubs_with_params () =
       [ param "max_len" uint16be; mutable_param "out_len" uint16be ]
       [ field "Length" uint16be ]
   in
-  let c = Wire_stubs.to_c_stubs [ s ] in
+  let c = Wire_stubs.Private.to_c_stubs [ s ] in
   Alcotest.(check bool)
     "has parse" true
     (contains ~sub:"caml_wire_bounded_parse" c);
@@ -217,7 +217,7 @@ let test_c_stubs_with_params () =
 
 let test_normalised_fields_name () =
   let s = struct_ "CLCWReport" [ field "x" uint8 ] in
-  let c = Wire_stubs.to_c_stubs [ s ] in
+  let c = Wire_stubs.Private.to_c_stubs [ s ] in
   Alcotest.(check bool)
     "uses EverParse-normalised <Name>Fields type" true
     (contains ~sub:"ClcwreportFields" c);
@@ -238,7 +238,7 @@ let test_c_stubs_many_params () =
       ]
       [ field "x" uint8 ]
   in
-  let c = Wire_stubs.to_c_stubs [ s ] in
+  let c = Wire_stubs.Private.to_c_stubs [ s ] in
   Alcotest.(check bool)
     "has parse" true
     (contains ~sub:"caml_wire_manyparams_parse" c);
@@ -248,7 +248,7 @@ let test_c_stubs_bounds_check () =
   let s =
     struct_ "SimpleHeader" [ field "version" uint8; field "length" uint16 ]
   in
-  let c = Wire_stubs.to_c_stubs [ s ] in
+  let c = Wire_stubs.Private.to_c_stubs [ s ] in
   Alcotest.(check bool)
     "rejects a negative offset" true
     (contains ~sub:"if (off < 0) caml_invalid_argument" c);
@@ -278,7 +278,7 @@ let test_c_stubs_callback_args_rooted () =
         field "d" uint64be;
       ]
   in
-  let c = Wire_stubs.to_c_stubs [ s ] in
+  let c = Wire_stubs.Private.to_c_stubs [ s ] in
   Alcotest.(check bool)
     "callback arguments live in a CAMLlocalN root block" true
     (contains ~sub:"CAMLlocalN(args, 4)" c);
@@ -295,17 +295,18 @@ let test_c_stubs_callback_args_rooted () =
 let test_name_camel () =
   Alcotest.(check string)
     "camel" "simple_header"
-    (Wire_stubs.to_ml_stub_name (struct_ "SimpleHeader" [ field "x" uint8 ]))
+    (Wire_stubs.Private.to_ml_stub_name
+       (struct_ "SimpleHeader" [ field "x" uint8 ]))
 
 let test_name_allcaps () =
   Alcotest.(check string)
     "allcaps" "c_l_c_w"
-    (Wire_stubs.to_ml_stub_name (struct_ "CLCW" [ field "x" uint8 ]))
+    (Wire_stubs.Private.to_ml_stub_name (struct_ "CLCW" [ field "x" uint8 ]))
 
 let test_name_single () =
   Alcotest.(check string)
     "single" "foo"
-    (Wire_stubs.to_ml_stub_name (struct_ "Foo" [ field "x" uint8 ]))
+    (Wire_stubs.Private.to_ml_stub_name (struct_ "Foo" [ field "x" uint8 ]))
 
 (* -- Field names -- *)
 
@@ -326,15 +327,18 @@ let test_ml_labels_clash () =
   let both a b =
     let s = struct_ "Clash" [ field a uint8; field b uint8 ] in
     let subs = [ Fmt.str "%S" a; Fmt.str "%S" b ] in
-    rejects (a ^ " and " ^ b) subs (fun () -> Wire_stubs.to_ml_stubs [ s ]);
+    rejects
+      (a ^ " and " ^ b)
+      subs
+      (fun () -> Wire_stubs.Private.to_ml_stubs [ s ]);
     rejects
       (a ^ " and " ^ b ^ " (single)")
       subs
-      (fun () -> Wire_stubs.to_ml_stub s)
+      (fun () -> Wire_stubs.Private.to_ml_stub s)
   in
   both "X" "x";
   let s = struct_ "Esc" [ field "done" uint8; field "done_" uint8 ] in
-  let ml = Wire_stubs.to_ml_stubs [ s ] in
+  let ml = Wire_stubs.Private.to_ml_stubs [ s ] in
   Alcotest.(check bool)
     "done and done_ apart" true
     (contains ~sub:"done_ :" ml && contains ~sub:"done__ :" ml)
@@ -346,12 +350,13 @@ let test_check_names () =
   let refused what names =
     rejects what
       (List.map (Fmt.str "%S") names)
-      (fun () -> Wire_stubs.check_names (s names))
+      (fun () -> Wire_stubs.Private.check_names (s names))
   in
   refused "one visitor macro and label" [ "X"; "x" ];
   refused "not an identifier" [ "a-b" ];
-  Wire_stubs.check_names (s [ "end"; "int"; "typeof"; "done"; "local_"; "X" ]);
-  Wire_stubs.check_names
+  Wire_stubs.Private.check_names
+    (s [ "end"; "int"; "typeof"; "done"; "local_"; "X" ]);
+  Wire_stubs.Private.check_names
     (s [ "end"; "end_"; "restrict"; "restrict_"; "local_"; "local__" ])
 
 (* A label that is a keyword of OCaml, or of OxCaml, is escaped, so the stub
@@ -369,12 +374,12 @@ let test_keyword_fields () =
       ]
   in
   check_struct s;
-  let ml = Wire_stubs.to_ml_stubs [ s ] in
+  let ml = Wire_stubs.Private.to_ml_stubs [ s ] in
   List.iter
     (fun l ->
       Alcotest.(check bool) ("label " ^ l) true (contains ~sub:(l ^ " :") ml))
     [ "done_"; "effect_"; "local__"; "int"; "typeof" ];
-  let c = Wire_stubs.to_c_stubs [ s ] in
+  let c = Wire_stubs.Private.to_c_stubs [ s ] in
   List.iter
     (fun m ->
       Alcotest.(check bool)
@@ -390,32 +395,35 @@ let test_keyword_codec_name () =
   check_struct s;
   Alcotest.(check bool)
     "module Type" true
-    (contains ~sub:"module Type :" (Wire_stubs.to_ml_stubs [ s ]));
+    (contains ~sub:"module Type :" (Wire_stubs.Private.to_ml_stubs [ s ]));
   rejects "_type" [ "\"_type\"" ] (fun () ->
-      Wire_stubs.to_ml_stubs [ struct_ "_type" [ field "x" uint8 ] ])
+      Wire_stubs.Private.to_ml_stubs [ struct_ "_type" [ field "x" uint8 ] ])
 
 (* Two codecs whose names fold to one are one stub module and one C stub. *)
 let test_codec_names_clash () =
   let both a b =
     let structs = List.map (fun n -> struct_ n [ field "x" uint8 ]) [ a; b ] in
     let subs = [ Fmt.str "%S" a; Fmt.str "%S" b ] in
-    rejects (a ^ " and " ^ b) subs (fun () -> Wire_stubs.to_ml_stubs structs);
+    rejects
+      (a ^ " and " ^ b)
+      subs
+      (fun () -> Wire_stubs.Private.to_ml_stubs structs);
     rejects
       (a ^ " and " ^ b ^ " (C)")
       subs
-      (fun () -> Wire_stubs.to_c_stubs structs)
+      (fun () -> Wire_stubs.Private.to_c_stubs structs)
   in
   both "foo" "FOO";
   both "FooBar" "Foobar";
   let structs =
     List.map (fun n -> struct_ n [ field "x" uint8 ]) [ "Type"; "Type_" ]
   in
-  let ml = Wire_stubs.to_ml_stubs structs in
+  let ml = Wire_stubs.Private.to_ml_stubs structs in
   compile_ml_stub ml;
   Alcotest.(check bool)
     "Type and Type_ apart" true
     (contains ~sub:"module Type :" ml && contains ~sub:"module Type_ :" ml);
-  ignore (Wire_stubs.to_c_stubs structs)
+  ignore (Wire_stubs.Private.to_c_stubs structs)
 
 (* -- End-to-end: generate -> EverParse -> compile C+ML -> call -- *)
 
@@ -466,11 +474,13 @@ let e2e ?(ocamlopt_flags = "") ?(run_env = "") ~name ~codecs ~test_ml () =
     (* 1. Generate .3d and run EverParse *)
     let schemas =
       List.map
-        (fun (Wire_stubs.C c) -> Wire.Everparse.project ~mode:`Ffi c)
+        (fun p ->
+          let (Wire_3d.Private.Pack c) = Wire_3d.Private.unpack p in
+          Wire.Everparse.project ~mode:`Ffi c)
         codecs
     in
-    Wire_3d.generate_3d ~outdir:dir schemas;
-    Wire_3d.run_everparse ~outdir:dir schemas;
+    Wire_3d.Private.generate_3d ~outdir:dir schemas;
+    Wire_3d.Private.run_everparse ~outdir:dir schemas;
     (* 2. Generate C and ML stubs *)
     Wire_stubs.generate ~schema_dir:dir ~outdir:dir codecs;
     write_file
@@ -501,7 +511,7 @@ let test_e2e_no_params () =
   List.iter
     (fun label ->
       e2e ~name:label
-        ~codecs:[ Wire_stubs.C (Stub_codecs.named label) ]
+        ~codecs:[ Wire_3d.pack (Stub_codecs.named label) ]
         ~test_ml:
           (Fmt.str
              {|module S = Stubs.%s.Make (struct
@@ -527,7 +537,7 @@ let () =
 
 let test_e2e_offset_bounds () =
   e2e ~name:"OffsetHeader"
-    ~codecs:[ Wire_stubs.C Stub_codecs.Offset_header.codec ]
+    ~codecs:[ Wire_3d.pack Stub_codecs.Offset_header.codec ]
     ~test_ml:
       {|module S = Stubs.OffsetHeader.Make (Stub_codecs.Offset_header)
 
@@ -552,7 +562,7 @@ let () =
 
 let test_e2e_with_constraint () =
   e2e ~name:"Constrained"
-    ~codecs:[ Wire_stubs.C Stub_codecs.Constrained.codec ]
+    ~codecs:[ Wire_3d.pack Stub_codecs.Constrained.codec ]
     ~test_ml:
       {|module S = Stubs.Constrained.Make (Stub_codecs.Constrained)
 
@@ -574,7 +584,7 @@ let () =
    functor refuses a codec other than the one the stubs come from. *)
 let test_e2e_refused_is_error () =
   e2e ~name:"Refused"
-    ~codecs:[ Wire_stubs.C Stub_codecs.Refused.codec ]
+    ~codecs:[ Wire_3d.pack Stub_codecs.Refused.codec ]
     ~test_ml:
       {|module S = Stubs.Refused.Make (Stub_codecs.Refused)
 
@@ -615,7 +625,7 @@ let test_e2e_bitfields () =
      This is the end-to-end interop witness: if Wire and EverParse disagree
      on bit placement, this test breaks. *)
   e2e ~name:"BfHeader"
-    ~codecs:[ Wire_stubs.C Stub_codecs.Bf_header.codec ]
+    ~codecs:[ Wire_3d.pack Stub_codecs.Bf_header.codec ]
     ~test_ml:
       {|module S = Stubs.BfHeader.Make (Stub_codecs.Bf_header)
 
@@ -644,7 +654,7 @@ let test_e2e_gc_stress () =
   else
     e2e ~ocamlopt_flags:"-runtime-variant d" ~run_env:"OCAMLRUNPARAM=s=1k,v=0"
       ~name:"GcQuad"
-      ~codecs:[ Wire_stubs.C Stub_codecs.Gc_quad.codec ]
+      ~codecs:[ Wire_3d.pack Stub_codecs.Gc_quad.codec ]
       ~test_ml:
         {|module S = Stubs.GcQuad.Make (Stub_codecs.Gc_quad)
 
@@ -704,7 +714,8 @@ let diff_stub ppf (D { module_; codec; _ }) =
   Fmt.pf ppf
     "(let module S = Stubs.%s.Make (Stub_codecs.%s) in@\n\
     \     fun b off -> Result.map ignore (S.parse b off))"
-    (Wire_stubs.module_name (Wire.Private.Everparse.Raw.struct_of_codec codec))
+    (Wire_stubs.Private.module_name
+       (Wire.Private.Everparse.Raw.struct_of_codec codec))
     module_
 
 let diff_main =
@@ -769,7 +780,7 @@ let test_e2e_differential () =
       diff_codecs
   in
   e2e ~name:"diff"
-    ~codecs:(List.map (fun (D { codec; _ }) -> Wire_stubs.C codec) diff_codecs)
+    ~codecs:(List.map (fun (D { codec; _ }) -> Wire_3d.pack codec) diff_codecs)
     ~test_ml ()
 
 (* -- Output pattern invariants --
@@ -987,16 +998,16 @@ let test_e2e_output_parse () =
     (* 2. Generate 3D with output pattern and run EverParse *)
     let schema = Wire.Everparse.project ~mode:`Ffi codec in
     Wire.Everparse.write ~mode:`Ffi ~outdir:dir [ schema ];
-    Wire_3d.run_everparse ~outdir:dir [ schema ];
+    Wire_3d.Private.run_everparse ~outdir:dir [ schema ];
     (* 3. Emit default ExternalTypedefs + _Fields visitor (Fields visitor is what
        wire.stubs now stack-allocates against in wire_ffi.c). *)
-    Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
-    Wire_3d.write_fields ~outdir:dir [ schema ];
+    Wire_3d.Private.write_external_typedefs ~outdir:dir [ schema ];
+    Wire_3d.Private.write_fields ~outdir:dir [ schema ];
     ignore name;
     (* 4. Generate parse stubs *)
-    Wire_stubs.of_structs ~schema_dir:dir ~outdir:dir [ s ];
+    Wire_stubs.Private.of_structs ~schema_dir:dir ~outdir:dir [ s ];
     (* 5. Generate ML stubs *)
-    let ml_stubs = Wire_stubs.to_ml_stubs [ s ] in
+    let ml_stubs = Wire_stubs.Private.to_ml_stubs [ s ] in
     write_file (Filename.concat dir "stubs.ml") ml_stubs;
     (* 6. Write test program *)
     write_file
@@ -1051,13 +1062,13 @@ let test_e2e_full_stack () =
     in
     List.iter
       (fun schema ->
-        Wire_3d.generate_3d ~outdir:dir [ schema ];
-        Wire_3d.run_everparse ~outdir:dir [ schema ];
-        Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
-        Wire_3d.write_fields ~outdir:dir [ schema ])
+        Wire_3d.Private.generate_3d ~outdir:dir [ schema ];
+        Wire_3d.Private.run_everparse ~outdir:dir [ schema ];
+        Wire_3d.Private.write_external_typedefs ~outdir:dir [ schema ];
+        Wire_3d.Private.write_fields ~outdir:dir [ schema ])
       schemas;
-    let validator = Wire_3d.validator_name in
-    let fields name = Wire_3d.everparse_name name ^ "Fields" in
+    let validator = Wire_3d.Private.validator_name in
+    let fields name = Wire_3d.Private.everparse_name name ^ "Fields" in
     let ip_off = Net.ethernet_size - Net.ethernet_payload_size in
     let tcp_off = ip_off + (Net.ipv4_size - Net.ipv4_payload_size) in
     (* A zero frame validates: the net codecs carry no refinements, only
@@ -1107,7 +1118,7 @@ int main(void) {
     let cmd =
       Fmt.str
         "cd %s && cc %s -I . $(ls *.c | grep -v Wrapper) -o stack_test 2>&1" dir
-        Wire_3d.strict_cc_flags
+        Wire_3d.Private.strict_cc_flags
     in
     run cmd;
     run (Filename.concat dir "stack_test")
@@ -1138,10 +1149,10 @@ let test_e2e_nested_wide () =
     in
     let dir = Filename.temp_dir "wire_e2e_wide" "" in
     let schema = Everparse.project ~mode:`Ffi codec in
-    Wire_3d.generate_3d ~outdir:dir [ schema ];
-    Wire_3d.run_everparse ~outdir:dir [ schema ];
-    Wire_3d.write_external_typedefs ~outdir:dir [ schema ];
-    Wire_3d.write_fields ~outdir:dir [ schema ];
+    Wire_3d.Private.generate_3d ~outdir:dir [ schema ];
+    Wire_3d.Private.run_everparse ~outdir:dir [ schema ];
+    Wire_3d.Private.write_external_typedefs ~outdir:dir [ schema ];
+    Wire_3d.Private.write_fields ~outdir:dir [ schema ];
     let driver =
       Fmt.str
         {c|#include "WideTop.h"
@@ -1166,13 +1177,13 @@ int main(void) {
 |c}
         Fmt.(list ~sep:comma int)
         (List.init (Bytes.length frame) (Bytes.get_uint8 frame))
-        (Wire_3d.everparse_name "WideTop" ^ "Fields")
-        (Wire_3d.validator_name "WideTop")
+        (Wire_3d.Private.everparse_name "WideTop" ^ "Fields")
+        (Wire_3d.Private.validator_name "WideTop")
     in
     write_file (Filename.concat dir "wide.c") driver;
     Fmt.kstr run
       "cd %s && cc %s -I . $(ls *.c | grep -v Wrapper) -o wide_test 2>&1" dir
-      Wire_3d.strict_cc_flags;
+      Wire_3d.Private.strict_cc_flags;
     Alcotest.(check (option string))
       "i_w, as the codec decodes it" (Some expected)
       (capture (Filename.concat dir "wide_test"))
