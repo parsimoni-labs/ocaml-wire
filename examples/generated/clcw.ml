@@ -20,7 +20,7 @@ let[@inline always] check_record ~stop ~off =
   if (stop : int) < 4 then -1 else off
 
 let[@inline always] check (_b : 'b Wire_runtime.Buf.t)
-    (length : 'b Wire_runtime.Buf.length) off : 'b check =
+    (length : 'b Wire_runtime.Buf.length) ~off : 'b check =
   let length = (length : _ Wire_runtime.Buf.length :> int) in
   let len = 4 in
   if off > length - len then -1
@@ -94,9 +94,9 @@ let[@inline never] too_short buf off =
 let[@inline] is_valid buf off =
   if off < 0 || off > Bytes.length buf - min_size then false else true
 
-let validate buf off = if is_valid buf off then Ok () else error buf off
+let validate buf ~off = if is_valid buf off then Ok () else error buf off
 
-let decode buf off =
+let decode buf ~off =
   if off < 0 || off > Bytes.length buf - min_size then error buf off
   else
     let bw1 = Int32.to_int (Wire_runtime.Unchecked.i32be buf off) land mask32 in
@@ -153,7 +153,7 @@ let[@inline never] first_error buf off f1_controlwordtype f2_clcwversion
   Wire_runtime.Errors.check_unsigned ~bits:8 f14_reportvalue;
   no_error ()
 
-let[@inline] write buf off ~controlwordtype:f1_controlwordtype
+let[@inline] write buf ~off ~controlwordtype:f1_controlwordtype
     ~clcwversion:f2_clcwversion ~statusfield:f3_statusfield
     ~copineffect:f4_copineffect ~vcid:f5_vcid ~spare:f6_spare ~norf:f7_norf
     ~nobitlock:f8_nobitlock ~lockout:f9_lockout ~wait:f10_wait
@@ -200,8 +200,8 @@ let[@inline] write buf off ~controlwordtype:f1_controlwordtype
     ()
   end
 
-let encode t buf off =
-  write buf off ~controlwordtype:t.controlwordtype ~clcwversion:t.clcwversion
+let encode t buf ~off =
+  write buf ~off ~controlwordtype:t.controlwordtype ~clcwversion:t.clcwversion
     ~statusfield:t.statusfield ~copineffect:t.copineffect ~vcid:t.vcid
     ~spare:t.spare ~norf:t.norf ~nobitlock:t.nobitlock ~lockout:t.lockout
     ~wait:t.wait ~retransmit:t.retransmit ~farmbcounter:t.farmbcounter
@@ -218,7 +218,7 @@ let[@inline] set_bits'i32be (b : _ Wire_runtime.Buf.t) at ~mask ~shift x msg =
        (Int32.shift_left (Int32.of_int x) shift))
 
 let failed = Invalid_argument "CLCW.get: the check failed"
-let[@inline always] ok (c : 'b check) = c >= 0
+let[@inline always] is_ok (c : 'b check) = c >= 0
 
 let[@inline always] get (c : 'b check) : 'b view =
   if c >= 0 then c else raise failed

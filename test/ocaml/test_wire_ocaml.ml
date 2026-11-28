@@ -26,20 +26,33 @@ let outcome f =
   | exception Invalid_argument m -> "invalid " ^ m
 
 (* The module of [c] and its interface, for the OCaml target unless [target]
-   says otherwise; [scanner] declares the fold [fold] of [fields], whose
-   visitor is [Step], and [decided] gives the decisions that module takes. *)
+   says otherwise; [scanner] declares a fold of the fields [fields] (default:
+   every integer field, {!paths}), and [decided] gives the decisions that
+   module takes. *)
 let ml ?(target = `OCaml) ?simd ?maps c =
   Wire_ocaml.(to_ml (v ~target ?simd ?maps c))
 
 let mli ?(target = `OCaml) c = Wire_ocaml.(to_mli (v ~target c))
-let visitors = [ ("fold", "step.ml") ]
-let folds ?fields () = Wire_ocaml.[ fold ?outputs:fields "fold" ]
+
+(* The path of every integer field of [c], as a fold names it. *)
+let paths c =
+  let rec go prefix (view : Wire_ocaml.Views.t) =
+    List.concat_map
+      (function
+        | Wire_ocaml.Views.Int { name; _ } -> [ prefix ^ name ]
+        | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
+        | Bool _ | Bytes _ -> [])
+      view.members
+  in
+  go "" (Wire_ocaml.Views.v c)
 
 let scanner ?(target = `OCaml) ?fields c =
-  Wire_ocaml.(to_ml ~visitors (v ~target ~folds:(folds ?fields ()) c))
+  let fold = match fields with Some f -> f | None -> paths c in
+  Wire_ocaml.(to_ml (v ~target ~fold c))
 
 let decided ?target ?fields c =
-  Wire_ocaml.Plan.decisions ?target ~folds:(folds ?fields ()) ~visitors c
+  let fold = match fields with Some f -> f | None -> paths c in
+  Wire_ocaml.Plan.decisions ?target ~fold c
 
 let rand = Random.State.make [| 7 |]
 let byte () = Char.chr (Random.State.int rand 256)
@@ -61,10 +74,10 @@ let input ~size ~fix =
 (* The bytes [encode] writes for the record [decode] reads: a generated
    module's record, whose type is its own, compared with the codec's through
    them. *)
-let encoded size encode decode buf off =
-  let r = ok (decode buf off) in
+let encoded size encode decode buf ~off =
+  let r = ok (decode buf ~off) in
   let out = Bytes.make size '\000' in
-  encode r out 0;
+  encode r out ~off:0;
   Bytes.to_string out
 
 let reads ?(fix = fun _ _ -> ()) codec ~decode ~validate =
@@ -74,15 +87,15 @@ let reads ?(fix = fun _ _ -> ()) codec ~decode ~validate =
     let buf, off = input ~size ~fix in
     Alcotest.(check string)
       "decode"
-      (outcome (fun () -> enc (ok (Codec.decode codec buf off))))
-      (outcome (fun () -> decode buf off));
+      (outcome (fun () -> enc (ok (Codec.decode codec buf ~off))))
+      (outcome (fun () -> decode buf ~off));
     Alcotest.(check string)
       "validate"
       (outcome (fun () ->
-           ok (Codec.validate codec buf off);
+           ok (Codec.validate codec buf ~off);
            ""))
       (outcome (fun () ->
-           ok (validate buf off);
+           ok (validate buf ~off);
            ""))
   done
 
@@ -107,13 +120,13 @@ let writes codec ~write values =
           Alcotest.(check string)
             "refused"
             (outcome (fun () ->
-                 Codec.encode codec v (Bytes.make size '\xaa') 0;
+                 Codec.encode codec v (Bytes.make size '\xaa') ~off:0;
                  ""))
             ("invalid " ^ m)
       | w ->
           Alcotest.(check string)
             "write"
-            (run (fun buf off -> Codec.encode codec v buf off))
+            (run (fun buf off -> Codec.encode codec v buf ~off))
             (run w))
     values
 
@@ -124,7 +137,7 @@ let decoded ?(fix = fun _ _ -> ()) codec n =
     (fun _ ->
       let buf = Bytes.init size (fun _ -> byte ()) in
       if Random.State.bool rand then fix buf 0;
-      Result.to_option (Codec.decode codec buf 0))
+      Result.to_option (Codec.decode codec buf ~off:0))
     (List.init n Fun.id)
 
 let fix_checked buf off =
@@ -139,7 +152,7 @@ let test_ipv4 () =
     ~validate:G_ipv4.validate;
   writes Schemas.ipv4
     ~write:(fun (a, b, c, d, e, f, g, h, i, j) buf off ->
-      G_ipv4.write buf off ~versionihl:a ~tos:b ~length:c ~id:d ~frag:e ~ttl:f
+      G_ipv4.write buf ~off ~versionihl:a ~tos:b ~length:c ~id:d ~frag:e ~ttl:f
         ~proto:g ~sum:h ~src:i ~dst:j)
     (decoded Schemas.ipv4 200)
 
@@ -148,15 +161,16 @@ let test_ipv4_record () =
   for _ = 1 to 1000 do
     let buf, off = input ~size ~fix:(fun _ _ -> ()) in
     let via_gen () =
-      let r = ok (G_ipv4_record.decode buf off) in
+      let r = ok (G_ipv4_record.decode buf ~off) in
       let out = Bytes.create size in
-      G_ipv4_record.encode r out 0;
+      G_ipv4_record.encode r out ~off:0;
       Bytes.to_string out
     in
     Alcotest.(check string)
       "record"
       (outcome (fun () ->
-           Codec.to_string Schemas.ipv4 (ok (Codec.decode Schemas.ipv4 buf off))))
+           Codec.to_string Schemas.ipv4
+             (ok (Codec.decode Schemas.ipv4 buf ~off))))
       (outcome via_gen)
   done
 
@@ -173,7 +187,7 @@ let test_checked () =
   in
   writes Schemas.checked
     ~write:(fun (a, b, c, d, e) buf off ->
-      G_checked.write buf off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e)
+      G_checked.write buf ~off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e)
     (decoded ~fix:fix_checked Schemas.checked 200
     @ List.init 300 (fun _ -> wild ()))
 
@@ -189,7 +203,7 @@ let test_mixed () =
   in
   writes Schemas.mixed
     ~write:(fun (a, b, c, d, e, f, g, h) buf off ->
-      G_mixed.write buf off ~a ~b ~c ~d ~e ~f ~g ~h)
+      G_mixed.write buf ~off ~a ~b ~c ~d ~e ~f ~g ~h)
     (decoded Schemas.mixed 200 @ List.init 200 (fun _ -> wild ()))
 
 let test_small () =
@@ -197,7 +211,7 @@ let test_small () =
     ~decode:(encoded G_small.min_size G_small.encode G_small.decode)
     ~validate:G_small.validate;
   writes Schemas.small
-    ~write:(fun (a, b) buf off -> G_small.write buf off ~type_:a ~local__:b)
+    ~write:(fun (a, b) buf off -> G_small.write buf ~off ~type_:a ~local__:b)
     (decoded Schemas.small 100)
 
 let test_eth () =
@@ -206,7 +220,8 @@ let test_eth () =
     ~validate:G_eth.validate;
   let str n = String.init n (fun _ -> byte ()) in
   writes Schemas.eth
-    ~write:(fun (a, b, c) buf off -> G_eth.write buf off ~dst:a ~src:b ~type_:c)
+    ~write:(fun (a, b, c) buf off ->
+      G_eth.write buf ~off ~dst:a ~src:b ~type_:c)
     (decoded Schemas.eth 100
     @ List.init 100 (fun _ ->
         ( str (4 + Random.State.int rand 4),
@@ -234,7 +249,7 @@ let test_write_values () =
       let c = UInt16.v c in
       let d = UInt8.v d in
       let e = UInt8.v e in
-      Codec.encode Schemas.checked (a, b, c, d, e) buf off
+      Codec.encode Schemas.checked (a, b, c, d, e) buf ~off
     in
     Alcotest.(check string)
       "checked" (run typed)
@@ -242,7 +257,7 @@ let test_write_values () =
            let c = UInt16.v c in
            let d = UInt8.v d in
            let e = UInt8.v e in
-           G_checked.write buf off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e))
+           G_checked.write buf ~off ~version:a ~ihl:b ~length:c ~ttl:d ~proto:e))
   done;
   let size = Codec.min_size Schemas.mixed in
   for _ = 1 to 2000 do
@@ -266,7 +281,7 @@ let test_write_values () =
       let d = SInt16.v d in
       let e = UInt32.of_int32 e in
       let f = SInt32.of_int32 f in
-      Codec.encode Schemas.mixed (a, b, c, d, e, f, g, h) buf off
+      Codec.encode Schemas.mixed (a, b, c, d, e, f, g, h) buf ~off
     in
     Alcotest.(check string)
       "mixed" (run typed)
@@ -277,7 +292,7 @@ let test_write_values () =
            let d = SInt16.v d in
            let e = UInt32.of_int32 e in
            let f = SInt32.of_int32 f in
-           G_mixed.write buf off ~a ~b ~c ~d ~e ~f ~g ~h))
+           G_mixed.write buf ~off ~a ~b ~c ~d ~e ~f ~g ~h))
   done
 
 let test_wide () =
@@ -290,19 +305,8 @@ let test_wide () =
   in
   writes Schemas.wide
     ~write:(fun (a, b, c, d, e, f) buf off ->
-      G_wide.write buf off ~a ~b ~c ~d ~e ~f)
+      G_wide.write buf ~off ~a ~b ~c ~d ~e ~f)
     (decoded Schemas.wide 200 @ List.init 300 (fun _ -> wild ()))
-
-(* The interpreted twin names the shape of the codec its module comes from,
-   and refuses to run against a codec whose shape has changed since. *)
-let test_stale () =
-  let src = Wire_ocaml.(to_ml ~twin:true (v Schemas.small)) in
-  let digest = Wire.Private.Gen.digest Schemas.small in
-  Alcotest.(check bool) "digest in source" true (contains src digest);
-  Wire.Private.Gen.check Schemas.small digest;
-  match Wire.Private.Gen.check Schemas.eth digest with
-  | () -> Alcotest.fail "a changed codec was accepted"
-  | exception Invalid_argument _ -> ()
 
 (* The digest a generated module checks at load time changes with anything its
    code relies on: a field's sign, an enum's cases, a bitfield's layout. *)
@@ -352,7 +356,7 @@ let test_signed () =
     ~decode:(encoded G_signed.min_size G_signed.encode G_signed.decode)
     ~validate:G_signed.validate;
   writes Schemas.signed
-    ~write:(fun (a, b) buf off -> G_signed.write buf off ~s:a ~t:b)
+    ~write:(fun (a, b) buf off -> G_signed.write buf ~off ~s:a ~t:b)
     (decoded Schemas.signed 200)
 
 (* [packed]'s fields store as a few wide words: each value, a negative one
@@ -365,7 +369,7 @@ let test_packed () =
     ~validate:G_packed.validate;
   writes packed
     ~write:(fun r buf off ->
-      G_packed.write buf off ~a:r.a ~b:r.b ~c:r.c ~d:r.d ~e:r.e ~f:r.f ~g:r.g
+      G_packed.write buf ~off ~a:r.a ~b:r.b ~c:r.c ~d:r.d ~e:r.e ~f:r.f ~g:r.g
         ~h:r.h ~i:r.i ~j:r.j ~k:r.k ~l:r.l)
     (decoded packed 300);
   let wild k = Random.State.int rand (k + 40) - 20 in
@@ -396,7 +400,7 @@ let test_packed () =
       let j = UInt16.v j in
       let k = SInt8.v k in
       let l = UInt8.v l in
-      Codec.encode packed (packed_make a b c d e f g h i j k l) buf off
+      Codec.encode packed (packed_make a b c d e f g h i j k l) buf ~off
     in
     Alcotest.(check string)
       "packed" (run typed)
@@ -412,7 +416,7 @@ let test_packed () =
            let j = UInt16.v j in
            let k = SInt8.v k in
            let l = UInt8.v l in
-           G_packed.write buf off ~a ~b ~c ~d ~e ~f ~g ~h ~i ~j ~k ~l))
+           G_packed.write buf ~off ~a ~b ~c ~d ~e ~f ~g ~h ~i ~j ~k ~l))
   done
 
 (* Values that make each check of [refined] pass or fail, often several at
@@ -435,13 +439,10 @@ let test_refined () =
   in
   writes Schemas.refined
     ~write:(fun (a, b, c, d) buf off ->
-      G_refined.write buf off ~hi:a ~lo:b ~kind:c ~code:d)
+      G_refined.write buf ~off ~hi:a ~lo:b ~kind:c ~code:d)
     (decoded ~fix:fix_refined Schemas.refined 200
     @ List.init 300 (fun _ -> wild ()))
 
-(* A codec the generator cannot specialise is refused when the code is
-   generated, naming the field and why, rather than given a module with fewer
-   functions. *)
 (* Arithmetic near the top of the native int reads and writes as the codec
    does. *)
 let test_overflow () =
@@ -456,7 +457,7 @@ let test_overflow () =
   let u32 = UInt32.of_int32 in
   writes Schemas.overflow
     ~write:(fun (a, hi, lo, b, c) buf off ->
-      G_overflow.write buf off ~a ~hi ~lo ~b ~c)
+      G_overflow.write buf ~off ~a ~hi ~lo ~b ~c)
     (decoded ~fix Schemas.overflow 200
     @ [
         (u32 9l, 0, 0, u32 1l, u32 1l);
@@ -464,6 +465,31 @@ let test_overflow () =
         (u32 1l, 0, 0, u32 Int32.min_int, u32 Int32.min_int);
       ])
 
+(* A remainder by a constant is the codec's, narrow or past the native int,
+   where a check fails and where it holds. *)
+let test_remainder () =
+  let fix buf off =
+    Bytes.set_uint8 buf (off + 1) (2 * Random.State.int rand 128)
+  in
+  reads ~fix Schemas.remainder
+    ~decode:(encoded G_remainder.min_size G_remainder.encode G_remainder.decode)
+    ~validate:G_remainder.validate;
+  let u16 = UInt16.v and u32 = UInt32.of_int32 in
+  writes Schemas.remainder
+    ~write:(fun (even, word, lo, hi) buf off ->
+      G_remainder.write buf ~off ~even ~word ~lo ~hi)
+    (decoded ~fix Schemas.remainder 200
+    @ [
+        (u16 1, u32 0l, 0, 0);
+        (u16 0, u32 5l, 0, 0);
+        (u16 0, u32 (-1l), 0, 0);
+        (u16 2, u32 0l, 1, 1);
+        (u16 2, u32 0l, 1, 0);
+      ])
+
+(* A codec the generator cannot specialise is refused when the code is
+   generated, naming the field and why, rather than given a module with fewer
+   functions. *)
 let test_refused () =
   let refused ~maps name =
     match Wire_ocaml.(to_ml (v ~target:`OCaml ~maps Schemas.mapped)) with
@@ -508,6 +534,43 @@ let test_refused () =
   | exception Invalid_argument m ->
       Alcotest.(check bool) "names the field" true (contains m "Big")
 
+(* Shapes no module reads are refused, naming the field and the shape: an
+   integer of [n] bytes, which holds an [Optint.Int63.t] that [wire.runtime]
+   has no carrier for; a byte array whose bytes have a condition, which needs a
+   loop over its bytes; and a remainder by anything but a positive literal,
+   which an input could make divide by zero. *)
+let test_refused_shapes () =
+  let refused : type a. string -> a Field.t -> string list -> unit =
+   fun what field needles ->
+    let c =
+      Codec.v "Shape"
+        (fun n x -> (n, x))
+        Codec.[ Field.v "n" uint8 $ fst; field $ snd ]
+    in
+    match ml c with
+    | _ -> Alcotest.failf "%s: generated" what
+    | exception Invalid_argument m ->
+        List.iter
+          (fun needle ->
+            if not (contains m needle) then
+              Alcotest.failf "%s: %S does not name %S" what m needle)
+          needles
+  in
+  refused "a 3-byte integer" (Field.v "x" (uint 3)) [ "field x"; "UINTBE(3)" ];
+  refused "a 3-byte little-endian integer"
+    (Field.v "x" (uint ~endian:Little 3))
+    [ "field x"; "UINT(3)" ];
+  refused "a byte array with a condition on its bytes"
+    (Field.v "x"
+       (byte_array_where ~size:(int 3) ~per_byte:(fun b ->
+            Expr.(b >= int 32 && b <= int 126))))
+    [ "field x"; "[:byte-size 3]"; ">= 32" ];
+  let n = Field.v "n" uint8 in
+  refused "a remainder by a field"
+    (Field.v "x" uint8 ~self_constraint:(fun self ->
+         Expr.(Field.ref n >= int 1 && self mod Field.ref n = int 0)))
+    [ "field x"; "expression"; "%" ]
+
 (* Field names that spell one OCaml name twice, once lower-cased, escaped or
    suffixed, are refused naming both fields, as is a name the generated module
    uses for itself: a later definition would silently shadow the first. *)
@@ -528,8 +591,8 @@ let test_clash () =
               true (contains m n))
           names
   in
-  (* [Get.x_int] and [Get.x_word] exist only in a module whose views do not
-     read the fields: one with a field under a map. *)
+  (* A module with no walk, one with a field under a map, has an accessor per
+     field, named apart from the module's own values. *)
   let m = map ~decode:UInt8.to_int ~encode:UInt8.v uint8 in
   let maps = [ Wire_ocaml.map "M" ~typ:"int" m ] in
   let mapped = Codec.(Field.v "m" m $ fun () -> 0) in
@@ -538,28 +601,6 @@ let test_clash () =
       (fun _ _ -> ())
       Codec.[ (Field.v n (bits ~width:8 U8) $ fun () -> 0); mapped ]
   in
-  ignore (ml (pair "x_int" uint8 "x" uint32be) : string);
-  refused ~maps "a 32-bit x and x_int"
-    (Codec.v "C"
-       (fun _ _ _ -> ())
-       Codec.
-         [
-           (Field.v "x_int" uint8 $ fun () -> UInt8.zero);
-           (Field.v "x" uint32be $ fun () -> UInt32.zero);
-           mapped;
-         ])
-    [ "\"x_int\""; "\"x\"" ];
-  ignore (ml (pair "x" (bits ~width:3 U8) "x_word" uint8) : string);
-  refused ~maps "a bitfield x and x_word"
-    (Codec.v "C"
-       (fun _ _ _ -> ())
-       Codec.
-         [
-           (Field.v "x" (bits ~width:3 U8) $ fun () -> 0);
-           (Field.v "x_word" (bits ~width:5 U8) $ fun () -> 0);
-           mapped;
-         ])
-    [ "\"x\""; "\"x_word\"" ];
   refused "X and x" (pair "X" uint8 "x" uint8) [ "\"X\""; "\"x\"" ];
   refused "a-b and a_b" (pair "a-b" uint8 "a_b" uint8) [ "\"a-b\""; "\"a_b\"" ];
   refused "1 and f_1" (pair "1" uint8 "f_1" uint8) [ "\"1\""; "\"f_1\"" ];
@@ -569,12 +610,14 @@ let test_clash () =
   Alcotest.(check bool)
     "end and end_ apart" true
     (contains src "  end_ :" && contains src "  end__ :");
-  (* A getter in [Get] would shadow a helper the getters after it call. *)
-  refused ~maps "cast" (one "cast") [ "\"cast\""; "Get.cast" ];
-  (* Outside [Get], a field may take a name the module uses for itself. *)
+  (* An accessor takes a trailing ['_'] where it would shadow a helper or a
+     value of the module. *)
   Alcotest.(check bool)
-    "size getter" true
-    (contains (ml ~maps (one "size")) "let[@inline] size buf off");
+    "cast accessor" true
+    (contains (ml ~maps (one "cast")) "let[@inline always] cast_ ");
+  Alcotest.(check bool)
+    "size accessor" true
+    (contains (ml ~maps (one "size")) "let[@inline always] size_ ");
   (* An OxCaml keyword is escaped for the default target too, so its code
      compiles on an OxCaml compiler. *)
   let c = Codec.v "C" Fun.id Codec.[ Field.v "local_" uint8 $ Fun.id ] in
@@ -654,19 +697,6 @@ let test_narrow_ints () =
       ("wide OxCaml", ml ~target:`OxCaml Schemas.wide);
     ]
 
-(* A generated getter reads what [Codec.get] reads, or raises what it raises,
-   on random buffers and offsets around the field. *)
-let getter codec field ~get ~show =
-  let read = Codec.get codec field in
-  let size = Codec.min_size codec in
-  for _ = 1 to 2000 do
-    let buf, off = input ~size ~fix:(fun _ _ -> ()) in
-    Alcotest.(check string)
-      "get"
-      (outcome (fun () -> show (ok (read buf off))))
-      (outcome (fun () -> show (ok (get buf off))))
-  done
-
 (* Every field under a map: over 16- and 32-bit integers, a lookup whose index
    bound validate checks, and a bitfield. *)
 let test_mapped () =
@@ -675,122 +705,83 @@ let test_mapped () =
     ~validate:G_mapped.validate;
   writes Schemas.mapped
     ~write:(fun (a, b, c, d, e) buf off ->
-      G_mapped.write buf off ~len:a ~addr:b ~proto:c ~flag:d ~rest:e)
+      G_mapped.write buf ~off ~len:a ~addr:b ~proto:c ~flag:d ~rest:e)
     (decoded Schemas.mapped 300);
-  getter Schemas.mapped Schemas.mapped_len ~get:G_mapped.Get.len
-    ~show:string_of_int;
   let lookalike = map ~decode:UInt16.to_int ~encode:UInt16.v uint16be in
   Wire.Private.Gen.check_map Schemas.mapped "Len" Schemas.u16be_int;
   match Wire.Private.Gen.check_map Schemas.mapped "Len" lookalike with
   | () -> Alcotest.fail "a different map of the same shape was accepted"
   | exception Invalid_argument _ -> ()
 
-(* A module with no views reads its fields with [Get]: the module of a record
-   with fields under maps. *)
-let test_getters () =
-  getter Schemas.mapped Schemas.mapped_proto ~get:G_mapped.Get.proto
-    ~show:(function
-    | `Icmp -> "icmp"
-    | `Tcp -> "tcp"
-    | `Udp -> "udp");
-  getter Schemas.mapped Schemas.mapped_rest ~get:G_mapped.Get.rest
-    ~show:string_of_int
-
-(* In the buffer named [b] of length [len], [check b len off] passes
-   exactly when [Codec.validate] accepts the record at [off], and each accessor
-   [<field> b v] of the view [get] makes then reads what [Codec.get] reads at
-   [off]. *)
-let test_view () =
-  let get codec field show =
-    let read = Codec.get codec field in
-    fun buf off -> show (ok (read buf off))
-  in
-  let frag =
-    get Schemas.ipv4 Schemas.ipv4_frag (fun v ->
-        string_of_int (UInt16.to_int v))
-  and src =
-    get Schemas.ipv4 Schemas.ipv4_src (fun v -> string_of_int (SInt32.to_int v))
-  and proto =
-    get Schemas.checked Schemas.checked_proto (fun v ->
-        string_of_int (UInt8.to_int v))
-  in
+(* In the buffer named [b], [check b len ~off] passes exactly when
+   [Codec.validate] accepts the record at [off], and each accessor
+   [<field> b v] of the view [get] makes then reads what [Codec.decode]
+   reads at [off]: in a module with views and in one with fields under
+   maps, which has no walk. *)
+let viewed ?(fix = fun _ _ -> ()) codec ~expect ~check =
+  let size = Codec.min_size codec in
   for _ = 1 to 2000 do
-    let size = Codec.min_size Schemas.ipv4 in
     let len = size + Random.State.int rand 8 in
     let buf = Bytes.init len (fun _ -> byte ()) in
     let off = Random.State.int rand (len - size + 3) - 1 in
-    let codec_ok =
-      outcome (fun () ->
-          ok (Codec.validate Schemas.ipv4 buf off);
-          "ok")
-    in
+    if Random.State.bool rand && off >= 0 && off + size <= len then fix buf off;
     let expected =
-      outcome (fun () ->
-          ok (Codec.validate Schemas.ipv4 buf off);
-          frag buf off ^ "," ^ src buf off)
+      outcome (fun () -> expect (ok (Codec.decode codec buf ~off)))
     in
-    let (Buf.Any b) = Buf.v buf in
-    let len = Buf.length b in
-    let read v =
-      string_of_int (UInt16.to_int (G_ipv4.frag b v))
-      ^ ","
-      ^ string_of_int (SInt32.to_int (G_ipv4.src b v))
-    in
-    let c = G_ipv4.check b len off in
-    Alcotest.(check bool)
-      "check"
-      (String.starts_with ~prefix:"ok" codec_ok)
-      (G_ipv4.ok c);
     let got =
       outcome (fun () ->
-          if G_ipv4.ok c then read (G_ipv4.get c)
-          else (
-            ok (G_ipv4.validate buf off);
-            ""))
+          match check buf off with
+          | Some s -> s
+          | None ->
+              ok (Codec.validate codec buf ~off);
+              "accepted by the codec")
     in
-    Alcotest.(check string) "ipv4 view" expected got
-  done;
-  for _ = 1 to 2000 do
-    let size = Codec.min_size Schemas.checked in
-    let len = size + Random.State.int rand 8 in
-    let buf = Bytes.init len (fun _ -> byte ()) in
-    let off = Random.State.int rand (len - size + 3) - 1 in
-    if Random.State.bool rand && off >= 0 && off + size <= len then
-      fix_checked buf off;
-    let codec_ok =
-      outcome (fun () ->
-          ok (Codec.validate Schemas.checked buf off);
-          "ok")
-    in
-    (let (Buf.Any b) = Buf.v buf in
-     Alcotest.(check bool)
-       "check"
-       (String.starts_with ~prefix:"ok" codec_ok)
-       (G_checked.ok (G_checked.check b (Buf.length b) off)));
-    let expected =
-      outcome (fun () ->
-          ok (Codec.validate Schemas.checked buf off);
-          proto buf off)
-    in
-    let (Buf.Any b) = Buf.v buf in
-    let got =
-      outcome (fun () ->
-          let c = G_checked.check b (Buf.length b) off in
-          if G_checked.ok c then
-            string_of_int (UInt8.to_int (G_checked.proto b (G_checked.get c)))
-          else (
-            ok (G_checked.validate buf off);
-            ""))
-    in
-    Alcotest.(check string) "checked view" expected got
+    Alcotest.(check string) "view" expected got
   done
+
+let test_view () =
+  let u16 v = string_of_int (UInt16.to_int v) in
+  let i32 v = string_of_int (SInt32.to_int v) in
+  viewed Schemas.ipv4
+    ~expect:(fun (_, _, _, _, frag, _, _, _, src, _) ->
+      u16 frag ^ "," ^ i32 src)
+    ~check:(fun buf off ->
+      let (Buf.Any b) = Buf.v buf in
+      let c = G_ipv4.check b (Buf.length b) ~off in
+      if G_ipv4.is_ok c then
+        let v = G_ipv4.get c in
+        Some (u16 (G_ipv4.frag b v) ^ "," ^ i32 (G_ipv4.src b v))
+      else None);
+  viewed ~fix:fix_checked Schemas.checked
+    ~expect:(fun (_, _, _, _, proto) -> string_of_int (UInt8.to_int proto))
+    ~check:(fun buf off ->
+      let (Buf.Any b) = Buf.v buf in
+      let c = G_checked.check b (Buf.length b) ~off in
+      if G_checked.is_ok c then
+        Some
+          (string_of_int (UInt8.to_int (G_checked.proto b (G_checked.get c))))
+      else None);
+  let proto = function `Icmp -> "icmp" | `Tcp -> "tcp" | `Udp -> "udp" in
+  viewed Schemas.mapped
+    ~expect:(fun (len, addr, p, flag, rest) ->
+      Fmt.str "%d %ld %s %b %d" len addr (proto p) flag rest)
+    ~check:(fun buf off ->
+      let (Buf.Any b) = Buf.v buf in
+      let c = G_mapped.check b (Buf.length b) ~off in
+      if G_mapped.is_ok c then
+        let v = G_mapped.get c in
+        Fmt.kstr Option.some "%d %ld %s %b %d" (G_mapped.len b v)
+          (G_mapped.addr b v)
+          (proto (G_mapped.proto b v))
+          (G_mapped.flag b v) (G_mapped.rest b v)
+      else None)
 
 (* A check that failed gives no view: [get] refuses it. *)
 let test_failed_views () =
   let short = Bytes.make 3 '\xff' in
   let (Buf.Any b) = Buf.v short in
-  let c = G_ipv4.check b (Buf.length b) 0 in
-  Alcotest.(check bool) "failed" false (G_ipv4.ok c);
+  let c = G_ipv4.check b (Buf.length b) ~off:0 in
+  Alcotest.(check bool) "failed" false (G_ipv4.is_ok c);
   Alcotest.(check bool)
     "get refuses" true
     (match G_ipv4.get c with
@@ -798,10 +789,9 @@ let test_failed_views () =
     | exception Invalid_argument _ -> true);
   let off_end = Bytes.make 40 '\x45' in
   let (Buf.Any b) = Buf.v off_end in
-  let len = Buf.length b in
-  let at off = G_ipv4.check b len off in
-  Alcotest.(check bool) "negative offset" false (G_ipv4.ok (at (-1)));
-  Alcotest.(check bool) "past the end" false (G_ipv4.ok (at 21));
+  let at off = G_ipv4.check b (Buf.length b) ~off in
+  Alcotest.(check bool) "negative offset" false (G_ipv4.is_ok (at (-1)));
+  Alcotest.(check bool) "past the end" false (G_ipv4.is_ok (at 21));
   (* A record with no check of its own (Eth, 14 bytes) tests no sign of its
      own: its answer to a negative offset is refused all the same. *)
   List.iter
@@ -809,7 +799,7 @@ let test_failed_views () =
       Alcotest.(check bool)
         (Fmt.str "no check, at %d" off)
         ok
-        (G_eth.ok (G_eth.check b len off)))
+        (G_eth.is_ok (G_eth.check b (Buf.length b) ~off)))
     [
       (min_int, false);
       (-14, false);
@@ -835,10 +825,10 @@ let test_short_faults () =
       let check name got =
         Alcotest.(check string) (Fmt.str "%s %S" name s) expected got
       in
-      check "codec decode" (error (Codec.decode Schemas.checked buf 0));
-      check "codec validate" (error (Codec.validate Schemas.checked buf 0));
-      check "generated decode" (error (G_checked.decode buf 0));
-      check "generated validate" (error (G_checked.validate buf 0)))
+      check "codec decode" (error (Codec.decode Schemas.checked buf ~off:0));
+      check "codec validate" (error (Codec.validate Schemas.checked buf ~off:0));
+      check "generated decode" (error (G_checked.decode buf ~off:0));
+      check "generated validate" (error (G_checked.validate buf ~off:0)))
     [
       ("\x55", "Version@0: field constraint violated (value 5)");
       ("\x45\x00\x00\x00", "@0: where clause violated");
@@ -856,11 +846,12 @@ let test_oxcaml () =
     (fun s -> Alcotest.(check bool) s true (contains src s))
     [
       "let[@inline][@zero_alloc] is_valid";
-      "let[@inline always] check (_b : 'b Wire_runtime.Buf.t @ local)";
+      "let[@inline always] check (_b : 'b Wire_runtime.Buf.t @ local) (length \
+       : 'b Wire_runtime.Buf.length) ~off";
       "let[@inline always] src (b : 'b Wire_runtime.Buf.t @ local) (v : 'b \
        view)";
       "[@zero_alloc assume error] fail";
-      "let[@inline][@zero_alloc] write (buf @ local) off";
+      "let[@inline][@zero_alloc] write (buf @ local) ~off";
       "module Int32_u = Wire_runtime.Target.Int32_u";
     ];
   (* A write checks what it wrote only where the record has checks. *)
@@ -916,107 +907,76 @@ let test_simd () =
   | exception Invalid_argument m ->
       Alcotest.(check bool) m true (contains m "OxCaml")
 
-(* A frame of [len] bytes holding [n], then [rest]. *)
+(* A frame of 4 bytes holding [n], then [rest]. *)
 let frame n rest =
   let b = Bytes.create (4 + String.length rest) in
   Bytes.set_int32_be b 0 n;
   Bytes.blit_string rest 0 b 4 (String.length rest);
   b
 
-let sized_reference =
-  Diff_ocaml.Reference
-    {
-      label = "sized";
-      codec = Schemas.sized;
-      known = None;
-      project =
-        (fun _ (n, body, tail) ->
-          [
-            ("n", UInt32.to_int n);
-            ("body_present", if Option.is_some body then 1 else 0);
-            ("tail", UInt8.to_int tail);
-          ]);
-      inputs = (fun b -> [ b ]);
-    }
+(* The fold of a generated module, [fold b ~off ~len], against the codec on
+   every window of [buf] from offset 0: it passes iff [Codec.decode] accepts
+   the window, and hands [f] what [project] reads of the record decoded. *)
+let check_fold codec ~project ~fold buf =
+  for len = 0 to Bytes.length buf do
+    let want =
+      match Codec.decode codec (Bytes.sub buf 0 len) ~off:0 with
+      | Ok r -> Some (project r)
+      | Error _ -> None
+    in
+    Alcotest.(check (option (list int)))
+      (Fmt.str "%S, window %d" (Bytes.to_string buf) len)
+      want (fold buf ~off:0 ~len)
+  done
 
-let overflow_reference =
-  Diff_ocaml.Reference
-    {
-      label = "overflow";
-      codec = Schemas.overflow;
-      known = None;
-      project =
-        (fun _ (a, hi, lo, b, c) ->
-          [
-            ("a", UInt32.to_int a);
-            ("hi", hi);
-            ("lo", lo);
-            ("b", UInt32.to_int b);
-            ("c", UInt32.to_int c);
-          ]);
-      inputs = (fun b -> [ b ]);
-    }
+(* The one answer of a fold on the frame of [len] bytes at [off], whose [f]
+   conses [Some] of the fields and [invalid] [None]. *)
+let one fold buf ~off ~len =
+  match
+    fold buf ~offs:[| off |] ~lens:[| len |] ~invalid:(fun acc -> None :: acc)
+  with
+  | Ok [ answer ] -> answer
+  | Ok answers ->
+      Alcotest.failf "%d answers for one record" (List.length answers)
+  | Error (e, _) -> Alcotest.failf "an error with invalid: %a" Error.pp e
 
-let scan_ops name fields decode =
-  {
-    Diff_ocaml.scan_name = name;
-    scan_fields = fields;
-    scan = decode;
-    scan_batch = None;
-    scan_index = None;
-  }
-
-(* The answer of a fold whose visitor conses each record's outputs onto its
-   accumulator, on one record. *)
-let one = function
-  | [ answer ] -> answer
-  | answers -> Alcotest.failf "%d answers for one record" (List.length answers)
+let u32 = UInt32.to_int
+let u8 = UInt8.to_int
+let opt = Option.fold ~none:(-1) ~some:u8
 
 (* The scanner accepts what the codec accepts when a condition, size or check
    computes near the top of its type. *)
 let test_scan_overflow () =
   let sized =
-    scan_ops "S_sized" [ "n"; "body_present"; "tail" ] (fun b o n ->
-        one (S_sized.fold b o n ~init:[]))
-  in
-  let overflow =
-    scan_ops "S_overflow" [ "a"; "hi"; "lo"; "b"; "c" ] (fun b o n ->
-        one (S_overflow.fold b o n ~init:[]))
+    one (fun buf ~offs ~lens ~invalid ->
+        S_sized.fold buf ~offs ~lens ~invalid ~init:[] ~f:(fun acc ~n ~tail ->
+            Some [ u32 n; u8 tail ] :: acc))
+  and overflow =
+    one (fun buf ~offs ~lens ~invalid ->
+        S_overflow.fold buf ~offs ~lens ~invalid ~init:[]
+          ~f:(fun acc ~a ~hi ~lo ~b ~c ->
+            Some [ u32 a; hi; lo; u32 b; u32 c ] :: acc))
   in
   List.iter
     (fun n ->
       List.iter
         (fun rest ->
-          Diff_ocaml.check_scan sized_reference [ sized ] (frame n rest);
-          Diff_ocaml.check_scan overflow_reference [ overflow ] (frame n rest))
+          check_fold Schemas.sized
+            ~project:(fun (n, _, tail) -> [ u32 n; u8 tail ])
+            ~fold:sized (frame n rest);
+          check_fold Schemas.overflow
+            ~project:(fun (a, hi, lo, b, c) -> [ u32 a; hi; lo; u32 b; u32 c ])
+            ~fold:overflow (frame n rest))
         [ ""; "\001"; "\001\002"; "abcdefghij"; String.make 40 '\255' ])
     [ 0l; 1l; 2l; 3l; 6l; 46341l; 0x5a827999l; 0x7fffffffl; -1l ]
-
-let skipped_reference =
-  let int8 = UInt8.to_int in
-  let opt name v =
-    [
-      (name ^ "_present", if Option.is_some v then 1 else 0);
-      (name, Option.fold ~none:0 ~some:int8 v);
-    ]
-  in
-  Diff_ocaml.Reference
-    {
-      label = "skipped";
-      codec = Schemas.skipped;
-      known = None;
-      project =
-        (fun _ (n, x, a, b) ->
-          [ ("n", UInt32.to_int n); ("x", int8 x) ] @ opt "a" a @ opt "b" b);
-      inputs = (fun b -> [ b ]);
-    }
 
 (* A condition that facts decide is still evaluated where the codec
    evaluates it: when [x = 4] holds, [n * n > max_int && x = 3] is false. *)
 let test_scan_skipped () =
   let skipped =
-    scan_ops "S_skipped" [ "n"; "x"; "a_present"; "a"; "b_present"; "b" ]
-      (fun b o n -> one (S_skipped.fold b o n ~init:[]))
+    one (fun buf ~offs ~lens ~invalid ->
+        S_skipped.fold buf ~offs ~lens ~invalid ~init:[]
+          ~f:(fun acc ~n ~x ~a ~b -> Some [ u32 n; u8 x; opt a; opt b ] :: acc))
   in
   List.iter
     (fun n ->
@@ -1024,23 +984,13 @@ let test_scan_skipped () =
         (fun x ->
           List.iter
             (fun rest ->
-              Diff_ocaml.check_scan skipped_reference [ skipped ]
+              check_fold Schemas.skipped
+                ~project:(fun (n, x, a, b) -> [ u32 n; u8 x; opt a; opt b ])
+                ~fold:skipped
                 (frame n (String.make 1 (Char.chr x) ^ rest)))
             [ ""; "\007"; "\007\008" ])
         [ 3; 4; 5 ])
     [ 0l; 1l; 46341l; 0x5a827999l; 0x7fffffffl; -1l ]
-
-let huge_reference =
-  Diff_ocaml.Reference
-    {
-      label = "huge";
-      codec = Schemas.huge;
-      known = None;
-      project =
-        (fun _ (flag, _, tail) ->
-          [ ("flag", UInt8.to_int flag); ("tail", UInt8.to_int tail) ]);
-      inputs = (fun b -> [ b ]);
-    }
 
 (* Generating code for a prefix takes time in its number of fields, whatever
    its size in bytes. *)
@@ -1058,11 +1008,15 @@ let test_huge_prefix () =
   in
   ignore (ml array : string);
   let huge =
-    scan_ops "S_huge" [ "flag"; "tail" ] (fun b o n ->
-        one (S_huge.fold b o n ~init:[]))
+    one (fun buf ~offs ~lens ~invalid ->
+        S_huge.fold buf ~offs ~lens ~invalid ~init:[] ~f:(fun acc ~flag ~tail ->
+            Some [ u8 flag; u8 tail ] :: acc))
   in
   List.iter
-    (fun s -> Diff_ocaml.check_scan huge_reference [ huge ] (Bytes.of_string s))
+    (fun s ->
+      check_fold Schemas.huge
+        ~project:(fun (flag, _, tail) -> [ u8 flag; u8 tail ])
+        ~fold:huge (Bytes.of_string s))
     [ ""; "\001"; "\001\002"; String.make 64 '\001' ]
 
 (* A codec whose constant offsets overflow the native int holds more than any
@@ -1101,42 +1055,57 @@ let words s =
     s;
   !n
 
-(* [n] optional fields nested inside each other that hand out every output.
-   Each target writes the walks of [fold], [fold_frames] and [fold_index],
-   whose loops walk a frame through functions cut out of it. Past the first
-   four levels,
+(* [n] optional fields nested inside each other, a fold of every field.
+   Each target writes the walks of [fold_step], [fold_step_frames] and
+   [fold_step_index], whose loops walk a frame through functions cut out of
+   it, and [fold], which places the records. Past the first four levels,
    whose outputs are immutable, a level costs a walk about 21 lines: its
    three slots, the bound checks and reads of its two prefixes, its
    presence, its join and the jumps to it, or the short code after it copied
-   into its branches; and about 150 words on OCaml, 215 on OxCaml, whose
-   arithmetic is spelled as calls. [pp] prints the three outputs of a level
-   on three lines. *)
+   into its branches; and about 490 words on OCaml, 610 on OxCaml, whose
+   arithmetic is spelled as calls: each call of [f] gives each field in its
+   carrier, labelled, an option under a layer. [pp] prints the three outputs of a
+   level on three lines. *)
 let nested_budget target n =
   match target with
-  | `OCaml -> ((47 * n) + 72, (340 * n) + 250)
+  | `OCaml -> ((47 * n) + 72, (490 * n) + 700)
   | `OxCaml -> ((132 * n) + 72, (1380 * n) + 250)
 
 (* The scanner's text before its views, and its views, which start with the
    type of a view. A level of [gated] or [nested] costs the views a module
-   of some 133 lines and 860 words, on either target: its types, [ok], [get],
+   of some 133 lines and 860 words, on either target: its types, [is_ok], [get],
    an accessor per field, each of which tests the presence again and places
    the field after the optional one, a setter per field at a constant offset,
    the function that finds where the record ends, and its values: the record
    type and its printer, [of_view], [encode_at], [size], and the checks and
    the walk that find the codec's error, some 70 lines and 420 words of
-   these. *)
+   these. The root's views hold, for a fold of records back to back, where
+   its record ends. *)
 let scan_and_views src =
-  let marker = "type 'b view = int" in
-  let n = String.length marker in
-  let rec find i =
-    if i + n > String.length src then Alcotest.failf "no views in the scanner"
-    else if String.sub src i n = marker then i
-    else find (i + 1)
+  let find ?(from = 0) marker =
+    let n = String.length marker in
+    let rec go i =
+      if i + n > String.length src then None
+      else if String.sub src i n = marker then Some i
+      else go (i + 1)
+    in
+    go from
   in
-  let i = find 0 in
-  (String.sub src 0 i, String.sub src i (String.length src - i))
+  let i =
+    match find "type 'b view = int" with
+    | Some i -> i
+    | None -> Alcotest.failf "no views in the scanner"
+  in
+  (* The fold the walks end with, its error found off the hot path, is
+     written after the views and counted with the walks. *)
+  let j =
+    Option.value ~default:(String.length src)
+      (find ~from:i "let[@inline never] window_error")
+  in
+  ( String.sub src 0 i ^ String.sub src j (String.length src - j),
+    String.sub src i (j - i) )
 
-let views_budget n = ((140 * n) + 60, (900 * n) + 400)
+let views_budget n = ((140 * n) + 120, (900 * n) + 400)
 
 let test_size () =
   List.iter
@@ -1184,14 +1153,13 @@ let test_size () =
         [ 8; 16; 32; 64 ])
     [ (`OCaml, "OCaml"); (`OxCaml, "OxCaml") ]
 
-(* The scanner of nested optional fields that hands out every output
-   allocates nothing where it calls its consumer by name, beyond the floats
-   of the measure: a frame with no optional field gives zeros, one with all
-   twelve levels a one for each of its 35 outputs. Dune's dev profile compiles
-   wire.runtime [-opaque], so its 64-bit load returns a boxed [int64], and on
-   OxCaml the library of these tests, whose visitor [Nested_step] is a unit of
-   its own: the batch then allocates and only the answers are checked. *)
-let test_nested_no_alloc () =
+(* The fold of nested optional fields, each field under a layer an option:
+   on one frame, in slots and in frames of an index, it gives the same sums,
+   a frame with no optional field zeros and one with all twelve levels a one
+   for each of its 24 fields. A refused frame stops the fold where it is not
+   given [invalid], with the error of its window, and offsets and lengths of
+   two lengths are refused. *)
+let test_nested_fold () =
   let stride = 32 and frames = 4096 in
   let len = stride * frames in
   let buf =
@@ -1200,37 +1168,103 @@ let test_nested_no_alloc () =
         else if i < 2 * stride then '\001'
         else Char.chr (Random.State.int rand 2))
   in
-  let one off = S_nested.fold buf off stride ~init:0 in
+  let v x = UInt8.to_int x in
+  let o = function Some x -> v x | None -> 0 in
+  let f acc ~tag:t0 ~inner_tag:t1 ~inner_inner_tag:t2 ~inner_inner_inner_tag:t3
+      ~inner_inner_inner_inner_tag:t4 ~inner_inner_inner_inner_inner_tag:t5
+      ~inner_inner_inner_inner_inner_inner_tag:t6
+      ~inner_inner_inner_inner_inner_inner_inner_tag:t7
+      ~inner_inner_inner_inner_inner_inner_inner_inner_tag:t8
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_tag:t9
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_tag:t10
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_tag:t11
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_after:
+        a11
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_after:a10
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_after:a9
+      ~inner_inner_inner_inner_inner_inner_inner_inner_after:a8
+      ~inner_inner_inner_inner_inner_inner_inner_after:a7
+      ~inner_inner_inner_inner_inner_inner_after:a6
+      ~inner_inner_inner_inner_inner_after:a5 ~inner_inner_inner_inner_after:a4
+      ~inner_inner_inner_after:a3 ~inner_inner_after:a2 ~inner_after:a1
+      ~after:a0 =
+    acc + v t0 + o t1 + o t2 + o t3 + o t4 + o t5 + o t6 + o t7 + o t8 + o t9
+    + o t10 + o t11 + o a11 + o a10 + o a9 + o a8 + o a7 + o a6 + o a5 + o a4
+    + o a3 + o a2 + o a1 + v a0
+  in
+  let invalid acc = acc - 1 in
+  let ok = function
+    | Ok n -> n
+    | Error (e, _) -> Alcotest.failf "fold: %a" Error.pp e
+  in
+  let one off =
+    ok
+      (S_nested.fold buf ~offs:[| off |] ~lens:[| stride |] ~invalid ~init:0 ~f)
+  in
   Alcotest.(check int) "no optional field" 0 (one 0);
-  Alcotest.(check int) "every optional field" 35 (one stride);
-  let each () =
+  Alcotest.(check int) "every optional field" 24 (one stride);
+  let each =
     let acc = ref 0 in
     for i = 0 to frames - 1 do
-      acc := S_nested.fold buf (i * stride) stride ~init:!acc
+      acc := !acc + one (i * stride)
     done;
     !acc
   in
-  let batch () = S_nested.fold_frames buf 0 len ~stride ~init:0 in
-  let measured what f =
+  Alcotest.(check int)
+    "one by one and in slots" each
+    (ok (S_nested.fold buf ~stride ~invalid ~init:0 ~f));
+  let offs = Array.init frames (fun i -> i * stride)
+  and lens = Array.make frames stride in
+  Alcotest.(check int)
+    "one by one and in an index" each
+    (ok (S_nested.fold buf ~offs ~lens ~invalid ~init:0 ~f));
+  (match S_nested.fold buf ~offs ~lens:[| stride |] ~invalid ~init:0 ~f with
+  | _ -> Alcotest.fail "offs and lens of different lengths"
+  | exception Invalid_argument _ -> ());
+  let short = Bytes.make 1 '\001' in
+  match S_nested.fold short ~init:0 ~f with
+  | Error (e, 0) ->
+      Alcotest.(check bool)
+        "the error of the window" true
+        (Error.equal e (Result.get_error (S_nested.validate short ~off:0)))
+  | _ -> Alcotest.fail "a refused record stops the fold back to back"
+
+(* A fold over fields that are no option allocates nothing, beyond the floats
+   of the measure, on frames in slots and in an index. Dune's dev profile
+   compiles wire.runtime [-opaque], so its 64-bit load returns a boxed
+   [int64]: there only the answers are checked. *)
+let test_fold_no_alloc () =
+  let size = Codec.min_size Schemas.checked and frames = 4096 in
+  let buf = Bytes.make (size * frames) '\000' in
+  for i = 0 to frames - 1 do
+    fix_checked buf (i * size);
+    Bytes.set_uint16_be buf ((i * size) + 1) 20
+  done;
+  let f acc ~version ~ihl ~length ~ttl ~proto =
+    acc + version + ihl + UInt16.to_int length + UInt8.to_int ttl
+    + UInt8.to_int proto
+  in
+  let measured what g =
     let before = Gc.minor_words () in
-    let v = Sys.opaque_identity (f ()) in
+    let v = Sys.opaque_identity (g ()) in
     let words = Gc.minor_words () -. before in
     if words >= 64. && not Boxed_loads.v then
       Alcotest.failf "%s: %.0f words allocated over %d frames" what words frames;
     v
   in
-  Alcotest.(check int)
-    "fold and fold_frames" (measured "fold" each)
-    (measured "fold_frames" batch);
-  let offs = Array.init frames (fun i -> i * stride)
-  and lens = Array.make frames stride in
-  let index () = S_nested.fold_index buf ~offs ~lens ~init:0 in
-  Alcotest.(check int)
-    "fold and fold_index" (measured "fold" each)
-    (measured "fold_index" index);
-  match S_nested.fold_index buf ~offs ~lens:[| stride |] ~init:0 with
-  | _ -> Alcotest.fail "fold_index: offs and lens of different lengths"
-  | exception Invalid_argument _ -> ()
+  let offs = Array.init frames (fun i -> i * size)
+  and lens = Array.make frames size in
+  let invalid acc = acc in
+  let slots = measured "slots" (fun () -> G_checked.fold buf ~init:0 ~f) in
+  let index =
+    measured "index" (fun () ->
+        G_checked.fold buf ~offs ~lens ~invalid ~init:0 ~f)
+  in
+  match (slots, index) with
+  | Ok a, Ok b ->
+      Alcotest.(check int) "back to back and in an index" a b;
+      if a <= 0 then Alcotest.fail "no record passed"
+  | _ -> Alcotest.fail "a refused record"
 
 let refused what generate =
   match generate () with
@@ -1244,35 +1278,32 @@ let test_scanner_refusals () =
       Codec.[ Field.v n1 uint8 $ fst; Field.v n2 uint8 $ snd ]
   in
   refused "two outputs of one name" (fun () -> scanner (pair "a_b" "a_B"));
-  refused "an unknown output" (fun () -> scanner ~fields:[ "c" ] (pair "a" "b"));
-  (* A fold calls its visitor by name: one that no visitor names is
-     refused, naming it, as is a visitor of a fold the module does not
-     declare. *)
-  let declared = Wire_ocaml.(v ~folds:[ fold "count" ] (pair "a" "b")) in
-  List.iter
-    (fun (what, write, needle) ->
-      match write () with
-      | _ -> Alcotest.failf "%s: written" what
-      | exception Invalid_argument msg ->
-          Alcotest.(check bool) (what ^ ": " ^ msg) true (contains msg needle))
-    [
-      ( "a fold with no visitor",
-        (fun () -> Wire_ocaml.to_ml declared),
-        "\"count\"" );
-      ("its interface", (fun () -> Wire_ocaml.to_mli declared), "\"count\"");
-      ("its twin", (fun () -> Wire_ocaml.to_ml ~twin:true declared), "\"count\"");
-      ( "the visitor of another fold",
-        (fun () ->
-          Wire_ocaml.to_ml
-            ~visitors:[ ("count", "count.ml"); ("sum", "sum.ml") ]
-            declared),
-        "\"sum\"" );
-    ];
+  (* A fold names each field by its path: one that names no field, a field
+     no fold reads or goes through a field that holds no record is refused,
+     naming the path, and so are two paths [f] would take under one label. *)
+  let refused_path what make needle =
+    match make () with
+    | _ -> Alcotest.failf "%s: written" what
+    | exception Invalid_argument msg ->
+        Alcotest.(check bool) (what ^ ": " ^ msg) true (contains msg needle)
+  in
+  let fold c paths () = Wire_ocaml.(v ~fold:paths c) in
+  refused_path "an unknown field" (fold (pair "a" "b") [ "c" ]) "\"c\"";
+  refused_path "through a byte" (fold (pair "a" "b") [ "a.b" ]) "\"a.b\"";
+  refused_path "an empty path" (fold (pair "a" "b") [ "" ]) "\"\"";
+  refused_path "a field of bytes"
+    (fold Packet_stack.capture [ "dst" ])
+    "\"dst\"";
+  refused_path "a field holding a record"
+    (fold Packet_stack.capture [ "ipv4.tcp" ])
+    "\"ipv4.tcp\"";
+  refused_path "two paths of one label" (fold (pair "a" "b") [ "a"; "a" ]) "~a";
   Alcotest.(check bool)
-    "a fold with its visitor" true
-    (contains
-       (Wire_ocaml.to_ml ~visitors:[ ("count", "count.ml") ] declared)
-       "Count.valid init");
+    "a fold of no field" true
+    (contains (scanner ~fields:[] (pair "a" "b")) "let[@inline] fold ");
+  Alcotest.(check bool)
+    "a fold calls f" true
+    (contains (scanner (pair "a" "b")) "f init");
   Alcotest.(check bool)
     "no fold by default" false
     (contains (ml Schemas.sized) "~init");
@@ -1317,17 +1348,22 @@ let test_scanner_outputs () =
       ("y_b", false);
     ]
     (Wire_ocaml.outputs outer);
-  let src = scanner outer in
+  (* A field under a layer is an option, whether the layer is optional or
+     not, as [Codec.( / )] types it. *)
+  let intf = Wire_ocaml.(to_mli (v ~fold:[ "tag"; "x.a"; "y.b" ] outer)) in
   Alcotest.(check bool)
-    "valid takes the outputs by name" true
-    (contains src "Step.valid init ~tag:"
-    && contains src "~x_present:" && contains src "~y_b:");
+    "f takes the fields labelled by their paths" true
+    (contains intf
+       "f:('acc -> tag:Wire_runtime.UInt8.t -> x_a:Wire_runtime.UInt8.t option \
+        -> y_b:Wire_runtime.UInt8.t option -> 'acc)");
   let padded =
-    Everparse.Raw.(struct_ "Padded" [ anon_field uint8; field "z" uint8 ])
+    Wire.Private.Everparse.Raw.(
+      struct_ "Padded" [ anon_field uint8; field "z" uint8 ])
   in
   let holder =
     Codec.v "Holder" Fun.id
-      Codec.[ Field.v "h" (Everparse.Raw.struct_typ padded) $ Fun.id ]
+      Codec.
+        [ Field.v "h" (Wire.Private.Everparse.Raw.struct_typ padded) $ Fun.id ]
   in
   refused "an anonymous field in a struct type" (fun () ->
       Wire_ocaml.outputs holder);
@@ -1352,77 +1388,6 @@ let test_portable () =
   Alcotest.(check bool) "u8 scanner" false (guarded (scanner (one uint8)));
   Alcotest.(check bool) "u16 scanner" true (guarded (scanner (one uint16be)))
 
-(* An Ethernet, IPv4 and TCP header of [Packet_stack.codec] in 64 bytes,
-   which [edit] changes. *)
-let stack_frame edit =
-  let b = Bytes.make 64 '\000' in
-  Bytes.set_uint16_be b 12 0x0800;
-  Bytes.set_uint8 b 14 0x45;
-  Bytes.set_uint16_be b 16 50;
-  Bytes.set_uint8 b 22 64;
-  Bytes.set_uint8 b 23 6;
-  Bytes.set_int32_be b 26 0xc0a80001l;
-  Bytes.set_int32_be b 30 0xc0a80002l;
-  Bytes.set_uint16_be b 34 443;
-  Bytes.set_uint16_be b 36 51000;
-  Bytes.set_uint8 b 46 0x50;
-  edit b;
-  b
-
-(* On OCaml the step functions read the Ethernet type from the word that also
-   holds the start of the IPv4 header, loaded before the dispatch on the type.
-   They give the codec's answers on records each check rejects and on frames
-   cut around the bounds that word straddles. *)
-let test_shared_words () =
-  let src = scanner Packet_stack.codec in
-  Alcotest.(check bool)
-    "the Ethernet type from the word at 12" true
-    (contains src "(Int64.shift_right_logical w12 48)");
-  let case =
-    List.find
-      (fun (Diff_codecs.Scan c) -> c.label = "scan_packet")
-      Diff_codecs.scan_cases
-  in
-  let reference = Diff_ocaml.of_scan_case case
-  and backends = (List.assoc "scan_packet" Ocaml_index.scanners) () in
-  let records =
-    [
-      ("TCP", true, ignore);
-      ("not IPv4", true, fun b -> Bytes.set_uint16_be b 12 0x86dd);
-      ("version", false, fun b -> Bytes.set_uint8 b 14 0x65);
-      ("header length", false, fun b -> Bytes.set_uint8 b 14 0x44);
-      ("total length", false, fun b -> Bytes.set_uint16_be b 16 16);
-      ("total past the frame", false, fun b -> Bytes.set_uint16_be b 16 51);
-      ("fragment", true, fun b -> Bytes.set_uint16_be b 20 1);
-      ( "UDP length",
-        false,
-        fun b ->
-          Bytes.set_uint8 b 23 17;
-          Bytes.set_uint16_be b 38 7 );
-      ("data offset", false, fun b -> Bytes.set_uint8 b 46 0x40);
-    ]
-  in
-  let frames =
-    List.map
-      (fun (what, ok, edit) ->
-        let b = stack_frame edit in
-        Alcotest.(check bool)
-          (what ^ " accepted") ok
-          (Result.is_ok (Codec.decode Packet_stack.codec b 0));
-        b)
-      records
-  in
-  Diff_ocaml.check_scan ~strides:[ 64 ] ~expand:false reference backends
-    (Bytes.concat Bytes.empty frames);
-  let ip = stack_frame ignore
-  and other = stack_frame (fun b -> Bytes.set_uint16_be b 12 0x86dd) in
-  List.iter
-    (fun n ->
-      let cut b = Bytes.sub b 0 n in
-      Diff_ocaml.check_scan ~strides:[ n ] ~expand:false reference backends
-        (Bytes.concat Bytes.empty [ cut ip; cut other; cut ip ]))
-    [ 13; 14; 19; 20; 21; 33; 34; 35 ]
-
 (* The decisions the scanner of [Packet_stack.codec] takes, on each target and
    with the step functions: the IPv4 header's two bitfields tested as one range
    of their byte, the IPv4 options' bound left to the check of the bytes after
@@ -1440,7 +1405,7 @@ let test_decisions () =
   let has ds what p = Alcotest.(check bool) what true (List.exists p ds) in
   let start = { var = None; at = 0 } in
   has ocaml "fold holds int64s" (function
-    | Walk { name = "fold"; values = `Int64; known = 0 } -> true
+    | Walk { name = "fold_step"; values = `Int64; known = 0 } -> true
     | _ -> false);
   has ocaml "Ethernet tested" (function
     | Prefix_bound { at; window = "stop"; bytes = 14; tested = true } ->
@@ -1466,7 +1431,7 @@ let test_decisions () =
     (function
     | Frame_loop
         {
-          name = "fold_frames";
+          name = "fold_step_frames";
           need = 34;
           frames = 4;
           short = Some Apart;
@@ -1479,7 +1444,7 @@ let test_decisions () =
     (function
     | Frame_loop
         {
-          name = "fold_frames";
+          name = "fold_step_frames";
           need = 34;
           frames = 4;
           short = Some Inline;
@@ -1492,12 +1457,17 @@ let test_decisions () =
     | Shared_words { at = 14; window = "stop"; held = [ 12 ]; _ } -> true
     | _ -> false);
   has ocaml "the IPv4 header cut into a function of its own" (function
-    | Cut { name = "fold_ipv4"; window = "stop"; known = 0 } -> true
+    | Cut { name = "step_ipv4"; window = "stop"; known = 0 } -> true
     | _ -> false);
   let index ahead = function
     | Frame_loop
-        { name = "fold_index"; need = 34; frames = 2; short = None; ahead = a }
-      ->
+        {
+          name = "fold_step_index";
+          need = 34;
+          frames = 2;
+          short = None;
+          ahead = a;
+        } ->
         a = ahead
     | _ -> false
   in
@@ -1634,60 +1604,6 @@ let test_region_left_to_next () =
        (region (function Checked _ -> true | _ -> false))
        (decided c))
 
-(* The structured cases' corpora, and the EverParse C validator when built. *)
-let test_scanners () =
-  List.iter
-    (fun (Diff_codecs.Scan c as case) ->
-      Diff_ocaml.scan_corpus
-        ?oracle:(Diff_driver.oracle c.label)
-        case
-        ((List.assoc c.label Ocaml_index.scanners) ()))
-    Diff_codecs.scan_cases
-
-(* The codec and every scanner, alone and in a frame fold, accept the frames
-   of [cases] marked accepted and reject the others. *)
-let check_packet cases =
-  let label = "scan_packet" in
-  let codec =
-    match
-      List.find
-        (fun (Diff_codecs.Scan c) -> c.label = label)
-        Diff_codecs.scan_cases
-    with
-    | Diff_codecs.Scan c -> fun b -> Result.is_ok (Codec.decode c.codec b 0)
-  in
-  let backends = (List.assoc label Ocaml_index.scanners) () in
-  List.iter
-    (fun (name, b, accepted) ->
-      let len = Bytes.length b in
-      Alcotest.(check bool) (name ^ ": codec") accepted (codec b);
-      List.iter
-        (fun (s : Diff_ocaml.scan_ops) ->
-          Alcotest.(check bool)
-            (Fmt.str "%s: %s" name s.scan_name)
-            accepted
-            (Option.is_some (s.scan b 0 len));
-          Option.iter
-            (fun batch ->
-              let frames =
-                Option.value ~default:[] (batch (Bytes.cat b b) 0 (2 * len) len)
-              in
-              Alcotest.(check (list bool))
-                (Fmt.str "%s: %s fold_frames" name s.scan_name)
-                [ accepted; accepted ]
-                (List.map Option.is_some frames))
-            s.scan_batch)
-        backends)
-    cases
-
-(* A frame that exactly fits a bound is accepted, and one a byte over is
-   rejected. *)
-let test_packet_bounds () = check_packet Diff_codecs.packet_bounds
-
-(* The IPv4 version and header length byte is accepted exactly in
-   [0x45, 0x4f]. *)
-let test_packet_versions () = check_packet Diff_codecs.packet_versions
-
 (* A backend sizes its ports from the plan's outputs: a signed field keeps its
    width on the wire and says it is signed, so a negative value survives. *)
 let test_plan_signed_output () =
@@ -1709,7 +1625,7 @@ let test_plan_signed_output () =
       Alcotest.(check bool)
         (Fmt.str "%d accepted" value)
         true
-        (Result.is_ok (Codec.decode codec bytes 0)))
+        (Result.is_ok (Codec.decode codec bytes ~off:0)))
     [ -128; -1 ]
 
 (* The interface states the public API and hides the rest. The one for the
@@ -1757,18 +1673,15 @@ let suite =
       Alcotest.test_case "offsets past the largest buffer" `Quick test_scan_deep;
       Alcotest.test_case "prefix of a huge fixed slice" `Quick test_huge_prefix;
       Alcotest.test_case "code size of optional fields" `Quick test_size;
-      Alcotest.test_case "nested optional fields allocate nothing" `Quick
-        test_nested_no_alloc;
+      Alcotest.test_case "nested optional fields in a fold" `Quick
+        test_nested_fold;
+      Alcotest.test_case "a fold of plain fields allocates nothing" `Quick
+        test_fold_no_alloc;
       Alcotest.test_case "scanner refusals" `Quick test_scanner_refusals;
       Alcotest.test_case "plan signed output" `Quick test_plan_signed_output;
       Alcotest.test_case "scanner outputs are label paths" `Quick
         test_scanner_outputs;
       Alcotest.test_case "portable when values fit 31 bits" `Quick test_portable;
-      Alcotest.test_case "structured scanners" `Quick test_scanners;
-      Alcotest.test_case "packet bounds" `Quick test_packet_bounds;
-      Alcotest.test_case "packet versions" `Quick test_packet_versions;
-      Alcotest.test_case "a word shared across prefixes" `Quick
-        test_shared_words;
       Alcotest.test_case "the scanner's decisions" `Quick test_decisions;
       Alcotest.test_case "the entry's bounds" `Quick test_entry_bounds;
       Alcotest.test_case "a region of constant size" `Quick test_constant_region;
@@ -1783,13 +1696,14 @@ let suite =
       Alcotest.test_case "32-bit bitfields" `Quick test_wide;
       Alcotest.test_case "maps" `Quick test_mapped;
       Alcotest.test_case "write from the values" `Quick test_write_values;
-      Alcotest.test_case "stale code is refused" `Quick test_stale;
       Alcotest.test_case "the digest sees sign, cases and layout" `Quick
         test_digest;
       Alcotest.test_case "negative literals" `Quick test_signed;
       Alcotest.test_case "adjacent fields" `Quick test_packed;
       Alcotest.test_case "errors in the codec's order" `Quick test_refined;
       Alcotest.test_case "overflowing arithmetic" `Quick test_overflow;
+      Alcotest.test_case "remainders" `Quick test_remainder;
+      Alcotest.test_case "refused shapes" `Quick test_refused_shapes;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "clashing names are refused" `Quick test_clash;
       Alcotest.test_case "no literal needs more than 31 bits" `Quick
@@ -1797,7 +1711,6 @@ let suite =
       Alcotest.test_case "OxCaml target" `Quick test_oxcaml;
       Alcotest.test_case "interfaces" `Quick test_interfaces;
       Alcotest.test_case "NEON lanes" `Quick test_simd;
-      Alcotest.test_case "getters" `Quick test_getters;
       Alcotest.test_case "view at an offset" `Quick test_view;
       Alcotest.test_case "failed views share nothing" `Quick test_failed_views;
     ] )

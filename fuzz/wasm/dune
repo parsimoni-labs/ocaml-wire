@@ -19,7 +19,7 @@
 (executable
  (name fuzz)
  (modes js wasm)
- (libraries wire alcobar fuzz_gen)
+ (libraries wire rfc5280 alcobar fuzz_gen)
  (js_of_ocaml
   (enabled_if %{bin-available:js_of_ocaml}))
  (wasm_of_ocaml

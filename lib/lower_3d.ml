@@ -276,7 +276,7 @@ let rec case_index_to_expr : type k. k typ -> k -> packed_expr =
   | Float32 _ | Float64 _ | Unit | All_bytes | All_zeros | Zeroterm
   | Zeroterm_at_most _ | Array _ | Byte_array _ | Byte_array_where _
   | Byte_slice _ | Casetype _ | Union _ | Struct _ | Type_ref _
-  | Qualified_ref _ | Codec _ | Optional _ | Optional_or _ | Repeat _ ->
+  | Qualified_ref _ | Codec _ | Optional _ | Optional_or _ | Repeat _ | Der _ ->
       invalid_arg
         "Wire.casetype: this tag type carries no integer case index; use a \
          fixed-width integer, bitfield, or enum tag."
@@ -463,6 +463,7 @@ let rec wrap_shape : type a. a typ -> string * param list =
       in
       (Fmt.str "ap%s_%s" ttag (String.concat "_" atags), List.concat aformals)
   | Codec { codec_name; codec_struct; _ } -> (codec_name, codec_struct.params)
+  | Der _ -> invalid_arg "Wire: an ASN.1 component has no 3D projection"
 
 and expr_shape : type a. a expr -> string * param list =
  fun e ->
@@ -658,6 +659,16 @@ let index_bound_elt : type a. a typ -> (string * bool expr) option =
       let elt_var = Fmt.str "%slk%d" elt_var_prefix bound in
       Some (elt_var, Lt (Ref (I, elt_var), Int bound))
   | _ -> None
+
+let is_der_struct (s : struct_) =
+  List.exists
+    (fun (Field f) -> match f.field_typ with Der _ -> true | _ -> false)
+    s.fields
+
+let rec is_der_value : type a. a typ -> bool = function
+  | Codec { codec_struct; _ } -> is_der_struct codec_struct
+  | Map { inner; _ } -> is_der_value inner
+  | _ -> false
 
 let primitive_region : type a.
     a typ -> (int expr * packed_typ * int * bool) option = function
@@ -920,6 +931,8 @@ let rec collect_casetype_decls : type a.
          enum type (declared by [enum_decls]); a wider or big-endian one renders
          through the synthesised refined-element struct, declared here. *)
       if closed_enum_elem_wide elem then emit_enum_elem_struct seen acc elem
+  (* Bytes to 3D, the DER in them is everparse-asn1's to check. *)
+  | Single_elem { elem; at_most = false; _ } when is_der_value elem -> ()
   | Single_elem { elem; _ } as typ ->
       extract elem;
       emit_single_elem seen acc typ elem

@@ -11,7 +11,22 @@ let contains s sub =
 let has what src sub =
   Alcotest.(check bool) (Fmt.str "%s: %S" what sub) true (contains src sub)
 
-let rs ?folds ?visitors c = Wire_rust.(to_rs ?visitors (v ?folds c))
+let rs ?fold c = Wire_rust.(to_rs (v ?fold c))
+
+(* The path of every integer field of [c], as a fold names it. *)
+let paths c =
+  let rec go prefix (view : Wire_ocaml.Views.t) =
+    List.concat_map
+      (function
+        | Wire_ocaml.Views.Int { name; _ } -> [ prefix ^ name ]
+        | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
+        | Bool _ | Bytes _ -> [])
+      view.members
+  in
+  go "" (Wire_ocaml.Views.v c)
+
+(* The module of [c] with a fold of every integer field. *)
+let folded c = rs ~fold:(paths c) c
 
 (* The function [name] of [src]: from its signature to the end of its body,
    the first line that closes a block at the start. *)

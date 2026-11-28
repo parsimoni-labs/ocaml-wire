@@ -29,14 +29,6 @@ val validate_agrees_cases : string -> int -> Alcobar.test_case list
     answer [Error] exactly when {!Wire.Codec.decode} returns [Error], with the
     same [Wire.Error.kind], over an arbitrary nested codec per sample. *)
 
-val direct_cases : string -> 'a t -> Alcobar.test_case list
-(** [direct_cases label g] round-trips [g] through {!Wire.of_string} and
-    {!Wire.to_string}. Skipped when [g] needs a [Param.env]. *)
-
-val streaming_cases : string -> 'a t -> Alcobar.test_case list
-(** [streaming_cases label g] round-trips [g] through {!Wire.of_reader} and
-    {!Wire.to_writer}. Skipped when [g] needs a [Param.env]. *)
-
 val validate_cases : string -> 'a t -> Alcobar.test_case list
 (** [validate_cases label g] requires validate to pass positives and not to
     crash on random and adversarial inputs. *)

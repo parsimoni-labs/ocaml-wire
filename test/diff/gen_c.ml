@@ -6,7 +6,8 @@
 (* ---- Field type metadata ---- *)
 
 type ft = {
-  make_field : string -> bool Wire.expr option -> Wire.Everparse.Raw.field;
+  make_field :
+    string -> bool Wire.expr option -> Wire.Private.Everparse.Raw.field;
   wire_size : int;
   gen_constraint : Random.State.t -> int;
   big_endian : bool;
@@ -25,49 +26,56 @@ let field_types =
   [|
     {
       make_field =
-        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint8);
+        (fun n c ->
+          Wire.Private.Everparse.Raw.field n ?constraint_:c Wire.uint8);
       wire_size = 1;
       gen_constraint = gen_uint8;
       big_endian = false;
     };
     {
       make_field =
-        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint16);
+        (fun n c ->
+          Wire.Private.Everparse.Raw.field n ?constraint_:c Wire.uint16);
       wire_size = 2;
       gen_constraint = gen_uint16;
       big_endian = false;
     };
     {
       make_field =
-        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint16be);
+        (fun n c ->
+          Wire.Private.Everparse.Raw.field n ?constraint_:c Wire.uint16be);
       wire_size = 2;
       gen_constraint = gen_uint16;
       big_endian = true;
     };
     {
       make_field =
-        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint32);
+        (fun n c ->
+          Wire.Private.Everparse.Raw.field n ?constraint_:c Wire.uint32);
       wire_size = 4;
       gen_constraint = gen_uint32;
       big_endian = false;
     };
     {
       make_field =
-        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint32be);
+        (fun n c ->
+          Wire.Private.Everparse.Raw.field n ?constraint_:c Wire.uint32be);
       wire_size = 4;
       gen_constraint = gen_uint32;
       big_endian = true;
     };
     {
       make_field =
-        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint64);
+        (fun n c ->
+          Wire.Private.Everparse.Raw.field n ?constraint_:c Wire.uint64);
       wire_size = 8;
       gen_constraint = gen_uint64;
       big_endian = false;
     };
     {
       make_field =
-        (fun n c -> Wire.Everparse.Raw.field n ?constraint_:c Wire.uint64be);
+        (fun n c ->
+          Wire.Private.Everparse.Raw.field n ?constraint_:c Wire.uint64be);
       wire_size = 8;
       gen_constraint = gen_uint64;
       big_endian = true;
@@ -84,7 +92,7 @@ type random_field = {
 }
 
 type random_schema = {
-  struct_ : Wire.Everparse.Raw.struct_;
+  struct_ : Wire.Private.Everparse.Raw.struct_;
   fields : random_field list;
   total_wire_size : int;
 }
@@ -122,7 +130,7 @@ let random_struct seed =
     List.fold_left (fun acc rf -> acc + rf.ft.wire_size) 0 fields
   in
   {
-    struct_ = Wire.Everparse.Raw.struct_ struct_name wire_fields;
+    struct_ = Wire.Private.Everparse.Raw.struct_ struct_name wire_fields;
     fields;
     total_wire_size;
   }
@@ -143,14 +151,14 @@ let generate_c_stubs ~schema_dir outdir schemas =
   (* Include all wrapper headers - they declare the check functions *)
   List.iter
     (fun rs ->
-      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
+      let name = Wire.Private.Everparse.Raw.struct_name rs.struct_ in
       pr "#include \"%s/%sWrapper.h\"\n" schema_dir name)
     schemas;
   pr "\n";
   (* Include wrapper implementations with unique error handlers *)
   List.iteri
     (fun i rs ->
-      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
+      let name = Wire.Private.Everparse.Raw.struct_name rs.struct_ in
       (* Include EverParse.h and parser *)
       if i = 0 then pr "#include \"%s/EverParse.h\"\n" schema_dir;
       pr "#include \"%s/%s.h\"\n" schema_dir name;
@@ -165,7 +173,7 @@ let generate_c_stubs ~schema_dir outdir schemas =
       pr "  uint64_t c, uint8_t *ctx, EVERPARSE_INPUT_BUFFER i, uint64_t p) {\n";
       pr "  (void)t; (void)f; (void)r; (void)c; (void)ctx; (void)i; (void)p;\n";
       pr "}\n";
-      let params = Wire.Everparse.Raw.struct_params rs.struct_ in
+      let params = Wire.Private.Everparse.Raw.struct_params rs.struct_ in
       let input_params =
         List.filter (fun p -> not (param_is_mutable p)) params
       in
@@ -195,7 +203,7 @@ let generate_c_stubs ~schema_dir outdir schemas =
   (* Generate OCaml stubs *)
   List.iter
     (fun rs ->
-      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
+      let name = Wire.Private.Everparse.Raw.struct_name rs.struct_ in
       pr "CAMLprim value caml_%s_check(value v_bytes) {\n"
         (String.lowercase_ascii name);
       pr "  CAMLparam1(v_bytes);\n";
@@ -214,7 +222,7 @@ let generate_ml_stubs outdir schemas =
   let pr fmt = Fmt.pf ppf fmt in
   List.iter
     (fun rs ->
-      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
+      let name = Wire.Private.Everparse.Raw.struct_name rs.struct_ in
       let lower = String.lowercase_ascii name in
       pr "external %s_check : bytes -> bool = \"caml_%s_check\"\n" lower lower)
     schemas;
@@ -252,7 +260,7 @@ let fields_with_offsets fields =
 
 let emit_wire_checker ppf rs =
   let pr fmt = Fmt.pf ppf fmt in
-  let name = Wire.Everparse.Raw.struct_name rs.struct_ in
+  let name = Wire.Private.Everparse.Raw.struct_name rs.struct_ in
   let lower = String.lowercase_ascii name in
   pr "(* %s: wire_size=%d *)\n" name rs.total_wire_size;
   pr "let %s_wire_check (buf : bytes) : bool =\n" lower;
@@ -285,7 +293,7 @@ let generate_test_runner outdir schemas =
   pr "let schemas = [\n";
   List.iter
     (fun rs ->
-      let name = Wire.Everparse.Raw.struct_name rs.struct_ in
+      let name = Wire.Private.Everparse.Raw.struct_name rs.struct_ in
       let lower = String.lowercase_ascii name in
       pr
         "  { name = %S; wire_size = %d; wire_check = %s_wire_check; c_check = \
@@ -329,10 +337,10 @@ let action_schema () =
   let outx = Wire.Param.output "outx" Wire.uint8 in
   let f_x = Wire.Field.v "x" Wire.uint8 in
   let s =
-    Wire.Everparse.Raw.param_struct "ActionDemo"
-      [ Wire.Everparse.Raw.mutable_param "outx" Wire.uint32 ]
+    Wire.Private.Everparse.Raw.param_struct "ActionDemo"
+      [ Wire.Private.Everparse.Raw.mutable_param "outx" Wire.uint32 ]
       [
-        Wire.Everparse.Raw.field "x"
+        Wire.Private.Everparse.Raw.field "x"
           ~action:
             (Wire.Action.on_success
                [
@@ -340,7 +348,7 @@ let action_schema () =
                  Wire.Action.return_bool Wire.Expr.true_;
                ])
           Wire.uint8;
-        Wire.Everparse.Raw.field "y" Wire.uint8;
+        Wire.Private.Everparse.Raw.field "y" Wire.uint8;
       ]
   in
   {
@@ -378,11 +386,13 @@ let () =
   let wire_3d_schemas =
     List.map
       (fun rs ->
-        Wire.Everparse.Raw.of_module
-          ~name:(Wire.Everparse.Raw.struct_name rs.struct_)
+        Wire.Private.Everparse.Raw.of_module
+          ~name:(Wire.Private.Everparse.Raw.struct_name rs.struct_)
           ~module_:
-            (Wire.Everparse.Raw.module_
-               [ Wire.Everparse.Raw.typedef ~entrypoint:true rs.struct_ ])
+            (Wire.Private.Everparse.Raw.module_
+               [
+                 Wire.Private.Everparse.Raw.typedef ~entrypoint:true rs.struct_;
+               ])
           ~wire_size:rs.total_wire_size)
       schemas
   in

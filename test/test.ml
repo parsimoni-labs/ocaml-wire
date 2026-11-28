@@ -11,8 +11,6 @@ let () =
       Test_arith_3d.suite;
       Test_codec_bitfield.suite;
       Test_codec_encode.suite;
-      Test_codec_writer.suite;
-      Test_codec_word.suite;
       Test_codec_view.suite;
       Test_codec_action.suite;
       Test_codec_misuse.suite;
@@ -27,6 +25,7 @@ let () =
       Test_codec_zeroterm.suite;
       Test_codec_alloc.suite;
       Test_everparse.suite;
+      Test_everparse_extract.suite;
       Test_everparse_doc.suite;
       Test_everparse_bitorder.suite;
       Test_everparse_names.suite;
@@ -52,4 +51,6 @@ let () =
       Test_shape.suite;
       Test_names.suite;
       Test_layout.suite;
+      Test_asn1_syntax.suite;
+      Test_asn1.suite;
     ]

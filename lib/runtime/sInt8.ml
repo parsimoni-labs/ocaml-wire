@@ -4,6 +4,7 @@ let min_int = -128
 let max_int = 127
 let zero = 0
 let equal : t -> t -> bool = Int.equal
+let compare : t -> t -> int = Int.compare
 let pp = Format.pp_print_int
 
 (* The one place the range is enforced. Every other path takes a [t] and so

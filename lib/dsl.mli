@@ -74,6 +74,9 @@ type _ codec_ref = ..
 (** The codec a sub-codec field holds, which the codec module extends. Internal
     use. *)
 
+type _ der = ..
+(** A DER component, which the ASN.1 module extends. Internal use. *)
+
 type 'r walk = {
   wvalue : cursor -> 'r;
       (** The record at the cursor's {!field-wpos}, within its {!field-wend}:
@@ -409,6 +412,9 @@ and _ typ =
       seq : ('a, 'seq) seq_map;
     }
       -> 'seq typ  (** Repeated elements filling a byte budget. *)
+  | Der : 'a der -> 'a typ
+      (** A component of an ASN.1 SEQUENCE or SET, which only the ASN.1 module
+          reads. *)
 
 and ('a, 'k) case_branch =
   | Case_branch : {

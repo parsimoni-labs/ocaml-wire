@@ -91,6 +91,6 @@ let suite =
   ( "target",
     [ Alcotest.test_case "word values and misaligned offsets" `Quick words ]
     @
-    if Paranoid.enabled then
+    if Unchecked.checked then
       [ Alcotest.test_case "full-width checked indices" `Quick bad_indices ]
     else [] )

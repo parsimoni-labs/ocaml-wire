@@ -118,11 +118,11 @@ let test_array_record_element () =
         ];
     }
   in
-  let sz = Codec.encoded_size arr_recs_codec v in
+  let sz = Codec.size arr_recs_codec v in
   Alcotest.(check int) "wire size" 7 sz;
   let buf = Bytes.create sz in
-  Codec.encode arr_recs_codec v buf 0;
-  match Codec.decode arr_recs_codec buf 0 with
+  Codec.encode arr_recs_codec v buf ~off:0;
+  match Codec.decode arr_recs_codec buf ~off:0 with
   | Ok d ->
       Alcotest.(check (list (pair int int)))
         "pts"
@@ -160,11 +160,11 @@ let test_nested_over_array () =
         ]
   in
   let v = List.map UInt64.of_int64 [ 1L; 2L ] in
-  let buf = Bytes.create (Codec.encoded_size codec v) in
-  Codec.encode codec v buf 0;
+  let buf = Bytes.create (Codec.size codec v) in
+  Codec.encode codec v buf ~off:0;
   Alcotest.(check bool)
     "roundtrip" true
-    (List.equal UInt64.equal (decode_ok (Codec.decode codec buf 0)) v)
+    (List.equal UInt64.equal (decode_ok (Codec.decode codec buf ~off:0)) v)
 
 let test_nested_at_most_over_array () =
   let codec =
@@ -178,11 +178,11 @@ let test_nested_at_most_over_array () =
         ]
   in
   let v = List.map UInt64.of_int64 [ 7L; 9L ] in
-  let buf = Bytes.create (Codec.encoded_size codec v) in
-  Codec.encode codec v buf 0;
+  let buf = Bytes.create (Codec.size codec v) in
+  Codec.encode codec v buf ~off:0;
   Alcotest.(check bool)
     "roundtrip" true
-    (List.equal UInt64.equal (decode_ok (Codec.decode codec buf 0)) v)
+    (List.equal UInt64.equal (decode_ok (Codec.decode codec buf ~off:0)) v)
 
 let test_nested_exact_region () =
   let make name typ =
@@ -191,21 +191,21 @@ let test_nested_exact_region () =
   let exact = make "NestedExact" (nested ~size:(int 4) zeroterm) in
   let at_most = make "NestedAtMost" (nested_at_most ~size:(int 4) zeroterm) in
   let padded = Bytes.of_string "A\x00\x00\x00" in
-  (match Codec.decode exact padded 0 with
+  (match Codec.decode exact padded ~off:0 with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "compiled exact nested accepted trailing padding");
   Alcotest.(check string)
     "compiled at-most accepts padding" "A"
-    (decode_ok (Codec.decode at_most padded 0));
+    (decode_ok (Codec.decode at_most padded ~off:0));
   Alcotest.(check string)
     "compiled exact accepts full consumption" "ABC"
-    (decode_ok (Codec.decode exact (Bytes.of_string "ABC\x00") 0));
-  (match Codec.encoded_size exact "A" with
+    (decode_ok (Codec.decode exact (Bytes.of_string "ABC\x00") ~off:0));
+  (match Codec.size exact "A" with
   | _ -> Alcotest.fail "compiled exact nested encode accepted padding"
   | exception Invalid_argument msg ->
       Alcotest.(check bool) "nested error" true (contains ~sub:"nested" msg));
   let buf = Bytes.create 4 in
-  Codec.encode at_most "A" buf 0;
+  Codec.encode at_most "A" buf ~off:0;
   Alcotest.(check bytes) "compiled at-most pads" padded buf
 
 (* A casetype whose case body is a [nested] region (a scalar in a fixed span):
@@ -230,11 +230,11 @@ let nest_case_codec =
 let test_casetype_nested_case_body () =
   List.iter
     (fun v ->
-      let buf = Bytes.create (Codec.encoded_size nest_case_codec v) in
-      Codec.encode nest_case_codec v buf 0;
+      let buf = Bytes.create (Codec.size nest_case_codec v) in
+      Codec.encode nest_case_codec v buf ~off:0;
       Alcotest.(check bool)
         "roundtrip" true
-        (decode_ok (Codec.decode nest_case_codec buf 0) = v))
+        (decode_ok (Codec.decode nest_case_codec buf ~off:0) = v))
     [ N (SInt32.of_int 12345); U (UInt8.v 7) ]
 
 (* Field.repeat over a fixed byte_array element: a list of n-byte chunks within
@@ -253,11 +253,11 @@ let rep_chunks_codec =
 
 let test_repeat_byte_array_element () =
   let v = { rn = UInt16.v 8; chunks = [ "aaaa"; "bbbb" ] } in
-  let sz = Codec.encoded_size rep_chunks_codec v in
+  let sz = Codec.size rep_chunks_codec v in
   Alcotest.(check int) "wire size" 10 sz;
   let buf = Bytes.create sz in
-  Codec.encode rep_chunks_codec v buf 0;
-  match Codec.decode rep_chunks_codec buf 0 with
+  Codec.encode rep_chunks_codec v buf ~off:0;
+  match Codec.decode rep_chunks_codec buf ~off:0 with
   | Ok d ->
       Alcotest.(check int) "count" 8 (UInt16.to_int d.rn);
       Alcotest.(check (list string)) "chunks" [ "aaaa"; "bbbb" ] d.chunks
@@ -428,9 +428,9 @@ let test_array_scalar_element_projects () =
   (* and it still round-trips *)
   let c = arr_field (array ~len:(int 2) float64be) in
   let v = [ 1.5; -2.25 ] in
-  let buf = Bytes.create (Codec.encoded_size c v) in
-  Codec.encode c v buf 0;
-  match Codec.decode c buf 0 with
+  let buf = Bytes.create (Codec.size c v) in
+  Codec.encode c v buf ~off:0;
+  match Codec.decode c buf ~off:0 with
   | Ok d -> Alcotest.(check (list (float 0.0))) "float array" v d
   | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
@@ -503,11 +503,11 @@ let test_greedy_not_last_rejected () =
       Codec.[ Field.v "n" uint8 $ fst; Field.v "rest" all_bytes $ snd ]
   in
   let v = (UInt8.v 5, "tail") in
-  let buf = Bytes.create (Codec.encoded_size c v) in
-  Codec.encode c v buf 0;
+  let buf = Bytes.create (Codec.size c v) in
+  Codec.encode c v buf ~off:0;
   Alcotest.(check bool)
     "greedy last roundtrip" true
-    (let n, rest = decode_ok (Codec.decode c buf 0) in
+    (let n, rest = decode_ok (Codec.decode c buf ~off:0) in
      UInt8.equal n (fst v) && String.equal rest (snd v))
 
 (* A casetype whose case body is a sub-codec ending in a greedy field consumes
@@ -772,9 +772,14 @@ let test_signed_cross_constraint () =
     b
   in
   let ok r = match r with Ok _ -> true | Error _ -> false in
-  Alcotest.(check bool) "a = -1 < 5" true (ok (Codec.decode c (frame (-1)) 0));
-  Alcotest.(check bool) "a = 5 < 5" false (ok (Codec.decode c (frame 5) 0));
-  let s = Everparse.Raw.to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  Alcotest.(check bool)
+    "a = -1 < 5" true
+    (ok (Codec.decode c (frame (-1)) ~off:0));
+  Alcotest.(check bool) "a = 5 < 5" false (ok (Codec.decode c (frame 5) ~off:0));
+  let s =
+    Private.Everparse.Raw.to_3d
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "projects in two's-complement form" true
     (Re.execp (Re.compile (Re.str "((a ^ 128) < 133)")) s)

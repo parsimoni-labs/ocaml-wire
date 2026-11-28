@@ -8,10 +8,12 @@ let n_data = 1024
    This derives the projection from the codec's own field list, avoiding
    hand-copied field layouts that can drift from the codec definition. *)
 let project (type r) (codec : r Codec.t) ~name ~keep =
-  Everparse.Raw.struct_project (Everparse.Raw.struct_of_codec codec) ~name ~keep
+  Private.Everparse.Raw.struct_project
+    (Private.Everparse.Raw.struct_of_codec codec)
+    ~name ~keep
 
 let project_one (type r a) (codec : r Codec.t) ~name ~keep:(f : a Field.t) =
-  project codec ~name ~keep:[ Field.Named f ]
+  project codec ~name ~keep:[ Private.Named f ]
 
 type dataset = { items : bytes array; packed : bytes; n_items : int }
 
@@ -43,7 +45,7 @@ type 'a read_case =
       label : string;
       size : int;
       dataset : dataset;
-      struct_ : Everparse.struct_;
+      struct_ : Private.Everparse.struct_;
       codec : 'r Codec.t;
       get : bytes -> int -> ('a, Wire.Error.t) result;
       set : bytes -> int -> 'a -> unit;
@@ -133,11 +135,34 @@ let enum_dataset =
 let constrained_dataset =
   dataset_of_packed (Demo.constrained_data n_data) ~size:Demo.constrained_size
 
+(* A lone field read as a user of the views reads it: the record checked,
+   then the field read from its view, made once by [Codec.View.field]. *)
+let get codec field =
+  let f = Codec.View.field codec field in
+  fun buf off ->
+    let (Buf.Any b) = Buf.v buf in
+    let k = Codec.View.check codec b ~off in
+    if Codec.View.is_ok k then Ok (Codec.View.read b (Codec.View.get k) f)
+    else
+      match Codec.validate codec buf ~off with
+      | Error e -> Error e
+      | Ok () -> invalid_arg "get: the check and validate disagree"
+
+(* A lone field written as a user of the views writes it: the record
+   checked, then the field written in place through its view. *)
+let set codec field =
+  let f = Codec.View.field codec field in
+  fun buf off x ->
+    let (Buf.Any b) = Buf.v buf in
+    let k = Codec.View.check codec b ~off in
+    if Codec.View.is_ok k then Codec.View.set b (Codec.View.get k) f x
+    else Fmt.invalid_arg "set: %s refuses the record" (Codec.name codec)
+
 let tcp_frame = (Net.tcp_frame_data 1).(0)
 
 (* The frame is written by [Net.tcp_frame_data], so its payloads are read. *)
 let payload codec field =
-  let read = Codec.get codec field in
+  let read = get codec field in
   fun buf off ->
     match read buf off with
     | Ok s -> s
@@ -148,19 +173,15 @@ let read_ip_payload = payload Net.ipv4_codec Net.bf_ip_payload
 
 (* Where the TCP header of [buf] starts, read through checked views of the
    Ethernet and IPv4 headers. *)
-module Eth_view = (val Codec.View.codec Net.ethernet_codec)
-module Ip_view = (val Codec.View.codec Net.ipv4_codec)
-
-let eth_payload = Codec.View.field Eth_view.codec Net.bf_eth_payload
-let ip_payload = Codec.View.field Ip_view.codec Net.bf_ip_payload
+let eth_payload = Codec.View.field Net.ethernet_codec Net.bf_eth_payload
+let ip_payload = Codec.View.field Net.ipv4_codec Net.bf_ip_payload
 
 let nested_tcp_off buf =
   let (Buf.Any b) = Buf.v buf in
-  let len = Buf.length b in
-  let eth = Codec.View.(get (check Eth_view.codec b len 0)) in
-  let ip = Slice.first (Codec.View.read eth_payload b eth) in
-  let ip = Codec.View.(get (check Ip_view.codec b len ip)) in
-  Slice.first (Codec.View.read ip_payload b ip)
+  let eth = Codec.View.(get (check Net.ethernet_codec b ~off:0)) in
+  let ip = Slice.first (Codec.View.read b eth eth_payload) in
+  let ip = Codec.View.(get (check Net.ipv4_codec b ~off:ip)) in
+  Slice.first (Codec.View.read b ip ip_payload)
 
 let ip_off = Slice.first (read_eth_payload tcp_frame 0)
 let tcp_off = Slice.first (read_ip_payload tcp_frame ip_off)
@@ -224,8 +245,8 @@ let tcp_syn_struct =
   project_one Net.tcp_codec ~name:"TCPSyn" ~keep:Net.f_tcp_syn
 
 let minimal_case =
-  let get = Codec.get Demo.minimal_codec Demo.bf_minimal_value in
-  let set = Codec.set Demo.minimal_codec Demo.bf_minimal_value in
+  let get = get Demo.minimal_codec Demo.bf_minimal_value in
+  let set = set Demo.minimal_codec Demo.bf_minimal_value in
   Read_case
     {
       id = Minimal;
@@ -245,8 +266,8 @@ let minimal_case =
     }
 
 let all_ints_case =
-  let get = Codec.get Demo.all_ints_codec Demo.bf_ints_u64be in
-  let set = Codec.set Demo.all_ints_codec Demo.bf_ints_u64be in
+  let get = get Demo.all_ints_codec Demo.bf_ints_u64be in
+  let set = set Demo.all_ints_codec Demo.bf_ints_u64be in
   Read_case
     {
       id = All_ints;
@@ -266,8 +287,8 @@ let all_ints_case =
     }
 
 let large_mixed_case =
-  let get = Codec.get Demo.large_mixed_codec Demo.bf_mixed_timestamp in
-  let set = Codec.set Demo.large_mixed_codec Demo.bf_mixed_timestamp in
+  let get = get Demo.large_mixed_codec Demo.bf_mixed_timestamp in
+  let set = set Demo.large_mixed_codec Demo.bf_mixed_timestamp in
   Read_case
     {
       id = Large_mixed;
@@ -287,8 +308,8 @@ let large_mixed_case =
     }
 
 let bitfield8_case =
-  let get = Codec.get Demo.bf8_codec Demo.bf_bf8_value in
-  let set = Codec.set Demo.bf8_codec Demo.bf_bf8_value in
+  let get = get Demo.bf8_codec Demo.bf_bf8_value in
+  let set = set Demo.bf8_codec Demo.bf_bf8_value in
   Read_case
     {
       id = Bitfield8;
@@ -308,8 +329,8 @@ let bitfield8_case =
     }
 
 let bitfield16_case =
-  let get = Codec.get Demo.bf16_codec Demo.bf_bf16_id in
-  let set = Codec.set Demo.bf16_codec Demo.bf_bf16_id in
+  let get = get Demo.bf16_codec Demo.bf_bf16_id in
+  let set = set Demo.bf16_codec Demo.bf_bf16_id in
   Read_case
     {
       id = Bitfield16;
@@ -329,8 +350,8 @@ let bitfield16_case =
     }
 
 let bitfield32_case =
-  let get = Codec.get Demo.bf32_codec Demo.bf_bf32_pri in
-  let set = Codec.set Demo.bf32_codec Demo.bf_bf32_pri in
+  let get = get Demo.bf32_codec Demo.bf_bf32_pri in
+  let set = set Demo.bf32_codec Demo.bf_bf32_pri in
   Read_case
     {
       id = Bitfield32;
@@ -350,8 +371,8 @@ let bitfield32_case =
     }
 
 let bool_fields_case =
-  let get = Codec.get Demo.bool_fields_codec Demo.bf_bool_active in
-  let set = Codec.set Demo.bool_fields_codec Demo.bf_bool_active in
+  let get = get Demo.bool_fields_codec Demo.bf_bool_active in
+  let set = set Demo.bool_fields_codec Demo.bf_bool_active in
   Read_case
     {
       id = Bool_fields;
@@ -371,8 +392,8 @@ let bool_fields_case =
     }
 
 let clcw_case =
-  let get = Codec.get Space.clcw_codec Space.bf_cw_report in
-  let set = Codec.set Space.clcw_codec Space.bf_cw_report in
+  let get = get Space.clcw_codec Space.bf_cw_report in
+  let set = set Space.clcw_codec Space.bf_cw_report in
   Read_case
     {
       id = Clcw_report;
@@ -392,8 +413,8 @@ let clcw_case =
     }
 
 let packet_case =
-  let get = Codec.get Space.packet_codec Space.bf_sp_apid in
-  let set = Codec.set Space.packet_codec Space.bf_sp_apid in
+  let get = get Space.packet_codec Space.bf_sp_apid in
+  let set = set Space.packet_codec Space.bf_sp_apid in
   Read_case
     {
       id = Space_packet_apid;
@@ -413,8 +434,8 @@ let packet_case =
     }
 
 let ipv4_case =
-  let get = Codec.get Net.ipv4_codec Net.bf_ip_src in
-  let set = Codec.set Net.ipv4_codec Net.bf_ip_src in
+  let get = get Net.ipv4_codec Net.bf_ip_src in
+  let set = set Net.ipv4_codec Net.bf_ip_src in
   Read_case
     {
       id = Ipv4_src;
@@ -434,8 +455,8 @@ let ipv4_case =
     }
 
 let tcp_case =
-  let get = Codec.get Net.tcp_codec Net.bf_tcp_dst_port in
-  let set = Codec.set Net.tcp_codec Net.bf_tcp_dst_port in
+  let get = get Net.tcp_codec Net.bf_tcp_dst_port in
+  let set = set Net.tcp_codec Net.bf_tcp_dst_port in
   Read_case
     {
       id = Tcp_dst_port;
@@ -455,8 +476,8 @@ let tcp_case =
     }
 
 let tcp_syn_case =
-  let get = Codec.get Net.tcp_codec Net.bf_tcp_syn in
-  let set = Codec.set Net.tcp_codec Net.bf_tcp_syn in
+  let get = get Net.tcp_codec Net.bf_tcp_syn in
+  let set = set Net.tcp_codec Net.bf_tcp_syn in
   Read_case
     {
       id = Tcp_syn;
@@ -476,8 +497,8 @@ let tcp_syn_case =
     }
 
 let mapped_case =
-  let get = Codec.get Demo.mapped_codec Demo.bf_mp_priority in
-  let set = Codec.set Demo.mapped_codec Demo.bf_mp_priority in
+  let get = get Demo.mapped_codec Demo.bf_mp_priority in
+  let set = set Demo.mapped_codec Demo.bf_mp_priority in
   Read_case
     {
       id = Mapped_priority;
@@ -497,8 +518,8 @@ let mapped_case =
     }
 
 let cases_case =
-  let get = Codec.get Demo.cases_demo_codec Demo.bf_cd_type in
-  let set = Codec.set Demo.cases_demo_codec Demo.bf_cd_type in
+  let get = get Demo.cases_demo_codec Demo.bf_cd_type in
+  let set = set Demo.cases_demo_codec Demo.bf_cd_type in
   Read_case
     {
       id = Cases_type;
@@ -518,8 +539,8 @@ let cases_case =
     }
 
 let enum_case =
-  let get = Codec.get Demo.enum_demo_codec Demo.bf_en_status in
-  let set = Codec.set Demo.enum_demo_codec Demo.bf_en_status in
+  let get = get Demo.enum_demo_codec Demo.bf_en_status in
+  let set = set Demo.enum_demo_codec Demo.bf_en_status in
   Read_case
     {
       id = Enum_status;
@@ -539,8 +560,8 @@ let enum_case =
     }
 
 let constrained_case =
-  let get = Codec.get Demo.constrained_codec Demo.bf_co_data in
-  let set = Codec.set Demo.constrained_codec Demo.bf_co_data in
+  let get = get Demo.constrained_codec Demo.bf_co_data in
+  let set = set Demo.constrained_codec Demo.bf_co_data in
   Read_case
     {
       id = Constrained_data;
@@ -616,8 +637,8 @@ let verify_nested_write ~label ~set ~get ~equal value () =
   | Ok _ | Error _ -> Fmt.failwith "%s write verification failed" label
 
 let nested_tcp_dst_write_case =
-  let set = Codec.set Net.tcp_codec Net.bf_tcp_dst_port in
-  let get = Codec.get Net.tcp_codec Net.bf_tcp_dst_port in
+  let set = set Net.tcp_codec Net.bf_tcp_dst_port in
+  let get = get Net.tcp_codec Net.bf_tcp_dst_port in
   let value = Wire.UInt16.v 8080 in
   {
     label = "Eth->TCP.dst_port (3 layers)";
@@ -628,8 +649,8 @@ let nested_tcp_dst_write_case =
   }
 
 let tcp_dst_port_write_case =
-  let set = Codec.set Net.tcp_codec Net.bf_tcp_dst_port in
-  let get = Codec.get Net.tcp_codec Net.bf_tcp_dst_port in
+  let set = set Net.tcp_codec Net.bf_tcp_dst_port in
+  let get = get Net.tcp_codec Net.bf_tcp_dst_port in
   let value = Wire.UInt16.v 8080 in
   {
     label = "TCP.dst_port (uint16be)";
@@ -640,8 +661,8 @@ let tcp_dst_port_write_case =
   }
 
 let nested_tcp_syn_write_case =
-  let set = Codec.set Net.tcp_codec Net.bf_tcp_syn in
-  let get = Codec.get Net.tcp_codec Net.bf_tcp_syn in
+  let set = set Net.tcp_codec Net.bf_tcp_syn in
+  let get = get Net.tcp_codec Net.bf_tcp_syn in
   let value = true in
   {
     label = "Eth->TCP.syn (3 layers)";
@@ -652,8 +673,8 @@ let nested_tcp_syn_write_case =
   }
 
 let tcp_syn_write_case =
-  let set = Codec.set Net.tcp_codec Net.bf_tcp_syn in
-  let get = Codec.get Net.tcp_codec Net.bf_tcp_syn in
+  let set = set Net.tcp_codec Net.bf_tcp_syn in
+  let get = get Net.tcp_codec Net.bf_tcp_syn in
   let value = true in
   {
     label = "TCP.syn (bool bf1, read-mod-write)";

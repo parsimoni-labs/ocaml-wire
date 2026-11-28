@@ -21,7 +21,7 @@ let test_dep_bslice_decode_empty () =
   (* length=0, no payload bytes *)
   let buf = Bytes.create 2 in
   Bytes.set_uint16_be buf 0 0;
-  let r = decode_ok (Codec.decode dep_slice_codec buf 0) in
+  let r = decode_ok (Codec.decode dep_slice_codec buf ~off:0) in
   Alcotest.(check int) "length" 0 (UInt16.to_int r.length);
   Alcotest.(check int) "payload length" 0 (Bs.length r.payload)
 
@@ -33,7 +33,7 @@ let test_dep_bslice_decode_4 () =
   Bytes.set_uint8 buf 3 0xBB;
   Bytes.set_uint8 buf 4 0xCC;
   Bytes.set_uint8 buf 5 0xDD;
-  let r = decode_ok (Codec.decode dep_slice_codec buf 0) in
+  let r = decode_ok (Codec.decode dep_slice_codec buf ~off:0) in
   Alcotest.(check int) "length" 4 (UInt16.to_int r.length);
   Alcotest.(check int) "payload length" 4 (Bs.length r.payload);
   Alcotest.(check int) "payload first" 2 (Bs.first r.payload);
@@ -51,7 +51,7 @@ let test_dep_bslice_decode_100 () =
   for i = 0 to 99 do
     Bytes.set_uint8 buf (2 + i) (i land 0xFF)
   done;
-  let r = decode_ok (Codec.decode dep_slice_codec buf 0) in
+  let r = decode_ok (Codec.decode dep_slice_codec buf ~off:0) in
   Alcotest.(check int) "length" 100 (UInt16.to_int r.length);
   Alcotest.(check int) "payload length" 100 (Bs.length r.payload);
   Alcotest.(check int)
@@ -65,14 +65,14 @@ let test_dep_bslice_roundtrip () =
     { length = UInt16.v 4; payload = Bs.make payload_data ~first:0 ~length:4 }
   in
   let buf = Bytes.create 6 in
-  Codec.encode dep_slice_codec original buf 0;
+  Codec.encode dep_slice_codec original buf ~off:0;
   (* Verify encoded length field *)
   Alcotest.(check int) "encoded length field" 4 (Bytes.get_uint16_be buf 0);
   (* Verify wire_size_at reads the buffer correctly *)
   Alcotest.(check int)
     "wire_size_at" 6
-    (decode_ok (Codec.size_at dep_slice_codec buf 0));
-  let decoded = decode_ok (Codec.decode dep_slice_codec buf 0) in
+    (decode_ok (Codec.size_at dep_slice_codec buf ~off:0));
+  let decoded = decode_ok (Codec.decode dep_slice_codec buf ~off:0) in
   Alcotest.(check int) "roundtrip length" 4 (UInt16.to_int decoded.length);
   Alcotest.(check int) "roundtrip payload len" 4 (Bs.length decoded.payload);
   Alcotest.(check int)
@@ -100,15 +100,15 @@ let test_dep_bslice_sub () =
   Alcotest.(check int) "sub offset" 2 off
 
 let test_dep_bslice_set_length () =
-  let buf = Bytes.create 6 in
+  let buf = Bytes.create 10 in
   Bytes.set_uint16_be buf 0 4;
-  Codec.set dep_slice_codec cf_ds_length buf 0 (UInt16.v 8);
+  setter dep_slice_codec cf_ds_length buf 0 (UInt16.v 8);
   Alcotest.(check int)
     "set length" 8
     (UInt16.to_int ((reader dep_slice_codec cf_ds_length) buf 0))
 
 let test_dep_bslice_get_length () =
-  let buf = Bytes.create 6 in
+  let buf = Bytes.create 44 in
   Bytes.set_uint16_be buf 0 42;
   Alcotest.(check int)
     "get length" 42
@@ -132,15 +132,15 @@ let test_dep_byte_array_decode () =
   let buf = Bytes.create 7 in
   Bytes.set_uint16_be buf 0 5;
   Bytes.blit_string "hello" 0 buf 2 5;
-  let r = decode_ok (Codec.decode dep_array_codec buf 0) in
+  let r = decode_ok (Codec.decode dep_array_codec buf ~off:0) in
   Alcotest.(check int) "length" 5 (UInt16.to_int r.length);
   Alcotest.(check string) "payload is string copy" "hello" r.payload
 
 let test_dep_byte_array_roundtrip () =
   let original = { length = UInt16.v 3; payload = "abc" } in
   let buf = Bytes.create 5 in
-  Codec.encode dep_array_codec original buf 0;
-  let decoded = decode_ok (Codec.decode dep_array_codec buf 0) in
+  Codec.encode dep_array_codec original buf ~off:0;
+  let decoded = decode_ok (Codec.decode dep_array_codec buf ~off:0) in
   Alcotest.(check int) "roundtrip length" 3 (UInt16.to_int decoded.length);
   Alcotest.(check string) "roundtrip payload" "abc" decoded.payload
 
@@ -185,8 +185,11 @@ let test_dep_trailer_set_checksum () =
   Bytes.set_uint8 buf 3 0x22;
   Bytes.set_uint8 buf 4 0x33;
   Bytes.set_uint16_be buf 5 0x0000;
-  Codec.set trailer_codec cf_tr_checksum buf 0 (UInt16.v 0xCAFE);
-  Alcotest.(check int) "set checksum" 0xCAFE (Bytes.get_uint16_be buf 5)
+  (* After a span the checksum has no constant place: a set refuses it. *)
+  (match setter trailer_codec cf_tr_checksum buf 0 (UInt16.v 0xCAFE) with
+  | () -> Alcotest.fail "set wrote a field with no constant place"
+  | exception Invalid_argument _ -> ());
+  Alcotest.(check int) "checksum untouched" 0 (Bytes.get_uint16_be buf 5)
 
 let test_dep_trailer_decode () =
   let buf = Bytes.create 7 in
@@ -195,7 +198,7 @@ let test_dep_trailer_decode () =
   Bytes.set_uint8 buf 3 0xBB;
   Bytes.set_uint8 buf 4 0xCC;
   Bytes.set_uint16_be buf 5 0xDEAD;
-  let r = decode_ok (Codec.decode trailer_codec buf 0) in
+  let r = decode_ok (Codec.decode trailer_codec buf ~off:0) in
   Alcotest.(check int) "length" 3 (UInt16.to_int r.length);
   Alcotest.(check int) "payload length" 3 (Bs.length r.payload);
   Alcotest.(check int) "payload first" 2 (Bs.first r.payload);
@@ -214,8 +217,8 @@ let test_dep_trailer_roundtrip () =
     }
   in
   let buf = Bytes.create 6 in
-  Codec.encode trailer_codec original buf 0;
-  let decoded = decode_ok (Codec.decode trailer_codec buf 0) in
+  Codec.encode trailer_codec original buf ~off:0;
+  let decoded = decode_ok (Codec.decode trailer_codec buf ~off:0) in
   Alcotest.(check int) "rt length" 2 (UInt16.to_int decoded.length);
   Alcotest.(check int) "rt payload len" 2 (Bs.length decoded.payload);
   Alcotest.(check int) "rt checksum" 0x1234 (UInt16.to_int decoded.checksum)
@@ -225,12 +228,13 @@ let test_dep_trailer_roundtrip () =
 let test_dep_wire_size_metadata () =
   Alcotest.(check (option int))
     "fixed codec size" (Some 7)
-    (Codec.size simple_record_codec);
+    (Codec.fixed_size simple_record_codec);
   Alcotest.(check (option int))
     "dependent slice is variable" None
-    (Codec.size dep_slice_codec);
+    (Codec.fixed_size dep_slice_codec);
   Alcotest.(check (option int))
-    "trailer is variable" None (Codec.size trailer_codec);
+    "trailer is variable" None
+    (Codec.fixed_size trailer_codec);
   Alcotest.(check int) "fixed min size" 7 (Codec.min_size simple_record_codec)
 
 let test_dep_min_wire_size () =
@@ -250,23 +254,23 @@ let test_dep_compute_wire_size () =
   Bytes.set_uint16_be buf 0 4;
   Alcotest.(check int)
     "dep_slice compute" 6
-    (decode_ok (Codec.size_at dep_slice_codec buf 0));
+    (decode_ok (Codec.size_at dep_slice_codec buf ~off:0));
   (* dep_slice: length=0 -> total = 2 + 0 = 2 *)
   Bytes.set_uint16_be buf 0 0;
   Alcotest.(check int)
     "dep_slice compute 0" 2
-    (decode_ok (Codec.size_at dep_slice_codec buf 0));
+    (decode_ok (Codec.size_at dep_slice_codec buf ~off:0));
   (* trailer: length=3 -> total = 2 + 3 + 2 = 7 *)
   let buf2 = Bytes.create 7 in
   Bytes.set_uint16_be buf2 0 3;
   Alcotest.(check int)
     "trailer compute" 7
-    (decode_ok (Codec.size_at trailer_codec buf2 0));
+    (decode_ok (Codec.size_at trailer_codec buf2 ~off:0));
   (* fixed codec: compute returns fixed size without reading buffer *)
   Alcotest.(check int)
     "fixed compute"
     (Codec.min_size simple_record_codec)
-    (decode_ok (Codec.size_at simple_record_codec (Bytes.create 7) 0))
+    (decode_ok (Codec.size_at simple_record_codec (Bytes.create 7) ~off:0))
 
 (* [size_at] reads a record's sizes from the buffer, so bytes that hold
    no size are input: it answers the end-of-input error of the bytes it reads
@@ -276,7 +280,7 @@ let test_dep_wire_size_at_bad_bytes () =
   let answers name codec buf off ~expected =
     Alcotest.(check (result int error))
       name (Error expected)
-      (Codec.size_at codec buf off)
+      (Codec.size_at codec buf ~off)
   in
   answers "a length the buffer cuts" dep_slice_codec (Bytes.of_string "\x00") 0
     ~expected:
@@ -286,7 +290,9 @@ let test_dep_wire_size_at_bad_bytes () =
     5
     ~expected:
       { at = 5; field = []; kind = Unexpected_eof { expected = 2; got = 0 } };
-  match Codec.size_at dep_slice_codec (Bytes.of_string "\x00\x00") (-1) with
+  match
+    Codec.size_at dep_slice_codec (Bytes.of_string "\x00\x00") ~off:(-1)
+  with
   | _ -> Alcotest.fail "a negative offset answered a size"
   | exception Invalid_argument _ -> ()
 
@@ -307,7 +313,7 @@ let test_dep_codec_ref () =
   for i = 0 to 4 do
     Bytes.set_uint8 buf (1 + i) (0x10 + i)
   done;
-  let len, data = decode_ok (Codec.decode codec buf 0) in
+  let len, data = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.(check int) "ref len" 5 (UInt8.to_int len);
   Alcotest.(check int) "ref data length" 5 (Bs.length data);
   Alcotest.(check int)
@@ -350,7 +356,7 @@ let test_where_arithmetic_overflow_offset () =
       (fun a b -> (a, b))
       Codec.[ f_a $ fst; f_b $ snd ]
   in
-  let ok s = Result.is_ok (Codec.decode c (Bytes.of_string s) 0) in
+  let ok s = Result.is_ok (Codec.decode c (Bytes.of_string s) ~off:0) in
   Alcotest.(check bool) "a + b = 0" false (ok "\000\000");
   Alcotest.(check bool) "a + b = 1" true (ok "\000\001");
   Alcotest.(check bool) "a + b = 510" true (ok "\255\255")
@@ -366,11 +372,13 @@ let test_dep_ref_size_eval () =
   in
   let buf = Bytes.create 11 in
   Bytes.set_uint8 buf 0 10;
-  Alcotest.(check int) "compute size" 11 (decode_ok (Codec.size_at codec buf 0));
+  Alcotest.(check int)
+    "compute size" 11
+    (decode_ok (Codec.size_at codec buf ~off:0));
   Bytes.set_uint8 buf 0 0;
   Alcotest.(check int)
     "compute size 0" 1
-    (decode_ok (Codec.size_at codec buf 0))
+    (decode_ok (Codec.size_at codec buf ~off:0))
 
 let signed_magnitude_seek_codec =
   let f_seek =
@@ -388,13 +396,15 @@ let test_int64_field_constraint_accepts_signed_magnitude_domain () =
   List.iter
     (fun v ->
       let decoded =
-        decode_ok (Codec.decode signed_magnitude_seek_codec (seek_buf v) 0)
+        decode_ok (Codec.decode signed_magnitude_seek_codec (seek_buf v) ~off:0)
       in
       Alcotest.(check int64) "seek" v (UInt64.to_int64 decoded))
     [ 0L; Int64.max_int; Int64.succ Int64.min_int; -1L ]
 
 let test_int64_field_constraint_rejects_negative_zero () =
-  match Codec.decode signed_magnitude_seek_codec (seek_buf Int64.min_int) 0 with
+  match
+    Codec.decode signed_magnitude_seek_codec (seek_buf Int64.min_int) ~off:0
+  with
   | Ok _ -> Alcotest.fail "expected signed-magnitude negative zero to fail"
   | Error { Error.kind = Constraint_failed _; _ } -> ()
   | Error e -> Alcotest.failf "expected Constraint_failed, got %a" Error.pp e
@@ -417,10 +427,10 @@ let test_int64_mask_constraint_over_map () =
     Alcotest.(check int64)
       "accept" v
       (UInt64.to_int64
-         (decode_ok (Codec.decode mask_seek_codec (seek_buf v) 0)))
+         (decode_ok (Codec.decode mask_seek_codec (seek_buf v) ~off:0)))
   in
   let reject v =
-    match Codec.decode mask_seek_codec (seek_buf v) 0 with
+    match Codec.decode mask_seek_codec (seek_buf v) ~off:0 with
     | Ok _ -> Alcotest.failf "expected 0x%Lx rejected" v
     | Error { Error.kind = Constraint_failed _; _ } -> ()
     | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
@@ -445,8 +455,8 @@ let test_uint64_int_ref_constraint_enforced () =
   in
   Alcotest.(check int64)
     "in-range accepts" 3L
-    (UInt64.to_int64 (decode_ok (Codec.decode codec (buf 3L) 0)));
-  match Codec.decode codec (buf 20L) 0 with
+    (UInt64.to_int64 (decode_ok (Codec.decode codec (buf 3L) ~off:0)));
+  match Codec.decode codec (buf 20L) ~off:0 with
   | Ok _ -> Alcotest.fail "20 exceeds the bound and must be rejected"
   | Error { Error.kind = Constraint_failed _; _ } -> ()
   | Error e -> Alcotest.failf "expected Constraint_failed, got %a" Error.pp e
@@ -495,7 +505,7 @@ let test_codec_sizeof_this () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x01\x00\x02\x03" in
-  let _v = decode_ok (Codec.decode ~env codec buf 0) in
+  let _v = decode_ok (Codec.decode ~env codec buf ~off:0) in
   (* sizeof_this at field c = 1 (uint8) + 2 (uint16be) = 3 *)
   Alcotest.(check int) "sizeof_this at c" 4 (UInt32.to_int (Param.get env out))
 
@@ -531,21 +541,21 @@ let test_size_names_mapped_field () =
   let lossy =
     sized (map ~decode:(fun v -> UInt8.to_int v land 3) ~encode:UInt8.v uint8)
   in
-  (match Codec.decode lossy (Bytes.of_string "\x07abcdefg") 0 with
+  (match Codec.decode lossy (Bytes.of_string "\x07abcdefg") ~off:0 with
   | Ok (k, s) ->
       Alcotest.(check int) "mapped value" 3 k;
       Alcotest.(check string) "sized by the wire value" "abcdefg" s
   | Error e -> Alcotest.failf "lossy: %a" Error.pp e);
-  (match Codec.decode lossy (Bytes.of_string "\x07abcd") 0 with
+  (match Codec.decode lossy (Bytes.of_string "\x07abcd") ~off:0 with
   | Ok _ -> Alcotest.fail "lossy: a short record decoded"
   | Error _ -> ());
   let refusing = sized (lookup [ 1; 2 ] uint8) in
-  (match Codec.decode refusing (Bytes.of_string "\x01abcde") 0 with
+  (match Codec.decode refusing (Bytes.of_string "\x01abcde") ~off:0 with
   | Ok (k, s) ->
       Alcotest.(check int) "looked up" 2 k;
       Alcotest.(check string) "sized by the index" "a" s
   | Error e -> Alcotest.failf "lookup: %a" Error.pp e);
-  match Codec.decode refusing (Bytes.of_string "\x05abcde") 0 with
+  match Codec.decode refusing (Bytes.of_string "\x05abcde") ~off:0 with
   | Ok _ -> Alcotest.fail "lookup: a refused index decoded"
   | Error e ->
       Alcotest.(check string)
@@ -577,7 +587,7 @@ let suite =
       Alcotest.test_case "dep: byte_array get" `Quick test_dep_byte_array_get;
       Alcotest.test_case "dep: fixed after variable get checksum" `Quick
         test_dep_trailer_get_checksum;
-      Alcotest.test_case "dep: fixed after variable set checksum" `Quick
+      Alcotest.test_case "dep: fixed after variable set refused" `Quick
         test_dep_trailer_set_checksum;
       Alcotest.test_case "dep: fixed after variable decode" `Quick
         test_dep_trailer_decode;

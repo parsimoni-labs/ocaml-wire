@@ -41,7 +41,7 @@ let test_assign_propagates () =
   (* x=10, y=20 => out=10 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x0A\x14" in
-  let r = decode_ok (Codec.decode ~env codec buf 0) in
+  let r = decode_ok (Codec.decode ~env codec buf ~off:0) in
   Alcotest.(check int) "x" 10 (UInt8.to_int r.x);
   Alcotest.(check int) "out" 10 (UInt8.to_int (Param.get env out))
 
@@ -91,7 +91,7 @@ let test_assign_expr () =
   (* x=42 => out=43 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
-  ignore (decode_ok (Codec.decode ~env codec buf 0));
+  ignore (decode_ok (Codec.decode ~env codec buf ~off:0));
   Alcotest.(check int) "out" 43 (UInt16.to_int (Param.get env out))
 
 (* -- Return -- *)
@@ -108,7 +108,7 @@ let test_return_true () =
       ]
   in
   let buf = Bytes.of_string "\x42" in
-  ignore (decode_ok (Codec.decode codec buf 0))
+  ignore (decode_ok (Codec.decode codec buf ~off:0))
 
 let test_return_false () =
   let codec =
@@ -122,7 +122,7 @@ let test_return_false () =
       ]
   in
   let buf = Bytes.of_string "\x42" in
-  expect_constraint_fail (Codec.decode codec buf 0)
+  expect_constraint_fail (Codec.decode codec buf ~off:0)
 
 let test_return_bool_expr () =
   (* return (x > 10): succeeds when x=42 *)
@@ -140,7 +140,7 @@ let test_return_bool_expr () =
       ]
   in
   let buf = Bytes.of_string "\x2A" in
-  ignore (decode_ok (Codec.decode codec buf 0))
+  ignore (decode_ok (Codec.decode codec buf ~off:0))
 
 let test_return_bool_expr_fail () =
   (* return (x > 10): fails when x=5 *)
@@ -158,7 +158,7 @@ let test_return_bool_expr_fail () =
       ]
   in
   let buf = Bytes.of_string "\x05" in
-  expect_constraint_fail (Codec.decode codec buf 0)
+  expect_constraint_fail (Codec.decode codec buf ~off:0)
 
 (* -- Abort -- *)
 
@@ -171,7 +171,7 @@ let test_abort () =
       ]
   in
   let buf = Bytes.of_string "\x42" in
-  expect_constraint_fail (Codec.decode codec buf 0)
+  expect_constraint_fail (Codec.decode codec buf ~off:0)
 
 (* -- Var -- *)
 
@@ -201,7 +201,7 @@ let test_var_local () =
   (* x=42 => tmp=84, out=84 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
-  ignore (decode_ok (Codec.decode ~env codec buf 0));
+  ignore (decode_ok (Codec.decode ~env codec buf ~off:0));
   Alcotest.(check int) "out" 84 (UInt16.to_int (Param.get env out))
 
 (* -- If -- *)
@@ -233,7 +233,7 @@ let check_if_gate label ~threshold ~input ~expected =
       ]
   in
   let env = Codec.env codec in
-  ignore (decode_ok (Codec.decode ~env codec (Bytes.of_string input) 0));
+  ignore (decode_ok (Codec.decode ~env codec (Bytes.of_string input) ~off:0));
   Alcotest.(check int) "out" expected (UInt8.to_int (Param.get env out))
 
 let test_if_true_branch () =
@@ -269,7 +269,7 @@ let test_if_else () =
   (* x=1 => else branch => out=20 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x01\x00" in
-  ignore (decode_ok (Codec.decode ~env codec buf 0));
+  ignore (decode_ok (Codec.decode ~env codec buf ~off:0));
   Alcotest.(check int) "out" 20 (UInt8.to_int (Param.get env out))
 
 let test_if_abort_in_else () =
@@ -296,7 +296,7 @@ let test_if_abort_in_else () =
   (* x=0 => else branch => abort *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x00" in
-  expect_constraint_fail (Codec.decode ~env codec buf 0)
+  expect_constraint_fail (Codec.decode ~env codec buf ~off:0)
 
 let test_if_nested () =
   (* if (x > 0) { if (x < 100) { out = 1 } else { out = 2 } } *)
@@ -331,7 +331,7 @@ let test_if_nested () =
   (* x=50: 50>0 => true, 50<100 => true, out=1 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x32\x00" in
-  ignore (decode_ok (Codec.decode ~env codec buf 0));
+  ignore (decode_ok (Codec.decode ~env codec buf ~off:0));
   Alcotest.(check int) "out" 1 (UInt8.to_int (Param.get env out))
 
 (* -- On_act vs On_success -- *)
@@ -351,9 +351,9 @@ let test_on_act () =
       ]
   in
   let buf = Bytes.of_string "\x2A" in
-  ignore (decode_ok (Codec.decode codec buf 0));
+  ignore (decode_ok (Codec.decode codec buf ~off:0));
   let buf_bad = Bytes.of_string "\x00" in
-  expect_constraint_fail (Codec.decode codec buf_bad 0)
+  expect_constraint_fail (Codec.decode codec buf_bad ~off:0)
 
 (* -- Multiple statements sequencing -- *)
 
@@ -385,7 +385,7 @@ let test_stmt_sequencing () =
   (* x=42 => a=42, b=43, out=86 *)
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x2A\x00" in
-  ignore (decode_ok (Codec.decode ~env codec buf 0));
+  ignore (decode_ok (Codec.decode ~env codec buf ~off:0));
   Alcotest.(check int) "out" 86 (UInt16.to_int (Param.get env out))
 
 let test_return_short_circuits () =
@@ -402,7 +402,7 @@ let test_return_short_circuits () =
       ]
   in
   let buf = Bytes.of_string "\x42" in
-  ignore (decode_ok (Codec.decode codec buf 0))
+  ignore (decode_ok (Codec.decode codec buf ~off:0))
 
 let test_abort_short_circuits () =
   (* abort; assign out = 1 => should fail (assign never reached) *)
@@ -423,7 +423,7 @@ let test_abort_short_circuits () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\x42\x00" in
-  expect_constraint_fail (Codec.decode ~env codec buf 0)
+  expect_constraint_fail (Codec.decode ~env codec buf ~off:0)
 
 (* -- Empty action -- *)
 
@@ -434,7 +434,7 @@ let test_empty_action () =
       [ Field.v "x" ~action:(Action.on_success []) uint8 $ Fun.id ]
   in
   let buf = Bytes.of_string "\x42" in
-  ignore (decode_ok (Codec.decode codec buf 0))
+  ignore (decode_ok (Codec.decode codec buf ~off:0))
 
 (* -- Action on bitfield -- *)
 
@@ -455,7 +455,7 @@ let test_action_on_bitfield () =
   in
   let env = Codec.env codec in
   let buf = Bytes.of_string "\xAB" in
-  ignore (decode_ok (Codec.decode ~env codec buf 0));
+  ignore (decode_ok (Codec.decode ~env codec buf ~off:0));
   let out_val = UInt8.to_int (Param.get env out) in
   Alcotest.(check bool) "out <= 15" true (out_val <= 15)
 
@@ -479,13 +479,13 @@ let test_encode_output_no_env () =
       ]
   in
   let seven = UInt8.v 7 in
-  let buf = Bytes.create (Codec.encoded_size codec seven) in
-  Codec.encode codec seven buf 0;
+  let buf = Bytes.create (Codec.size codec seven) in
+  Codec.encode codec seven buf ~off:0;
   Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0);
   let env = Codec.env codec in
   Alcotest.(check int)
     "decoded" 7
-    (UInt8.to_int (decode_ok (Codec.decode ~env codec buf 0)));
+    (UInt8.to_int (decode_ok (Codec.decode ~env codec buf ~off:0)));
   Alcotest.(check int) "out" 7 (UInt8.to_int (Param.get env out))
 
 (* An embedded output-param sub-codec encodes from the parent without an env,
@@ -511,8 +511,8 @@ let test_encode_embedded_output_no_env () =
       [ (Field.v "inner" (codec inner) $ fun i -> i) ]
   in
   let seven = UInt8.v 7 in
-  let buf = Bytes.create (Codec.encoded_size outer seven) in
-  Codec.encode outer seven buf 0;
+  let buf = Bytes.create (Codec.size outer seven) in
+  Codec.encode outer seven buf ~off:0;
   Alcotest.(check int) "encoded byte" 7 (Bytes.get_uint8 buf 0)
 
 (* The allocating encoders are the safe whole-record boundary: unlike the
@@ -529,7 +529,7 @@ let test_allocating_encode_runs_actions () =
   in
   let value = UInt8.v 7 in
   let buf = Bytes.create 1 in
-  Codec.encode codec value buf 0;
+  Codec.encode codec value buf ~off:0;
   Alcotest.(check int)
     "buffer encode remains action-free" 7 (Bytes.get_uint8 buf 0);
   let rejects name f =

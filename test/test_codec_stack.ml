@@ -387,8 +387,8 @@ let stack_answers =
   let unit () = "" in
   fun input ->
     let shifted = Bytes.cat (Bytes.of_string "\xee\xee") input in
-    let decode c b off () = Test_helpers.ok (Codec.decode c b off) in
-    let validate c b off () = Test_helpers.ok (Codec.validate c b off) in
+    let decode c b off () = Test_helpers.ok (Codec.decode c b ~off) in
+    let validate c b off () = Test_helpers.ok (Codec.validate c b ~off) in
     [
       stack_answer show_stack (decode Packet_stack.codec input 0);
       stack_answer show_stack (decode Packet_stack.codec shifted 2);
@@ -397,9 +397,10 @@ let stack_answers =
       stack_answer show_stack (decode frame input 0);
       stack_answer unit (validate frame input 0);
       stack_answer show_stack (fun () ->
-          Test_helpers.ok (Codec.decode ~env:(env ()) param_frame input 0));
+          Test_helpers.ok (Codec.decode ~env:(env ()) param_frame input ~off:0));
       stack_answer unit (fun () ->
-          Test_helpers.ok (Codec.validate ~env:(env ()) param_frame input 0));
+          Test_helpers.ok
+            (Codec.validate ~env:(env ()) param_frame input ~off:0));
       stack_answer show_ipv4 (decode Packet_stack.ipv4 input 14);
       stack_answer unit (validate Packet_stack.ipv4 input 14);
     ]
@@ -456,8 +457,8 @@ let show_read (p : Packet_stack.t) =
 
 (* The stack read through checked views. [View.check] of the stack, and of a
    frame around it, accepts what [validate] accepts; on an accepted record each
-   layer [View.enter] reaches reads the fields [decode] gives, and an absent
-   layer is refused. *)
+   layer [View.sub] reaches reads the fields [decode] gives, and an absent layer
+   is refused. *)
 let test_stack_views () =
   let module V = Codec.View in
   let module P = Packet_stack in
@@ -466,76 +467,70 @@ let test_stack_views () =
       Field.v "packet" (nested_at_most ~size:(int 64) (codec P.codec)) $ Fun.id)
   in
   let frame = Codec.v "StackViewFrame" Fun.id [ packet ] in
-  let module F = (val V.codec frame) in
-  let module E = (val V.codec P.codec) in
-  let module Ip = (val V.codec P.ipv4) in
-  let module Tcp = (val V.codec P.tcp) in
-  let module Udp = (val V.codec P.udp) in
-  let in_frame = V.sub F.codec E.codec packet in
-  let ip = V.sub_option E.codec Ip.codec P.eth_ipv4 in
-  let tcp = V.sub_option Ip.codec Tcp.codec P.ipv4_tcp in
-  let udp = V.sub_option Ip.codec Udp.codec P.ipv4_udp in
-  let eth_src = V.field E.codec P.eth_src
-  and ether_type = V.field E.codec P.eth_ether_type
-  and ip_len = V.field Ip.codec P.ipv4_total_length
-  and ip_ttl = V.field Ip.codec P.ipv4_ttl
-  and ip_proto = V.field Ip.codec P.ipv4_protocol
-  and ip_src = V.field Ip.codec P.ipv4_src
-  and ip_options = V.checked_field Ip.codec P.ipv4_options
-  and tcp_sp = V.field Tcp.codec P.tcp_src_port
-  and tcp_dp = V.field Tcp.codec P.tcp_dst_port
-  and tcp_seq = V.field Tcp.codec P.tcp_seq
-  and tcp_ack = V.field Tcp.codec P.tcp_ack
-  and tcp_off = V.field Tcp.codec P.tcp_data_offset
-  and tcp_flags = V.field Tcp.codec P.tcp_flags
-  and tcp_options = V.checked_field Tcp.codec P.tcp_options
-  and udp_sp = V.field Udp.codec P.udp_src_port
-  and udp_len = V.field Udp.codec P.udp_length_f
-  and udp_payload = V.checked_field Udp.codec P.udp_payload in
+  let in_frame = V.layer frame (Codec.layer packet) in
+  let ip = V.layer P.codec (Codec.opt_layer P.eth_ipv4) in
+  let tcp = V.layer P.ipv4 (Codec.opt_layer P.ipv4_tcp) in
+  let udp = V.layer P.ipv4 (Codec.opt_layer P.ipv4_udp) in
+  let eth_src = V.field P.codec P.eth_src
+  and ether_type = V.field P.codec P.eth_ether_type
+  and ip_len = V.field P.ipv4 P.ipv4_total_length
+  and ip_ttl = V.field P.ipv4 P.ipv4_ttl
+  and ip_proto = V.field P.ipv4 P.ipv4_protocol
+  and ip_src = V.field P.ipv4 P.ipv4_src
+  and ip_options = V.field P.ipv4 P.ipv4_options
+  and tcp_sp = V.field P.tcp P.tcp_src_port
+  and tcp_dp = V.field P.tcp P.tcp_dst_port
+  and tcp_seq = V.field P.tcp P.tcp_seq
+  and tcp_ack = V.field P.tcp P.tcp_ack
+  and tcp_off = V.field P.tcp P.tcp_data_offset
+  and tcp_flags = V.field P.tcp P.tcp_flags
+  and tcp_options = V.field P.tcp P.tcp_options
+  and udp_sp = V.field P.udp P.udp_src_port
+  and udp_len = V.field P.udp P.udp_length_f
+  and udp_payload = V.field P.udp P.udp_payload in
   let view input off ~framed =
     let (Buf.Any b) = Buf.v input in
-    let len = Buf.length b in
-    let layer k show = if V.ok k then show (V.get k) else "" in
+    let layer k show = if V.is_ok k then show (V.get k) else "" in
     let tcp_of t =
       Fmt.str "tcp %d %d %a %a %d %d %s"
-        (UInt16.to_int (V.read tcp_sp b t))
-        (UInt16.to_int (V.read tcp_dp b t))
-        u32 (V.read tcp_seq b t) u32 (V.read tcp_ack b t) (V.read tcp_off b t)
-        (V.read tcp_flags b t)
-        (hex_slice (Result.get_ok (V.read tcp_options b t)))
+        (UInt16.to_int (V.read b t tcp_sp))
+        (UInt16.to_int (V.read b t tcp_dp))
+        u32 (V.read b t tcp_seq) u32 (V.read b t tcp_ack) (V.read b t tcp_off)
+        (V.read b t tcp_flags)
+        (hex_slice (V.read b t tcp_options))
     in
     let udp_of u =
       Fmt.str "udp %d %d %s"
-        (UInt16.to_int (V.read udp_sp b u))
-        (UInt16.to_int (V.read udp_len b u))
-        (hex_slice (Result.get_ok (V.read udp_payload b u)))
+        (UInt16.to_int (V.read b u udp_sp))
+        (UInt16.to_int (V.read b u udp_len))
+        (hex_slice (V.read b u udp_payload))
     in
     let ipv4_of r =
       Fmt.str "ipv4 %d %d %d %a %s [%s] [%s]"
-        (UInt16.to_int (V.read ip_len b r))
-        (UInt8.to_int (V.read ip_ttl b r))
-        (UInt8.to_int (V.read ip_proto b r))
-        u32 (V.read ip_src b r)
-        (hex_slice (Result.get_ok (V.read ip_options b r)))
-        (layer (V.enter tcp b len r) tcp_of)
-        (layer (V.enter udp b len r) udp_of)
+        (UInt16.to_int (V.read b r ip_len))
+        (UInt8.to_int (V.read b r ip_ttl))
+        (UInt8.to_int (V.read b r ip_proto))
+        u32 (V.read b r ip_src)
+        (hex_slice (V.read b r ip_options))
+        (layer (V.sub b r tcp) tcp_of)
+        (layer (V.sub b r udp) udp_of)
     in
     let eth_of e =
       Fmt.str "eth %s %d [%s]"
-        (hex_slice (V.read eth_src b e))
-        (UInt16.to_int (V.read ether_type b e))
-        (layer (V.enter ip b len e) ipv4_of)
+        (hex_slice (V.read b e eth_src))
+        (UInt16.to_int (V.read b e ether_type))
+        (layer (V.sub b e ip) ipv4_of)
     in
     if framed then
-      let k = V.check F.codec b len off in
-      if V.ok k then Some (layer (V.enter in_frame b len (V.get k)) eth_of)
+      let k = V.check frame b ~off in
+      if V.is_ok k then Some (layer (V.sub b (V.get k) in_frame) eth_of)
       else None
     else
-      let k = V.check E.codec b len off in
-      if V.ok k then Some (eth_of (V.get k)) else None
+      let k = V.check P.codec b ~off in
+      if V.is_ok k then Some (eth_of (V.get k)) else None
   in
   let decoded c input off =
-    Result.to_option (Codec.decode c input off) |> Option.map show_read
+    Result.to_option (Codec.decode c input ~off) |> Option.map show_read
   in
   let check name input off ~framed c =
     Alcotest.(check (option string))
@@ -557,13 +552,12 @@ let test_stack_views () =
         { dst = Slice.eod; src = Slice.eod; ether_type; ipv4 = None })
       Codec.[ (Field.v "ether_type" uint16be $ fun (r : P.t) -> r.ether_type) ]
   in
-  let module O = (val V.codec other) in
   Alcotest.(check bool)
     "a field of another codec" true
-    (raises (fun () -> V.sub_option O.codec Ip.codec P.eth_ipv4));
+    (raises (fun () -> V.layer other (Codec.opt_layer P.eth_ipv4)));
   Alcotest.(check bool)
-    "a field holding another codec" true
-    (raises (fun () -> V.sub F.codec O.codec packet))
+    "a field holding no record" true
+    (raises (fun () -> Codec.layer P.eth_ether_type))
 
 (* A fixed span after one sized by an earlier field: the walk reads the latter
    where the fixed fields before it end, not at the record's minimum size, and
@@ -593,12 +587,12 @@ let test_walk_trailer () =
       let buf = Bytes.of_string s in
       Alcotest.(check string)
         (Fmt.str "%S" s)
-        (show (Codec.decode general buf 0))
-        (show (Codec.decode c buf 0)))
+        (show (Codec.decode general buf ~off:0))
+        (show (Codec.decode c buf ~off:0)))
     [ "\002abXY"; "\000XY"; "\002abX"; "\003abXY"; "\001aXYZZ" ];
   Alcotest.(check string)
     "value" "ok 2 \"ab\" \"XY\""
-    (show (Codec.decode c (Bytes.of_string "\002abXY") 0))
+    (show (Codec.decode c (Bytes.of_string "\002abXY") ~off:0))
 
 (* Gates that reuse an earlier gate's answer, in a record and in a sub-codec
    walked between the gate and its reuse: the walk answers as the general
@@ -656,8 +650,8 @@ let test_walk_shared_gates () =
             Bytes.set_uint8 buf 1 f;
             Alcotest.(check string)
               (Fmt.str "k=%d flag=%d +%d" k f n)
-              (show (Codec.decode general buf 0))
-              (show (Codec.decode c buf 0))
+              (show (Codec.decode general buf ~off:0))
+              (show (Codec.decode c buf ~off:0))
           done)
         [ 0; 1; 2 ])
     [ 0; 1; 2 ]
@@ -669,8 +663,8 @@ let test_walk_shared_gates () =
 let test_region_bounds_nested () =
   let trailer = Bytes.concat Bytes.empty stack_seeds in
   let answer frame buf =
-    let decode () = Test_helpers.ok (Codec.decode frame buf 0) in
-    let validate () = Test_helpers.ok (Codec.validate frame buf 0) in
+    let decode () = Test_helpers.ok (Codec.decode frame buf ~off:0) in
+    let validate () = Test_helpers.ok (Codec.validate frame buf ~off:0) in
     [ stack_answer show_stack decode; stack_answer (fun () -> "") validate ]
     |> String.concat " / "
   in
@@ -746,40 +740,38 @@ let test_enter_past_regions () =
   Alcotest.(check bool)
     "walks" true
     (List.mem "decode.walk" (Private.Testing.paths outer));
-  let module O = (val V.codec outer) in
-  let module I = (val V.codec inner) in
-  let in_a = V.sub_option O.codec I.codec a
-  and in_b = V.sub O.codec I.codec b
-  and in_c = V.sub_option O.codec I.codec c
-  and in_d = V.sub O.codec I.codec d
-  and vk = V.field I.codec k_f in
+  let in_a = V.layer outer (Codec.opt_layer a)
+  and in_b = V.layer outer (Codec.layer b)
+  and in_c = V.layer outer (Codec.opt_layer c)
+  and in_d = V.layer outer (Codec.layer d)
+  and vk = V.field inner k_f in
   let show (_, _, a, b, _, c, d) =
     let o = Option.fold ~none:"-" ~some:string_of_int in
     Fmt.str "%s %d %s %d" (o a) b (o c) d
   in
   let viewed input =
     let (Buf.Any buf) = Buf.v input in
-    let len = Buf.length buf in
-    let ck = V.check O.codec buf len 0 in
-    if not (V.ok ck) then None
+    let ck = V.check outer buf ~off:0 in
+    if not (V.is_ok ck) then None
     else
       let o = V.get ck in
       let read e =
-        if V.ok e then Some (UInt8.to_int (V.read vk buf (V.get e))) else None
+        if V.is_ok e then Some (UInt8.to_int (V.read buf (V.get e) vk))
+        else None
       in
       let get e = Option.get (read e) in
       Some
         (show
            ( (),
              (),
-             read (V.enter in_a buf len o),
-             get (V.enter in_b buf len o),
+             read (V.sub buf o in_a),
+             get (V.sub buf o in_b),
              (),
-             read (V.enter in_c buf len o),
-             get (V.enter in_d buf len o) ))
+             read (V.sub buf o in_c),
+             get (V.sub buf o in_d) ))
   in
   let decoded input =
-    match Codec.decode outer input 0 with
+    match Codec.decode outer input ~off:0 with
     | Ok v -> Some (show v)
     | Error _ -> None
   in
@@ -796,9 +788,8 @@ let test_enter_past_regions () =
       (Fmt.str "input %d" i) (decoded input) (viewed input)
   done
 
-(* A field after a span is read with a check, which a field of a view does
-   not make: [View.field] refuses it, rather than raise on bytes written after
-   the check that move it out of the buffer. *)
+(* A field after a span has no constant place: a view locates it from the
+   record's bytes and reads what [decode] reads. *)
 let test_view_field_after_a_span () =
   let len = Field.v "len" uint8 in
   let tail = Codec.(Field.v "tail" uint8 $ fun (_, _, t) -> t) in
@@ -813,16 +804,16 @@ let test_view_field_after_a_span () =
           tail;
         ]
   in
-  let module V = Codec.View in
-  let module C = (val V.codec c) in
-  match V.field C.codec tail with
-  | _ -> Alcotest.fail "View.field takes a field read with a check"
-  | exception Invalid_argument _ -> ()
+  let buf = Bytes.of_string "\x02abX" in
+  let _, _, t = Result.get_ok (Codec.decode c buf ~off:0) in
+  Alcotest.(check int)
+    "tail" (UInt8.to_int t)
+    (UInt8.to_int (Test_helpers.reader c tail buf 0))
 
 let suite =
   ( "codec_stack",
     [
-      Alcotest.test_case "view: a field after a span is read with a check"
+      Alcotest.test_case "view: a field after a span reads what decode reads"
         `Quick test_view_field_after_a_span;
       Alcotest.test_case "walk: gates that reuse an earlier gate" `Quick
         test_walk_shared_gates;

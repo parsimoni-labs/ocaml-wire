@@ -271,6 +271,7 @@ let as_int : type a. a T.expr -> int T.expr option = function
   | T.Add _ as e -> Some e
   | T.Sub _ as e -> Some e
   | T.Mul _ as e -> Some e
+  | T.Mod _ as e -> Some e
   | T.Land _ as e -> Some e
   | T.Lor _ as e -> Some e
   | T.Lxor _ as e -> Some e
@@ -326,6 +327,7 @@ let rec expr : type a. w -> a T.expr -> string =
   | T.Add (a, b) -> arith_op "+" a b
   | T.Sub (a, b) -> arith_op "-" a b
   | T.Mul (a, b) -> arith_op "*" a b
+  | T.Mod (a, b) -> arith_op "mod" a b
   | (T.Lor _ | T.Lxor _ | T.Cast _) when is_fstar num ->
       fail_unsupported "the F* rendering of %a" T.pp_expr e
   | T.Land (a, b) -> binop num "land" (p a) (p b)
@@ -401,6 +403,7 @@ and wide w (e : int T.expr) =
   | T.Add (a, b) -> op "add" a b
   | T.Sub (a, b) -> op "sub" a b
   | T.Mul (a, b) -> op "mul" a b
+  | T.Mod (a, b) -> op "unsigned_rem" a b
   | T.Land (a, b) -> op "logand" a b
   | T.Lor (a, b) -> op "logor" a b
   | T.Lxor (a, b) -> op "logxor" a b

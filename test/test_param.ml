@@ -2,7 +2,7 @@
    decode-time semantics. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 open Test_helpers
 
 (* -- Param.input / Param.output / Param.decl -- *)
@@ -156,7 +156,7 @@ let test_output_binding () =
   Alcotest.(check int) "initial value" 0 (UInt8.to_int (Param.get env out));
   (* after decode, output param is written by the action *)
   let buf = Bytes.of_string "\x07" in
-  ignore (decode_ok (Codec.decode ~env c buf 0));
+  ignore (decode_ok (Codec.decode ~env c buf ~off:0));
   Alcotest.(check int) "after decode" 7 (UInt8.to_int (Param.get env out))
 
 (* -- Input param visible to constraints (via Codec) -- *)
@@ -173,11 +173,11 @@ let test_input_param_constraint () =
   (* limit=10, x=5: passes *)
   let buf = Bytes.of_string "\x05" in
   let env = Codec.env c |> Param.bind limit (UInt8.v 10) in
-  let r = decode_ok (Codec.decode ~env c buf 0) in
+  let r = decode_ok (Codec.decode ~env c buf ~off:0) in
   Alcotest.(check int) "x" 5 (UInt8.to_int r.x);
   (* limit=3, x=5: fails *)
   let env = Codec.env c |> Param.bind limit (UInt8.v 3) in
-  expect_constraint_fail (Codec.decode ~env c buf 0)
+  expect_constraint_fail (Codec.decode ~env c buf ~off:0)
 
 (* -- Output param written by action (via Codec) -- *)
 
@@ -192,7 +192,7 @@ let test_output_param_action () =
   let c = Codec.v "Writer" (fun x -> { x }) Codec.[ (cf_x $ fun r -> r.x) ] in
   let buf = Bytes.of_string "\x2A" in
   let env = Codec.env c in
-  ignore (decode_ok (Codec.decode ~env c buf 0));
+  ignore (decode_ok (Codec.decode ~env c buf ~off:0));
   Alcotest.(check int) "out" 42 (UInt8.to_int (Param.get env out))
 
 let test_output_param_computed () =
@@ -207,7 +207,7 @@ let test_output_param_computed () =
   let c = Codec.v "Computed" (fun x -> { x }) Codec.[ (cf_x $ fun r -> r.x) ] in
   let buf = Bytes.of_string "\x15" in
   let env = Codec.env c in
-  ignore (decode_ok (Codec.decode ~env c buf 0));
+  ignore (decode_ok (Codec.decode ~env c buf ~off:0));
   Alcotest.(check int) "out" 42 (UInt16.to_int (Param.get env out))
 
 (* -- Where clause with params (via Codec) -- *)
@@ -227,7 +227,7 @@ let test_where_clause_pass () =
   (* max_val=100, value=50: passes *)
   let buf = Bytes.of_string "\x00\x32" in
   let env = Codec.env c |> Param.bind max_val (UInt16.v 100) in
-  let r = decode_ok (Codec.decode ~env c buf 0) in
+  let r = decode_ok (Codec.decode ~env c buf ~off:0) in
   Alcotest.(check int) "value" 50 (UInt16.to_int r.bv_value)
 
 let test_where_clause_fail () =
@@ -243,7 +243,7 @@ let test_where_clause_fail () =
   (* max_val=10, value=50: where clause fails *)
   let buf = Bytes.of_string "\x00\x32" in
   let env = Codec.env c |> Param.bind max_val (UInt16.v 10) in
-  match Codec.decode ~env c buf 0 with
+  match Codec.decode ~env c buf ~off:0 with
   | Ok _ -> Alcotest.fail "expected where failure"
   | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
@@ -266,10 +266,10 @@ let test_bind_by_name () =
   let env = Codec.env c |> Param.bind_by_name "max_val" 100 in
   Alcotest.(check int)
     "value" 50
-    (UInt16.to_int (decode_ok (Codec.decode ~env c buf 0)).bv_value);
+    (UInt16.to_int (decode_ok (Codec.decode ~env c buf ~off:0)).bv_value);
   (* max_val=10 (< 50): the where clause fails *)
   let env = Codec.env c |> Param.bind_by_name "max_val" 10 in
-  (match Codec.decode ~env c buf 0 with
+  (match Codec.decode ~env c buf ~off:0 with
   | Ok _ -> Alcotest.fail "expected where failure"
   | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" Error.pp e);
@@ -281,7 +281,7 @@ let test_bind_by_name () =
   in
   Alcotest.(check int)
     "ignores unknown name" 50
-    (UInt16.to_int (decode_ok (Codec.decode ~env c buf 0)).bv_value)
+    (UInt16.to_int (decode_ok (Codec.decode ~env c buf ~off:0)).bv_value)
 
 (* -- Mixed input + output params (via Codec) -- *)
 
@@ -313,11 +313,11 @@ let test_mixed_params () =
   (* a=10, b=20 => out_sum=30, max_val=50 => 30 <= 50: OK *)
   let buf = Bytes.of_string "\x0A\x14" in
   let env = Codec.env c |> Param.bind max_val (UInt8.v 50) in
-  ignore (decode_ok (Codec.decode ~env c buf 0));
+  ignore (decode_ok (Codec.decode ~env c buf ~off:0));
   Alcotest.(check int) "out_sum" 30 (UInt16.to_int (Param.get env out_sum));
   (* a=10, b=20 => out_sum=30, max_val=20 => 30 > 20: FAIL *)
   let env = Codec.env c |> Param.bind max_val (UInt8.v 20) in
-  expect_constraint_fail (Codec.decode ~env c buf 0)
+  expect_constraint_fail (Codec.decode ~env c buf ~off:0)
 
 (* -- Codec.decode ~env:params with -- *)
 
@@ -340,7 +340,7 @@ let test_codec_param_decode () =
   in
   let buf = Bytes.of_string "\x05" in
   let env = Codec.env c |> Param.bind limit (UInt8.v 10) in
-  let v = decode_ok (Codec.decode ~env c buf 0) in
+  let v = decode_ok (Codec.decode ~env c buf ~off:0) in
   Alcotest.(check int) "x" 5 (UInt8.to_int v.x)
 
 let test_codec_param_where_fail () =
@@ -360,7 +360,7 @@ let test_codec_param_where_fail () =
   in
   let buf = Bytes.of_string "\x05" in
   let env = Codec.env c |> Param.bind limit (UInt8.v 3) in
-  match Codec.decode ~env c buf 0 with
+  match Codec.decode ~env c buf ~off:0 with
   | Error { Error.kind = Constraint_failed { which = Where; _ }; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
   | Ok _ -> Alcotest.fail "expected decode failure"
@@ -406,7 +406,9 @@ let test_3d_rendering () =
 
 let test_no_params () =
   let s = struct_ "Simple" [ field "x" uint8 ] in
-  ignore (decode_ok (of_string (struct_typ s) "\x42"))
+  decode_ok
+    (Wire.Private.(validate_struct (validator_of_struct s))
+       (Bytes.of_string "\x42") 0)
 
 (* -- Param-driven size -- *)
 
@@ -431,7 +433,7 @@ let test_param_size_decode () =
   let buf = Bytes.create 5 in
   Bytes.blit_string "ABCD" 0 buf 0 4;
   Bytes.set_uint8 buf 4 0xFF;
-  let r = decode_ok (Codec.decode ~env param_size_codec buf 0) in
+  let r = decode_ok (Codec.decode ~env param_size_codec buf ~off:0) in
   Alcotest.(check string) "data" "ABCD" r.data;
   Alcotest.(check int) "tag" 0xFF (UInt8.to_int r.tag)
 
@@ -443,7 +445,7 @@ let test_param_size_different_sizes () =
   let buf2 = Bytes.create 3 in
   Bytes.blit_string "XY" 0 buf2 0 2;
   Bytes.set_uint8 buf2 2 0xAA;
-  let r2 = decode_ok (Codec.decode ~env:env2 param_size_codec buf2 0) in
+  let r2 = decode_ok (Codec.decode ~env:env2 param_size_codec buf2 ~off:0) in
   Alcotest.(check string) "data 2" "XY" r2.data;
   Alcotest.(check int) "tag 2" 0xAA (UInt8.to_int r2.tag);
   let env8 =
@@ -452,7 +454,7 @@ let test_param_size_different_sizes () =
   let buf8 = Bytes.create 9 in
   Bytes.blit_string "12345678" 0 buf8 0 8;
   Bytes.set_uint8 buf8 8 0xBB;
-  let r8 = decode_ok (Codec.decode ~env:env8 param_size_codec buf8 0) in
+  let r8 = decode_ok (Codec.decode ~env:env8 param_size_codec buf8 ~off:0) in
   Alcotest.(check string) "data 8" "12345678" r8.data;
   Alcotest.(check int) "tag 8" 0xBB (UInt8.to_int r8.tag)
 
@@ -464,7 +466,7 @@ let test_param_size_bind_by_name () =
   let buf = Bytes.create 5 in
   Bytes.blit_string "ABCD" 0 buf 0 4;
   Bytes.set_uint8 buf 4 0xFF;
-  let r = decode_ok (Codec.decode ~env param_size_codec buf 0) in
+  let r = decode_ok (Codec.decode ~env param_size_codec buf ~off:0) in
   Alcotest.(check string) "data" "ABCD" r.data;
   Alcotest.(check int) "tag" 0xFF (UInt8.to_int r.tag);
   (* same codec, a different bound size *)
@@ -472,7 +474,7 @@ let test_param_size_bind_by_name () =
   let buf2 = Bytes.create 3 in
   Bytes.blit_string "XY" 0 buf2 0 2;
   Bytes.set_uint8 buf2 2 0xAA;
-  let r2 = decode_ok (Codec.decode ~env:env2 param_size_codec buf2 0) in
+  let r2 = decode_ok (Codec.decode ~env:env2 param_size_codec buf2 ~off:0) in
   Alcotest.(check string) "data 2" "XY" r2.data;
   Alcotest.(check int) "tag 2" 0xAA (UInt8.to_int r2.tag)
 
@@ -489,14 +491,15 @@ let test_decode_rejects_unbound_param () =
     (Invalid_argument
        "Codec.decode: codec ParamSize has input params; pass ?env (e.g. \
         [Codec.env c |> Param.bind p N]).") (fun () ->
-      match Codec.decode param_size_codec buf 0 with Ok _ | Error _ -> ());
+      match Codec.decode param_size_codec buf ~off:0 with Ok _ | Error _ -> ());
   (* env present but the param left unbound *)
   let env = Codec.env param_size_codec in
   Alcotest.check_raises "decode with unbound param"
     (Invalid_argument
        "Codec.decode: codec ParamSize has unbound input params [data_size]; \
         bind every one before use.") (fun () ->
-      match Codec.decode ~env param_size_codec buf 0 with Ok _ | Error _ -> ())
+      match Codec.decode ~env param_size_codec buf ~off:0 with
+      | Ok _ | Error _ -> ())
 
 let test_param_size_zero () =
   let env =
@@ -504,7 +507,7 @@ let test_param_size_zero () =
   in
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0xFF;
-  let r = decode_ok (Codec.decode ~env param_size_codec buf 0) in
+  let r = decode_ok (Codec.decode ~env param_size_codec buf ~off:0) in
   Alcotest.(check string) "data" "" r.data;
   Alcotest.(check int) "tag" 0xFF (UInt8.to_int r.tag)
 
@@ -526,12 +529,13 @@ let test_param_size_reentrant_codec () =
       ~encode:(fun v ->
         reenter (fun codec env ->
             let buf = Bytes.create 2 in
-            Codec.encode ~env codec (UInt8.v 7, "Z") buf 0);
+            Codec.encode ~env codec (UInt8.v 7, "Z") buf ~off:0);
         v)
       ~decode:(fun v ->
         reenter (fun codec env ->
             ignore
-              (decode_ok (Codec.decode ~env codec (Bytes.of_string "\x07Z") 0)));
+              (decode_ok
+                 (Codec.decode ~env codec (Bytes.of_string "\x07Z") ~off:0)));
         v)
   in
   let codec =
@@ -548,10 +552,10 @@ let test_param_size_reentrant_codec () =
   inner_env_ref := Some inner_env;
   let outer_env = Codec.env codec |> Param.bind size_p (UInt8.v 2) in
   let buf = Bytes.create 3 in
-  Codec.encode ~env:outer_env codec (UInt8.v 9, "AB") buf 0;
+  Codec.encode ~env:outer_env codec (UInt8.v 9, "AB") buf ~off:0;
   Alcotest.(check bytes)
     "outer encode keeps its size" (Bytes.of_string "\x09AB") buf;
-  let tag, data = decode_ok (Codec.decode ~env:outer_env codec buf 0) in
+  let tag, data = decode_ok (Codec.decode ~env:outer_env codec buf ~off:0) in
   Alcotest.(check (pair int string))
     "outer decode keeps its size" (9, "AB")
     (UInt8.to_int tag, data)
@@ -578,11 +582,11 @@ let test_param_size_in_casetype () =
   in
   let env = Codec.env outer |> Param.bind size_p (UInt8.v 2) in
   let buf = Bytes.create 3 in
-  Codec.encode ~env outer (`Body "AB") buf 0;
+  Codec.encode ~env outer (`Body "AB") buf ~off:0;
   Alcotest.(check bytes) "encoded casetype" (Bytes.of_string "\x01AB") buf;
   Alcotest.(check (result string string))
     "decoded casetype" (Ok "AB")
-    (match Codec.decode ~env outer buf 0 with
+    (match Codec.decode ~env outer buf ~off:0 with
     | Ok (`Body value) -> Ok value
     | Error error -> err_parse "%a" Error.pp error)
 
@@ -604,8 +608,8 @@ let test_param_through_typ_wrappers () =
   Alcotest.(check (result (option int) string))
     "decoded wrapped codec" (Ok (Some 45))
     (Result.map (Option.map UInt8.to_int)
-       (string_error (Codec.decode ~env outer buf 0)));
-  Codec.encode ~env outer (Some (UInt8.v 45)) buf 0;
+       (string_error (Codec.decode ~env outer buf ~off:0)));
+  Codec.encode ~env outer (Some (UInt8.v 45)) buf ~off:0;
   Alcotest.(check bytes) "encoded wrapped codec" (Bytes.of_string "\x2d") buf
 
 (* -- Concurrent decode -- *)
@@ -663,7 +667,7 @@ let test_multi_domain_decode () =
     let ok = ref true in
     let expected = UInt8.v value in
     for _ = 1 to 1_000 do
-      match Codec.decode ~env codec buf 0 with
+      match Codec.decode ~env codec buf ~off:0 with
       | Ok (a, b) ->
           if
             not
@@ -685,10 +689,14 @@ let test_slice_navigation_requires_parameters () =
     Codec.(Field.v "body" (byte_slice ~size:(Param.expr size_p)) $ Fun.id)
   in
   let codec = Codec.v "ParamSlice" Fun.id [ field ] in
-  match Codec.View.codec codec with
-  | _ -> Alcotest.fail "a view without its input parameter"
+  let (Buf.Any b) = Buf.v (Bytes.of_string "abc") in
+  match Codec.View.check codec b ~off:0 with
+  | _ -> Alcotest.fail "a check without its input parameter"
   | exception Invalid_argument _ -> ()
 
+(* A slice an input parameter places and sizes is read by [decode] with its
+   env; a view, which carries no env, refuses it, and a check refuses an env
+   that does not bind the parameter or belongs to another codec. *)
 let test_slice_navigation_with_parameters () =
   let size_p = Param.input "size" uint8 in
   let prefix = Field.v "prefix" (byte_array ~size:(Param.expr size_p)) in
@@ -702,22 +710,16 @@ let test_slice_navigation_with_parameters () =
   in
   let buf = Bytes.of_string "_abcDEF" in
   let env = Codec.env codec |> Param.bind size_p (UInt8.v 3) in
-  let module V = (val Codec.View.codec ~env codec) in
-  let slice = (reader ~env codec body) buf 1 in
-  let (Buf.Any b) = Buf.v buf in
-  let r = Codec.View.(get (check V.codec b (Buf.length b) 1)) in
-  let read = Result.get_ok Codec.View.(read (checked_field V.codec body) b r) in
-  Alcotest.(check int)
-    "absolute offset"
-    (Bytesrw.Bytes.Slice.first slice)
-    (Bytesrw.Bytes.Slice.first read);
-  Alcotest.(check int)
-    "length"
-    (Bytesrw.Bytes.Slice.length slice)
-    (Bytesrw.Bytes.Slice.length read);
+  let _, slice = decode_ok (Codec.decode ~env codec buf ~off:1) in
+  Alcotest.(check int) "absolute offset" 4 (Bytesrw.Bytes.Slice.first slice);
+  Alcotest.(check int) "length" 3 (Bytesrw.Bytes.Slice.length slice);
+  Alcotest.(check bool) "check with env" true (accepts ~env codec buf 1);
+  (match Codec.View.field codec body with
+  | _ -> Alcotest.fail "a view read a param-placed slice"
+  | exception Invalid_argument _ -> ());
   List.iter
     (fun env ->
-      match Codec.View.codec ~env codec with
+      match accepts ~env codec buf 1 with
       | _ -> Alcotest.fail "accepted an invalid slice environment"
       | exception Invalid_argument _ -> ())
     [ Codec.env codec; Codec.env (Codec.v "Other" () []) ]

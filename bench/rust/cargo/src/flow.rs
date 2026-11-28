@@ -230,80 +230,46 @@ fn index(buf: &[u8]) -> Vec<(usize, usize)> {
     frames
 }
 
-type Frames<'a> = &'a [(usize, usize)];
-
-/// The visitor of the fold `classify` of `Packet_stack.capture`, which
-/// hands each packet's key to the sink.
-pub struct Classify<'s, S: Sink>(pub &'s mut S);
-
-impl<S: Sink> flow_scan::classify::Visitor for Classify<'_, S> {
-    #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
-    fn valid(
-        &mut self,
-        ipv4_present: bool,
-        ipv4_total_length: u16,
-        ipv4_protocol: u8,
-        ipv4_src: u32,
-        ipv4_dst: u32,
-        ipv4_tcp_present: bool,
-        ipv4_tcp_src_port: u16,
-        ipv4_tcp_dst_port: u16,
-        ipv4_udp_present: bool,
-        ipv4_udp_src_port: u16,
-        ipv4_udp_dst_port: u16,
-        ipv6_present: bool,
-        ipv6_payload_length: u16,
-        ipv6_next_header: u8,
-        ipv6_src0: u32,
-        ipv6_src1: u32,
-        ipv6_src2: u32,
-        ipv6_src3: u32,
-        ipv6_dst0: u32,
-        ipv6_dst1: u32,
-        ipv6_dst2: u32,
-        ipv6_dst3: u32,
-        ipv6_tcp_present: bool,
-        ipv6_tcp_src_port: u16,
-        ipv6_tcp_dst_port: u16,
-        ipv6_udp_present: bool,
-        ipv6_udp_src_port: u16,
-        ipv6_udp_dst_port: u16,
-    ) {
-        if ipv4_present {
-            let p = if ipv4_tcp_present {
-                ports(ipv4_tcp_src_port, ipv4_tcp_dst_port)
-            } else if ipv4_udp_present {
-                ports(ipv4_udp_src_port, ipv4_udp_dst_port)
-            } else {
-                0
-            };
-            self.0.add4(ipv4_src, ipv4_dst, ipv4_protocol, p, ipv4_total_length as u64);
-        } else if ipv6_present {
-            let p = if ipv6_tcp_present {
-                ports(ipv6_tcp_src_port, ipv6_tcp_dst_port)
-            } else if ipv6_udp_present {
-                ports(ipv6_udp_src_port, ipv6_udp_dst_port)
-            } else {
-                0
-            };
-            let s = [ipv6_src0, ipv6_src1, ipv6_src2, ipv6_src3];
-            let d = [ipv6_dst0, ipv6_dst1, ipv6_dst2, ipv6_dst3];
-            self.0.add6(s, d, ipv6_next_header, p, 40 + ipv6_payload_length as u64);
-        }
-    }
-
-    #[inline(always)]
-    fn invalid(&mut self) {}
+/// The frames of a capture: the offset and captured length of each, and the
+/// same as two arrays, as an index lists them.
+pub struct Index {
+    pairs: Vec<(usize, usize)>,
+    offs: Vec<usize>,
+    lens: Vec<usize>,
 }
 
-// The fold `classify` of `Packet_stack.capture`, handing out only the
-// classifier's fields, over each frame.
+type Frames<'a> = &'a Index;
+
+// The fold of `Packet_stack.capture` over the frames of the index, handing
+// only the classifier's fields of each packet to a closure, which hands its
+// key to the sink: a field under a layer is `None` where the layer is
+// absent.
 fn wire_rust_scanner<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
-    let mut v = Classify(t);
-    for &(o, n) in frames {
-        flow_scan::classify(&mut v, buf, o, n);
-    }
+    let r = flow_scan::fold(
+        buf,
+        flow_scan::Records::Frames(&frames.offs, &frames.lens),
+        t,
+        Some(&mut |t| t),
+        |t, len4, proto4, src4, dst4, tsp4, tdp4, usp4, udp4, len6, nh6, s0, s1, s2, s3, d0, d1, d2, d3, tsp6, tdp6, usp6, udp6| {
+            if let (Some(len), Some(proto), Some(src), Some(dst)) = (len4, proto4, src4, dst4) {
+                let p = match (tsp4, tdp4, usp4, udp4) {
+                    (Some(sp), Some(dp), _, _) | (_, _, Some(sp), Some(dp)) => ports(sp, dp),
+                    _ => 0,
+                };
+                t.add4(src, dst, proto, p, len as u64);
+            } else if let (Some(len), Some(nh), Some(s0), Some(s1), Some(s2), Some(s3), Some(d0), Some(d1), Some(d2), Some(d3)) =
+                (len6, nh6, s0, s1, s2, s3, d0, d1, d2, d3)
+            {
+                let p = match (tsp6, tdp6, usp6, udp6) {
+                    (Some(sp), Some(dp), _, _) | (_, _, Some(sp), Some(dp)) => ports(sp, dp),
+                    _ => 0,
+                };
+                t.add6([s0, s1, s2, s3], [d0, d1, d2, d3], nh, p, 40 + len as u64);
+            }
+            t
+        },
+    );
+    let _ = r;
 }
 
 // The fixed header codecs, linked here: the ports of the transport header at
@@ -311,14 +277,22 @@ fn wire_rust_scanner<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
 fn linked_ports(p: &[u8], o: usize, proto: u8) -> Option<u32> {
     match proto {
         6 => {
-            let t = tcp::check(p, o).get()?;
+            let c = tcp::check(p, o);
+            if !c.is_ok() {
+                return None;
+            }
+            let t = c.get();
             if o + t.data_offset() as usize * 4 > p.len() {
                 return None;
             }
             Some(ports(t.src_port(), t.dst_port()))
         }
         17 => {
-            let u = udp::check(p, o).get()?;
+            let c = udp::check(p, o);
+            if !c.is_ok() {
+                return None;
+            }
+            let u = c.get();
             Some(ports(u.src_port(), u.dst_port()))
         }
         _ => Some(0),
@@ -326,12 +300,20 @@ fn linked_ports(p: &[u8], o: usize, proto: u8) -> Option<u32> {
 }
 
 fn wire_rust_linked<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
-    for &(o, n) in frames {
+    for &(o, n) in &frames.pairs {
         let p = &buf[o..o + n];
-        let Some(e) = eth::check(p, 0).get() else { continue };
+        let c = eth::check(p, 0);
+        if !c.is_ok() {
+            continue;
+        }
+        let e = c.get();
         match e.ether_type() {
             IPV4 => {
-                let Some(ip) = ipv4::check(p, eth::MIN_SIZE).get() else { continue };
+                let c = ipv4::check(p, eth::MIN_SIZE);
+                if !c.is_ok() {
+                    continue;
+                }
+                let ip = c.get();
                 let hlen = ip.ihl() as usize * 4;
                 let total = ip.total_length();
                 if (total as usize) < hlen || eth::MIN_SIZE + hlen > p.len() {
@@ -347,7 +329,11 @@ fn wire_rust_linked<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
                 t.add4(ip.src_addr(), ip.dst_addr(), proto, pt, total as u64);
             }
             IPV6 => {
-                let Some(ip) = ipv6::check(p, eth::MIN_SIZE).get() else { continue };
+                let c = ipv6::check(p, eth::MIN_SIZE);
+                if !c.is_ok() {
+                    continue;
+                }
+                let ip = c.get();
                 let proto = ip.next_header();
                 let Some(pt) = linked_ports(p, eth::MIN_SIZE + ipv6::MIN_SIZE, proto) else { continue };
                 let s = [ip.src0(), ip.src1(), ip.src2(), ip.src3()];
@@ -367,7 +353,7 @@ fn wire_rust_linked<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
 fn etherparse<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
     use etherparse::err::Layer;
     use etherparse::{LaxNetSlice, LaxSlicedPacket, TransportSlice};
-    for &(o, n) in frames {
+    for &(o, n) in &frames.pairs {
         let Ok(s) = LaxSlicedPacket::from_ethernet(&buf[o..o + n]) else { continue };
         if let Some((_, Layer::TcpHeader | Layer::UdpHeader)) = s.stop_err {
             continue;
@@ -425,7 +411,7 @@ fn smoltcp<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
             _ => Some(0),
         }
     };
-    for &(o, n) in frames {
+    for &(o, n) in &frames.pairs {
         let Ok(e) = EthernetFrame::new_checked(&buf[o..o + n]) else { continue };
         let body = e.payload();
         match u16::from(e.ethertype()) {
@@ -505,7 +491,7 @@ fn smoltcp_ipv4_flows<S: Sink>(t: &mut S, mix: &mut Mix, buf: &[u8], frames: Fra
             _ => Some(0),
         }
     };
-    for &(o, n) in frames {
+    for &(o, n) in &frames.pairs {
         let Ok(e) = EthernetFrame::new_checked(&buf[o..o + n]) else {
             mix.other += 1;
             continue;
@@ -574,7 +560,7 @@ fn pnet<S: Sink>(t: &mut S, buf: &[u8], frames: Frames) {
             _ => Some(0),
         }
     };
-    for &(o, n) in frames {
+    for &(o, n) in &frames.pairs {
         let Some(e) = EthernetPacket::new(&buf[o..o + n]) else { continue };
         let body = e.payload();
         match e.get_ethertype().0 {
@@ -629,7 +615,7 @@ fn rows<S: Sink>() -> [(&'static str, Row<S>); 5] {
 struct Capture {
     name: String,
     buf: Vec<u8>,
-    frames: Vec<(usize, usize)>,
+    frames: Index,
     runs: usize,
     filter: timing::Filter,
 }
@@ -639,7 +625,10 @@ fn capture(args: &[String]) -> Capture {
     let buf = std::fs::read(path).expect("capture");
     let runs = args[1].parse().expect("runs");
     let filter = timing::Filter::new(args.get(2).map(String::as_str));
-    let frames = index(&buf);
+    let pairs = index(&buf);
+    let offs = pairs.iter().map(|&(o, _)| o).collect();
+    let lens = pairs.iter().map(|&(_, n)| n).collect();
+    let frames = Index { pairs, offs, lens };
     let name = path.file_stem().and_then(|s| s.to_str()).expect("capture name").to_string();
     Capture { name, buf, frames, runs, filter }
 }
@@ -655,7 +644,7 @@ fn keys(c: &Capture) -> Vec<u64> {
 /// table alone on corpus `<capture> table`.
 pub fn main(args: &[String]) {
     let c = capture(args);
-    let n = c.frames.len();
+    let n = c.frames.pairs.len();
     let mut table = Table::new(2 * n);
     for (name, f) in rows::<Table>() {
         let pass = |t: &mut Table| {
@@ -687,7 +676,7 @@ pub fn main(args: &[String]) {
 /// row handing its keys to `Sum`, on corpus `<capture> parse`.
 pub fn parse(args: &[String]) {
     let c = capture(args);
-    let n = c.frames.len();
+    let n = c.frames.pairs.len();
     let corpus = format!("{} parse", c.name);
     let mut sum = Sum::default();
     for (name, f) in rows::<Sum>() {

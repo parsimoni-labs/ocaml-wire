@@ -4,8 +4,8 @@
     (20B) or UDP (8B)
 
     All payload fields use [byte_slice] for zero-copy sub-slicing. Individual
-    header fields are accessed via [Codec.get] without allocating intermediate
-    records. *)
+    header fields are read in place through [Codec.View] without allocating
+    intermediate records. *)
 
 open Wire
 module Slice = Bytesrw.Bytes.Slice
@@ -40,7 +40,7 @@ let ethernet_codec =
         bf_eth_payload;
       ]
 
-let ethernet_struct = Everparse.Raw.struct_of_codec ethernet_codec
+let ethernet_struct = Private.Everparse.Raw.struct_of_codec ethernet_codec
 let ethernet_size = Codec.min_size ethernet_codec
 
 (* -- IPv4 header: 20 bytes fixed (no options) + payload -- *)
@@ -172,7 +172,7 @@ let ipv4_codec =
         bf_ip_payload;
       ]
 
-let ipv4_struct = Everparse.Raw.struct_of_codec ipv4_codec
+let ipv4_struct = Private.Everparse.Raw.struct_of_codec ipv4_codec
 let ipv4_size = Codec.min_size ipv4_codec
 
 (* -- TCP header: 20 bytes fixed (no options) -- *)
@@ -255,7 +255,7 @@ let tcp_codec =
         (Field.v "UrgentPtr" uint16be $ fun t -> t.urgent_ptr);
       ]
 
-let tcp_struct = Everparse.Raw.struct_of_codec tcp_codec
+let tcp_struct = Private.Everparse.Raw.struct_of_codec tcp_codec
 let tcp_size = Codec.min_size tcp_codec
 
 (* -- UDP header: 8 bytes -- *)
@@ -289,7 +289,7 @@ let udp_codec =
         (f_udp_checksum $ fun u -> u.checksum);
       ]
 
-let udp_struct = Everparse.Raw.struct_of_codec udp_codec
+let udp_struct = Private.Everparse.Raw.struct_of_codec udp_codec
 let udp_size = Codec.min_size udp_codec
 
 (* -- Utilities -- *)
@@ -394,13 +394,19 @@ let udp_frame_data n =
 type 'a schema = {
   name : string;
   codec : 'a Codec.t;
-  struct_ : Wire.Everparse.Raw.struct_;
+  struct_ : Wire.Private.Everparse.Raw.struct_;
   size : int;
   decode : bytes -> int -> ('a, Wire.Error.t) result;
 }
 
 let schema name codec struct_ size =
-  { name; codec; struct_; size; decode = Codec.decode codec }
+  {
+    name;
+    codec;
+    struct_;
+    size;
+    decode = (fun buf off -> Codec.decode codec buf ~off);
+  }
 
 type any_schema = Any : 'a schema -> any_schema
 

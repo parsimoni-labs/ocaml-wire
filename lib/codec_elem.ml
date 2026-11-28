@@ -169,7 +169,7 @@ let build_bf_writer base byte_off shift width =
         Bitfield.set_u32_be buf (off + byte_off)
           (cur lor ((value land mask) lsl shift))
 
-(* The [Codec.set] writer, one closure per base. It range-checks like
+(* The [Codec.View.set] writer, one closure per base. It range-checks like
    {!build_bf_writer}: masking here is the one silent truncation no later check
    can catch, because the masked result is a legal field value that
    [Codec.get] and [validate] both accept. [set] promises the buffer is
@@ -427,7 +427,7 @@ let rec iter_typ_refs : type a.
       iter_params_fields ~assign param codec_struct.fields codec_struct.where
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
   | Float32 _ | Float64 _ | Bits _ | Unit | All_bytes | All_zeros | Zeroterm
-  | Struct _ | Type_ref _ | Qualified_ref _ ->
+  | Struct _ | Type_ref _ | Qualified_ref _ | Der _ ->
       ()
 
 and iter_param_refs_typ : type a.

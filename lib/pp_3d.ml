@@ -173,6 +173,8 @@ and pp_typ : type a. a typ Fmt.t =
       Fmt.pf ppf "UINT8[:byte-size %a]" pp_expr size
   | Byte_array_where { size; cond; _ } ->
       Fmt.pf ppf "UINT8 { %a }[:byte-size %a]" pp_expr cond pp_expr size
+  | Single_elem { size; elem; at_most = false } when is_der_value elem ->
+      pp_typ ppf (Byte_array { size })
   | Single_elem { size; elem; at_most = false } ->
       Fmt.pf ppf "%a[:byte-size-single-element-array %a]" pp_typ elem pp_expr
         size
@@ -212,6 +214,7 @@ and pp_typ : type a. a typ Fmt.t =
   | Optional_or { present = Bool false; _ } -> Fmt.string ppf "UINT8"
   | Optional _ | Optional_or _ | Repeat _ ->
       assert false (* unreachable: rejected by the wrapping combinator *)
+  | Der _ -> invalid_arg "Wire: an ASN.1 component has no 3D projection"
 
 and pp_packed_expr ppf (Pack_expr e) = pp_expr ppf e
 
@@ -481,6 +484,8 @@ and field_suffix : type a. a typ -> field_suffix * (Format.formatter -> unit) =
   | Byte_array_where { size; elt_var; _ } ->
       let synth = synth_name_of_elt_var elt_var in
       (Byte_array size, fun ppf -> Fmt.string ppf synth)
+  | Single_elem { size; elem; at_most = false } when is_der_value elem ->
+      field_suffix (Byte_array { size })
   | Single_elem { size; _ } when Option.is_some (primitive_region typ) ->
       ( No_suffix,
         fun ppf ->

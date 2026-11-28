@@ -134,10 +134,10 @@ let reference_consumed codec oracle buf off len =
   | Some (o : Diff_codecs.c_oracle) -> o.standalone buf off len
   | None -> (
       let frame = Bytes.sub buf off len in
-      match Wire.Codec.decode codec frame 0 with
+      match Wire.Codec.decode codec frame ~off:0 with
       | Error _ -> -1
       | Ok _ -> (
-          match Wire.Codec.size_at codec frame 0 with
+          match Wire.Codec.size_at codec frame ~off:0 with
           | Ok n -> n
           | Error _ -> -1))
 

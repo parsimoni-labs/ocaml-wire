@@ -2,7 +2,7 @@
 
    The historical [bind]/[get]/[action]/[set_pos] tests are gone -- the
    String-Map context machinery they exercised was retired when struct
-   decoding moved to the [Codec.validator_of_struct] int-array kernel. *)
+   decoding moved to the [Wire.Private.validator_of_struct] int-array kernel. *)
 
 open Wire.Private
 

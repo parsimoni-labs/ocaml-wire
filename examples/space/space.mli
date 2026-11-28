@@ -2,12 +2,28 @@
 
 (** {2 CLCW} *)
 
-type clcw
+type clcw = {
+  type_ : int;
+  version : int;
+  status : int;
+  cop : int;
+  vcid : int;
+  spare : int;
+  no_rf : int;
+  no_bitlock : int;
+  lockout : int;
+  wait : int;
+  retransmit : int;
+  farmb : int;
+  spare2 : int;
+  report : int;
+}
+(** A Communications Link Control Word, one field per bitfield. *)
 
 val clcw_codec : clcw Wire.Codec.t
 (** Codec for the 4-byte CLCW bitfield structure. *)
 
-val clcw_struct : Wire.Everparse.Raw.struct_
+val clcw_struct : Wire.Private.Everparse.Raw.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val clcw_size : int
@@ -45,12 +61,21 @@ val bf_cw_report : (int, clcw) Wire.Codec.field
 
 (** {2 SpacePacket} *)
 
-type packet
+type packet = {
+  version : int;
+  type_ : int;
+  sec_hdr : int;
+  apid : int;
+  seq_flags : int;
+  seq_count : int;
+  data_len : Wire.UInt16.t;
+}
+(** A space packet primary header, one field per bitfield. *)
 
 val packet_codec : packet Wire.Codec.t
 (** Codec for the 6-byte CCSDS Space Packet primary header. *)
 
-val packet_struct : Wire.Everparse.Raw.struct_
+val packet_struct : Wire.Private.Everparse.Raw.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val packet_size : int
@@ -91,12 +116,25 @@ val full_packet_codec : full_packet Wire.Codec.t
 
 (** {2 TMFrame} *)
 
-type tm_frame
+type tm_frame = {
+  version : int;
+  scid : int;
+  vcid : int;
+  ocf_flag : int;
+  mc_count : int;
+  vc_count : int;
+  sec_hdr : int;
+  sync : int;
+  packet_order : int;
+  seg_id : int;
+  first_hdr : int;
+}
+(** A TM transfer frame primary header, one field per bitfield. *)
 
 val tm_frame_codec : tm_frame Wire.Codec.t
 (** Codec for the 6-byte TM Transfer Frame primary header. *)
 
-val tm_frame_struct : Wire.Everparse.Raw.struct_
+val tm_frame_struct : Wire.Private.Everparse.Raw.struct_
 (** Wire struct descriptor for EverParse code generation. *)
 
 val tm_frame_size : int

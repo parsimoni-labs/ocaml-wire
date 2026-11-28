@@ -50,8 +50,8 @@ let[@inline] to_int32 (v : t) : int32 =
 let[@inline] of_int32 (n : int32) : t =
   match Carrier.is_immediate with True -> Int32.to_int n | False -> n
 
-(* Every encoder path (typ-level, compiled field, [Codec.set]) writes an int32
-   through here, so the width check belongs here too. *)
+(* Every encoder path, [Codec.encode] and [Codec.View.set] alike, writes an
+   int32 through here, so the width check belongs here too. *)
 let low16 v = Carrier.to_int (Carrier.logand v mask16)
 let high16 v = low16 (Carrier.shift_right_logical v 16)
 

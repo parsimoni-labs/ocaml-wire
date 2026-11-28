@@ -9,12 +9,12 @@ open Rust_src
    field, its record, its values and the error of the codec, a field's
    original name in its path. *)
 let test_shape () =
-  let src = rs Schemas.checked in
+  let src = folded Schemas.checked in
   let has = has "checked" src in
   has "pub const MIN_SIZE: usize = 5;";
   has "pub fn check(buf: &[u8], off: usize) -> Check<'_> {";
-  has "pub fn ok(&self) -> bool {";
-  has "pub fn get(self) -> Option<View<'a>> {";
+  has "pub fn is_ok(&self) -> bool {";
+  has "pub fn get(self) -> View<'a> {";
   has "pub fn ttl(&self) -> u8 {";
   has "pub fn set_ttl(buf: &mut [u8], at: usize, x: u8) -> Result<(), Error>";
   has "pub struct Record {";
@@ -27,10 +27,13 @@ let test_shape () =
   has "path.push(\"TTL\")";
   has "Kind::InvalidEnum { value: f5_proto, valid: &[";
   has "Predicate::Where";
-  has "pub trait Visitor {";
-  has
-    "pub fn fold<V: fold::Visitor>(v: &mut V, buf: &[u8], off: usize, len: \
-     usize)";
+  has "pub enum Records<'r> {";
+  has "pub fn fold<A, F>(";
+  has "F: FnMut(A, u8, u8, u16, u8, u8) -> A,";
+  Alcotest.(check bool) "no visitor" false (contains src "trait Visitor");
+  Alcotest.(check bool)
+    "no fold without ~fold" false
+    (contains (rs Schemas.checked) "pub fn fold");
   has "#![forbid(unsafe_code)]";
   Alcotest.(check bool) "no std" false (contains src "std::");
   Alcotest.(check bool) "no digest" false (contains src "DIGEST");

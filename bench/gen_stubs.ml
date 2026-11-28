@@ -19,16 +19,16 @@ let structs =
    loops use (bench/rust/everparse): archived with the others, no OCaml stub. *)
 let c_only_structs =
   [
-    Wire.Everparse.Raw.struct_of_codec Packet_stack.codec;
-    Wire.Everparse.Raw.struct_of_codec Packet_stack.capture;
+    Wire.Private.Everparse.Raw.struct_of_codec Packet_stack.codec;
+    Wire.Private.Everparse.Raw.struct_of_codec Packet_stack.capture;
   ]
 
 let struct_size s =
-  match Wire.Everparse.Raw.struct_size s with
+  match Wire.Private.Everparse.Raw.struct_size s with
   | Some n -> n
   | None ->
       Fmt.failwith "benchmark schema %s has variable-length fields"
-        (Wire.Everparse.Raw.struct_name s)
+        (Wire.Private.Everparse.Raw.struct_name s)
 
 let projection_structs = Demo_bench_cases.projection_structs
 
@@ -40,7 +40,7 @@ let projection_strings ~is_proj ~field_kinds =
   if not is_proj then (zero_int, zero_int64)
   else
     match field_kinds with
-    | [ (_, Wire.Everparse.Raw.Int64) ] ->
+    | [ (_, Wire.Private.Everparse.Raw.Int64) ] ->
         ( zero_int,
           "(fun b off -> Result.value ~default:0L (S.parse_k Fun.id b off))" )
     | [ _ ] ->
@@ -75,20 +75,20 @@ let generate_stub_registry ppf structs projection_structs =
   pr "  match name with\n";
   List.iter
     (fun s ->
-      let name = Wire.Everparse.Raw.struct_name s in
+      let name = Wire.Private.Everparse.Raw.struct_name s in
       let lower = String.lowercase_ascii name in
       let is_proj =
         List.exists
-          (fun p -> Wire.Everparse.Raw.struct_name p = name)
+          (fun p -> Wire.Private.Everparse.Raw.struct_name p = name)
           projection_structs
       in
-      let field_kinds = Wire.Everparse.Raw.field_kinds s in
+      let field_kinds = Wire.Private.Everparse.Raw.field_kinds s in
       let proj_int, proj_int64 = projection_strings ~is_proj ~field_kinds in
       let n_args =
         List.length
-          (Wire.Everparse.Raw.field_kinds
+          (Wire.Private.Everparse.Raw.field_kinds
              (List.find
-                (fun p -> Wire.Everparse.Raw.struct_name p = name)
+                (fun p -> Wire.Private.Everparse.Raw.struct_name p = name)
                 all_structs))
       in
       let cont = noop_continuation ~n_args in
@@ -107,14 +107,18 @@ let generate_ml oc =
   let pr fmt = Fmt.pf ppf fmt in
   List.iter
     (fun s ->
-      let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
+      let lower =
+        String.lowercase_ascii (Wire.Private.Everparse.Raw.struct_name s)
+      in
       pr "external %s_check : bytes -> bool = \"caml_wire_%s_check\"\n\n" lower
         lower)
     structs;
   pr "(* Timed C benchmark loops *)\n\n";
   List.iter
     (fun s ->
-      let lower = String.lowercase_ascii (Wire.Everparse.Raw.struct_name s) in
+      let lower =
+        String.lowercase_ascii (Wire.Private.Everparse.Raw.struct_name s)
+      in
       pr "external %s_loop : bytes -> int -> int -> int = \"ep_loop_%s\"\n\n"
         lower lower)
     structs;
@@ -130,11 +134,11 @@ let generate_c oc =
   pr "#include \"bench_common.h\"\n\n";
   List.iter
     (fun s ->
-      let name = Wire.Everparse.Raw.struct_name s in
+      let name = Wire.Private.Everparse.Raw.struct_name s in
       let ep = Wire_3d.everparse_name name in
       let validator = Wire_3d.validator_name name in
       let lower = String.lowercase_ascii name in
-      let n_fields = List.length (Wire.Everparse.Raw.field_names s) in
+      let n_fields = List.length (Wire.Private.Everparse.Raw.field_names s) in
       ignore n_fields;
       pr "CAMLprim value caml_wire_%s_check(value v_buf) {\n" lower;
       pr "  CAMLparam1(v_buf);\n";
@@ -176,7 +180,7 @@ let () =
   else begin
     let schemas =
       List.map
-        (Wire.Everparse.Raw.project_struct ~mode:`Ffi)
+        (Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi)
         (structs @ c_only_structs)
     in
 

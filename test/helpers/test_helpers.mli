@@ -80,8 +80,34 @@ val ok : ('a, Error.t) result -> 'a
 
 val reader :
   ?env:Param.env -> 'r Codec.t -> ('a, 'r) Codec.field -> bytes -> int -> 'a
-(** [reader ?env c f buf off] is what {!Codec.get} of [f] reads at [off] in
-    [buf], its error failing the test. *)
+(** [reader ?env c f buf off] is the field [f] of the view of the record of [c]
+    at [off] in [buf], failing the test when the check refuses the record. *)
+
+val setter :
+  ?env:Param.env ->
+  'r Codec.t ->
+  ('a, 'r) Codec.field ->
+  bytes ->
+  int ->
+  'a ->
+  unit
+(** [setter ?env c f buf off x] writes [x] as the field [f] of the view of the
+    record of [c] at [off] in [buf], failing the test when the check refuses the
+    record. *)
+
+val accepts : ?env:Param.env -> 'r Codec.t -> bytes -> int -> bool
+(** [accepts ?env c buf off] is [true] iff {!Codec.View.check} passes the record
+    of [c] at [off] in [buf]. *)
+
+val codec_of_typ : 'a typ -> 'a Codec.t
+(** [codec_of_typ t] is the codec of one field of type [t]. *)
+
+val decode_typ :
+  ?consume:consumption -> 'a typ -> string -> ('a, Error.t) result
+(** [decode_typ ~consume t s] decodes [s] with {!codec_of_typ}[ t]. *)
+
+val encode_typ : 'a typ -> 'a -> string
+(** [encode_typ t v] is [v] encoded with {!codec_of_typ}[ t]. *)
 
 val expect_constraint_fail : ('a, Error.t) result -> unit
 (** [expect_constraint_fail r] asserts [r] is [Error] with a [Constraint_failed]

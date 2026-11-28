@@ -10,7 +10,7 @@ let test_repeat_decode_empty () =
   (* length=0 -> no items *)
   let buf = Bytes.create 1 in
   Bytes.set_uint8 buf 0 0;
-  let r = decode_ok (Codec.decode repeat_codec buf 0) in
+  let r = decode_ok (Codec.decode repeat_codec buf ~off:0) in
   Alcotest.(check int) "length" 0 (UInt8.to_int r.length);
   Alcotest.(check int) "item count" 0 (List.length r.items)
 
@@ -20,7 +20,7 @@ let test_repeat_decode_one () =
   Bytes.set_uint8 buf 0 3;
   Bytes.set_uint8 buf 1 0x42;
   Bytes.set_uint16_be buf 2 0x1234;
-  let r = decode_ok (Codec.decode repeat_codec buf 0) in
+  let r = decode_ok (Codec.decode repeat_codec buf ~off:0) in
   Alcotest.(check int) "length" 3 (UInt8.to_int r.length);
   Alcotest.(check int) "item count" 1 (List.length r.items);
   let item = List.hd r.items in
@@ -40,7 +40,7 @@ let test_repeat_decode_multiple () =
   (* item 2 *)
   Bytes.set_uint8 buf 7 0x03;
   Bytes.set_uint16_be buf 8 0x0003;
-  let r = decode_ok (Codec.decode repeat_codec buf 0) in
+  let r = decode_ok (Codec.decode repeat_codec buf ~off:0) in
   Alcotest.(check int) "length" 9 (UInt8.to_int r.length);
   Alcotest.(check int) "item count" 3 (List.length r.items);
   List.iteri
@@ -64,7 +64,7 @@ let test_repeat_encode () =
     }
   in
   let buf = Bytes.create 7 in
-  Codec.encode repeat_codec v buf 0;
+  Codec.encode repeat_codec v buf ~off:0;
   Alcotest.(check int) "length byte" 6 (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "item0.tag" 0x01 (Bytes.get_uint8 buf 1);
   Alcotest.(check int) "item0.value" 0x0001 (Bytes.get_uint16_be buf 2);
@@ -73,7 +73,7 @@ let test_repeat_encode () =
 
 let expect_repeat_encode_error label codec value =
   let buf = Bytes.make 8 '\x7f' in
-  match Codec.encode codec value buf 0 with
+  match Codec.encode codec value buf ~off:0 with
   | () -> Alcotest.failf "%s: expected a repeat byte-budget error" label
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
@@ -91,7 +91,7 @@ let test_repeat_exact_budget () =
           Field.repeat "items" ~size:(Field.ref f_size) uint16be $ snd;
         ]
   in
-  (match Codec.decode fixed (Bytes.of_string "\x01\xaa") 0 with
+  (match Codec.decode fixed (Bytes.of_string "\x01\xaa") ~off:0 with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "fixed-width repeat accepted a remainder");
   expect_repeat_encode_error "fixed underrun" fixed (UInt8.v 6, [ UInt16.v 1 ]);
@@ -107,7 +107,7 @@ let test_repeat_exact_budget () =
           Field.repeat "items" ~size:(Field.ref f_var_size) zeroterm $ snd;
         ]
   in
-  match Codec.decode variable (Bytes.of_string "\x01A\x00") 0 with
+  match Codec.decode variable (Bytes.of_string "\x01A\x00") ~off:0 with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "variable-width repeat crossed its byte budget"
 
@@ -121,8 +121,8 @@ let test_repeat_roundtrip () =
   in
   let original : container = { length = UInt8.v 9; items } in
   let buf = Bytes.create 10 in
-  Codec.encode repeat_codec original buf 0;
-  let decoded = decode_ok (Codec.decode repeat_codec buf 0) in
+  Codec.encode repeat_codec original buf ~off:0;
+  let decoded = decode_ok (Codec.decode repeat_codec buf ~off:0) in
   Alcotest.(check int)
     "length"
     (UInt8.to_int original.length)
@@ -158,29 +158,29 @@ let test_repeat_primitive () =
   Bytes.set_uint16_be buf 1 0x1111;
   Bytes.set_uint16_be buf 3 0x2222;
   Bytes.set_uint16_be buf 5 0x3333;
-  let r = decode_ok (Codec.decode repeat_int_codec buf 0) in
+  let r = decode_ok (Codec.decode repeat_int_codec buf ~off:0) in
   Alcotest.(check int) "count" 6 (UInt8.to_int r.count);
   Alcotest.(check int) "n values" 3 (List.length r.values);
   Alcotest.(check (list int))
     "values" [ 0x1111; 0x2222; 0x3333 ]
     (List.map UInt16.to_int r.values)
 
-(* [Codec.encoded_size] counts a [Field.repeat]'s elements, including under a
-   dynamic byte budget, so a buffer sized from [encoded_size] holds the whole
+(* [Codec.size] counts a [Field.repeat]'s elements, including under a
+   dynamic byte budget, so a buffer sized from [Codec.size] holds the whole
    encoding. *)
 let test_repeat_size_of_value () =
   let v =
     { count = UInt8.v 6; values = List.map UInt16.v [ 0x1111; 0x2222; 0x3333 ] }
   in
   (* Count (1) + 3 * uint16be (6) = 7 *)
-  let n = Codec.encoded_size repeat_int_codec v in
+  let n = Codec.size repeat_int_codec v in
   Alcotest.(check int) "size_of_value" 7 n;
   let buf = Bytes.create n in
-  Codec.encode repeat_int_codec v buf 0;
+  Codec.encode repeat_int_codec v buf ~off:0;
   Alcotest.(check int)
     "wire_size_at" 7
-    (decode_ok (Codec.size_at repeat_int_codec buf 0));
-  let r = decode_ok (Codec.decode repeat_int_codec buf 0) in
+    (decode_ok (Codec.size_at repeat_int_codec buf ~off:0));
+  let r = decode_ok (Codec.decode repeat_int_codec buf ~off:0) in
   Alcotest.(check (list int))
     "roundtrip"
     (List.map UInt16.to_int v.values)
@@ -212,7 +212,7 @@ let test_repeat_with_trailer () =
   Bytes.set_uint8 buf 4 0x02;
   Bytes.set_uint16_be buf 5 0x0002;
   Bytes.set_uint8 buf 7 0xFF;
-  let r = decode_ok (Codec.decode repeat_trailer_codec buf 0) in
+  let r = decode_ok (Codec.decode repeat_trailer_codec buf ~off:0) in
   Alcotest.(check int) "len" 6 (UInt8.to_int r.len);
   Alcotest.(check int) "item count" 2 (List.length r.items);
   Alcotest.(check int) "check" 0xFF (UInt8.to_int r.check)
@@ -258,7 +258,7 @@ let test_repeat_variable_size_elements () =
   (* item 1: len=3, data="cde" *)
   Bytes.set_uint8 buf 5 3;
   Bytes.blit_string "cde" 0 buf 6 3;
-  let r = decode_ok (Codec.decode var_repeat_codec buf 0) in
+  let r = decode_ok (Codec.decode var_repeat_codec buf ~off:0) in
   Alcotest.(check int) "size" 7 (UInt16.to_int r.size);
   Alcotest.(check int) "item count" 2 (List.length r.items);
   let i0 = List.nth r.items 0 in
@@ -267,6 +267,22 @@ let test_repeat_variable_size_elements () =
   Alcotest.(check string) "item0.data" "ab" i0.data;
   Alcotest.(check int) "item1.len" 3 (UInt8.to_int i1.len);
   Alcotest.(check string) "item1.data" "cde" i1.data
+
+(* The byte-budget loop sizes each element from its declaration, so a
+   [uint_var] whose width is an expression is refused where the field is
+   built, as is one of no width. *)
+let test_repeat_uint_var_width () =
+  let refused name size =
+    Alcotest.(check bool)
+      name true
+      (raises_invalid (fun () ->
+           Field.repeat "items" ~size:(int 4) (uint_var size)))
+  in
+  refused "no width" (sizeof empty);
+  refused "a parameter's width" (Param.expr (Param.input "w" uint8));
+  match Field.repeat "items" ~size:(int 4) (uint_var (int 2)) with
+  | _ -> ()
+  | exception Invalid_argument m -> Alcotest.failf "literal width: %s" m
 
 let suite =
   ( "codec_repeat",
@@ -285,4 +301,6 @@ let suite =
       Alcotest.test_case "repeat: with trailer" `Quick test_repeat_with_trailer;
       Alcotest.test_case "repeat: variable size elements" `Quick
         test_repeat_variable_size_elements;
+      Alcotest.test_case "repeat: uint_var width" `Quick
+        test_repeat_uint_var_width;
     ] )

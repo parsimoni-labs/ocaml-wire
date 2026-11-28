@@ -11,7 +11,7 @@ let simple_codec =
 
 let encode_simple v =
   let buf = Bytes.create (Codec.min_size simple_codec) in
-  Codec.encode simple_codec v buf 0;
+  Codec.encode simple_codec v buf ~off:0;
   Bytes.unsafe_to_string buf
 
 (* Mock C functions that behave identically to OCaml *)

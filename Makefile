@@ -1,5 +1,5 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
-       fuzz-nightly fuzz-rust 3d bench bench-demo bench-routing bench-gateway \
+       fuzz-nightly fuzz-rust 3d asn1 bench bench-demo bench-routing bench-gateway \
        bench-clcw bench-rust bench-flow bench-flow-swap bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck prove verify clean
@@ -98,6 +98,12 @@ verify:
 
 3d:
 	dune exec examples/validate_3d.exe
+
+# everparse-asn1 verifies every module of test/asn1 in F* and its C compiles
+# (needs everparse-asn1.exe in PATH or ~/.local/everparse/bin, with the F*, Z3
+# and libraries of its EverParse prefix).
+asn1:
+	BUILD_EVERPARSE=1 dune build @test/asn1/runtest
 
 bench: bench-demo bench-routing bench-gateway bench-clcw
 
@@ -222,8 +228,8 @@ bench-flow: $(BENCH_FLOW_TRACE)
 	@_build/default/bench/rust/bench.exe report $(BENCH_FLOW)/*.txt
 
 # The swap rows of bench-flow alone: one flow counter (bench/rust/flow_swap.ml)
-# written against the header modules wire.ocaml generates or their
-# interpreted twins, on OCaml and on each switch of
+# written against the header modules wire.ocaml generates or the
+# interpreted form under their names (bench/rust/swap.ml), on OCaml and on each switch of
 # BENCH_SWITCHES, with smoltcp making the same checks, each with the table
 # (corpus mawi swap) and without it (mawi swap parse). Each row is timed as
 # in bench-flow, into _build/bench-flow/swap/, then counted by bench/count.sh,

@@ -13,7 +13,7 @@ let widths = [| 4; 4; 8; 3; 5; 6; 2 |]
 (* The fields of the record at [off] in [b], through its view: a record of
    [G] has no check, so one that fits passes. *)
 let per_record b off =
-  let v = G.get (G.check b (Buf.length b) off) in
+  let v = G.get (G.check b (Buf.length b) ~off) in
   [
     G.a b v;
     G.b b v;
@@ -42,7 +42,7 @@ let test_read () =
     let off = Random.State.int rand (len + 5) - 2 in
     let (Buf.Any b) = Buf.v buf in
     let got =
-      G.X4.with_ b (Buf.length b) off
+      G.X4.with_ b ~off
         ~ok:(fun w -> Some (List.init 4 (lanes w)))
         ~fail:(fun () -> None)
     in
@@ -83,7 +83,7 @@ let test_write () =
     let (Buf.Any ba) = Buf.v a in
     let got =
       outcome (fun () ->
-          G.X4.write_int_at ba (Buf.length ba) off (vec 0) (vec 1) (vec 2)
+          G.X4.write_int_at ba ~off (vec 0) (vec 1) (vec 2)
             (vec 3) (vec 4) (vec 5) (vec 6))
     in
     let want =
@@ -92,7 +92,7 @@ let test_write () =
             let f i = fields.(i).(k) in
             let c = Wire_runtime.UInt8.v (f 2) in
             G.write s
-              (off + (4 * k))
+              ~off:(off + (4 * k))
               ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
           done)
     in
@@ -121,14 +121,14 @@ let test_parts () =
     in
     let a = Bytes.make len '\000' and s = Bytes.make len '\000' in
     let (Buf.Any ba) = Buf.v a in
-    let got = outcome (fun () -> G.X4.store ba (Buf.length ba) off part) in
+    let got = outcome (fun () -> G.X4.store ba ~off part) in
     let want =
       outcome (fun () ->
           for k = 0 to 3 do
             let f i = lanes.(i).(k) land ((1 lsl widths.(i)) - 1) in
             let c = Wire_runtime.UInt8.v (f 2) in
             G.write s
-              (off + (4 * k))
+              ~off:(off + (4 * k))
               ~a:(f 0) ~b:(f 1) ~c ~d:(f 3) ~e:(f 4) ~f:(f 5) ~g:(f 6)
           done)
     in
@@ -174,12 +174,12 @@ let test_fill () =
     let (Buf.Any bs) = Buf.v s in
     let got =
       outcome (fun () ->
-          G.X4.fill ba (Buf.length ba) off ~count ~f:(fun k -> parts.(k)))
+          G.X4.fill ba ~off ~count ~f:(fun k -> parts.(k)))
     in
     let want =
       outcome (fun () ->
           for k = 0 to count - 1 do
-            G.X4.store bs (Buf.length bs) (off + (16 * k)) parts.(k)
+            G.X4.store bs ~off:(off + (16 * k)) parts.(k)
           done)
     in
     let name = Fmt.str "len %d off %d count %d" len off count in

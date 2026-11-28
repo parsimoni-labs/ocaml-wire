@@ -1,7 +1,7 @@
 (* Writes the modules Wire_ocaml generates for the CLCW codec, [clcw], and
    for the Ethernet, IPv4 and TCP or UDP stack, [stack], or their
-   interfaces, as its command line names them. [stack] has a fold,
-   [count_tcp], whose visitor is [Count_tcp]. The committed copies are for
+   interfaces, as its command line names them. [stack] has a fold over the
+   IPv4 protocol and the TCP destination port. The committed copies are for
    the OCaml target, whichever compiler builds them. *)
 
 let () =
@@ -11,6 +11,6 @@ let () =
       [
         v ~target Space.clcw_codec;
         v ~target ~name:"stack"
-          ~folds:[ fold ~outputs:[ "ipv4_tcp_present" ] "count_tcp" ]
+          ~fold:[ "ipv4.protocol"; "ipv4.tcp.dst_port" ]
           Packet_stack.codec;
       ])

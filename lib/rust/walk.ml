@@ -51,6 +51,7 @@ let as_int : type a. a T.expr -> int T.expr option = function
   | T.Add _ as e -> Some e
   | T.Sub _ as e -> Some e
   | T.Mul _ as e -> Some e
+  | T.Mod _ as e -> Some e
   | T.Land _ as e -> Some e
   | T.Lor _ as e -> Some e
   | T.Lxor _ as e -> Some e
@@ -80,6 +81,7 @@ let rec expr : type a. P.Scope.t -> a T.expr -> string =
   | T.Add (a, b) -> op "+" a b
   | T.Sub (a, b) -> op "-" a b
   | T.Mul (a, b) -> op "*" a b
+  | T.Mod (a, b) -> op "%" a b
   | T.Land (a, b) -> op "&" a b
   | T.Lor (a, b) -> op "|" a b
   | T.Lxor (a, b) -> op "^" a b
@@ -125,6 +127,7 @@ and wide scope (e : int T.expr) =
   | T.Add (a, b) -> op "+" a b
   | T.Sub (a, b) -> op "-" a b
   | T.Mul (a, b) -> op "*" a b
+  | T.Mod (a, b) -> op "%" a b
   | T.Land (a, b) -> op "&" a b
   | T.Lor (a, b) -> op "|" a b
   | T.Lxor (a, b) -> op "^" a b

@@ -13,7 +13,11 @@ let everparse_cases label g =
       Alcobar.[ Alcobar.const () ]
       (fun () ->
         match Wire.Everparse.project ~mode:`Ffi g.codec with
-        | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
+        | s ->
+            ignore
+              (Wire.Private.Everparse.Raw.to_3d
+                 (Wire.Private.Everparse.module_ s)
+                : string)
         | exception Invalid_argument msg ->
             Alcobar.failf "%s: 3D projection raised %s" label msg);
   ]
@@ -28,7 +32,11 @@ let everparse_nested_cases label depth =
         let comp = a.label and codec = a.g.codec in
         fun () ->
           match Wire.Everparse.project ~mode:`Ffi codec with
-          | s -> ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
+          | s ->
+              ignore
+                (Wire.Private.Everparse.Raw.to_3d
+                   (Wire.Private.Everparse.module_ s)
+                  : string)
           | exception Invalid_argument msg ->
               Alcobar.failf "%s [%s]: 3D projection raised %s" label comp msg)
   in
@@ -46,7 +54,9 @@ let everparse_projectable (_, Pack g) =
      so such a codec is excluded from the sweep rather than crashing it. *)
   try
     let s = Wire.Everparse.project ~mode:`Ffi g.codec in
-    ignore (Wire.Everparse.Raw.to_3d s.module_ : string);
+    ignore
+      (Wire.Private.Everparse.Raw.to_3d (Wire.Private.Everparse.module_ s)
+        : string);
     true
   with Invalid_argument _ -> false
 
@@ -64,7 +74,9 @@ let afl_everparse_cases ?max_len label =
     ~check:(fun case (Pack g) _input ->
       match
         let s = Wire.Everparse.project ~mode:`Ffi g.codec in
-        ignore (Wire.Everparse.Raw.to_3d s.module_ : string)
+        ignore
+          (Wire.Private.Everparse.Raw.to_3d (Wire.Private.Everparse.module_ s)
+            : string)
       with
       | () -> ()
       | exception Invalid_argument msg ->

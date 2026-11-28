@@ -24,7 +24,23 @@ let reject_no_int64_slot ~combinator name typ =
       "Wire.Field.%s: field %S does not have a full-width int64 validation slot"
       combinator name
 
+(* A DER component has no integer view and no action hook: [Asn1] reads it,
+   and would drop either. *)
+let reject_refined_der name typ ~refined =
+  match typ with
+  | Types.Der _ when refined ->
+      Fmt.invalid_arg
+        "Wire.Field.v: field %S is an ASN.1 component, which takes no \
+         constraint and no action: DER has no expression over its components"
+        name
+  | _ -> ()
+
 let v name ?constraint_ ?self_constraint ?self_int64 ?action ?doc typ =
+  reject_refined_der name typ
+    ~refined:
+      (Option.is_some constraint_
+      || Option.is_some self_constraint
+      || Option.is_some self_int64 || Option.is_some action);
   if Option.is_some self_int64 then
     reject_no_int64_slot ~combinator:"v ?self_int64" name typ;
   let constraint_ =
@@ -101,8 +117,11 @@ let rec is_repeat_element : type a. a Types.typ -> bool =
   let open Types in
   match typ with
   | Uint8 | Uint16 _ | Uint32 _ | Uint64 _ | Int8 | Int16 _ | Int32 _ | Int64 _
-  | Float32 _ | Float64 _ | Uint_var _ | Zeroterm ->
+  | Float32 _ | Float64 _ | Zeroterm ->
       true
+  (* The loop sizes an element before it reads it, from its declaration: a
+     [uint_var] whose width is not a literal has no size there. *)
+  | Uint_var { size = Int n; _ } -> n > 0
   (* [Unit] is 0-width: a byte-budget list of it carries no bytes and projects to
      a zero-size element EverParse refuses to extract, like the [array] case. A
      byte span whose declared size is a literal zero (or less) is 0-width for

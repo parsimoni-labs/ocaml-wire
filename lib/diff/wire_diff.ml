@@ -25,7 +25,9 @@ type result =
 
 let wire_size (Harness h) = Wire.Codec.min_size h.codec
 let string_of_record codec v = Wire.Codec.to_string codec v
-let record_of_string codec s = Wire.Codec.decode codec (Bytes.of_string s) 0
+
+let record_of_string codec s =
+  Wire.Codec.decode codec (Bytes.of_string s) ~off:0
 
 let default_ocaml_read codec project buf =
   let buf_too_short = String.length buf < Wire.Codec.min_size codec in

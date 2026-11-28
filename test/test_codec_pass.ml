@@ -20,12 +20,12 @@ let test_validate_check_free_no_alloc () =
         ]
   in
   let buf = Bytes.make 32 '\007' in
-  decode_ok (Codec.validate c buf 0);
+  decode_ok (Codec.validate c buf ~off:0);
   (* warm up any one-time setup *)
   let n = 100_000 in
   let before = Gc.minor_words () in
   for _ = 1 to n do
-    decode_ok (Codec.validate c buf 0)
+    decode_ok (Codec.validate c buf ~off:0)
   done;
   let per_call = (Gc.minor_words () -. before) /. float_of_int n in
   Alcotest.(check bool)
@@ -51,11 +51,11 @@ let test_encode_fixed_no_alloc () =
   in
   let v = (UInt8.v 1, SInt16.v 2, SInt32.of_int32 3l, 4.0) in
   let buf = Bytes.create 15 in
-  Codec.encode c v buf 0;
+  Codec.encode c v buf ~off:0;
   let n = 100_000 in
   let before = Gc.minor_words () in
   for _ = 1 to n do
-    Codec.encode c v buf 0
+    Codec.encode c v buf ~off:0
   done;
   let per_call = (Gc.minor_words () -. before) /. float_of_int n in
   Alcotest.(check bool)
@@ -63,9 +63,8 @@ let test_encode_fixed_no_alloc () =
     true (per_call < 1.0)
 
 (* [decode] reads a fixed scalar field with no bounds check of its own, after
-   checking the record's extent. Each such read must give what the
-   bounds-checked [Codec.get] gives, sign included, on bytes with the top bit
-   set. *)
+   checking the record's extent. Each such read must give what a view
+   gives, sign included, on bytes with the top bit set. *)
 let test_decode_scalars_agree_with_get () =
   let buf = Bytes.of_string "\x00\xf1\x82\x93\xa4\xb5" in
   let check : type a. string -> a typ -> unit =
@@ -79,7 +78,7 @@ let test_decode_scalars_agree_with_get () =
     let get = reader c b in
     Alcotest.(check bool)
       name true
-      (decode_ok (Codec.decode c buf 0) = get buf 0)
+      (decode_ok (Codec.decode c buf ~off:0) = get buf 0)
   in
   check "uint8" uint8;
   check "uint16" uint16;
@@ -104,7 +103,7 @@ let test_decode_scalars_agree_with_get () =
       Alcotest.(check (pair int int))
         name
         (get hi, get lo)
-        (ok (Codec.decode c buf 0)))
+        (ok (Codec.decode c buf ~off:0)))
     [ ("bits u8", U8); ("bits u16", U16); ("bits u16be", U16be) ]
 
 (* The fixed fields are read with no check of their own, so the offset is
@@ -112,10 +111,10 @@ let test_decode_scalars_agree_with_get () =
 let test_decode_offset_out_of_range () =
   let c = Codec.v "Two" Fun.id Codec.[ Field.v "x" uint16be $ Fun.id ] in
   let buf = Bytes.make 4 '\x00' in
-  (match Codec.decode c buf (-1) with
+  (match Codec.decode c buf ~off:(-1) with
   | exception Invalid_argument _ -> ()
   | _ -> Alcotest.fail "decode at -1: expected Invalid_argument");
-  match Codec.decode c buf (max_int - 1) with
+  match Codec.decode c buf ~off:(max_int - 1) with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "decode at max_int - 1: expected an error"
 
@@ -153,7 +152,7 @@ let test_record_too_big_for_a_buffer () =
                  (Field.v "b" uint32 $ fun _ -> UInt32.of_int 0);
                ]
          in
-         Codec.decode c (Bytes.create 8) 0))
+         Codec.decode c (Bytes.create 8) ~off:0))
 
 (* An array's size is a byte count too: one that would overflow is refused. *)
 let test_array_size_overflow () =
@@ -194,10 +193,14 @@ let test_constraint_intervals () =
     Bytes.set_uint8 buf 0 x;
     Bytes.set_uint8 buf 1 y;
     let validated =
-      match Codec.validate c buf 0 with Ok () -> "ok" | Error e -> describe e
+      match Codec.validate c buf ~off:0 with
+      | Ok () -> "ok"
+      | Error e -> describe e
     in
     let decoded =
-      match Codec.decode c buf 0 with Ok _ -> "ok" | Error e -> describe e
+      match Codec.decode c buf ~off:0 with
+      | Ok _ -> "ok"
+      | Error e -> describe e
     in
     Alcotest.(check string) "decode agrees with validate" validated decoded;
     validated
@@ -221,7 +224,7 @@ let test_constraint_intervals () =
   in
   Alcotest.(check bool)
     "an empty interval refuses everything" true
-    (match Codec.validate never (Bytes.make 1 '\xff') 0 with
+    (match Codec.validate never (Bytes.make 1 '\xff') ~off:0 with
     | Ok () -> false
     | Error _ -> true)
 
@@ -242,7 +245,7 @@ let test_failure_value_is_this_frames () =
     b
   in
   let failure c b =
-    match Codec.decode c b 0 with
+    match Codec.decode c b ~off:0 with
     | Ok _ -> Alcotest.fail "expected a constraint failure"
     | Error e -> Fmt.str "%a" Error.pp e
   in
@@ -263,11 +266,10 @@ let test_wide_constraint () =
   in
   let outcomes (type r) (c : r Codec.t) b =
     let ok = function Ok _ -> true | Error _ -> false in
-    let module V = (val Codec.View.codec c) in
     let (Buf.Any v) = Buf.v b in
-    ( ok (Codec.decode c b 0),
-      ok (Codec.validate c b 0),
-      Codec.View.(ok (check V.codec v (Buf.length v) 0)) )
+    ( ok (Codec.decode c b ~off:0),
+      ok (Codec.validate c b ~off:0),
+      Codec.View.(is_ok (check c v ~off:0)) )
   in
   let check name c n expected =
     Alcotest.(check (triple bool bool bool))
@@ -339,13 +341,12 @@ let test_wide_presence () =
     Bytes.set_int64_be b 0 v;
     b
   in
-  let module V = (val Codec.View.codec c) in
   let outcomes b =
     let ok = function Ok _ -> true | Error _ -> false in
     let (Buf.Any v) = Buf.v b in
-    ( ok (Codec.decode c b 0),
-      ok (Codec.validate c b 0),
-      Codec.View.(ok (check V.codec v (Buf.length v) 0)) )
+    ( ok (Codec.decode c b ~off:0),
+      ok (Codec.validate c b ~off:0),
+      Codec.View.(is_ok (check c v ~off:0)) )
   in
   let check name v ~short ~full =
     Alcotest.(check (triple bool bool bool))
@@ -361,7 +362,7 @@ let test_wide_presence () =
   check "2^62" 0x4000_0000_0000_0000L ~short:false ~full:true;
   check "2^63" Int64.min_int ~short:false ~full:true;
   check "2^64 - 1" (-1L) ~short:false ~full:true;
-  match Codec.decode c (frame 9 Int64.min_int) 0 with
+  match Codec.decode c (frame 9 Int64.min_int) ~off:0 with
   | Ok (_, Some d) -> Alcotest.(check int) "2^63: d" 0xaa (UInt8.to_int d)
   | Ok (_, None) -> Alcotest.fail "2^63: d absent"
   | Error e -> Alcotest.failf "2^63: %a" Error.pp e
@@ -392,21 +393,25 @@ let test_plain_encode () =
   in
   let v = (5, 17, 9, 0xabc, 513, -2l) in
   let buf = Bytes.make 9 '\xff' in
-  Codec.encode c v buf 0;
+  Codec.encode c v buf ~off:0;
   Alcotest.(check string)
     "bytes" "\xb1\x9a\xbc\x01\x02\xff\xff\xff\xfe" (Bytes.to_string buf);
-  Alcotest.(check bool) "roundtrip" true (decode_ok (Codec.decode c buf 0) = v);
+  Alcotest.(check bool)
+    "roundtrip" true
+    (decode_ok (Codec.decode c buf ~off:0) = v);
   let refused name f =
     Alcotest.(check bool)
       name true
       (match f () with () -> false | exception Invalid_argument _ -> true)
   in
-  refused "bits too wide" (fun () -> Codec.encode c (8, 0, 0, 0, 0, 0l) buf 0);
-  refused "negative offset" (fun () -> Codec.encode c v buf (-1));
-  refused "short buffer" (fun () -> Codec.encode c v buf 1);
-  refused "constraint" (fun () -> Codec.encode c (0, 0, 0, 0, 1001, 0l) buf 0)
+  refused "bits too wide" (fun () ->
+      Codec.encode c (8, 0, 0, 0, 0, 0l) buf ~off:0);
+  refused "negative offset" (fun () -> Codec.encode c v buf ~off:(-1));
+  refused "short buffer" (fun () -> Codec.encode c v buf ~off:1);
+  refused "constraint" (fun () ->
+      Codec.encode c (0, 0, 0, 0, 1001, 0l) buf ~off:0)
 
-(* A record [View.check] accepts reads every field as [get] does.
+(* A record [View.check] accepts reads every field as [decode] does.
    [View.check] refuses a short buffer and a negative offset without raising,
    [View.get] raises on what it refuses, and [View.field] refuses a field of
    the same name and type that the codec was not built from. *)
@@ -415,22 +420,21 @@ let test_view_read () =
   let b = Codec.(Field.v "b" (bits ~width:4 U16be) $ fun (_, b, _) -> b) in
   let s = Codec.(Field.v "s" (byte_array ~size:(int 3)) $ fun (_, _, s) -> s) in
   let c = Codec.v "Valid" (fun a b s -> (a, b, s)) [ a; b; s ] in
-  let module V = (val Codec.View.codec c) in
   let buf = Bytes.of_string "\x07\xa0\x00xyz" in
   let check buf off =
     let (Buf.Any b) = Buf.v buf in
-    Codec.View.(ok (check V.codec b (Buf.length b) off))
+    Codec.View.(is_ok (check c b ~off))
   in
   let read f =
     let (Buf.Any b) = Buf.v buf in
-    let k = Codec.View.check V.codec b (Buf.length b) 0 in
-    Codec.View.read (Codec.View.field V.codec f) b (Codec.View.get k)
+    let k = Codec.View.check c b ~off:0 in
+    Codec.View.read b (Codec.View.get k) (Codec.View.field c f)
   in
-  let get f = (reader c f) buf 0 in
+  let da, db, ds = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check bool) "accepted" true (check buf 0);
-  Alcotest.(check bool) "uint8" true (read a = get a);
-  Alcotest.(check int) "bits" (get b) (read b);
-  Alcotest.(check string) "byte_array" (get s) (read s);
+  Alcotest.(check bool) "uint8" true (read a = da);
+  Alcotest.(check int) "bits" db (read b);
+  Alcotest.(check string) "byte_array" ds (read s);
   let raises f =
     match f () with _ -> false | exception Invalid_argument _ -> true
   in
@@ -442,19 +446,18 @@ let test_view_read () =
     "get of a failed check" true
     (raises (fun () ->
          let (Buf.Any b) = Buf.v short in
-         ignore Codec.View.(get (check V.codec b (Buf.length b) 0))));
+         ignore Codec.View.(get (check c b ~off:0))));
   let lookalike = Codec.(Field.v "a" uint8 $ fun (a, _, _) -> a) in
   Alcotest.(check bool)
     "a lookalike field" true
-    (raises (fun () -> Codec.View.field V.codec lookalike))
+    (raises (fun () -> Codec.View.field c lookalike))
 
 (* In a frame of 4 to 7 bytes, the 4-byte word a view reads a field from
    ends at the frame's end at most: every field of a 4-byte word of bitfields
-   and of a 6-byte header reads as [get] does, with the record at the very end
-   of the buffer. *)
+   and of a 6-byte header reads as [decode] does, with the record at the very
+   end of the buffer. *)
 let test_view_short_frames () =
-  let check_codec (type r) name (c : r Codec.t) fields =
-    let module V = (val Codec.View.codec c) in
+  let check_codec name (c : int list Codec.t) fields =
     let size = Codec.min_size c in
     for i = 0 to 63 do
       let buf =
@@ -463,16 +466,15 @@ let test_view_short_frames () =
       in
       let off = 3 in
       let (Buf.Any b) = Buf.v buf in
-      let k = Codec.View.check V.codec b (Buf.length b) off in
-      if Codec.View.ok k then
+      let k = Codec.View.check c b ~off in
+      if Codec.View.is_ok k then
         let r = Codec.View.get k in
-        List.iter
-          (fun f ->
-            Alcotest.(check int)
-              (Fmt.str "%s %d" name i)
-              ((reader c f) buf off)
-              (Codec.View.read (Codec.View.field V.codec f) b r))
-          fields
+        Alcotest.(check (list int))
+          (Fmt.str "%s %d" name i)
+          (decode_ok (Codec.decode c buf ~off))
+          (List.map
+             (fun f -> Codec.View.read b r (Codec.View.field c f))
+             fields)
     done
   in
   let bit w =
@@ -484,7 +486,9 @@ let test_view_short_frames () =
   and b7 = bit 7
   and b16 = bit 16 in
   check_codec "U32be bitfields"
-    (Codec.v "Word" (fun _ _ _ _ _ -> ()) Codec.[ b1; b3; b5; b7; b16 ])
+    (Codec.v "Word"
+       (fun a b c d e -> [ a; b; c; d; e ])
+       Codec.[ b1; b3; b5; b7; b16 ])
     [ b1; b3; b5; b7; b16 ];
   let hi = Codec.(Field.v "hi" (bits ~width:5 U16be) $ fun _ -> 0) in
   let lo = Codec.(Field.v "lo" (bits ~width:11 U16be) $ fun _ -> 0) in
@@ -492,19 +496,20 @@ let test_view_short_frames () =
   let last = Codec.(Field.v "last" uint8 $ fun _ -> UInt8.v 0) in
   let pad = Codec.(Field.v "pad" uint8 $ fun _ -> UInt8.v 0) in
   let c6 =
-    Codec.v "Six" (fun _ _ _ _ _ -> ()) Codec.[ hi; lo; mid; pad; last ]
+    Codec.v "Six"
+      (fun hi lo _ _ _ -> [ hi; lo ])
+      Codec.[ hi; lo; mid; pad; last ]
   in
   check_codec "6-byte header bits" c6 [ hi; lo ];
-  let module V = (val Codec.View.codec c6) in
   let buf = Bytes.of_string "\xff\xff\x12\x34\x00\xab" in
   let (Buf.Any b) = Buf.v buf in
-  let r = Codec.View.(get (check V.codec b (Buf.length b) 0)) in
+  let r = Codec.View.(get (check c6 b ~off:0)) in
   Alcotest.(check int)
     "mid" 0x1234
-    (UInt16.to_int Codec.View.(read (field V.codec mid) b r));
+    (UInt16.to_int Codec.View.(read b r (field c6 mid)));
   Alcotest.(check int)
     "last" 0xab
-    (UInt8.to_int Codec.View.(read (field V.codec last) b r))
+    (UInt8.to_int Codec.View.(read b r (field c6 last)))
 
 (* Constraints on fields that share a byte are checked together, and a failure
    still names the first field, in declaration order, whose constraint fails. *)
@@ -525,12 +530,12 @@ let test_shared_byte_constraints () =
   let outcome byte =
     let buf = Bytes.make 1 (Char.chr byte) in
     let validated =
-      match Codec.validate c buf 0 with
+      match Codec.validate c buf ~off:0 with
       | Ok () -> "ok"
       | Error e -> String.concat "." e.field
     in
     let decoded =
-      match Codec.decode c buf 0 with
+      match Codec.decode c buf ~off:0 with
       | Ok _ -> "ok"
       | Error e -> String.concat "." e.field
     in
@@ -562,7 +567,7 @@ let test_shared_byte_constraints () =
   in
   let two_outcome b0 b1 =
     match
-      Codec.validate two (Bytes.init 2 (function 0 -> b0 | _ -> b1)) 0
+      Codec.validate two (Bytes.init 2 (function 0 -> b0 | _ -> b1)) ~off:0
     with
     | Ok () -> "ok"
     | Error e -> String.concat "." e.field
@@ -612,8 +617,6 @@ let test_word_merged_tests () =
   in
   let general = Private.Testing.general c in
   let general_walked = Private.Testing.general walked in
-  let module V = (val Codec.View.codec c) in
-  let module W = (val Codec.View.codec walked) in
   let good = "\x45\x00\x40\x00\x06\x0a\x00\x23\x3e\xad\xbe\xef" in
   let rnd = Random.State.make [| 7 |] in
   let input () =
@@ -624,7 +627,7 @@ let test_word_merged_tests () =
         | _ -> good.[i])
   in
   let accepts c buf =
-    match Codec.validate c buf 0 with Ok () -> true | Error _ -> false
+    match Codec.validate c buf ~off:0 with Ok () -> true | Error _ -> false
   in
   Alcotest.(check bool) "good" true (accepts general (Bytes.of_string good));
   for i = 1 to 20_000 do
@@ -636,7 +639,7 @@ let test_word_merged_tests () =
         (* Only a target whose ints hold 63 bits stages word tests. *)
         if Sys.int_size >= 63 then Alcotest.fail "the tests are not staged");
     let (Buf.Any b) = Buf.v buf in
-    let viewed = Codec.View.(ok (check V.codec b (Buf.length b) 0)) in
+    let viewed = Codec.View.(is_ok (check c b ~off:0)) in
     if viewed <> accepts general buf then
       Alcotest.failf "input %d: view %b" i viewed;
     let tail = Random.State.int rnd 3 in
@@ -645,7 +648,7 @@ let test_word_merged_tests () =
     in
     let buf = Bytes.cat buf (Bytes.make tail 'x') in
     let (Buf.Any b) = Buf.v buf in
-    let viewed = Codec.View.(ok (check W.codec b (Buf.length b) 0)) in
+    let viewed = Codec.View.(is_ok (check walked b ~off:0)) in
     if viewed <> accepts general_walked buf then
       Alcotest.failf "input %d: walked view %b" i viewed
   done;
@@ -704,10 +707,14 @@ let test_mapped_and_disjunctive_checks () =
     Bytes.set_uint8 buf 2 k;
     Bytes.set_uint8 buf 3 b;
     let validated =
-      match Codec.validate c buf 0 with Ok () -> "ok" | Error e -> describe e
+      match Codec.validate c buf ~off:0 with
+      | Ok () -> "ok"
+      | Error e -> describe e
     in
     let decoded =
-      match Codec.decode c buf 0 with Ok _ -> "ok" | Error e -> describe e
+      match Codec.decode c buf ~off:0 with
+      | Ok _ -> "ok"
+      | Error e -> describe e
     in
     Alcotest.(check string) "decode agrees" validated decoded;
     validated
@@ -764,7 +771,7 @@ let staged_scalars ~d_typ ~f_typ =
   let rand = Random.State.make [| 42 |] in
   for _ = 1 to 2000 do
     let buf = Bytes.init 15 (fun _ -> Char.chr (Random.State.int rand 256)) in
-    let v = decode_ok (Codec.decode codec buf 0) in
+    let v = decode_ok (Codec.decode codec buf ~off:0) in
     let get x = (reader codec x) buf 0 in
     let a', b', c', d', e', f', g', h', i', j' = v in
     Alcotest.(check bool) "a" true (a' = get a);
@@ -778,7 +785,7 @@ let staged_scalars ~d_typ ~f_typ =
     Alcotest.(check int) "i" (get i) i';
     Alcotest.(check int) "j" (get j) j';
     let out = Bytes.make 15 '\xff' in
-    Codec.encode codec v out 0;
+    Codec.encode codec v out ~off:0;
     Alcotest.(check string)
       "encode"
       (Bytes.sub_string buf 0 15)
@@ -801,12 +808,12 @@ let test_staged_spans () =
   let rand = Random.State.make [| 7 |] in
   for _ = 1 to 500 do
     let buf = Bytes.init 11 (fun _ -> Char.chr (Random.State.int rand 256)) in
-    let ((a', _, b') as v) = decode_ok (Codec.decode codec buf 0) in
+    let ((a', _, b') as v) = decode_ok (Codec.decode codec buf ~off:0) in
     let get x = (reader codec x) buf 0 in
     Alcotest.(check string) "a" (get a) a';
     Alcotest.(check string) "b" (get b) b';
     let out = Bytes.make 11 '\x00' in
-    Codec.encode codec v out 0;
+    Codec.encode codec v out ~off:0;
     Alcotest.(check string) "encode" (Bytes.to_string buf) (Bytes.to_string out)
   done
 
@@ -842,12 +849,12 @@ let test_layout_pass () =
   let fast, _ = page ~params:false and slow, env = page ~params:true in
   let outcome c env buf =
     let v =
-      match Codec.validate ?env c buf 0 with
+      match Codec.validate ?env c buf ~off:0 with
       | Ok () -> "ok"
       | Error e -> Fmt.str "%a" Error.pp e
     in
     let d =
-      match Codec.decode ?env c buf 0 with
+      match Codec.decode ?env c buf ~off:0 with
       | Ok (_, _, a, _, rest) -> Fmt.str "ok %S %S" a rest
       | Error e -> Fmt.str "%a" Error.pp e
     in
@@ -884,17 +891,18 @@ let test_layout_size_overflow () =
   | c ->
       let buf = Bytes.make (2 + 32767) '\x00' in
       Bytes.set_uint16_be buf 0 0xffff;
-      let decoded = Result.is_ok (Codec.decode c buf 0) in
+      let decoded = Result.is_ok (Codec.decode c buf ~off:0) in
       let validated =
-        match Codec.validate c buf 0 with Ok () -> true | Error _ -> false
+        match Codec.validate c buf ~off:0 with
+        | Ok () -> true
+        | Error _ -> false
       in
       Alcotest.(check bool) "decode refuses" false decoded;
       Alcotest.(check bool) "validate agrees with decode" decoded validated;
       Alcotest.(check bool)
         "no proof for a record decode refuses" false
-        (let module V = (val Codec.View.codec c) in
-         let (Buf.Any b) = Buf.v buf in
-         Codec.View.(ok (check V.codec b (Buf.length b) 0)))
+        (let (Buf.Any b) = Buf.v buf in
+         Codec.View.(is_ok (check c b ~off:0)))
 
 (* A negative offset is refused by name on every encode path, the general one
    included: a codec with a [where] clause does not take the plain one. *)
@@ -903,7 +911,7 @@ let test_encode_negative_offset () =
   let c =
     Codec.v "Neg" ~where:Expr.(Field.ref n > int 0) Fun.id Codec.[ n $ Fun.id ]
   in
-  match Codec.encode c (UInt8.v 1) (Bytes.create 4) (-1) with
+  match Codec.encode c (UInt8.v 1) (Bytes.create 4) ~off:(-1) with
   | () -> Alcotest.fail "encoded at a negative offset"
   | exception Invalid_argument m ->
       Alcotest.(check string) "message" "Codec.encode Neg: negative offset -1" m
@@ -932,7 +940,7 @@ let test_plain_encode_blits () =
     in
     fun v ->
       let buf = Bytes.make 8 '\xff' in
-      match Codec.encode ?env c v buf 0 with
+      match Codec.encode ?env c v buf ~off:0 with
       | () -> Bytes.to_string buf
       | exception Invalid_argument m -> m
   in
@@ -965,10 +973,10 @@ let test_layout_gated_optional () =
         ]
   in
   let buf = Bytes.of_string "\x01\x00" in
-  (match Codec.decode c buf 0 with
+  (match Codec.decode c buf ~off:0 with
   | Ok _ -> Alcotest.fail "decode accepted a missing payload"
   | Error _ -> ());
-  match Codec.validate c buf 0 with
+  match Codec.validate c buf ~off:0 with
   | Ok () -> Alcotest.fail "validate accepted a missing payload"
   | Error _ -> ()
 
@@ -991,7 +999,7 @@ let test_decode_reads_in_order () =
       (fun _ _ _ _ _ _ _ _ _ -> ())
       Codec.[ f 1; f 2; f 3; f 4; f 5; f 6; f 7; f 8; f 9 ]
   in
-  decode_ok (Codec.decode c (Bytes.make 9 '\x00') 0);
+  decode_ok (Codec.decode c (Bytes.make 9 '\x00') ~off:0);
   Alcotest.(check (list int))
     "read order"
     [ 1; 2; 3; 4; 5; 6; 7; 8; 9 ]
@@ -1017,9 +1025,9 @@ let test_fresh_domain_validate_flat_in_validator_count () =
       (fun x -> x)
       Codec.[ (Field.v "x" uint8 $ fun x -> x) ]
   in
-  (* [Codec.size] forces the compile, which builds the validator. *)
+  (* [Codec.fixed_size] forces the compile, which builds the validator. *)
   for i = 1 to 10_000 do
-    ignore (Sys.opaque_identity (Codec.size (Fmt.kstr mk "S%d" i)))
+    ignore (Sys.opaque_identity (Codec.fixed_size (Fmt.kstr mk "S%d" i)))
   done;
   let c = mk "Last" in
   let buf = Bytes.make 8 '\007' in
@@ -1027,7 +1035,7 @@ let test_fresh_domain_validate_flat_in_validator_count () =
     Domain.join
       (Domain.spawn (fun () ->
            let before = Gc.allocated_bytes () in
-           decode_ok (Codec.validate c buf 0);
+           decode_ok (Codec.validate c buf ~off:0);
            (Gc.allocated_bytes () -. before) /. 8.))
   in
   Fmt.kstr
@@ -1076,7 +1084,7 @@ let test_v_defers_compilation () =
   in
   let c, built = words Deferred.codec in
   let buf = Bytes.of_string "\x21\003\000\007abc" in
-  let decoded, first = words (fun () -> Codec.decode c buf 0) in
+  let decoded, first = words (fun () -> Codec.decode c buf ~off:0) in
   (match decoded with
   | Ok r -> Alcotest.(check string) "body" "abc" r.Deferred.body
   | Error e -> Alcotest.failf "decode: %a" Error.pp e);
@@ -1092,7 +1100,7 @@ let test_first_use_races_across_domains () =
   let c = Deferred.codec () in
   let buf = Bytes.of_string "\x21\003\000\007abc" in
   let decode () =
-    match Codec.decode c buf 0 with
+    match Codec.decode c buf ~off:0 with
     | Ok r -> r.Deferred.body
     | Error e -> Fmt.str "%a" Error.pp e
   in
@@ -1150,7 +1158,7 @@ let test_v_rejects_bad_description_eagerly () =
    bound, and on a buffer too short for the frame. *)
 let test_fixed_spans_keep_intervals () =
   let outcome c buf =
-    match Codec.validate c buf 0 with
+    match Codec.validate c buf ~off:0 with
     | Ok () -> "ok"
     | Error e -> Fmt.str "%a" Error.pp e
   in

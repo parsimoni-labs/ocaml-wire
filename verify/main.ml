@@ -3,8 +3,9 @@
    main.exe [OPTION]... SPECS FILE:KIND:PARSER:BOUND...
 
    For each entry of the generated module FILE (KIND says which: record, or
-   step/N and step-ox/N for the fold [fold_step] on OCaml and on OxCaml, N
-   the shortest stride fold_step_frames walks without frame checks), proves
+   step/N and step-ox/N for the walks of the fold, [fold_step], on OCaml and
+   on OxCaml, N the shortest stride fold_step_frames walks without frame
+   checks), proves
    with Z3
    that every unchecked read is inside the buffer and inside the window the
    entry is given, that every shift amount is in range, that no input
@@ -94,21 +95,23 @@ let accessors ctx =
     ctx.globals []
   |> List.sort_uniq String.compare
 
-(* A record module: [is_valid buf off], [check b len off] and every
-   accessor behind a check. *)
+(* A record module: [is_valid buf off], [check b len ~off] and every
+   accessor behind a check, [len] the length of [b] as [Buf.length] reads
+   it. *)
 let record ~spec ~bound ctx =
   let viewed = [ b; Int_input "len"; Int_input "off" ] in
   let pre = "len = Bytes.length b" and window = ("off", "len - off") in
-  let checked = "check b len off" in
+  let checked = "check b len ~off" in
   entry ~spec ~bound ~inputs:[ buf; Int_input "off" ]
     ~window:("off", "Bytes.length buf - off")
     "is_valid" "is_valid buf off"
   :: entry ~pre ~spec ~bound ~inputs:viewed ~window "check"
-       (Fmt.str "ok (%s)" checked)
+       (Fmt.str "is_ok (%s)" checked)
   :: List.map
        (fun v ->
          entry ~pre ~bound ~inputs:viewed ~window (v ^ " after check")
-           (Fmt.str "let c = %s in if ok c then %s b (get c) else 0" checked v))
+           (Fmt.str "let c = %s in if is_ok c then %s b (get c) else 0" checked
+              v))
        (accessors ctx)
 
 (* What fold_frames must establish of each frame it hands frames_record,
@@ -131,7 +134,7 @@ let frame_pre_ox min_stride =
    whose arguments hold what those expressions read, and each call of the
    loop is checked to pass that. *)
 let loaded_ahead ctx ~record ~frames =
-  let standard = [ "buf"; "base"; "stop"; "current" ] in
+  let standard = [ "buf"; "base"; "stop"; "current"; "f"; "invalid" ] in
   let ahead =
     List.filter_map
       (fun (p : Parsetree.function_param) ->
@@ -197,8 +200,8 @@ let valid_arguments =
   "stride > 0 && off >= 0 && len >= 0 && off <= Bytes.length buf && len <= \
    Bytes.length buf - off"
 
-(* The fold [fold_step], which answers through [Step.valid] and
-   [Step.invalid]: its one-frame entry, the body of its frame loop for a
+(* The walks of the fold, [fold_step], which answer through the functions
+   [f] and [invalid] they are given: its one-frame entry, the body of its frame loop for a
    stride the loop walks without frame checks, from what the loop
    establishes (with the fields the loop loads ahead of the body, each an
    input of 64 bits, any of which the load can give), and the frame loop
@@ -207,11 +210,13 @@ let valid_arguments =
 let scanner ~ox ~spec ~bound ~min_stride ctx =
   let at x = if ox then Fmt.str "~%s:(Int64.of_int %s)" x x else "~" ^ x in
   let fold = "fold_step"
-  and fold_expr = "fold_step buf off len ~init:0"
+  and fold_expr = "fold_step buf off len ~init:0 ~f ~invalid"
   and record = "step_frames_record"
-  and record_args = "~current"
+  and record_args = "~current ~f ~invalid"
   and frames = "fold_step_frames"
-  and frames_expr = "fold_step_frames buf off len ~stride ~init:0" in
+  and frames_expr =
+    "fold_step_frames buf off len ~stride ~init:0 ~f ~invalid"
+  in
   let ahead = loaded_ahead ctx ~record ~frames in
   let contract, record_pre = frame_contract ~ox ~min_stride ahead in
   let record_args =

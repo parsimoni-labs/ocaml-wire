@@ -12,12 +12,26 @@
   (= %{env:BUILD_HARDCAML=} "1"))
  (libraries hw_bench hardcaml net wire wire.ocaml wire_hardcaml))
 
+; The checksum contribution of one frame the hardware is compared with: the
+; fold of g_selected, the module of Packet_stack.codec whose fold hands out the
+; fields the checksum reads, as bench/rust computes it.
+
 (rule
- (copy ../rust/stack_read.ml stack_read.ml))
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (targets g_selected.ml g_selected.mli)
+ (action
+  (run %{dep:../rust/gen.exe} %{targets})))
+
+(rule
+ (enabled_if
+  (= %{env:BUILD_HARDCAML=} "1"))
+ (action
+  (copy ../rust/selected_read.ml selected_read.ml)))
 
 (executable
  (name test)
- (modules test stack_read)
+ (modules test g_selected selected_read)
  (enabled_if
   (= %{env:BUILD_HARDCAML=} "1"))
  (libraries

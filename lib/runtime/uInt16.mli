@@ -41,6 +41,11 @@ val equal : t -> t -> bool
 val pp : Format.formatter -> t -> unit
 (** Pretty-printer for unsigned 16-bit values. *)
 
+val compare : t -> t -> int
+(** [compare] is the order of the values as integers. *)
+
+(**/**)
+
 val le : bytes -> int -> t
 (** [le buf off] reads two little-endian bytes at offset [off]. Total: two bytes
     spell only values the field holds. *)
@@ -56,8 +61,6 @@ val set_le : bytes -> int -> t -> unit
 val set_be : bytes -> int -> t -> unit
 (** [set_be buf off v] writes [v] as two unsigned big-endian bytes at offset
     [off]. Needs no range check, as for {!set_le}. *)
-
-(**/**)
 
 external unsafe_of_int : int -> t = "%identity"
 (** [unsafe_of_int n] is [n] with no check, for code that read [n] from a field

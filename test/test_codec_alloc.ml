@@ -371,12 +371,12 @@ let alloc_codec33 =
 
 let per_decode_words codec nfields =
   let buf = Bytes.make nfields '\042' in
-  ignore (Sys.opaque_identity (decode_ok (Codec.decode codec buf 0)));
+  ignore (Sys.opaque_identity (decode_ok (Codec.decode codec buf ~off:0)));
   let iters = 200_000 in
   Gc.full_major ();
   let before = Gc.minor_words () in
   for _ = 1 to iters do
-    ignore (Sys.opaque_identity (decode_ok (Codec.decode codec buf 0)))
+    ignore (Sys.opaque_identity (decode_ok (Codec.decode codec buf ~off:0)))
   done;
   let after = Gc.minor_words () in
   (after -. before) /. float_of_int iters
@@ -404,34 +404,34 @@ let test_decode_no_partial_closure () =
 let test_decode_high_arity_roundtrip () =
   (* Exercise the saturated 16-field case. *)
   let buf16 = Bytes.init 16 (fun i -> Char.chr (i + 1)) in
-  let v16 = decode_ok (Codec.decode alloc_codec16 buf16 0) in
+  let v16 = decode_ok (Codec.decode alloc_codec16 buf16 ~off:0) in
   Alcotest.(check int) "b1" 1 (UInt8.to_int v16.b1);
   Alcotest.(check int) "b16" 16 (UInt8.to_int v16.b16);
   (* 17 fields: still saturated after the table was widened to 32. *)
   let buf17 = Bytes.init 17 (fun i -> Char.chr (i + 1)) in
-  let v17 = decode_ok (Codec.decode alloc_codec17 buf17 0) in
+  let v17 = decode_ok (Codec.decode alloc_codec17 buf17 ~off:0) in
   Alcotest.(check int) "c1" 1 (UInt8.to_int v17.c1);
   Alcotest.(check int) "c16" 16 (UInt8.to_int v17.c16);
   Alcotest.(check int) "c17" 17 (UInt8.to_int v17.c17);
   let out = Bytes.create 17 in
-  Codec.encode alloc_codec17 v17 out 0;
+  Codec.encode alloc_codec17 v17 out ~off:0;
   Alcotest.(check bytes) "17-field roundtrip" buf17 out;
   (* 32 fields: the saturated-table ceiling. *)
   let buf32 = Bytes.init 32 (fun i -> Char.chr (i + 1)) in
-  let v32 = decode_ok (Codec.decode alloc_codec32 buf32 0) in
+  let v32 = decode_ok (Codec.decode alloc_codec32 buf32 ~off:0) in
   Alcotest.(check int) "d1" 1 (UInt8.to_int v32.d1);
   Alcotest.(check int) "d32" 32 (UInt8.to_int v32.d32);
   let out32 = Bytes.create 32 in
-  Codec.encode alloc_codec32 v32 out32 0;
+  Codec.encode alloc_codec32 v32 out32 ~off:0;
   Alcotest.(check bytes) "32-field roundtrip" buf32 out32;
   (* 33 fields: the first arity past the table, exercising the recursive arm. *)
   let buf33 = Bytes.init 33 (fun i -> Char.chr (i + 1)) in
-  let v33 = decode_ok (Codec.decode alloc_codec33 buf33 0) in
+  let v33 = decode_ok (Codec.decode alloc_codec33 buf33 ~off:0) in
   Alcotest.(check int) "e1" 1 (UInt8.to_int v33.e1);
   Alcotest.(check int) "e32" 32 (UInt8.to_int v33.e32);
   Alcotest.(check int) "e33" 33 (UInt8.to_int v33.e33);
   let out33 = Bytes.create 33 in
-  Codec.encode alloc_codec33 v33 out33 0;
+  Codec.encode alloc_codec33 v33 out33 ~off:0;
   Alcotest.(check bytes) "33-field roundtrip" buf33 out33
 
 (* Encoding a var-bytes field must not allocate. [var_bytes_writer]'s length
@@ -462,14 +462,14 @@ let test_encode_var_bytes_no_closure () =
   let v = { a = String.make 32 'x'; b = String.make 16 'y' } in
   let buf = Bytes.create (2 + 32 + 2 + 16) in
   let zbuf = Bytes.create 3 in
-  Codec.encode alloc_vb_codec v buf 0;
-  Codec.encode alloc_zt_codec "hi" zbuf 0;
+  Codec.encode alloc_vb_codec v buf ~off:0;
+  Codec.encode alloc_zt_codec "hi" zbuf ~off:0;
   let iters = 200_000 in
   Gc.full_major ();
   let before = Gc.minor_words () in
   for _ = 1 to iters do
-    Codec.encode alloc_vb_codec v buf 0;
-    Codec.encode alloc_zt_codec "hi" zbuf 0
+    Codec.encode alloc_vb_codec v buf ~off:0;
+    Codec.encode alloc_zt_codec "hi" zbuf ~off:0
   done;
   let after = Gc.minor_words () in
   let words =
@@ -477,11 +477,10 @@ let test_encode_var_bytes_no_closure () =
   in
   Alcotest.(check int) "var-bytes encode allocates nothing" 0 words
 
-(* [Codec.get] and [Codec.set] resolve a field's type and offset when the
-   accessor is staged. Pin the per-call contract separately from functional
-   correctness: rebuilding a reader closure returns the right value but still
-   puts pressure on a hot-path minor heap. A read allocates the [Ok] it
-   answers, two words, and nothing else. *)
+(* A view's fields are resolved once, by [View.field]. Pin the per-call
+   contract separately from functional correctness: a check, its view and a
+   read or a write of a field allocate nothing, so a hot loop over a buffer
+   puts no pressure on the minor heap. *)
 type alloc_priority = Low | High
 
 type alloc_accessor = {
@@ -542,44 +541,71 @@ let check_no_per_call_allocation name f =
     (Fmt.str "%s allocates nothing" name)
     0 (per_call_words f)
 
-let test_get_allocates_its_answer () =
+(* A frame shorter than 4 bytes reads each field with one load of its own,
+   with no word in between. *)
+let short_hi = Codec.(alloc_hi $ fun (hi, _, _, _) -> hi)
+let short_lo = Codec.(alloc_lo $ fun (_, lo, _, _) -> lo)
+let short_u8 = Codec.(alloc_u8 $ fun (_, _, u8, _) -> u8)
+let short_priority = Codec.(alloc_priority $ fun (_, _, _, p) -> p)
+
+let alloc_short_codec =
+  Codec.v "AllocShort"
+    (fun hi lo u8 priority -> (hi, lo, u8, priority))
+    Codec.[ short_hi; short_lo; short_u8; short_priority ]
+
+let test_view_no_allocation () =
   skip_unless_gc_counters ();
-  let buf = Bytes.make (Codec.min_size alloc_accessor_codec) '\007' in
-  let get f = Codec.get alloc_accessor_codec f in
-  let get_hi = get alloc_bf_hi
-  and get_u8 = get alloc_bf_u8
-  and get_u16 = get alloc_bf_u16
-  and get_i32 = get alloc_bf_i32
-  and get_priority = get alloc_bf_priority in
-  let check name f =
-    Alcotest.(check int)
-      (Fmt.str "%s allocates its Ok" name)
-      2 (per_call_words f)
+  let c = alloc_accessor_codec in
+  let buf = Bytes.make (Codec.min_size c) '\007' in
+  let (Buf.Any b) = Buf.v buf in
+  check_no_per_call_allocation "check" (fun () ->
+      Codec.View.is_ok (Codec.View.check c b ~off:0));
+  check_no_per_call_allocation "check and get" (fun () ->
+      Codec.View.get (Codec.View.check c b ~off:0));
+  (* A frame of 8 bytes or more reads an unsigned field from one word. *)
+  let v = Codec.View.get (Codec.View.check c b ~off:0) in
+  let read name f =
+    let f = Codec.View.field c f in
+    check_no_per_call_allocation ("read " ^ name) (fun () ->
+        Codec.View.read b v f)
   in
-  check "get bits" (fun () -> get_hi buf 0);
-  check "get uint8" (fun () -> get_u8 buf 0);
-  check "get uint16be" (fun () -> get_u16 buf 0);
-  check "get int32be" (fun () -> get_i32 buf 0);
-  check "get map" (fun () -> get_priority buf 0)
+  read "word bits" alloc_bf_hi;
+  read "word uint8" alloc_bf_u8;
+  read "word uint16be" alloc_bf_u16;
+  read "int32be" alloc_bf_i32;
+  let c = alloc_short_codec in
+  let buf = Bytes.make (Codec.min_size c) '\007' in
+  let (Buf.Any b) = Buf.v buf in
+  let v = Codec.View.get (Codec.View.check c b ~off:0) in
+  let read name f =
+    let f = Codec.View.field c f in
+    check_no_per_call_allocation ("read " ^ name) (fun () ->
+        Codec.View.read b v f)
+  in
+  read "bits" short_hi;
+  read "uint8" short_u8;
+  read "map" short_priority
 
 let test_set_no_allocation () =
   skip_unless_gc_counters ();
-  let buf = Bytes.make (Codec.min_size alloc_accessor_codec) '\007' in
-  let set f = Codec.set alloc_accessor_codec f in
-  let set_hi = set alloc_bf_hi
-  and set_u8 = set alloc_bf_u8
-  and set_u16 = set alloc_bf_u16
-  and set_i32 = set alloc_bf_i32
-  and set_priority = set alloc_bf_priority in
+  let c = alloc_accessor_codec in
+  let buf = Bytes.make (Codec.min_size c) '\007' in
+  let (Buf.Any b) = Buf.v buf in
+  let v = Codec.View.get (Codec.View.check c b ~off:0) in
+  let set name f x =
+    let f = Codec.View.field c f in
+    check_no_per_call_allocation ("set " ^ name) (fun () ->
+        Codec.View.set b v f x)
+  in
   (* Built once: the point of the check is the setter's own cost, not the
      carrier's constructor. *)
   let i32_v = SInt32.of_int 70_000 in
   let u16_v = UInt16.v 513 in
-  check_no_per_call_allocation "set bits" (fun () -> set_hi buf 0 3);
-  check_no_per_call_allocation "set uint8" (fun () -> set_u8 buf 0 (UInt8.v 7));
-  check_no_per_call_allocation "set uint16be" (fun () -> set_u16 buf 0 u16_v);
-  check_no_per_call_allocation "set int32be" (fun () -> set_i32 buf 0 i32_v);
-  check_no_per_call_allocation "set map" (fun () -> set_priority buf 0 High)
+  set "bits" alloc_bf_hi 3;
+  set "uint8" alloc_bf_u8 (UInt8.v 7);
+  set "uint16be" alloc_bf_u16 u16_v;
+  set "int32be" alloc_bf_i32 i32_v;
+  set "map" alloc_bf_priority High
 
 (* {2 Resource bounds}
 
@@ -679,7 +705,7 @@ let optional_or_family name ~present typ =
    record types measure through one fold. *)
 let validate_case name mk payload n =
   let c = mk n and buf = gated_payload payload n in
-  (name, fun () -> decode_ok (Codec.validate c buf 0))
+  (name, fun () -> decode_ok (Codec.validate c buf ~off:0))
 
 let gated_span_cases n =
   List.concat_map
@@ -719,7 +745,7 @@ let test_validate_allocation_is_bounded () =
     List.map
       (fun (name, mk, mkbuf) ->
         let c = mk n and buf = mkbuf n in
-        (name, fun () -> decode_ok (Codec.validate c buf 0)))
+        (name, fun () -> decode_ok (Codec.validate c buf ~off:0)))
       span_families
     @ gated_span_cases n
   in
@@ -787,7 +813,7 @@ let repeat_budget_case ?(buf = repeat_budget_buf) name elem =
   ( name,
     fun n ->
       let buf = buf n in
-      fun () -> decode_ok (Codec.validate c buf 0) )
+      fun () -> decode_ok (Codec.validate c buf ~off:0) )
 
 (* Four bytes wide, so a 512- and a 4096-byte budget both divide into whole
    elements, and constrained, so the element has something to check. *)
@@ -874,7 +900,7 @@ let container_case_typ =
 
 let container_words name typ buf =
   let c = Codec.v name Fun.id Codec.[ Field.v "x" typ $ Fun.id ] in
-  words_per_call ~iters:5000 (fun () -> decode_ok (Codec.validate c buf 0))
+  words_per_call ~iters:5000 (fun () -> decode_ok (Codec.validate c buf ~off:0))
 
 let test_container_subcodec_validate_no_alloc () =
   skip_unless_gc_counters ();
@@ -923,7 +949,7 @@ let enum_of_case_count n =
 let enum_budget_words ~cases ~budget =
   let c = repeat_budget_codec (enum_of_case_count cases) in
   let buf = repeat_budget_buf budget in
-  words_per_call ~iters:500 (fun () -> decode_ok (Codec.validate c buf 0))
+  words_per_call ~iters:500 (fun () -> decode_ok (Codec.validate c buf ~off:0))
 
 let test_enum_element_validate_allocation_is_bounded () =
   skip_unless_gc_counters ();
@@ -985,7 +1011,7 @@ let test_validate_checked_no_param_no_alloc () =
       (fun acc (name, c) ->
         let words =
           words_per_call ~iters:5000 (fun () ->
-              decode_ok (Codec.validate c buf 0))
+              decode_ok (Codec.validate c buf ~off:0))
         in
         if words <> 0 then
           Fmt.str "a codec with a %s costs %d words a validate" name words
@@ -1009,7 +1035,7 @@ let test_decode_allocates_one_copy () =
       (fun acc (name, mk, mkbuf) ->
         let c = mk n and buf = mkbuf n in
         let words =
-          words_per_call ~iters:2000 (fun () -> Codec.decode c buf 0)
+          words_per_call ~iters:2000 (fun () -> Codec.decode c buf ~off:0)
         in
         if words > payload + 32 then
           Fmt.str "%s allocates %d words for a %d-word payload" name words
@@ -1091,11 +1117,11 @@ let rec chain_depth r =
 
 let chain_words depth =
   let c = chain_codec depth and buf = chain_buf depth in
-  match Codec.decode c buf 0 with
+  match Codec.decode c buf ~off:0 with
   | Error e -> Alcotest.failf "depth %d: %a" depth Error.pp e
   | Ok r when chain_depth r <> depth ->
       Alcotest.failf "depth %d decoded %d levels" depth (chain_depth r)
-  | Ok _ -> words_per_call ~iters:200 (fun () -> Codec.decode c buf 0)
+  | Ok _ -> words_per_call ~iters:200 (fun () -> Codec.decode c buf ~off:0)
 
 let test_decode_nested_cost_is_linear () =
   skip_unless_gc_counters ();
@@ -1116,9 +1142,9 @@ let suite =
         test_decode_high_arity_roundtrip;
       Alcotest.test_case "encode: var-bytes fields allocate nothing" `Quick
         test_encode_var_bytes_no_closure;
-      Alcotest.test_case "get: immediate fields allocate their answer" `Quick
-        test_get_allocates_its_answer;
-      Alcotest.test_case "set: immediate fields allocate nothing" `Quick
+      Alcotest.test_case "view: check, get and read allocate nothing" `Quick
+        test_view_no_allocation;
+      Alcotest.test_case "view: set allocates nothing" `Quick
         test_set_no_allocation;
       Alcotest.test_case "validate: allocation does not scale with the frame"
         `Quick test_validate_allocation_is_bounded;

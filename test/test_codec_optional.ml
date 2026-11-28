@@ -13,7 +13,7 @@ let test_optional_present_decode () =
   Bytes.set_uint8 buf 0 0xAA;
   Bytes.set_uint16_be buf 1 0x1234;
   Bytes.set_uint8 buf 3 0xBB;
-  let r = decode_ok (Codec.decode opt_codec_present buf 0) in
+  let r = decode_ok (Codec.decode opt_codec_present buf ~off:0) in
   Alcotest.(check int) "hdr" 0xAA (UInt8.to_int r.hdr);
   Alcotest.(check (option int))
     "payload" (Some 0x1234)
@@ -25,7 +25,7 @@ let test_optional_absent_decode () =
   let buf = Bytes.create 2 in
   Bytes.set_uint8 buf 0 0xAA;
   Bytes.set_uint8 buf 1 0xBB;
-  let r = decode_ok (Codec.decode opt_codec_absent buf 0) in
+  let r = decode_ok (Codec.decode opt_codec_absent buf ~off:0) in
   Alcotest.(check int) "hdr" 0xAA (UInt8.to_int r.hdr);
   Alcotest.(check (option int))
     "payload" None
@@ -41,7 +41,7 @@ let test_optional_present_encode () =
     }
   in
   let buf = Bytes.create 4 in
-  Codec.encode opt_codec_present v buf 0;
+  Codec.encode opt_codec_present v buf ~off:0;
   Alcotest.(check int) "hdr" 0xAA (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "payload" 0x1234 (Bytes.get_uint16_be buf 1);
   Alcotest.(check int) "trail" 0xBB (Bytes.get_uint8 buf 3)
@@ -51,7 +51,7 @@ let test_optional_absent_encode () =
     { hdr = UInt8.v 0xAA; payload = None; trail = UInt8.v 0xBB }
   in
   let buf = Bytes.create 2 in
-  Codec.encode opt_codec_absent v buf 0;
+  Codec.encode opt_codec_absent v buf ~off:0;
   Alcotest.(check int) "hdr" 0xAA (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "trail" 0xBB (Bytes.get_uint8 buf 1)
 
@@ -64,8 +64,8 @@ let test_optional_present_roundtrip () =
     }
   in
   let buf = Bytes.create 4 in
-  Codec.encode opt_codec_present original buf 0;
-  let decoded = decode_ok (Codec.decode opt_codec_present buf 0) in
+  Codec.encode opt_codec_present original buf ~off:0;
+  let decoded = decode_ok (Codec.decode opt_codec_present buf ~off:0) in
   Alcotest.(check int)
     "hdr"
     (UInt8.to_int original.hdr)
@@ -84,8 +84,8 @@ let test_optional_absent_roundtrip () =
     { hdr = UInt8.v 0x11; payload = None; trail = UInt8.v 0x44 }
   in
   let buf = Bytes.create 2 in
-  Codec.encode opt_codec_absent original buf 0;
-  let decoded = decode_ok (Codec.decode opt_codec_absent buf 0) in
+  Codec.encode opt_codec_absent original buf ~off:0;
+  let decoded = decode_ok (Codec.decode opt_codec_absent buf ~off:0) in
   Alcotest.(check int)
     "hdr"
     (UInt8.to_int original.hdr)
@@ -121,10 +121,10 @@ let test_bytearray_sized_by_optional_or () =
         ]
   in
   let rt v expected =
-    let buf = Bytes.create (Codec.encoded_size c v) in
-    Codec.encode c v buf 0;
+    let buf = Bytes.create (Codec.size c v) in
+    Codec.encode c v buf ~off:0;
     Alcotest.(check string) "encoded bytes" expected (Bytes.to_string buf);
-    match Codec.decode c buf 0 with
+    match Codec.decode c buf ~off:0 with
     | Ok (g, l, d) ->
         let vg, vl, vd = v in
         Alcotest.(check bool)
@@ -166,7 +166,7 @@ let test_optional_codec_present () =
   Bytes.set_uint8 buf 1 0x42;
   Bytes.set_uint16_be buf 2 0x1234;
   Bytes.set_uint8 buf 4 0xBB;
-  let r = decode_ok (Codec.decode c buf 0) in
+  let r = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check int) "hdr" 0xAA (UInt8.to_int r.hdr);
   (match r.inner with
   | None -> Alcotest.fail "expected Some"
@@ -181,7 +181,7 @@ let test_optional_codec_absent () =
   let buf = Bytes.create 2 in
   Bytes.set_uint8 buf 0 0xAA;
   Bytes.set_uint8 buf 1 0xBB;
-  let r = decode_ok (Codec.decode c buf 0) in
+  let r = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check int) "hdr" 0xAA (UInt8.to_int r.hdr);
   Alcotest.(check (option int))
     "inner" None
@@ -216,7 +216,7 @@ let test_optional_both_present () =
   Bytes.set_uint16_be buf 0 0x1111;
   Bytes.set_int32_be buf 2 0x22222222l;
   Bytes.set_uint16_be buf 6 0x3333;
-  let r = decode_ok (Codec.decode c buf 0) in
+  let r = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check int) "data" 0x1111 (UInt16.to_int r.data);
   Alcotest.(check (option int))
     "ocf" (Some 0x22222222)
@@ -230,7 +230,7 @@ let test_optional_both_absent () =
   (* data(2) only *)
   let buf = Bytes.create 2 in
   Bytes.set_uint16_be buf 0 0x1111;
-  let r = decode_ok (Codec.decode c buf 0) in
+  let r = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check int) "data" 0x1111 (UInt16.to_int r.data);
   Alcotest.(check (option int)) "ocf" None (Option.map UInt32.to_int r.ocf);
   Alcotest.(check (option int)) "fecf" None (Option.map UInt16.to_int r.fecf)
@@ -241,7 +241,7 @@ let test_optional_mixed () =
   let buf = Bytes.create 6 in
   Bytes.set_uint16_be buf 0 0x1111;
   Bytes.set_int32_be buf 2 0x22222222l;
-  let r = decode_ok (Codec.decode c buf 0) in
+  let r = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check int) "data" 0x1111 (UInt16.to_int r.data);
   Alcotest.(check (option int))
     "ocf" (Some 0x22222222)
@@ -274,7 +274,7 @@ let test_dyn_opt_present () =
   Bytes.set_uint8 buf 0 1;
   Bytes.set_uint16_be buf 1 0x1234;
   Bytes.set_uint8 buf 3 0xFF;
-  let r = decode_ok (Codec.decode dyn_opt_codec buf 0) in
+  let r = decode_ok (Codec.decode dyn_opt_codec buf ~off:0) in
   Alcotest.(check int) "flags" 1 (UInt8.to_int r.flags);
   Alcotest.(check (option int))
     "payload" (Some 0x1234)
@@ -286,7 +286,7 @@ let test_dyn_opt_absent () =
   let buf = Bytes.create 2 in
   Bytes.set_uint8 buf 0 0;
   Bytes.set_uint8 buf 1 0xFF;
-  let r = decode_ok (Codec.decode dyn_opt_codec buf 0) in
+  let r = decode_ok (Codec.decode dyn_opt_codec buf ~off:0) in
   Alcotest.(check int) "flags" 0 (UInt8.to_int r.flags);
   Alcotest.(check (option int))
     "payload" None
@@ -311,15 +311,15 @@ let test_dyn_opt_get_trail () =
 let check_dyn_opt_roundtrip label expected_len expected_bytes original =
   Alcotest.(check int)
     (label ^ " size_of_value") expected_len
-    (Codec.encoded_size dyn_opt_codec original);
+    (Codec.size dyn_opt_codec original);
   let buf = Bytes.create expected_len in
-  Codec.encode dyn_opt_codec original buf 0;
+  Codec.encode dyn_opt_codec original buf ~off:0;
   Alcotest.(check string)
     (label ^ " bytes") expected_bytes (Bytes.to_string buf);
   Alcotest.(check int)
     (label ^ " wire_size_at") expected_len
-    (decode_ok (Codec.size_at dyn_opt_codec buf 0));
-  let decoded = decode_ok (Codec.decode dyn_opt_codec buf 0) in
+    (decode_ok (Codec.size_at dyn_opt_codec buf ~off:0));
+  let decoded = decode_ok (Codec.decode dyn_opt_codec buf ~off:0) in
   Alcotest.(check int)
     (label ^ " flags")
     (UInt8.to_int original.flags)
@@ -345,8 +345,8 @@ let test_field_optional_dynamic_roundtrip () =
 
 let test_dyn_opt_reject_gate () =
   let check_reject label v =
-    let len = Codec.encoded_size dyn_opt_codec v + 4 in
-    match Codec.encode dyn_opt_codec v (Bytes.create len) 0 with
+    let len = Codec.size dyn_opt_codec v + 4 in
+    match Codec.encode dyn_opt_codec v (Bytes.create len) ~off:0 with
     | () -> Alcotest.failf "%s: encode unexpectedly succeeded" label
     | exception Invalid_argument _ -> ()
   in
@@ -361,14 +361,16 @@ let test_dyn_opt_reject_gate () =
 
 let test_encode_totality () =
   let check_exact label original =
-    let len = Codec.encoded_size dyn_opt_codec original in
+    let len = Codec.size dyn_opt_codec original in
     let buf = Bytes.create len in
-    Codec.encode dyn_opt_codec original buf 0;
+    Codec.encode dyn_opt_codec original buf ~off:0;
     Alcotest.(check int)
       (label ^ " wire_size_at") len
-      (decode_ok (Codec.size_at dyn_opt_codec buf 0));
+      (decode_ok (Codec.size_at dyn_opt_codec buf ~off:0));
     if len > 0 then
-      match Codec.encode dyn_opt_codec original (Bytes.create (len - 1)) 0 with
+      match
+        Codec.encode dyn_opt_codec original (Bytes.create (len - 1)) ~off:0
+      with
       | () -> Alcotest.failf "%s: short buffer accepted" label
       | exception Invalid_argument _ -> ()
   in
@@ -415,7 +417,7 @@ let test_dyn_opt_anyref_present () =
   Bytes.set_uint16_be buf 1 0x1234;
   Bytes.set_int32_be buf 3 0xDEADBEEFl;
   Bytes.set_uint8 buf 7 0xFF;
-  let r = decode_ok (Codec.decode tm_opt_codec buf 0) in
+  let r = decode_ok (Codec.decode tm_opt_codec buf ~off:0) in
   Alcotest.(check bool) "ocf_flag" true r.ocf_flag;
   Alcotest.(check int) "data" 0x1234 (UInt16.to_int r.data);
   Alcotest.(check (option int32))
@@ -428,7 +430,7 @@ let test_dyn_opt_anyref_absent () =
   Bytes.set_uint8 buf 0 0x00;
   Bytes.set_uint16_be buf 1 0x1234;
   Bytes.set_uint8 buf 3 0xFF;
-  let r = decode_ok (Codec.decode tm_opt_codec buf 0) in
+  let r = decode_ok (Codec.decode tm_opt_codec buf ~off:0) in
   Alcotest.(check bool) "ocf_flag" false r.ocf_flag;
   Alcotest.(check int) "data" 0x1234 (UInt16.to_int r.data);
   Alcotest.(check (option int)) "ocf" None (Option.map UInt32.to_int r.ocf);
@@ -458,11 +460,11 @@ let bg_codec ~present =
 let check_bit_gated ~present ~present_buf ~present_label ~absent_buf
     ~absent_label =
   let c = bg_codec ~present in
-  let r = decode_ok (Codec.decode c (Bytes.of_string present_buf) 0) in
+  let r = decode_ok (Codec.decode c (Bytes.of_string present_buf) ~off:0) in
   Alcotest.(check (option int))
     present_label (Some 0x2A)
     (Option.map UInt8.to_int r.body);
-  let r = decode_ok (Codec.decode c (Bytes.of_string absent_buf) 0) in
+  let r = decode_ok (Codec.decode c (Bytes.of_string absent_buf) ~off:0) in
   Alcotest.(check (option int))
     absent_label None
     (Option.map UInt8.to_int r.body)
@@ -512,7 +514,7 @@ let test_field_ref_through_optional () =
      non-zero. With the populate bug, ref(x) read 0 and the constraint
      failed; with the fix it reads 0x80 and the decode succeeds. *)
   let buf = Bytes.of_string "\x80\x7F" in
-  let r = decode_ok (Codec.decode ref_opt_codec buf 0) in
+  let r = decode_ok (Codec.decode ref_opt_codec buf ~off:0) in
   Alcotest.(check (option int)) "x" (Some 0x80) (Option.map UInt8.to_int r.x);
   Alcotest.(check int) "check" 0x7F (UInt8.to_int r.check)
 

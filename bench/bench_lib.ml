@@ -4,7 +4,8 @@
     definition:
     - EverParse C: generated verified C validator in a tight C loop
     - OCaml->C FFI: calling the EverParse C validator from OCaml
-    - Pure OCaml: Wire.Codec.get/set (zero-copy field access)
+    - Pure OCaml: Wire.Codec.View check, then read or set (zero-copy field
+      access)
 
     Reporting is standardized: ns/op, alloc (words), ratio vs C, throughput. *)
 

@@ -1,7 +1,8 @@
 (* The application logic over the generated OCaml, as a user of the
    generated modules writes it, on OCaml and on OxCaml alike: each buffer is
-   named once, each record checked once ([check], at its offset, as
-   [Codec.View.check] takes one) and then read through its accessors, plain checked indexing, and
+   named once and its length read once, each record checked once ([check], at
+   its offset, as [Codec.View.check] takes one) and then read through its
+   accessors, plain checked indexing, and
    a record that fails its check ends the loop, as the Rust rows' [break]
    does. A record is written by [write], which takes its fields' values and
    tests the range of each bitfield. A record's size is the generated
@@ -23,8 +24,8 @@ let routing buf n =
   let off = ref 0 and i = ref 0 in
   while !i < n do
     if !off + hdr > total then off := 0;
-    let c = P.check b len !off in
-    if P.ok c then begin
+    let c = P.check b len ~off:!off in
+    if P.is_ok c then begin
       let v = P.get c in
       let route = Routing_workload.route_of_apid (P.apid b v) in
       counts.(route) <- counts.(route) + 1;
@@ -37,7 +38,7 @@ let routing buf n =
 
 (* One packet hashed into [h], or [h] itself when its check failed. *)
 let packet b h c =
-  if P.ok c then
+  if P.is_ok c then
     let p = P.get c in
     Gateway_workload.(hash_int (hash_int h (P.apid b p)) (P.seqcount b p))
   else h
@@ -53,8 +54,8 @@ let gateway buf =
   let frame = ref 0 and ok = ref true in
   while !ok && !frame < frames do
     let base = !frame * cadu_size in
-    let c = F.check b len base in
-    ok := F.ok c;
+    let c = F.check b len ~off:base in
+    ok := F.is_ok c;
     if !ok then begin
       let f = F.get c in
       let fhp = F.firsthdrptr b f in
@@ -62,8 +63,8 @@ let gateway buf =
       let data_end = base + hdr + data_field_size in
       let off = ref (base + hdr + fhp) in
       while !ok && !off + pkt_size <= data_end do
-        let c = P.check b len !off in
-        ok := P.ok c;
+        let c = P.check b len ~off:!off in
+        ok := P.is_ok c;
         checksum := packet b !checksum c;
         off := !off + pkt_size
       done;
@@ -83,15 +84,15 @@ let restamp buf n out =
   let off = ref 0 and i = ref 0 in
   while !i < n do
     if !off + hdr > total then off := 0;
-    let c = P.check b len !off in
-    if P.ok c then begin
+    let c = P.check b len ~off:!off in
+    if P.is_ok c then begin
       let v = P.get c in
       let apid = P.apid b v in
       let dlen = P.datalength b v in
       let route = Routing_workload.route_of_apid apid in
       let seq = seqs.(route) in
       seqs.(route) <- (seq + 1) land 0x3FFF;
-      P.write out !off ~version:0 ~type_:0 ~sechdrflag:1 ~apid ~seqflags:3
+      P.write out ~off:!off ~version:0 ~type_:0 ~sechdrflag:1 ~apid ~seqflags:3
         ~seqcount:seq ~datalength:dlen;
       off := !off + hdr + (dlen :> int) + 1;
       incr i
@@ -109,14 +110,15 @@ let frame n out =
   let carry = ref 0 and p = ref 0 in
   for f = 0 to n - 1 do
     let base = f * cadu_size in
-    F.write out base ~version:0 ~scid:0x1FF ~vcid:(f land 7) ~ocfflag:1
+    F.write out ~off:base ~version:0 ~scid:0x1FF ~vcid:(f land 7) ~ocfflag:1
       ~mccount:(f land 0xFF)
       ~vccount:((f lsr 3) land 0xFF)
       ~sechdrflag:0 ~syncflag:0 ~packetorder:0 ~seglenid:3 ~firsthdrptr:!carry;
     let off = ref (base + hdr + !carry) in
     while !off + pkt_size <= base + cadu_size do
-      P.write out !off ~version:0 ~type_:0 ~sechdrflag:1 ~apid:(!p land 0x7FF)
-        ~seqflags:3 ~seqcount:(!p land 0x3FFF) ~datalength:dlen;
+      P.write out ~off:!off ~version:0 ~type_:0 ~sechdrflag:1
+        ~apid:(!p land 0x7FF) ~seqflags:3 ~seqcount:(!p land 0x3FFF)
+        ~datalength:dlen;
       off := !off + pkt_size;
       incr p
     done;
@@ -127,7 +129,7 @@ let frame n out =
 
 let report n out =
   for i = 0 to n - 1 do
-    C.write out (i * C.min_size) ~controlwordtype:0 ~clcwversion:0
+    C.write out ~off:(i * C.min_size) ~controlwordtype:0 ~clcwversion:0
       ~statusfield:0 ~copineffect:1 ~vcid:7 ~spare:0 ~norf:0 ~nobitlock:0
       ~lockout:(((i land 0xFFF) + 1) lsr 12)
       ~wait:(((i land 0x3F) + 1) lsr 6)
@@ -142,8 +144,8 @@ let clcw buf =
   let words = Bytes.length buf / C.min_size in
   let anomalies = ref 0 and expected = ref 0 and i = ref 0 in
   while !i < words do
-    let c = C.check b len (!i * C.min_size) in
-    if C.ok c then begin
+    let c = C.check b len ~off:(!i * C.min_size) in
+    if C.is_ok c then begin
       let v = C.get c in
       let report = C.reportvalue b v in
       if

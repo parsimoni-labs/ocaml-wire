@@ -1,8 +1,9 @@
 (* CLCW polling: the word stream and the anomaly check, each word checked by
-   Wire's [Codec.Word.check] and its fields taken with [Codec.Word.read]. *)
+   Wire's [Codec.View.check] and its fields read from the view with
+   [Codec.View.read]. *)
 
 module C = Wire.Codec
-module W = C.Word
+module V = C.View
 
 let word_size = Wire.Codec.min_size Space.clcw_codec
 let cf_report = Space.bf_cw_report
@@ -16,18 +17,20 @@ let cf_retransmit = Space.bf_cw_retransmit
    meets words that fail it. *)
 let generate_stream n =
   let buf = Bytes.create (n * word_size) in
-  let set f = C.set Space.clcw_codec f in
-  let set_report = set cf_report and set_lockout = set cf_lockout in
-  let set_wait = set cf_wait and set_retransmit = set cf_retransmit in
   let report = ref 0 in
+  let flag b = if b then 1 else 0 in
   for i = 0 to n - 1 do
     let off = i * word_size in
-    Wire.Codec.encode Space.clcw_codec Space.clcw_default buf off;
-    if i mod 61 = 60 then set_wait buf off 1;
-    if i mod 97 = 96 then set_retransmit buf off 1;
-    if i mod 211 = 210 then set_lockout buf off 1;
     if i mod 127 = 126 then incr report;
-    set_report buf off (!report land 0xFF);
+    C.encode Space.clcw_codec
+      {
+        Space.clcw_default with
+        Space.wait = flag (i mod 61 = 60);
+        retransmit = flag (i mod 97 = 96);
+        lockout = flag (i mod 211 = 210);
+        report = !report land 0xFF;
+      }
+      buf ~off;
     incr report
   done;
   buf
@@ -50,19 +53,19 @@ type state = {
 
 let state buf =
   let n_words = Bytes.length buf / word_size in
-  let word = W.reader Space.clcw_codec in
-  let w_lockout = W.field Space.clcw_codec cf_lockout in
-  let w_wait = W.field Space.clcw_codec cf_wait in
-  let w_retransmit = W.field Space.clcw_codec cf_retransmit in
-  let w_report = W.field Space.clcw_codec cf_report in
+  let w_lockout = V.field Space.clcw_codec cf_lockout in
+  let w_wait = V.field Space.clcw_codec cf_wait in
+  let w_retransmit = V.field Space.clcw_codec cf_retransmit in
+  let w_report = V.field Space.clcw_codec cf_report in
   let anomalies = ref 0 in
   let expected_seq = ref 0 in
   let process_word buf off =
-    let k = W.check word buf off in
-    if W.ok k then
-      let w = W.get k in
-      detect_anomaly ~lockout:(W.read w_lockout w) ~wait:(W.read w_wait w)
-        ~retransmit:(W.read w_retransmit w) ~report:(W.read w_report w)
+    let (Wire.Buf.Any b) = Wire.Buf.v buf in
+    let k = V.check Space.clcw_codec b ~off in
+    if V.is_ok k then
+      let v = V.get k in
+      detect_anomaly ~lockout:(V.read b v w_lockout) ~wait:(V.read b v w_wait)
+        ~retransmit:(V.read b v w_retransmit) ~report:(V.read b v w_report)
         anomalies expected_seq
     else incr anomalies
   in
@@ -95,16 +98,16 @@ let run_all state =
 
 (* The word {!Space.clcw_default} encodes, COP-1 in effect on virtual channel
    7, every flag clear, with the four fields a FARM reports. *)
-let write_word =
-  C.writer Space.clcw_codec Space.clcw_default
-    [ cf_lockout; cf_wait; cf_retransmit; cf_report ]
-
 let report ~out n =
   for i = 0 to n - 1 do
     let off = i * word_size in
-    write_word out off
-      (((i land 0xFFF) + 1) lsr 12)
-      (((i land 0x3F) + 1) lsr 6)
-      ((i lsr 13) land 1)
-      (i land 0xFF)
+    C.encode Space.clcw_codec
+      {
+        Space.clcw_default with
+        Space.lockout = ((i land 0xFFF) + 1) lsr 12;
+        wait = ((i land 0x3F) + 1) lsr 6;
+        retransmit = (i lsr 13) land 1;
+        report = i land 0xFF;
+      }
+      out ~off
   done

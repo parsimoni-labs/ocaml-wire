@@ -395,9 +395,10 @@ let continuation name answer =
   let run _ctx path _loc _args k = k path (Answer answer) in
   { pname = name; arity = None; run }
 
-(* A fold calls its visitor by name, as [Step]. *)
-let step_continuations =
-  [ continuation "Step.valid" true; continuation "Step.invalid" false ]
+(* A fold answers through the functions it is given, [f] where a record
+   passes and [invalid] where it does not: the entries pass them by these
+   names. *)
+let step_continuations = [ continuation "f" true; continuation "invalid" false ]
 
 let compare64 loc a b =
   let a = i64 loc a and b = i64 loc b in
@@ -851,7 +852,7 @@ let is_rejection e =
   | Pexp_construct ({ txt = Lident "false"; _ }, None) -> true
   | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
       match Longident.flatten txt with
-      | [ ("invalid_arg" | "fail") ] | [ "Step"; "invalid" ] -> true
+      | [ ("invalid_arg" | "fail" | "invalid") ] -> true
       | _ -> false)
   | _ -> false
 
@@ -988,8 +989,15 @@ and eval ctx env path e k =
               if conj then k path (Bool Smt.False) else eval ctx env path b k))
   | Pexp_apply (f, args) ->
       eval ctx env path f (fun path fv ->
-          eval_args ctx env path args [] (fun path args ->
-              apply ctx path loc fv args k))
+          match fv with
+          | Prim (({ arity = None; _ } as p), []) ->
+              (* A continuation, [f] or [invalid], answers whatever it is
+                 handed: the fields [f] takes, converted to their carriers,
+                 are values the walk passes on and read no byte. *)
+              p.run ctx path loc [] k
+          | _ ->
+              eval_args ctx env path args [] (fun path args ->
+                  apply ctx path loc fv args k))
   | Pexp_ifthenelse (c, t, e_opt) ->
       let otherwise path =
         match e_opt with Some e -> eval ctx env path e k | None -> k path Unit

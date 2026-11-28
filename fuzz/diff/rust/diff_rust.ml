@@ -1,5 +1,6 @@
 type case = {
   id : int;
+  outputs : string list;
   full : string list;
   selected : string list;
   checks : bool;
@@ -101,9 +102,9 @@ let named names res ~base =
 (* The check at [off] in the [len] bytes there, then every output read
    through the accessors. *)
 let view m buf off len =
-  let res = slots ~n:1 ~k:(List.length m.full) in
+  let res = slots ~n:1 ~k:(List.length m.outputs) in
   match run m ~op:op_view ~off ~len ~res buf with
-  | 1, res -> Some (named m.full res ~base:0)
+  | 1, res -> Some (named m.outputs res ~base:0)
   | 0, _ -> None
   | n, _ -> Alcobar.failf "rust view: outcome %d" n
 
@@ -145,7 +146,7 @@ let fold_ops m sel (name, outputs) =
         ~extra:((n :: Array.to_list offs) @ Array.to_list lens)
         ~res:(slots ~n ~k) buf
     with
-    | -1, _ -> Alcobar.failf "rust %s_index: refused" name
+    | -1, _ -> Alcobar.failf "rust %s over an index: refused" name
     | n, res -> frames outputs res n
   in
   {
@@ -160,8 +161,8 @@ let folds m = List.mapi (fold_ops m) (fold_names m)
 let full m = (fold_ops m 0 ("full", m.full)).scan
 
 let views c m =
-  Diff_ocaml.view_scan ~name:"rust views" ~codec:c ~fields:m.full ~full:(full m)
-    (view m)
+  Diff_ocaml.view_scan ~name:"rust views" ~codec:c ~fields:m.outputs
+    ~full:(full m) (view m)
 
 let values c m =
   Diff_ocaml.values_scan ~name:"rust values" ~codec:c ~fields:m.full
@@ -196,7 +197,7 @@ let readers c m =
           List.filter_map
             (fun (f : Wire_ocaml.Plan.field) ->
               match f.output with
-              | Some o when List.mem o.name m.full ->
+              | Some o when List.mem o.name m.outputs ->
                   Some (o.name, Diff_ocaml.reference c f.name)
               | _ -> None)
             fs
@@ -206,13 +207,13 @@ let readers c m =
 let reads_at label c m refs buf off =
   let what w = Fmt.str "%s at offset %d" w off in
   same_result label (what "validate") Fmt.nop
-    (Wire.Codec.validate c buf off)
+    (Wire.Codec.validate c buf ~off)
     (validate m buf off);
   same_result label (what "decode") Fmt.Dump.string
-    (Result.map (Wire.Codec.to_string c) (Wire.Codec.decode c buf off))
+    (Result.map (Wire.Codec.to_string c) (Wire.Codec.decode c buf ~off))
     (decode m buf off);
   let expected =
-    match Wire.Codec.validate c buf off with
+    match Wire.Codec.validate c buf ~off with
     | Error _ -> None
     | Ok () ->
         Some
@@ -251,7 +252,7 @@ let inside prefix s =
    error they name. *)
 let codec_encode c v ~len ~off =
   let out = Bytes.make len '\xaa' in
-  match Wire.Codec.encode c v out off with
+  match Wire.Codec.encode c v out ~off with
   | () -> Ok (Bytes.to_string out)
   | exception Invalid_argument msg -> (
       match inside "constraints (" msg with
@@ -294,7 +295,7 @@ let encodes label c m ~op src v placements =
     placements
 
 let encodes_at label c m buf off =
-  match Wire.Codec.decode c buf off with
+  match Wire.Codec.decode c buf ~off with
   | Error _ | (exception Invalid_argument _) -> ()
   | Ok v ->
       let size = Wire.Codec.min_size c in
@@ -320,7 +321,7 @@ let raw label c m v =
   (* The codec writes a record before its own checks refuse it, so the
      bytes hold it for the module to read with no check. *)
   let src = Bytes.make size '\000' in
-  (try Wire.Codec.encode c v src 0 with Invalid_argument _ -> ());
+  (try Wire.Codec.encode c v src ~off:0 with Invalid_argument _ -> ());
   encodes label c m ~op:op_raw src v
     [ (size + 3, 3); (size + 2, 1); (size, 0); (size + 1, 2); (size - 1, 0) ]
 

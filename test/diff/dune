@@ -81,10 +81,17 @@
 ; Generate the OCaml backend's modules, one per sampled codec, with Wire_ocaml
 ; Run by the code generation rule in fuzz/diff/ocaml/ and fuzz/diff/ocaml-ox/
 
+; The fields a generated fold hands out, which both generators name.
+
+(library
+ (name fold_paths)
+ (modules fold_paths)
+ (libraries wire wire.ocaml))
+
 (executable
  (name gen_ocaml)
  (modules gen_ocaml)
- (libraries diff_ocaml diff_codecs fuzz_gen wire wire.ocaml fmt))
+ (libraries diff_ocaml diff_codecs fold_paths fuzz_gen wire wire.ocaml fmt))
 
 ; Generate the Rust backend's modules, one per sampled codec, and its
 ; scanners, three per structured case and two per sampled shape, with
@@ -97,6 +104,7 @@
  (libraries
   diff_ocaml
   diff_codecs
+  fold_paths
   fuzz_gen
   schemas
   wire

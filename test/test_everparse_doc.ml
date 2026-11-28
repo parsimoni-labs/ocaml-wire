@@ -1,7 +1,7 @@
 (* Tests for everparse.ml: the documentation projection. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 open Test_helpers
 
 let test_doc_drops_ffi_scaffolding () =
@@ -10,9 +10,12 @@ let test_doc_drops_ffi_scaffolding () =
   let c =
     Codec.v "Pkt" (fun v -> v) Codec.[ (Field.v "v" uint8 $ fun v -> v) ]
   in
-  let schema = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let schema =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   let doc =
-    to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    to_3d ~enum_as_type:true
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Standalone c))
   in
   Alcotest.(check bool)
     "schema has WireCtx" true
@@ -27,7 +30,8 @@ let test_doc_enum_as_type () =
   let e = enum "Color" [ ("Red", 0); ("Green", 1); ("Blue", 2) ] uint8 in
   let c = Codec.v "Pix" (fun v -> v) Codec.[ (Field.v "Hue" e $ fun v -> v) ] in
   let doc =
-    to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    to_3d ~enum_as_type:true
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Standalone c))
   in
   Alcotest.(check bool)
     "declares the enum" true
@@ -39,7 +43,8 @@ let test_doc_enum_as_type () =
     "drops the membership refinement" false (contains ~sub:"== 0" doc);
   Alcotest.(check bool)
     "codegen schema keeps membership" true
-    (contains ~sub:"== 0" (to_3d (Everparse.project ~mode:`Ffi c).module_))
+    (contains ~sub:"== 0"
+       (to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))))
 
 let test_doc_codec_citation () =
   (* [Codec.v ~doc] renders as a [/*++ ... --*/] comment on the typedef, so a
@@ -52,7 +57,8 @@ let test_doc_codec_citation () =
   Alcotest.(check (option string))
     "codec exposes its doc" (Some "RFC 9999 section 1") (Codec.doc c);
   let out =
-    to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    to_3d ~enum_as_type:true
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Standalone c))
   in
   Alcotest.(check bool)
     "typedef carries the citation comment" true
@@ -72,7 +78,9 @@ let test_doc_comment_wraps_at_80 () =
       (fun v -> v)
       Codec.[ (Field.v "v" uint8 ~doc:long $ fun v -> v) ]
   in
-  let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let out =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   let longest =
     String.split_on_char '\n' out
     |> List.fold_left (fun m l -> max m (String.length l)) 0
@@ -205,7 +213,8 @@ let test_doc_field_citation () =
     "field exposes its doc" (Some "RFC 9999 section 4.2") (Field.doc f);
   let c = Codec.v "Pkt" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
   let out =
-    to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    to_3d ~enum_as_type:true
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Standalone c))
   in
   Alcotest.(check bool)
     "field carries the citation comment" true
@@ -214,7 +223,7 @@ let test_doc_field_citation () =
 let test_doc_bit_order_matches_schema () =
   (* Doc-mode emits a validator with no FFI, so its bitfield layout is never
      run through the differential C tests that check the schema (FFI)
-     projection's bit order against [Codec.get]. Both projections must apply
+     projection's bit order against [Codec.decode]. Both projections must apply
      the same bit reordering; assert their bitfield sequence is identical so
      doc-mode's order stays pinned to the order those tests already cover.
      A,B,C share one [U8] word whose native order is [Lsb_first], so the
@@ -232,12 +241,12 @@ let test_doc_bit_order_matches_schema () =
         ]
   in
   let bit_order_of schema =
-    match Everparse.entrypoint_struct schema with
+    match Private.Everparse.entrypoint_struct schema with
     | None -> Alcotest.fail "schema has no entrypoint struct"
     | Some s ->
         List.map
           (fun (name, is_bitfield, _) -> (name, is_bitfield))
-          (Everparse.field_action_forms s)
+          (Private.Everparse.field_action_forms s)
   in
   Alcotest.(check (list (pair (option string) bool)))
     "doc reorders bitfields exactly as the schema projection does"

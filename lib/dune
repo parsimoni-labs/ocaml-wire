@@ -9,7 +9,6 @@
   layout
   seed
   codec_leaf
-  codec_run
   codec_repr
   codec_elem
   codec_compile
@@ -23,7 +22,8 @@
   codec_seal
   codec_struct
   codec_words
-  scan_outputs)
+  scan_outputs
+  der)
  (flags
   (:standard -open Wire_runtime))
  (libraries bytesrw fmt optint wire.runtime))

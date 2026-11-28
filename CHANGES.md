@@ -2,25 +2,33 @@
 
 ### Breaking
 
-- `Wire.Staged` and `Wire_runtime.Staged` are removed: `Codec.get c f`,
-  `Codec.set c f` and `Codec.writer c template fields`, applied once, are the
-  reader or the writer; drop `Staged.unstage` (#570, @samoht)
+- `Wire.Codec.get`, `set`, `bitfield`, `load_word`, `extract`, `slice_offset`,
+  `slice_length` and `Wire.Staged` are removed: read and write a field in
+  place with `Codec.View` (#465, #525, #566, #569, #570, #PR, @samoht)
 
-- The sizes of `Wire.Codec` are `size` (was `wire_size_opt`, and `wire_size`
-  for a codec of constant size, now `min_size` or `Option.get (size c)`),
-  `min_size` (was `min_wire_size`), `size_at` (was `wire_size_at`) and
-  `encoded_size` (was `size_of_value`) (#570, @samoht)
+- `Wire.of_string`, `of_bytes`, `of_reader`, `to_string`, `to_bytes`,
+  `to_writer`, their `_exn` forms and `Wire.Parse_error` are removed: decode a
+  lone type as a codec of one field (#566, #PR, @samoht)
+
+- The offset of `Codec.decode`, `validate`, `encode` and `size_at` is
+  labelled, `Codec.decode c buf ~off`, and `Codec.decode_exn` is removed
+  (#566, #PR, @samoht)
+
+- The sizes of `Wire.Codec` are `fixed_size` (was `wire_size_opt`), `min_size`
+  (was `min_wire_size`), `size_at` (was `wire_size_at`) and `size` (was
+  `size_of_value`) (#570, #PR, @samoht)
+
+- `Everparse.Raw`, `Everparse.struct_` and its visitor tables, the struct
+  validators, `Field.packed` and `Ascii.of_struct` move to `Wire.Private`,
+  which is not API; `Everparse.t` is abstract (#570, #PR, @samoht)
+
+- `Wire.Codec` gains `View`, `layer`, `opt_layer`, `( / )`, `( // )` and
+  `fixed_size`, which shadow local names under `open Wire.Codec`: rename or
+  qualify them (#435, #496, #525, #PR, @samoht)
 
 - `Wire.pp_value` is `Wire.Codec.pp_value`, and `Wire.Codec.name` is public: a
   `Codec.(...)` or `Codec.[...]` that names a local `name` or `size` now finds
   the codec function, so rename the local (#570, @samoht)
-
-- `Wire.Codec.decoder` and `Wire.Codec.encoder` are removed: apply
-  `Codec.decode c` and `Codec.encode c` once (#570, @samoht)
-
-- "plug" is "visitor" throughout: `Wire.Everparse.plug_field`, `plug_member`,
-  `plug_fields` and `plug_setters` are `visitor_field`, `visitor_member`,
-  `visitor_fields` and `visitor_setters` (#570, @samoht)
 
 - A stub `Wire_stubs` generates answers `(record, Wire.Error.t) result`: a
   record the validator refuses, a buffer that cuts it and an offset past the
@@ -57,40 +65,13 @@
   `equal` and `compare` in `Wire.Error`: write `Wire.Error.pp` for
   `pp_parse_error`, and a record for `parse_error` and `eof` (#566, @samoht)
 
-- `Wire.Parse_error`, `of_string_exn`, `of_bytes_exn`, `of_reader_exn` and
-  `Codec.decode_exn` are removed, so no decoder raises on bad input: match
-  on the result of `of_string`, `of_bytes`, `of_reader` or `decode` (#566,
-  @samoht)
-
-- `Wire.Codec.validate` returns a `result`, as `decode` does, and so do
-  `Codec.validate_struct` and the readers of `Codec.field_readers`: match on
-  it where the call raised (#492, #566, @samoht)
-
-- The reader `Wire.Codec.get c f` answers `('a, Wire.Error.t) result`: a
-  field the buffer cuts, a closed enum outside its cases, a lookup past its
-  table or an action that aborts is the error `decode` gives the field, not
-  an exception. Match on `read buf off` where it gave the value; a negative
-  offset still raises `Invalid_argument` (#566, @samoht)
+- `Wire.Codec.validate` returns a `result`, as `decode` does: match on it
+  where the call raised (#492, #566, @samoht)
 
 - `Wire.Codec.size_at` (was `wire_size_at`) answers `(int, Wire.Error.t)
   result`: a length field the buffer cuts is an end-of-input error, not an
   exception. Match on the result where the call gave the size; a negative
   offset raises `Invalid_argument` (#568, @samoht)
-
-- `Get.<field>_word` of a module `Wire_ocaml` writes answers a `result`: a
-  buffer that cuts the word is the error `Codec.get` gives the field, and a
-  negative offset raises `Invalid_argument` instead of reading in front of the
-  record. Match on the result before `<field>_of_word` (#568, @samoht)
-
-- `Wire.Codec.word_reader`, `read_word`, `word_part` and `of_word` are
-  `Codec.Word.reader`, `check`, `field` and `read`: `check r buf off` never
-  raises and allocates nothing; test `Codec.Word.ok`, take the word with
-  `Codec.Word.get`, and ask `Codec.Word.error` for the error of a refused
-  record (#569, @samoht)
-
-- `Wire.Codec.bitfield`, `load_word` and `extract` are removed: read the
-  bitfields of a record of at most 7 bytes with `Codec.Word.check` and
-  `Codec.Word.read`, and of any other record with `Codec.View` (#569, @samoht)
 
 - `Wire.Codec.decode` is twice as fast on variable-size records. It may now
   call a sub-codec's constructor on a record it then rejects, so a
@@ -110,15 +91,6 @@
   EverParse does, so OCaml and the generated C accept the same bytes. Write
   the constraint on the wire value, and turn a map `decode` that raises into
   a constraint or a `Wire.lookup` (#435, @samoht)
-
-- `Wire.Codec.slice_offset` and `slice_length` are removed. Read a byte
-  field through `Wire.Codec.View` instead: name the codec once with
-  `module V = (val Wire.Codec.View.codec c)` and make the field with
-  `View.field V.codec f`, then `View.check` the record, take its view with
-  `View.get` and `View.read` the field, which gives the slice. A record that
-  fails its check gives no view to read from. The read allocates the slice;
-  a caller that needs only the offset computes it from the record's offset
-  (#465, #525, @samoht)
 
 - Generated names escape every keyword of the target language (`effect` is
   `effect_`, `end_` is `end__`), so a field named after a keyword compiles.
@@ -145,11 +117,6 @@
 
 - `wire.diff-gen` (`Wire_diff_gen`) is removed: its runner passed every input
   without comparing anything. Use `Wire_diff.harness` (#472, @samoht)
-
-- `Wire.Codec` gains the module `View` and the values `writer`, `decoder` and
-  `encoder`, which shadow local names under `Wire.Codec.( ... )` or
-  `open Wire.Codec`. Rename the local one or qualify it (#435, #496, #525,
-  @samoht)
 
 - `Wire.Codec.v` refuses a codec whose constraint, action, size, presence
   condition or `where` clause names a field of an embedded sub-codec. 3D does
@@ -181,6 +148,24 @@
 
 ### Added
 
+- `Wire.Asn1`, experimental: ASN.1 DER types in the same description as
+  binary codecs, decoded, validated and encoded by `Asn1.codec`, and
+  projected by `Asn1.project` to the `.asn` modules everparse-asn1 verifies
+  (`Wire_asn1.run`). A binary codec holding DER projects to 3D with the DER
+  as a byte region of its size. Its API will break in 2.1.0 (#PR, @samoht)
+
+- `Wire.Codec.View`: `check c b ~off` checks a record once and never raises,
+  `is_ok` and `get` make it a view, and `read` and `set` a field made once by
+  `field` (#435, #496, #525, #566, #PR, @samoht)
+
+- `Codec.layer` and `opt_layer` make a field holding a record a layer, which
+  `View.sub` enters with no second check, and `ipv4 // tcp / dst_port` names a
+  nested field (#528, #PR, @samoht)
+
+- `Wire.Codec.View.fold c fields buf ~init ~f`: check the records of a
+  buffer, back to back, in `~stride` slots or in `~offs ~lens` frames, and
+  hand `f` the fields named, `None` under an absent layer (#PR, @samoht)
+
 - `Wire_ocaml.fstar`: an F* proof that a fold of a generated scanner, and
   the walk of a frame of its loops, accepts what the parser EverParse writes
   for the codec accepts, and hands its visitor the same values, for records
@@ -191,33 +176,6 @@
 - `Wire.Field.union`: a field that holds one of several cases, chosen by an
   earlier integer field (#414, #450, @samoht)
 
-- `Wire.Codec.View`: check a record once, without raising, then read its
-  fields with no further bounds check, as a generated module does, with the
-  same names (`check`, `ok`, `get`). The buffer and the codec are named by
-  types, so a view is read only in the buffer it was checked in and only by
-  the fields of its codec. Reading the Ethernet, IPv4 and TCP headers of a
-  packet this way takes about 530 instructions and allocates nothing.
-  `View.field` reads a field with no check; `View.checked_field` reads any
-  other as `Codec.get` does and answers its error, so no read raises on bytes
-  written after the check (#435, #496, #525, #566, @samoht)
-
-- `Wire.Codec.View.enter`: reach a sub-record of a checked view, such as the
-  IPv4 packet of an Ethernet frame, without checking it again. Make the
-  sub-codec field once with `View.sub` or `View.sub_option`; `enter` refuses
-  an absent sub-record. `View.check` of a codec of variable size makes its
-  checks without decoding: an Ethernet, IPv4 and TCP or UDP stack is checked
-  and its headers read in about 1440 instructions per packet, against 1900
-  for `decode` (#528, @samoht)
-
-- `Wire.Codec.decoder` and `Wire.Codec.encoder`: decode and encode prepared
-  once, for a loop over many records (#496, @samoht)
-
-- `Wire.Codec.writer`: write many fixed-size records from a template and the
-  fields that vary (#496, @samoht)
-
-- `Wire.Codec.Word`: read a record of at most 7 bytes as one `int`, then
-  take each field from it (#496, @samoht)
-
 - `wire.ocaml`: generate one OCaml module per codec, of any shape the walk
   covers, that links only the new `wire.runtime` and builds on OCaml,
   js_of_ocaml, wasm_of_ocaml and OxCaml. A generator declares each module with
@@ -225,12 +183,27 @@
   for the compiler that builds it (#436, #459, #488, #492, #501, #503, #504,
   #562, #566, @samoht)
 
-- A generated module decodes, validates and encodes its codec with the
-  codec's errors into a record of its own, sized by `size r` and `min_size`;
-  a fixed record adds `write buf off ~field ...`, each field under its label
-  and of the type its accessor returns, a field under a map in the map's
-  type. A module with no views, a fixed record with a map, reads its fields
-  with `Get.<field>` (#436, #492, #562, #566, #571, @samoht)
+- A generated module meets `Wire_ocaml.FIXED` or `VARIABLE` under the names of
+  `Codec.View`: `check b length ~off` (and `~len`), `is_ok`, `get`, an accessor
+  and `set_<field>` per field. `check` takes the buffer's length,
+  `Wire.Buf.length b`, which a loop reads once per buffer: ocamlopt does not
+  hoist `Bytes.length` out of the loop (#442, #492, #493, #562, #566, #571,
+  #PR, @samoht)
+
+- A generated module has its own record, with the codec's `validate`,
+  `decode`, `encode`, `size` and errors, and a fixed one `write buf ~off
+  ~field ...` (#436, #492, #562, #566, #568, #571, #PR, @samoht)
+
+- `Wire_ocaml.v ~fold:[ "ipv4.tcp.dst_port"; ... ]`: the module's one fold,
+  `fold ?stride ?offs ?lens ?invalid buf ~init ~f`, hands `f` the fields of
+  these paths labelled (`~ipv4_tcp_dst_port`) (#539, #566, #571, #PR, @samoht)
+
+- A fold of a generated module checks a record with nested codecs, optional
+  fields and variable sizes, and hands out its fields without building a
+  value. It skips a bound check that a later check, a region's constant start
+  or the range of a region's size already covers, and tests two adjacent
+  bitfields with one comparison. `Wire_ocaml.Plan` gives its plan to other
+  backends (#447, #473, #498, #501, #504, #509, #510, #517, #520, @samoht)
 
 - `Wire_ocaml.Plan.decisions`: the decisions a scanner takes beyond its
   plan, as data: which bounds it tests and which it leaves to a later
@@ -239,56 +212,24 @@
   proves the checks a generated scanner performs (#513, #519,
   @samoht)
 
-- `Wire_ocaml.fold`: a module declares its folds, none by default, each
-  with its outputs and a visitor whose source file the dune rule names
-  (`--visitor n=%{dep:v.ml}`). It calls the visitor by name, with no closure
-  call, as `n`, `n_frames` and `n_index`, which folds frames of any length,
-  such as the packets of a capture, with the accumulator in a register, on
-  OxCaml an unboxed tuple too; a fold no visitor names is refused (#539,
-  #566, #571, @samoht)
-
-- A generated module checks a record once (`check`, `ok`, `get`), then reads
-  a field with its accessor or writes one with `set_<field>`, with no bounds
-  check and no allocation. An accessor never raises: a field that bytes
-  written after the check move out of the buffer reads as absent (#442, #492,
-  #493, #562, #566, #571, @samoht)
-
-- A generated module of constant size checks its record at an offset,
-  `check b length off`, as `Wire.Codec.View.check` does; any other shape
-  checks a window, `check b length ~off ~len` (#562, @samoht)
-
 - `Wire_ocaml.to_mli`: a documented interface for each generated module.
   `examples/generated` has two modules with their interfaces (#501, #566,
   @samoht)
 
-- The interpreted twin of a generated module, the unit `<name>_codec` beside
-  it: `Make (struct type r = ... let codec = ... end)` reads the codec value
-  with the module's views, `validate` and folds, so code moves between the
-  two by changing one line; it checks the codec's shape when applied and
-  links `wire` (#492, #566, @samoht)
-
-- A fold of a generated module checks a record with nested codecs, optional
-  fields and variable sizes, and hands out the fields chosen with `~outputs`
-  without building a value. It skips a bound check that a
-  later check, a region's constant start or the range of a region's size
-  already covers, and tests two adjacent bitfields with one comparison.
-  A fold's `n_frames` walks four frames per loop iteration. A fold passes
-  integer outputs to its visitor as `int64`, which OCaml keeps in
-  registers. `Wire_ocaml.Plan` gives its plan to other
-  backends (#447, #473, #498, #501, #504, #509, #510, #517, #520, @samoht)
-
-- On OxCaml, generated code takes buffers allocated on the stack, is
-  `portable`, allocates nothing (`[@zero_alloc]` is checked) and keeps 32-bit
-  and 64-bit values unboxed (#492, #493, #498, #501, #504, @samoht)
+- On OxCaml, generated code takes buffers allocated on the stack (`@ local`),
+  is `portable`, allocates nothing (`[@zero_alloc]` is checked) and keeps
+  32-bit and 64-bit values unboxed (#492, #493, #498, #501, #504, @samoht)
 
 - `Wire_ocaml.v ~simd:true`, on OxCaml for arm64 or amd64: read and write
   four records of four one-byte fields at a time, with NEON or SSE (#493,
   @samoht)
 
-- `wire.rust`: generate safe, `no_std` Rust from a codec, the module
-  `Wire_ocaml` writes under the same names, its folds generic over a visitor
-  trait and its errors the codec's (`Wire_rust.v`, `Wire_rust.main`) (#439,
-  #448, #509, #572, @samoht)
+- `wire.rust`: safe, `no_std` Rust with the names of the OCaml module,
+  `Check::is_ok`, `Check::get` and a closure fold taking the fields in `?fold`
+  order (#439, #448, #509, #572, #PR, @samoht)
+
+- `Wire_ocaml` and `Wire_rust` generate a constraint with a remainder by a
+  positive literal, as `Expr.(self mod int 2 = int 0)` (#PR, @samoht)
 
 - `wire_hardcaml` (`Wire_hardcaml`), experimental and built only with
   `BUILD_HARDCAML=1`: generate a Hardcaml hardware decoder for a bounded
@@ -313,8 +254,8 @@
   fail naming every module EverParse rejected with its output (#575, @samoht)
 
 - A `byte_array_where` per-byte condition is compiled once per type: a
-  nested refined span and `Wire.of_string` compiled it on every call, and
-  now spend 30% fewer instructions on a 32-byte span (@samoht)
+  nested refined span compiled it on every call, and now spends 30% fewer
+  instructions on a 32-byte span (@samoht)
 
 - Arithmetic past OCaml's native int is computed on 64 bits, as unsigned
   integers, as the generated C computes it: `self + int (max_int - 5)` over a
@@ -354,10 +295,6 @@
   and dispatch fields before it walks the current one. On the MAWI trace
   the parse takes about 28% fewer cycles on OxCaml, fewer than
   `pnet_packet`, and 18 to 29% fewer on OCaml (#558, @samoht)
-
-- `Wire.Codec.get` and `set` of an integer or bitfield are faster: `set`
-  writes a space packet header field in a third of the instructions (#496,
-  @samoht)
 
 - `Wire_3d.generate_corpus` keeps each seeded input under 4 KiB, where a
   16-bit length gave lines of up to 64 KiB (#455, @samoht)
@@ -508,7 +445,7 @@
 - `validate` rejects a negative span size and checks every variable-size
   field, as `decode` does (#434, @samoht)
 
-- `Codec.set` enforces per-byte refinements on variable-length
+- `Codec.View.set` enforces per-byte refinements on variable-length
   `byte_array_where` fields and leaves the buffer untouched when it rejects
   (#466, @samoht)
 

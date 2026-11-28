@@ -1,0 +1,7 @@
+(documentation
+ (package wire)
+ (mld_files index api))
+
+(mdx
+ (files api.mld)
+ (libraries fmt net wire wire.runtime))

@@ -26,9 +26,9 @@ let capture_frame () =
 
 module C = S_capture
 
-let ports b len ip =
-  let t = C.Captured_ipv4.tcp b len ip in
-  if C.Stack_tcp.ok t then
+let ports b ip =
+  let t = C.Captured_ipv4.tcp b ip in
+  if C.Stack_tcp.is_ok t then
     let t = C.Stack_tcp.get t in
     Some
       ( UInt16.to_int (C.Stack_tcp.src_port b t),
@@ -38,24 +38,23 @@ let ports b len ip =
 let test_views () =
   let frame = capture_frame () in
   let p =
-    match Codec.decode Packet_stack.capture frame 0 with
+    match Codec.decode Packet_stack.capture frame ~off:0 with
     | Ok p -> p
     | Error e -> Alcotest.failf "the frame: %a" Error.pp e
   in
   let ip = Option.get p.ipv4 and tcp = Option.get (Option.get p.ipv4).tcp in
   match Buf.v frame with
   | Buf.Any b -> (
-      let len = Buf.length b in
-      let c = C.check b len ~off:0 ~len:54 in
-      Alcotest.(check bool) "accepted" true (C.ok c);
+      let c = C.check b (Buf.length b) ~off:0 ~len:54 in
+      Alcotest.(check bool) "accepted" true (C.is_ok c);
       let v = C.get c in
       Alcotest.(check int)
         "ether_type"
         (UInt16.to_int p.ether_type)
         (UInt16.to_int (C.ether_type b v));
-      Alcotest.(check bool) "no ipv6" false (C.Stack_ipv6.ok (C.ipv6 b len v));
-      let k = C.ipv4 b len v in
-      Alcotest.(check bool) "ipv4" true (C.Captured_ipv4.ok k);
+      Alcotest.(check bool) "no ipv6" false (C.Stack_ipv6.is_ok (C.ipv6 b v));
+      let k = C.ipv4 b v in
+      Alcotest.(check bool) "ipv4" true (C.Captured_ipv4.is_ok k);
       let i = C.Captured_ipv4.get k in
       Alcotest.(check int)
         "src" (UInt32.to_int ip.src)
@@ -70,26 +69,26 @@ let test_views () =
       Alcotest.(check (option (pair int int)))
         "ports"
         (Some (UInt16.to_int tcp.src_port, UInt16.to_int tcp.dst_port))
-        (ports b len i);
+        (ports b i);
       Alcotest.(check bool)
         "no udp" false
-        (C.Stack_udp_header.ok (C.Captured_ipv4.udp b len i));
+        (C.Stack_udp_header.is_ok (C.Captured_ipv4.udp b i));
       Alcotest.(check bool)
         "short frame" false
-        (C.ok (C.check b len ~off:0 ~len:53));
+        (C.is_ok (C.check b (Buf.length b) ~off:0 ~len:53));
       Alcotest.(check bool)
         "past the buffer" false
-        (C.ok (C.check b len ~off:1 ~len:54));
+        (C.is_ok (C.check b (Buf.length b) ~off:1 ~len:54));
       Alcotest.check_raises "get of a failed check"
         (Invalid_argument "CapturedStack.get: the check failed") (fun () ->
-          ignore (C.get (C.check b len ~off:(-1) ~len:54)));
+          ignore (C.get (C.check b (Buf.length b) ~off:(-1) ~len:54)));
       (* A setter of a nested record writes it in place, as the codec reads
          it back, and the bitfields beside it keep their bits. *)
-      let t = C.Stack_tcp.get (C.Captured_ipv4.tcp b len i) in
+      let t = C.Stack_tcp.get (C.Captured_ipv4.tcp b i) in
       C.Stack_tcp.set_src_port b t (UInt16.v 4321);
       C.Stack_tcp.set_reserved b t 5;
       C.Captured_ipv4.set_ttl b i (UInt8.v 9);
-      match Codec.decode Packet_stack.capture frame 0 with
+      match Codec.decode Packet_stack.capture frame ~off:0 with
       | Error e -> Alcotest.failf "after the writes: %a" Error.pp e
       | Ok p' ->
           let ip' = Option.get p'.ipv4 in
@@ -104,9 +103,7 @@ let test_views () =
             (UInt16.to_int tcp'.dst_port))
 
 (* What a test expects of the views of a frame. *)
-type expect = {
-  e : 'b. string -> 'b Buf.t -> 'b Buf.length -> 'b C.view -> unit;
-}
+type expect = { e : 'b. string -> 'b Buf.t -> 'b C.view -> unit }
 
 (* A sub-record whose bytes change after the check is placed again, and
    refused where it no longer lies in the buffer: no read leaves it. *)
@@ -115,19 +112,18 @@ let test_views_rewritten () =
     let frame = capture_frame () in
     match Buf.v frame with
     | Buf.Any b ->
-        let len = Buf.length b in
-        let c = C.check b len ~off:0 ~len:54 in
-        Alcotest.(check bool) (name ^ ": accepted") true (C.ok c);
+        let c = C.check b (Buf.length b) ~off:0 ~len:54 in
+        Alcotest.(check bool) (name ^ ": accepted") true (C.is_ok c);
         let v = C.get c in
         write frame;
-        expect name b len v
+        expect name b v
   in
-  let refused name b len v =
-    let k = C.ipv4 b len v in
-    Alcotest.(check bool) (name ^ ": ipv4") true (C.Captured_ipv4.ok k);
+  let refused name b v =
+    let k = C.ipv4 b v in
+    Alcotest.(check bool) (name ^ ": ipv4") true (C.Captured_ipv4.is_ok k);
     Alcotest.(check (option (pair int int)))
       (name ^ ": tcp") None
-      (ports b len (C.Captured_ipv4.get k))
+      (ports b (C.Captured_ipv4.get k))
   in
   let refused = { e = refused } in
   after "ihl 15" (fun f -> Bytes.set_uint8 f 14 0x4f) refused;
@@ -137,11 +133,13 @@ let test_views_rewritten () =
     (fun f -> Bytes.set_uint8 f 23 17)
     {
       e =
-        (fun name b len v ->
-          refused.e name b len v;
-          let i = C.Captured_ipv4.get (C.ipv4 b len v) in
-          let u = C.Captured_ipv4.udp b len i in
-          Alcotest.(check bool) (name ^ ": udp") true (C.Stack_udp_header.ok u);
+        (fun name b v ->
+          refused.e name b v;
+          let i = C.Captured_ipv4.get (C.ipv4 b v) in
+          let u = C.Captured_ipv4.udp b i in
+          Alcotest.(check bool)
+            (name ^ ": udp") true
+            (C.Stack_udp_header.is_ok u);
           Alcotest.(check int)
             (name ^ ": udp src_port") 1234
             (UInt16.to_int
@@ -153,16 +151,16 @@ let test_views_rewritten () =
       Bytes.set_uint8 f 20 6)
     {
       e =
-        (fun name b len v ->
+        (fun name b v ->
           Alcotest.(check bool)
             (name ^ ": ipv4") false
-            (C.Captured_ipv4.ok (C.ipv4 b len v));
-          let k = C.ipv6 b len v in
-          Alcotest.(check bool) (name ^ ": ipv6") true (C.Stack_ipv6.ok k);
+            (C.Captured_ipv4.is_ok (C.ipv4 b v));
+          let k = C.ipv6 b v in
+          Alcotest.(check bool) (name ^ ": ipv6") true (C.Stack_ipv6.is_ok k);
           Alcotest.(check bool)
             (name ^ ": tcp past the buffer")
             false
-            (C.Stack_tcp.ok (C.Stack_ipv6.tcp b len (C.Stack_ipv6.get k))));
+            (C.Stack_tcp.is_ok (C.Stack_ipv6.tcp b (C.Stack_ipv6.get k))));
     }
 
 (* A field after a span is placed again from the span's size, and reads as
@@ -174,9 +172,8 @@ let test_views_moved_field () =
   Bytes.set_uint8 buf 8 7;
   match Buf.v buf with
   | Buf.Any b ->
-      let len = Buf.length b in
-      let c = S_sized.check b len ~off:0 ~len:9 in
-      Alcotest.(check bool) "accepted" true (S_sized.ok c);
+      let c = S_sized.check b (Buf.length b) ~off:0 ~len:9 in
+      Alcotest.(check bool) "accepted" true (S_sized.is_ok c);
       let v = S_sized.get c in
       Alcotest.(check bool) "body" true (S_sized.body_present b v);
       Alcotest.(check int) "tail" 7 (UInt8.to_int (S_sized.tail b v));

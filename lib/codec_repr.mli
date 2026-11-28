@@ -552,8 +552,15 @@ type 'r t = {
   doc : string option;
   compiled : 'r compiled option Atomic.t;
   compile : string -> 'r compiled;
+  components : 'r components option;
 }
 (** A sealed codec. *)
+
+and 'r components = {
+  find : 'a. ('a, 'r) field -> (bytes -> int -> ('a, Error.t) result) option;
+}
+(** The readers of the fields of a codec whose bytes another module reads: a
+    field's reader, or [None] for a field not of the codec. *)
 
 val pp : Format.formatter -> 'r t -> unit
 (** [pp ppf c] prints the name of [c]. *)

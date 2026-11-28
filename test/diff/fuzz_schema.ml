@@ -22,7 +22,7 @@ let decode_record codec s =
         field = [];
         kind = Unexpected_eof { expected = ws; got = String.length s };
       }
-  else Codec.decode codec (Bytes.of_string s) 0
+  else Codec.decode codec (Bytes.of_string s) ~off:0
 
 (** Test SimpleHeader roundtrip *)
 let test_simple_header_roundtrip version length flags =

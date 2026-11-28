@@ -1,7 +1,7 @@
 (* Tests for c.ml: 3D generation and projection-facing syntax. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 open Test_helpers
 
 let test_bitfields () =
@@ -180,7 +180,9 @@ let test_3d_signed_float_setters () =
           (Field.v "d" int32be $ fun (_, _, _, d) -> d);
         ]
   in
-  let output = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let output =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "float32be routes to SetU32BE" true
     (contains ~sub:"SetU32BE" output);
@@ -205,7 +207,9 @@ let test_3d_arith_constraint_widens () =
         Expr.(Field.int f_a + b <= int 10))
   in
   let c = Codec.v "Arith" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ] in
-  let output = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let output =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "both Add operands widened to UINT16" true
     (contains ~sub:"((UINT16) a) + ((UINT16) b)" output);
@@ -224,7 +228,9 @@ let test_3d_array_enum_element_decl () =
       (fun v -> v)
       Codec.[ (Field.v "v" (array ~len:(int 4) e) $ fun v -> v) ]
   in
-  let output = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let output =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "enum declaration emitted" true
     (contains ~sub:"enum Color" output);
@@ -244,7 +250,9 @@ let test_3d_array_open_enum_element () =
       (fun v -> v)
       Codec.[ (Field.v "v" (array ~len:(int 4) e) $ fun v -> v) ]
   in
-  let output = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let output =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "open-enum array element renders as its base scalar" true
     (contains ~sub:"UINT8 v[" output);
@@ -264,7 +272,8 @@ let test_3d_enum_membership () =
   Alcotest.(check bool)
     "scalar enum bounds its value" true
     (contains ~sub:"(v == 1)"
-       (to_3d (Everparse.project ~mode:`Ffi scalar).module_));
+       (to_3d
+          (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi scalar))));
   let rec_ =
     Codec.v "Rec"
       (fun a b -> (a, b))
@@ -282,7 +291,8 @@ let test_3d_enum_membership () =
   Alcotest.(check bool)
     "enum nested in a sub-codec bounds its value" true
     (contains ~sub:"(e == 1)"
-       (to_3d (Everparse.project ~mode:`Ffi arr).module_))
+       (to_3d
+          (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi arr))))
 
 (* A closed enum used as a list element or optional inner must enforce membership
    in the verified C too. As a wide / big-endian array element, a repeat element
@@ -297,7 +307,9 @@ let test_3d_enum_membership_list_elements () =
       (fun v -> v)
       Codec.[ (Field.v "v" (array ~len:(int 3) e16) $ fun v -> v) ]
   in
-  let out_arr = to_3d (Everparse.project ~mode:`Ffi arr).module_ in
+  let out_arr =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi arr))
+  in
   Alcotest.(check bool)
     "wide-enum array element goes through a refined struct" true
     (contains ~sub:"_EnumElt_Wide" out_arr);
@@ -312,7 +324,9 @@ let test_3d_enum_membership_list_elements () =
       (fun v -> v)
       Codec.[ (Field.repeat "v" ~size:(int 3) e8 $ fun v -> v) ]
   in
-  let out_rep = to_3d (Everparse.project ~mode:`Ffi rep).module_ in
+  let out_rep =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi rep))
+  in
   Alcotest.(check bool)
     "repeat enum element goes through a refined struct" true
     (contains ~sub:"_EnumElt_Small" out_rep);
@@ -331,7 +345,9 @@ let test_3d_enum_membership_list_elements () =
           $ fun (_, b) -> b );
         ]
   in
-  let out_opt = to_3d (Everparse.project ~mode:`Ffi opt).module_ in
+  let out_opt =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi opt))
+  in
   Alcotest.(check bool)
     "optional enum inner goes through a refined struct" true
     (contains ~sub:"_EnumElt_Wide" out_opt)
@@ -344,11 +360,13 @@ let test_enum_open_accepts_and_no_refinement () =
   let e = enum_open "Kind" [ ("A", 0); ("B", 2) ] uint8 in
   let c = Codec.v "OpenK" (fun v -> v) Codec.[ (Field.v "k" e $ fun v -> v) ] in
   let buf = Bytes.make 1 '\x05' in
-  (match Codec.decode c buf 0 with
+  (match Codec.decode c buf ~off:0 with
   | Ok v ->
       Alcotest.(check int) "open accepts unlisted value" 5 (UInt8.to_int v)
   | Error _ -> Alcotest.fail "open enum wrongly rejected an unlisted value");
-  let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let out =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "no membership refinement" false (contains ~sub:"== 0" out);
   Alcotest.(check bool)
@@ -385,7 +403,8 @@ let test_formal_and_label_positions () =
         ]
   in
   let doc c =
-    to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+    to_3d ~enum_as_type:true
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Standalone c))
   in
   Alcotest.(check bool)
     "a struct formal renders as its integer base" true
@@ -416,7 +435,9 @@ let test_casetype_case_bodies_keep_refinements () =
           $ fun v -> v );
         ]
   in
-  let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let out =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "the enum body keeps its membership" true
     (contains ~sub:"{ ((v0 == 7) || (v0 == 9)) }" out);
@@ -424,7 +445,7 @@ let test_casetype_case_bodies_keep_refinements () =
     "the lookup body keeps its index bound" true
     (contains ~sub:"{ (v1 < 3) }" out);
   (* The codec rejects a body the unrefined validator would have accepted. *)
-  match Codec.decode c (Bytes.of_string "\x01\x05") 0 with
+  match Codec.decode c (Bytes.of_string "\x01\x05") ~off:0 with
   | Ok _ -> Alcotest.fail "expected the enum body to be refused"
   | Error _ -> ()
 
@@ -451,7 +472,8 @@ let test_casetype_integer_tags_dispatch () =
           ]
     in
     let out =
-      to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+      to_3d ~enum_as_type:true
+        (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Standalone c))
     in
     Alcotest.(check bool)
       (name ^ ": dispatches on the tag")
@@ -613,7 +635,9 @@ let test_3d_nested_byte_array_where () =
       (fun v -> v)
       Codec.[ (Field.v "n" (nested ~size:(int 4) inner) $ fun v -> v) ]
   in
-  let output = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let output =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "refined-byte typedef is defined, not just referenced" true
     (contains ~sub:"} _RefByte_" output)
@@ -650,7 +674,9 @@ let test_3d_sub_codec_declaration_order () =
           (Field.v "z" uint8 $ fun (_, b) -> b);
         ]
   in
-  let output = to_3d (Everparse.project ~mode:`Ffi top).module_ in
+  let output =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi top))
+  in
   let leaf_decl = index_of ~sub:"} OrdLeaf;" output in
   let middle_decl = index_of ~sub:"} OrdMiddle;" output in
   Alcotest.(check bool) "OrdLeaf declared" true (leaf_decl >= 0);
@@ -682,7 +708,9 @@ let test_3d_sub_codec_refined_byte_typedef () =
       (fun v -> v)
       Codec.[ (Field.v "xs" (array ~len:(int 2) (codec inner)) $ fun v -> v) ]
   in
-  let output = to_3d (Everparse.project ~mode:`Ffi top).module_ in
+  let output =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi top))
+  in
   let synth_decl = index_of ~sub:"} _RefByte_" output in
   let inner_decl = index_of ~sub:"} RefInner;" output in
   Alcotest.(check bool)
@@ -704,7 +732,8 @@ let test_3d_static_optional_transparent () =
   in
   let out_ba =
     to_3d
-      (Everparse.project ~mode:`Ffi (opt (byte_array ~size:(int 4)))).module_
+      (Wire.Private.Everparse.module_
+         (Everparse.project ~mode:`Ffi (opt (byte_array ~size:(int 4)))))
   in
   Alcotest.(check bool)
     "byte-span optional uses an offset setter" true
@@ -712,7 +741,10 @@ let test_3d_static_optional_transparent () =
   let baw =
     byte_array_where ~size:(int 4) ~per_byte:(fun b -> Expr.(b < int 10))
   in
-  let out_baw = to_3d (Everparse.project ~mode:`Ffi (opt baw)).module_ in
+  let out_baw =
+    to_3d
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi (opt baw)))
+  in
   Alcotest.(check bool)
     "byte_array_where optional emits its refined typedef" true
     (contains ~sub:"} _RefByte_" out_baw)
@@ -726,7 +758,10 @@ let test_3d_absent_optional_projects_to_unit () =
       (fun v -> v)
       Codec.[ (Field.optional "o" ~present:Expr.false_ inner $ fun v -> v) ]
   in
-  let out = to_3d (Everparse.project ~mode:`Ffi (c uint8)).module_ in
+  let out =
+    to_3d
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi (c uint8)))
+  in
   Alcotest.(check bool)
     "absent optional projects as unit" true
     (contains ~sub:"unit o" out);
@@ -760,7 +795,10 @@ let test_3d_optional_over_param_codec () =
   (* The FFI projection flattens the sub-codec into the visitor, so its struct
      also takes [ctx], after its own formal. *)
   let check mode ~formals ~args =
-    let out = flatten (to_3d (Everparse.project ~mode c).module_) in
+    let out =
+      flatten
+        (to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode c)))
+    in
     Alcotest.(check bool)
       "gate casetype declares the sub-codec formal" true
       (contains ~sub:("_Opt_OptPSub(UINT8 present, " ^ formals ^ ")") out);
@@ -827,7 +865,9 @@ let nested_stack () =
       ]
 
 let visitor_names s =
-  List.map (fun f -> f.Everparse.name) (Everparse.visitor_fields s)
+  List.map
+    (fun f -> f.Wire.Private.Everparse.name)
+    (Private.Everparse.visitor_fields s)
 
 let test_ffi_nested_visitor_paths () =
   let s = Everparse.project ~mode:`Ffi (nested_stack ()) in
@@ -851,20 +891,21 @@ let test_ffi_nested_visitor_paths () =
       "ip_pad_present";
     ]
     (visitor_names s);
-  let fields = Everparse.visitor_fields s in
+  let fields = Private.Everparse.visitor_fields s in
   Alcotest.(check (list int))
     "indices follow declaration order"
     (List.init (List.length fields) Fun.id)
-    (List.map (fun f -> f.Everparse.idx) fields);
+    (List.map (fun f -> f.Wire.Private.Everparse.idx) fields);
   let c_type name =
-    (List.find (fun f -> f.Everparse.name = name) fields).Everparse.c_type
+    (List.find (fun f -> f.Wire.Private.Everparse.name = name) fields)
+      .Wire.Private.Everparse.c_type
   in
   Alcotest.(check string)
     "the optional keeps its offset" "uint32_t" (c_type "ip");
   Alcotest.(check string) "a presence flag" "uint8_t" (c_type "ip_present");
   Alcotest.(check string) "a nested scalar" "uint32_t" (c_type "ip_src");
   Alcotest.(check string) "a nested bitfield" "uint8_t" (c_type "ip_tcp_off");
-  let out = flatten (to_3d s.module_) in
+  let out = flatten (to_3d (Wire.Private.Everparse.module_ s)) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
     [
@@ -919,8 +960,9 @@ let test_ffi_member_widths () =
       ("i_g", "uint8_t", "uint8_t");
     ]
     (List.map
-       (fun (f : Everparse.visitor_field) -> (f.name, f.c_type, f.val_c_type))
-       (Everparse.visitor_fields (Everparse.project ~mode:`Ffi c)))
+       (fun (f : Private.Everparse.visitor_field) ->
+         (f.name, f.c_type, f.val_c_type))
+       (Private.Everparse.visitor_fields (Everparse.project ~mode:`Ffi c)))
 
 (* An optional scalar of an embedded codec has a member after its flag, set
    by a codec of that one field that the optional's region parses. *)
@@ -942,7 +984,7 @@ let test_ffi_nested_optional_scalar () =
     "members"
     [ "t"; "i"; "i_k"; "i_o_present"; "i_o" ]
     (visitor_names s);
-  let out = flatten (to_3d s.module_) in
+  let out = flatten (to_3d (Wire.Private.Everparse.module_ s)) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
     [
@@ -986,7 +1028,7 @@ let test_ffi_nested_shared_codec () =
     "members"
     [ "a"; "a_x"; "a_y"; "b"; "b_x"; "b_y" ]
     (visitor_names s);
-  let out = flatten (to_3d s.module_) in
+  let out = flatten (to_3d (Wire.Private.Everparse.module_ s)) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
     [
@@ -1020,7 +1062,7 @@ let test_ffi_single_field_codec () =
     "members"
     [ "g"; "a"; "b"; "b_present"; "b_x" ]
     (visitor_names s);
-  let out = flatten (to_3d s.module_) in
+  let out = flatten (to_3d (Wire.Private.Everparse.module_ s)) in
   List.iter
     (fun sub -> Alcotest.(check bool) sub true (contains ~sub out))
     [ "} OneF;"; "} OneF_b;"; "OneF a"; "OneF_b(ctx) b[:byte-size" ]
@@ -1051,12 +1093,15 @@ let test_ffi_unflattened_shapes () =
   Alcotest.(check (list string)) "array elements" [ "xs" ] (visitor_names s);
   Alcotest.(check bool)
     "the element struct takes no ctx" true
-    (contains ~sub:"typedef struct WireArrIn\n{" (to_3d s.module_))
+    (contains ~sub:"typedef struct WireArrIn\n{"
+       (to_3d (Wire.Private.Everparse.module_ s)))
 
 let test_3d_span_guard_once () =
   (* A span sized [length - 8] puts [length >= 8] on [length]. When the field
      already states it, or two spans need it, it is written once. *)
-  let render c = flatten (to_3d (Everparse.project c).module_) in
+  let render c =
+    flatten (to_3d (Wire.Private.Everparse.module_ (Everparse.project c)))
+  in
   let checked =
     Field.v "length" uint16be ~self_constraint:(fun x -> Expr.(x >= int 8))
   in
@@ -1107,7 +1152,9 @@ let test_3d_on_act_drops_bool_return () =
            [ Action.assign out (Field.ref f_v); Action.return_bool Expr.true_ ])
   in
   let codec = Codec.v "ActOnAct" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
-  let out3d = to_3d (Everparse.project ~mode:`Ffi codec).module_ in
+  let out3d =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi codec))
+  in
   Alcotest.(check bool) "emits an :act block" true (contains ~sub:":act" out3d);
   Alcotest.(check bool)
     "the :act block has no bool return" false
@@ -1130,7 +1177,9 @@ let test_3d_on_success_conditional_return () =
            ])
   in
   let codec = Codec.v "ActIf" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
-  let out3d = to_3d (Everparse.project ~mode:`Ffi codec).module_ in
+  let out3d =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi codec))
+  in
   Alcotest.(check bool) "if is present" true (contains ~sub:"if (" out3d);
   Alcotest.(check bool)
     "an else branch is synthesised" true
@@ -1141,7 +1190,10 @@ let test_3d_on_success_conditional_return () =
 
 (* Whether building the codec [mk] makes, or projecting it, raises. *)
 let projects_or_raises mk =
-  match to_3d (Everparse.project ~mode:`Ffi (mk ())).module_ with
+  match
+    to_3d
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi (mk ())))
+  with
   | (_ : string) -> false
   | exception Invalid_argument _ -> true
 
@@ -1254,7 +1306,9 @@ let test_signed_constraint_twos_complement () =
     Field.v "x" int8 ~self_constraint:(fun self -> Expr.(self < int 100))
   in
   let codec = Codec.v "Signed" (fun v -> v) Codec.[ (f $ fun v -> v) ] in
-  let out = to_3d (Everparse.project ~mode:`Ffi codec).module_ in
+  let out =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi codec))
+  in
   Alcotest.(check bool)
     "two's-complement refinement emitted" true
     (contains ~sub:"(x ^ 128) < 228" out);
@@ -1269,11 +1323,11 @@ let test_signed_equality_twos_complement () =
      compares the raw byte and diverges from the OCaml decoder. *)
   let proj name k =
     to_3d
-      (Everparse.project ~mode:`Ffi
-         (Codec.v name
-            (fun v -> v)
-            Codec.[ (Field.v "v" int8 ~self_constraint:k $ fun v -> v) ]))
-        .module_
+      (Wire.Private.Everparse.module_
+         (Everparse.project ~mode:`Ffi
+            (Codec.v name
+               (fun v -> v)
+               Codec.[ (Field.v "v" int8 ~self_constraint:k $ fun v -> v) ])))
   in
   let eq_oor = proj "EqOOR" (fun s -> Expr.(s = int 200)) in
   Alcotest.(check bool)
@@ -1319,7 +1373,9 @@ let test_if_then_else_projects () =
           (Field.v "Data" (byte_array ~size:span) $ fun (_, d) -> d);
         ]
   in
-  let out = to_3d (Everparse.project ~mode:`Ffi c).module_ in
+  let out =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
+  in
   Alcotest.(check bool)
     "renders the conditional" true
     (contains ~sub:"? 65536 : N" out)
@@ -1330,7 +1386,9 @@ let test_3d_int64_literal_uses_unsigned_decimal () =
         Expr.(self > int64 Int64.min_int))
   in
   let codec = Codec.v "I64Lit" Fun.id Codec.[ f $ Fun.id ] in
-  let out3d = to_3d (Everparse.project ~mode:`Ffi codec).module_ in
+  let out3d =
+    to_3d (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi codec))
+  in
   Alcotest.(check bool)
     "high-bit int64 literal prints unsigned" true
     (contains ~sub:"9223372036854775808uL" out3d)
@@ -1347,7 +1405,11 @@ let test_3d_int64_mask_projects () =
           <= int64 (Int64.of_int max_int)))
   in
   let codec = Codec.v "MaskSeek" Fun.id Codec.[ f $ Fun.id ] in
-  let out = to_3d (Everparse.project ~mode:`Standalone codec).module_ in
+  let out =
+    to_3d
+      (Wire.Private.Everparse.module_
+         (Everparse.project ~mode:`Standalone codec))
+  in
   Alcotest.(check bool)
     "int64 mask renders as &" true
     (contains ~sub:"(Seek & 9223372036854775807uL)" out)
@@ -1364,481 +1426,9 @@ let test_3d_field_pos_rejected () =
   in
   Alcotest.(check bool) "field_pos refused" true (projects_or_raises codec)
 
-(* -- Codec definitions for 3D extraction tests --
-   The shared codecs ([inner], [outer], [l0]/[l1]/[l2], [opt_record],
-   [container]/[repeat_codec], [packet]/[packet_codec]) live in
-   {!Test_helpers}. *)
-
-type tm_like = {
-  hdr : UInt16.t;
-  data_len : UInt8.t;
-  packets : packet list;
-  ocf : UInt32.t option;
-  fecf : UInt16.t option;
-}
-
-let f_tm_data_len = Field.v "DataLen" uint8
-
-let tm_like_codec ~ocf ~fecf =
-  Codec.v "TmLike"
-    (fun hdr data_len packets ocf fecf -> { hdr; data_len; packets; ocf; fecf })
-    Codec.
-      [
-        (Field.v "Hdr" uint16be $ fun r -> r.hdr);
-        (f_tm_data_len $ fun r -> r.data_len);
-        ( Field.repeat "Packets" ~size:(Field.ref f_tm_data_len)
-            (codec packet_codec)
-        $ fun r -> r.packets );
-        ( Field.optional "OCF"
-            ~present:(if ocf then Expr.true_ else Expr.false_)
-            uint32be
-        $ fun r -> r.ocf );
-        (Field.optional "FECF" ~present:(bool fecf) uint16be $ fun r -> r.fecf);
-      ]
-
-(* -- 3D extraction tests -- *)
-
-let test_3d_codec_embed () =
-  (* Codec embed: field type should reference the sub-codec's struct name *)
-  let s_inner = Everparse.Raw.struct_of_codec inner_codec in
-  let s_outer = Everparse.Raw.struct_of_codec outer_codec in
-  let m = module_ [ typedef s_inner; typedef s_outer ] in
-  let output = to_3d m in
-  (* Inner struct must be defined *)
-  Alcotest.(check bool)
-    "inner struct defined" true
-    (contains ~sub:"typedef struct WireInner" output);
-  (* Outer struct references Inner by name *)
-  Alcotest.(check bool)
-    "outer references Inner" true
-    (contains ~sub:"Inner Inner" output);
-  Alcotest.(check bool)
-    "contains Header field" true
-    (contains ~sub:"Header" output);
-  Alcotest.(check bool)
-    "contains Trailer field" true
-    (contains ~sub:"Trailer" output)
-
-let test_3d_codec_nested () =
-  (* Two-level nesting: L0 -> L1 -> L2, each should reference by name *)
-  let s0 = Everparse.Raw.struct_of_codec l0_codec in
-  let m = module_ [ typedef s0 ] in
-  let output = to_3d m in
-  (* L0's struct should reference L1 by name *)
-  Alcotest.(check bool) "contains L1 ref" true (contains ~sub:"L1" output);
-  Alcotest.(check bool) "contains Z field" true (contains ~sub:"Z" output)
-
-let test_3d_optional_present () =
-  (* Optional present: field should appear as normal UINT16BE *)
-  let s = Everparse.Raw.struct_of_codec opt_codec_present in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
-  Alcotest.(check bool) "contains Hdr" true (contains ~sub:"Hdr" output);
-  Alcotest.(check bool) "contains UINT16" true (contains ~sub:"UINT16" output);
-  Alcotest.(check bool) "contains Payload" true (contains ~sub:"Payload" output);
-  Alcotest.(check bool) "contains Trail" true (contains ~sub:"Trail" output);
-  (* Must not contain invalid 3D syntax *)
-  Alcotest.(check bool)
-    "no optional() syntax" false
-    (contains ~sub:"optional(" output)
-
-let test_3d_optional_absent () =
-  (* Optional absent: zero-length field *)
-  let s = Everparse.Raw.struct_of_codec opt_codec_absent in
-  let m = module_ [ typedef s ] in
-  let output = to_3d m in
-  Alcotest.(check bool) "contains Hdr" true (contains ~sub:"Hdr" output);
-  Alcotest.(check bool) "contains Trail" true (contains ~sub:"Trail" output);
-  Alcotest.(check bool)
-    "no optional() syntax" false
-    (contains ~sub:"optional(" output)
-
-let test_3d_repeat () =
-  (* Repeat: should render as variable-length array with :byte-size *)
-  let s_inner = Everparse.Raw.struct_of_codec inner_codec in
-  let s = Everparse.Raw.struct_of_codec repeat_codec in
-  let m = module_ [ typedef s_inner; typedef s ] in
-  let output = to_3d m in
-  Alcotest.(check bool) "contains Length" true (contains ~sub:"Length" output);
-  Alcotest.(check bool) "contains Items" true (contains ~sub:"Items" output);
-  (* Repeat should render as :byte-size array, referencing Inner type *)
-  Alcotest.(check bool)
-    "contains :byte-size" true
-    (contains ~sub:":byte-size" output);
-  Alcotest.(check bool)
-    "references Inner elem type" true
-    (contains ~sub:"Inner" output);
-  (* Must not contain invalid 3D syntax *)
-  Alcotest.(check bool)
-    "no repeat() syntax" false
-    (contains ~sub:"repeat(" output)
-
-let test_3d_tm_like () =
-  (* Full TM-like composition: all nested types should project to 3D *)
-  let c = tm_like_codec ~ocf:true ~fecf:true in
-  let s_pkt = Everparse.Raw.struct_of_codec packet_codec in
-  let s = Everparse.Raw.struct_of_codec c in
-  let m = module_ [ typedef s_pkt; typedef s ] in
-  let output = to_3d m in
-  Alcotest.(check bool) "contains Hdr" true (contains ~sub:"Hdr" output);
-  Alcotest.(check bool) "contains DataLen" true (contains ~sub:"DataLen" output);
-  Alcotest.(check bool) "contains Packets" true (contains ~sub:"Packets" output);
-  Alcotest.(check bool) "contains OCF" true (contains ~sub:"OCF" output);
-  Alcotest.(check bool) "contains FECF" true (contains ~sub:"FECF" output);
-  (* Sub-codec should be referenced by name *)
-  Alcotest.(check bool)
-    "contains Packet typedef" true
-    (contains ~sub:"typedef struct WirePacket" output);
-  (* Packet should be referenced in the TmLike struct *)
-  Alcotest.(check bool)
-    "Packet type referenced" true
-    (contains ~sub:"Packet" output)
-
-(* -- Variable-size schema projection -- *)
-
-type dep_frame = { frame_length : UInt16.t; data : string }
-
-let f_frame_length = Field.v "FrameLength" uint16be
-let header_size = 2
-
-let dep_frame_codec =
-  Codec.v "DepFrame"
-    (fun frame_length data -> { frame_length; data })
-    Codec.
-      [
-        (f_frame_length $ fun r -> r.frame_length);
-        ( Field.v "Data"
-            (byte_array ~size:Expr.(Field.ref f_frame_length - int header_size))
-        $ fun r -> r.data );
-      ]
-
-let test_3d_dep_size_schema () =
-  let schema = Everparse.project ~mode:`Ffi dep_frame_codec in
-  Alcotest.(check bool) "variable wire_size" true (schema.wire_size = None);
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
-  Alcotest.(check bool)
-    "contains FrameLength" true
-    (contains ~sub:"FrameLength" s);
-  Alcotest.(check bool) "contains Data" true (contains ~sub:"Data" s);
-  Alcotest.(check bool)
-    "contains byte-size expr" true
-    (contains ~sub:":byte-size (FrameLength - 2)" s)
-
-let test_3d_dep_size_roundtrip () =
-  let original = { frame_length = UInt16.v 7; data = "HELLO" } in
-  let buf = Bytes.create 7 in
-  Codec.encode dep_frame_codec original buf 0;
-  let decoded = Codec.decode dep_frame_codec buf 0 in
-  match decoded with
-  | Ok v ->
-      Alcotest.(check int) "frame_length" 7 (UInt16.to_int v.frame_length);
-      Alcotest.(check string) "data" "HELLO" v.data
-  | Error e -> Alcotest.failf "%a" Error.pp e
-
-type param_frame = { pf_data : string }
-
-let p_len = Param.input "len" uint16be
-
-let param_frame_codec =
-  Codec.v "ParamFrame"
-    (fun data -> { pf_data = data })
-    Codec.
-      [
-        ( Field.v "Data" (byte_array ~size:(Param.expr p_len)) $ fun r ->
-          r.pf_data );
-      ]
-
-let test_3d_param_in_size () =
-  (* A byte_array whose size is driven by a formal parameter must thread
-     the parameter into the 3D typedef signature. *)
-  let schema = Everparse.project ~mode:`Ffi param_frame_codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
-  Alcotest.(check bool)
-    "typedef carries len param" true
-    (contains ~sub:"UINT16BE len" s);
-  Alcotest.(check bool) "size uses len" true (contains ~sub:":byte-size len" s)
-
-(* A codec embedding a parametric sub-codec must surface the sub's param as its
-   own formal and apply it at the use site, else 3D rejects the reference. *)
-let test_3d_param_embed () =
-  let lim = Param.input "lim" uint8 in
-  let sub =
-    Codec.v "PSub"
-      ~where:Expr.(Field.ref (Field.v "v" uint8) <= Param.expr lim)
-      (fun v -> v)
-      Codec.[ Field.v "v" uint8 $ Fun.id ]
-  in
-  let outer =
-    Codec.v "PEmbed"
-      (fun s -> s)
-      Codec.[ Field.v "s" (Wire.codec sub) $ Fun.id ]
-  in
-  let s =
-    Wire.Everparse.Raw.to_3d (Everparse.project ~mode:`Ffi outer).module_
-  in
-  Alcotest.(check bool)
-    "sub typedef carries the formal" true
-    (contains ~sub:"WirePSub(UINT8 lim)" s);
-  Alcotest.(check bool)
-    "use site applies the formal" true
-    (contains ~sub:"PSub(lim) s" s)
-
-(* A [nested] region over a composite inner (an array) projects through a
-   synthesised wrapper struct so the single-element-array element is a named
-   type, not a malformed inline array. *)
-let test_3d_nested_over_array () =
-  let codec =
-    Codec.v "NAEmbed"
-      (fun xs -> xs)
-      Codec.
-        [
-          Field.v "xs" (nested ~size:(int 16) (array ~len:(int 2) uint64be))
-          $ Fun.id;
-        ]
-  in
-  let s =
-    Wire.Everparse.Raw.to_3d (Everparse.project ~mode:`Ffi codec).module_
-  in
-  Alcotest.(check bool)
-    "wrapper struct holds the array" true
-    (contains ~sub:"UINT64BE v[:byte-size" s);
-  Alcotest.(check bool)
-    "use site is a single-element-array of the named wrapper" true
-    (contains ~sub:"xs[:byte-size-single-element-array 16]" s)
-
-(* A [nested] region lifts its inner into a synthesised wrapper struct, which is
-   a 3D scope of its own: an inner sized from a field of the enclosing struct
-   named something the wrapper never declared, and EverParse rejected the schema
-   with "Variable n not found". The wrapper takes the name as a formal and the
-   use site passes the field on. *)
-let test_3d_nested_inner_sized_by_a_field () =
-  let f_n = Field.v "n" uint8 in
-  let c =
-    Codec.v "NestRef"
-      (fun n a -> (n, a))
-      Codec.
-        [
-          (Field.v "n" uint8 $ fun (n, _) -> n);
-          ( Field.v "a" (nested ~size:(int 4) (byte_array ~size:(Field.ref f_n)))
-          $ fun (_, a) -> a );
-        ]
-  in
-  let check mode =
-    let out = flatten (to_3d (Everparse.project ~mode c).module_) in
-    Alcotest.(check bool)
-      "wrapper declares the field it is sized by" true
-      (contains ~sub:"(UINT32 n)" out);
-    Alcotest.(check bool)
-      "use site passes the field to the wrapper" true
-      (contains ~sub:"(n) a[:byte-size-single-element-array 4]" out)
-  in
-  check `Ffi;
-  check `Standalone
-
-(* Two [nested] inners of different shapes each need a wrapper of their own.
-   Both used to be named after the same catch-all, so the second was dropped as
-   a repeat of the first and its field then validated against the first's
-   length. *)
-let test_3d_nested_wrapper_per_shape () =
-  let f_n = Field.v "n" uint8 in
-  let f_m = Field.v "m" uint8 in
-  let c =
-    Codec.v "TwoNest"
-      (fun n m a b -> (n, m, a, b))
-      Codec.
-        [
-          (Field.v "n" uint8 $ fun (n, _, _, _) -> n);
-          (Field.v "m" uint8 $ fun (_, m, _, _) -> m);
-          ( Field.v "a" (nested ~size:(int 4) (byte_array ~size:(Field.ref f_n)))
-          $ fun (_, _, a, _) -> a );
-          ( Field.v "b" (nested ~size:(int 8) (byte_slice ~size:(Field.ref f_m)))
-          $ fun (_, _, _, b) -> b );
-        ]
-  in
-  let out = flatten (to_3d (Everparse.project ~mode:`Ffi c).module_) in
-  Alcotest.(check bool)
-    "the first inner keeps its own length" true
-    (contains ~sub:"UINT8 v[:byte-size n]" out);
-  Alcotest.(check bool)
-    "the second inner keeps its own length" true
-    (contains ~sub:"UINT8 v[:byte-size m]" out);
-  Alcotest.(check bool)
-    "each use site passes its own field" true
-    (contains ~sub:"(m) b[:byte-size-single-element-array 8]" out)
-
-let test_3d_byte_array_where () =
-  (* Synthesises a refinement struct so 3D can apply the per-byte constraint
-     to each element of the byte-size array. *)
-  let f_len = Field.v "Length" uint16be in
-  let f_data =
-    Field.v "Data"
-      (byte_array_where ~size:(Field.ref f_len)
-         ~per_byte:Expr.(fun b -> b >= int 0x20 && b <= int 0x7e))
-  in
-  let codec =
-    Codec.v "Printable"
-      (fun len data -> (len, data))
-      Codec.[ f_len $ fst; f_data $ snd ]
-  in
-  let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
-  Alcotest.(check bool)
-    "synth typedef present" true
-    (contains ~sub:"struct Wire_RefByte_" s);
-  Alcotest.(check bool)
-    "field references synth" true
-    (contains ~sub:"_RefByte_" s);
-  Alcotest.(check bool)
-    "constraint inlined" true
-    (contains ~sub:">= 32" s && contains ~sub:"<= 126" s);
-  let synth_ref =
-    Re.execp
-      (Re.compile
-         (Re.seq
-            [ Re.str "_RefByte_"; Re.rep1 Re.digit; Re.str " Data[:byte-size" ]))
-      s
-  in
-  Alcotest.(check bool) "Data references synth not raw UINT8" true synth_ref
-
-(* A lookup / cases field decodes only in-range indices (OCaml raises
-   [Invalid_tag] otherwise); the 3D projection must emit the matching [< len]
-   refinement so the generated C validator rejects the same out-of-range inputs.
-   Without it the verified C is more permissive than the OCaml decoder. *)
-let test_lookup_index_bound () =
-  let codec =
-    Codec.v "Lk"
-      (fun v -> v)
-      Codec.[ (Field.v "v" (lookup [ 'a'; 'b'; 'c'; 'd' ] uint8) $ fun v -> v) ]
-  in
-  let output =
-    to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec codec) ])
-  in
-  Alcotest.(check bool)
-    "lookup field bounds its index" true
-    (contains ~sub:"(v < 4)" output)
-
-let test_array_lookup_element_bound () =
-  (* A lookup as an array element must bound every element, not just a scalar
-     field, or the verified C validator accepts out-of-range indices the OCaml
-     decoder rejects. The element projects through a synthesised refined-byte
-     struct, as a byte_array_where does. *)
-  let codec =
-    Codec.v "ArrLk"
-      (fun v -> v)
-      Codec.
-        [
-          ( Field.v "a"
-              (array ~len:(int 3) (lookup [ 'a'; 'b'; 'c'; 'd' ] uint8))
-          $ fun v -> v );
-        ]
-  in
-  (* The synthesised element struct is emitted by the full schema projection,
-     not [struct_of_codec] alone, so render the whole module. *)
-  let output = to_3d (Everparse.project ~mode:`Ffi codec).module_ in
-  Alcotest.(check bool)
-    "array element bounds its index" true
-    (contains ~sub:"(__elt_lk4 < 4)" output);
-  Alcotest.(check bool)
-    "element refined via synth struct" true
-    (contains ~sub:"_RefByte_lk4 a" output)
-
-(* A lookup is exhaustive when its variant count fills the field's bit width
-   exactly ([nvariants = 2 ^ width]): every representable value is then a
-   valid index, so the [< nvariants] refinement [test_lookup_index_bound]
-   checks for above would always hold -- a dead check EverParse would still
-   compile into the generated C. This is the exact shape of ocaml-uslp's
-   [src_or_dest] field (a 2-variant lookup over a 1-bit UINT32BE), which
-   motivated suppressing the bound (see [lookup_is_exhaustive] in
-   lib/types.ml). One variant short of the same field width (3 variants over
-   2 bits, i.e. [3 < 4]) must still emit its bound: exhaustiveness, not
-   merely "small nvariants", drives the suppression. *)
-let test_lookup_index_bound_exhaustive () =
-  let exhaustive =
-    Codec.v "LkExhaustive"
-      (fun v -> v)
-      Codec.
-        [
-          (Field.v "v" (lookup [ 'a'; 'b' ] (bits ~width:1 U32be)) $ fun v -> v);
-        ]
-  in
-  let out =
-    to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec exhaustive) ])
-  in
-  Alcotest.(check bool)
-    "exhaustive lookup still emits the bitwidth suffix" true
-    (contains ~sub:"UINT32BE v : 1" out);
-  Alcotest.(check bool)
-    "exhaustive lookup emits no range bound" false (contains ~sub:"< 2" out);
-  let non_exhaustive =
-    Codec.v "LkNonExhaustive"
-      (fun v -> v)
-      Codec.
-        [
-          ( Field.v "v" (lookup [ 'a'; 'b'; 'c' ] (bits ~width:2 U32be))
-          $ fun v -> v );
-        ]
-  in
-  let out2 =
-    to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec non_exhaustive) ])
-  in
-  Alcotest.(check bool)
-    "one variant short of exhaustive still bounds its index" true
-    (contains ~sub:"(v < 3)" out2)
-
-let test_optional_scalar_regions () =
-  List.iter
-    (fun at_most ->
-      let tag = Field.v "tag" uint8 and size_f = Field.v "size" uint8 in
-      let region =
-        (if at_most then nested_at_most else nested)
-          ~size:(Field.ref size_f) uint16be
-      in
-      let c =
-        Codec.v "OptionalRegion"
-          (fun t s v -> (t, s, v))
-          Codec.
-            [
-              (tag $ fun (t, _, _) -> t);
-              (size_f $ fun (_, s, _) -> s);
-              ( Field.optional "value"
-                  ~present:Expr.(Field.ref tag = int 1)
-                  region
-              $ fun (_, _, v) -> v );
-            ]
-      in
-      List.iter
-        (fun mode ->
-          let out = flatten (to_3d (Everparse.project ~mode c).module_) in
-          Alcotest.(check bool)
-            "a gate preserves one optional region" true
-            (contains ~sub:"OptRegion_" out);
-          Alcotest.(check bool)
-            "the scalar region has a guarded size" true
-            (contains
-               ~sub:
-                 (if at_most then "_region_size >= 2" else "_region_size == 2")
-               out);
-          Alcotest.(check bool)
-            "the scalar region has its own parser" true
-            (contains
-               ~sub:
-                 (if at_most then "ScalarRegionAtMost_"
-                  else "ScalarRegionExact_")
-               out))
-        [ `Ffi; `Standalone ])
-    [ false; true ]
-
 let suite =
   ( "everparse",
     [
-      Alcotest.test_case "3d: optional scalar regions" `Quick
-        test_optional_scalar_regions;
-      Alcotest.test_case "generation: lookup index bound" `Quick
-        test_lookup_index_bound;
-      Alcotest.test_case "generation: lookup index bound, exhaustive" `Quick
-        test_lookup_index_bound_exhaustive;
-      Alcotest.test_case "generation: array lookup element bound" `Quick
-        test_array_lookup_element_bound;
       Alcotest.test_case "generation: bitfields" `Quick test_bitfields;
       Alcotest.test_case "generation: enumerations" `Quick test_enumerations;
       Alcotest.test_case "generation: big-endian enum projection" `Quick
@@ -1853,25 +1443,6 @@ let suite =
       Alcotest.test_case "generation: if_then_else projects" `Quick
         test_if_then_else_projects;
       Alcotest.test_case "generation: pretty print" `Quick test_pretty_print;
-      Alcotest.test_case "3d: codec embed" `Quick test_3d_codec_embed;
-      Alcotest.test_case "3d: codec nested" `Quick test_3d_codec_nested;
-      Alcotest.test_case "3d: optional present" `Quick test_3d_optional_present;
-      Alcotest.test_case "3d: optional absent" `Quick test_3d_optional_absent;
-      Alcotest.test_case "3d: repeat" `Quick test_3d_repeat;
-      Alcotest.test_case "3d: tm-like" `Quick test_3d_tm_like;
-      Alcotest.test_case "3d: dep-size schema" `Quick test_3d_dep_size_schema;
-      Alcotest.test_case "3d: dep-size roundtrip" `Quick
-        test_3d_dep_size_roundtrip;
-      Alcotest.test_case "3d: param in size" `Quick test_3d_param_in_size;
-      Alcotest.test_case "3d: param embed" `Quick test_3d_param_embed;
-      Alcotest.test_case "3d: nested over array" `Quick
-        test_3d_nested_over_array;
-      Alcotest.test_case "3d: nested inner sized by a field" `Quick
-        test_3d_nested_inner_sized_by_a_field;
-      Alcotest.test_case "3d: one nested wrapper per shape" `Quick
-        test_3d_nested_wrapper_per_shape;
-      Alcotest.test_case "3d: byte_array_where synth typedef" `Quick
-        test_3d_byte_array_where;
       Alcotest.test_case "3d: signed and float setters" `Quick
         test_3d_signed_float_setters;
       Alcotest.test_case "3d: arithmetic constraint widens operands" `Quick

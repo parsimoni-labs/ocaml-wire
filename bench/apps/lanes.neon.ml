@@ -19,7 +19,7 @@ let clcw buf =
   let prev = ref (V.v 0xFF) and good = ref (V.v 0) in
   let i = ref 0 and stopped = ref false in
   while (not !stopped) && !i + 4 <= words do
-    C.X4.with_ b len (!i * C.min_size)
+    C.X4.with_ b ~off:(!i * C.min_size)
       ~ok:(fun w ->
         let r = C.X4.reportvalue w in
         let flags =
@@ -34,8 +34,8 @@ let clcw buf =
   let anomalies = ref (!i - V.sum !good) in
   let expected = ref ((V.get !prev 3 + 1) land 0xFF) in
   while (not !stopped) && !i < words do
-    let c = C.check b len (!i * C.min_size) in
-    if C.ok c then begin
+    let c = C.check b len ~off:(!i * C.min_size) in
+    if C.is_ok c then begin
       let v = C.get c in
       let report = C.reportvalue b v in
       if
@@ -57,14 +57,13 @@ let clcw buf =
    bit 13 of [i]; every other field 0. *)
 let report n out =
   let (Buf.Any o) = Buf.v out in
-  let olen = Buf.length o in
   (* The fields every frame shares, placed once; each word adds the four that
      change, each moved to its place from its low bits. [fill] checks the span
      of all the registers once. *)
   let fixed = C.X4.(copineffect_of (V.v 1) ++ vcid_of (V.v 7)) in
   let one = V.v 1 and fff = V.v 0xFFF and x3f = V.v 0x3F and four = V.v 4 in
   let idx = ref (V.v4 0 1 2 3) in
-  C.X4.fill o olen 0 ~count:(n / 4) ~f:(fun _ ->
+  C.X4.fill o ~off:0 ~count:(n / 4) ~f:(fun _ ->
       let x = !idx in
       idx := V.add x four;
       C.X4.(
@@ -74,7 +73,7 @@ let report n out =
         ++ retransmit_bits (V.shift_right_logical 13 x)
         ++ reportvalue_bits x));
   for i = n / 4 * 4 to n - 1 do
-    C.write out (i * C.min_size) ~controlwordtype:0 ~clcwversion:0
+    C.write out ~off:(i * C.min_size) ~controlwordtype:0 ~clcwversion:0
       ~statusfield:0 ~copineffect:1 ~vcid:7 ~spare:0 ~norf:0 ~nobitlock:0
       ~lockout:(((i land 0xFFF) + 1) lsr 12)
       ~wait:(((i land 0x3F) + 1) lsr 6)

@@ -3,7 +3,8 @@
     Compares three tiers for accessing fields in binary protocol headers, all
     derived from the same Wire DSL definition: 1. EverParse C -- verified C
     validator in a tight C loop 2. OCaml->C FFI -- calling EverParse from OCaml
-    3. Pure OCaml -- Wire.Codec.get/set (zero-copy field access) *)
+    3. Pure OCaml -- Wire.Codec.View: check, then read or set (zero-copy field
+    access) *)
 
 open Bench_lib
 open Demo_bench_cases
@@ -12,7 +13,7 @@ let read_row (C rc) =
   let (Read_case case) = rc in
   let stubs =
     C_stubs.stubs_of_name
-      (Wire.Everparse.Raw.struct_name case.struct_)
+      (Wire.Private.Everparse.Raw.struct_name case.struct_)
       case.codec
   in
   let ocaml_fn, ocaml_reset =
@@ -48,7 +49,7 @@ let () =
   Fmt.pr "All three tiers validate the same record sequence.\n";
   Fmt.pr "  C        = EverParse validate+extract selected field in C\n";
   Fmt.pr "  FFI      = same EverParse projection, called from OCaml\n";
-  Fmt.pr "  OCaml    = Wire Codec.get on the same field\n";
+  Fmt.pr "  OCaml    = Wire Codec.View check and read of the same field\n";
 
   run_table ~title:"Read: projected field access (ns/op)" ~n
     (List.map read_row read_benchmark_cases);

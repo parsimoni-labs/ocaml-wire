@@ -1,6 +1,6 @@
 (* How a single field is read and written in place, staged from its type and
    its place in the record: the readers and writers of [Codec.get] and
-   [Codec.set]. *)
+   [Codec.View.set]. *)
 
 open Types
 module Slice = Bytesrw.Bytes.Slice
@@ -114,7 +114,7 @@ let rec encoder_writes_before_checking : type a. a typ -> bool = function
   | Apply { typ; _ } -> encoder_writes_before_checking typ
   | _ -> false
 
-(* [Codec.set] promises the buffer is untouched when it raises, so a writer
+(* [Codec.View.set] promises the buffer is untouched when it raises, so a writer
    that can raise mid-field keeps a copy of the bytes it is about to replace
    and puts them back. The width is the value-driven size the record encoder
    budgets the same field with, clipped to what the buffer holds so a short
@@ -208,9 +208,9 @@ let rec build_staged_writer : type a.
       let write = build_staged_writer inner access in
       fun runtime buf base value -> write runtime buf base (encode value)
   | _, Bitfield _ ->
-      invalid_arg "Codec.set: non-bitfield type with bitfield access"
+      invalid_arg "Codec.View.set: non-bitfield type with bitfield access"
   | _, Variable _ | _, Variable_dynamic _ ->
-      invalid_arg "Codec.set: unsupported variable-size field type"
+      invalid_arg "Codec.View.set: unsupported variable-size field type"
 
 (* Fast accessor variants never construct or inspect an evaluation context.
    Returning [None] keeps parameter-dependent and compound layouts on the

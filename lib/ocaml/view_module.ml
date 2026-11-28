@@ -41,18 +41,21 @@ type t = { root : record; records : record list; size : int option }
 let root_names =
   [
     "check";
-    "ok";
+    "is_ok";
     "get";
     "decode";
     "validate";
     "is_valid";
     "encode";
+    "write";
+    "fold";
+    "end_at";
     "size";
     "min_size";
     "pp";
   ]
 
-let sub_names = [ "ok"; "get"; "end_at"; "size"; "pp" ]
+let sub_names = [ "is_ok"; "get"; "end_at"; "size"; "pp" ]
 
 (* The helpers the module binds at its top level, which an accessor of that
    name would shadow for the code after it. *)
@@ -75,6 +78,10 @@ let helper_names =
     "fail_unless";
     "eof_if";
     "field_unless";
+    "window_error";
+    "window_ok";
+    "slot_error";
+    "frame_error";
   ]
 
 (* The modules the walks define on OxCaml, and those of a fixed record's
@@ -758,14 +765,13 @@ let direct (r : record) (f : field) =
       List.memq f fields && f.offset + width_bytes f.store <= r.fixed
   | _ -> false
 
-(* The function [name] over the buffer [b], with its length [len] when
-   [with_len], and the view [v], returning [ret], whose body is [code]; a
-   parameter the body does not read is written [_]-prefixed. *)
-let pp_function ?(global = false) ppf ~target ~with_len ~name ~ret code =
+(* The function [name] over the buffer [b], of length [len], and the view
+   [v], returning [ret], whose body is [code]; a parameter the body does not
+   read is written [_]-prefixed. *)
+let pp_function ?(global = false) ppf ~target ~name ~ret code =
   let lines =
     "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in"
-    :: (if with_len then "let len = (len : _ Wire_runtime.Buf.length :> int) in"
-        else "let len = Bytes.length buf in")
+    :: "let len = Bytes.length buf in"
     :: String.split_on_char '\n' code
     |> List.filter (fun l -> l <> "")
     |> Lines.prune
@@ -778,9 +784,7 @@ let pp_function ?(global = false) ppf ~target ~with_len ~name ~ret code =
         Fmt.str "(%s : 'b Wire_runtime.Buf.t @@ local)" (param "b")
     | `OxCaml | `OCaml -> Fmt.str "(%s : 'b Wire_runtime.Buf.t)" (param "b")
   in
-  Fmt.pf ppf "let[@inline always] %s %s%s (%s : 'b view)%s =\n%s\n\n" name b
-    (if with_len then Fmt.str " (%s : 'b Wire_runtime.Buf.length)" (param "len")
-     else "")
+  Fmt.pf ppf "let[@inline always] %s %s (%s : 'b view)%s =\n%s\n\n" name b
     (param "v") ret (String.concat "\n" lines)
 
 (* A presence whose last test is its answer answers that test. *)
@@ -873,7 +877,7 @@ let bytes_accessor ppf ~target ~run ~name ~at ~slice =
                 let q = skip w ~bad ~ahead:None size p in
                 emit w "%s"
                   (make (ptext p) (Fmt.str "(%s - %s)" (ptext q) (ptext p)))))
-  |> pp_function ~global:slice ppf ~target ~with_len:false ~name
+  |> pp_function ~global:slice ppf ~target ~name
        ~ret:(if slice then " : Bytesrw.Bytes.Slice.t" else " : string")
 
 let accessor ppf ~target ~t ~ends (r : record) member =
@@ -898,13 +902,12 @@ let accessor ppf ~target ~t ~ends (r : record) member =
             let m = result_mode target in
             let words = result_words w m f ~at ~size ~lo p in
             emit w "%s" (typed f (value m ~size ~lo ~o:p.var ~words ~k:p.at f)))
-      |> pp_function ppf ~target ~with_len:false ~name
-           ~ret:(" : " ^ carrier_type f)
+      |> pp_function ppf ~target ~name ~ret:(" : " ^ carrier_type f)
   | Present { name; presence } ->
       run ~absent:"false" ~bad:(absent_where "false") ~target:(Gate presence.id)
         ~finish:(fun w _ _ -> emit w "true")
       |> last_test
-      |> pp_function ppf ~target ~with_len:false ~name ~ret:" : bool"
+      |> pp_function ppf ~target ~name ~ret:" : bool"
   | Sub { name; sub; _ } ->
       let sub_fixed = fixed_of_sub t sub in
       run ~absent:"(-1)"
@@ -915,7 +918,7 @@ let accessor ppf ~target ~t ~ends (r : record) member =
           else
             emit w "if %s > len - %d then -1 else %s" (ptext p) sub_fixed
               (ptext p))
-      |> pp_function ppf ~target ~with_len:true ~name
+      |> pp_function ppf ~target ~name
            ~ret:(Fmt.str " : 'b %s.check" (module_name t sub))
   | Bytes { name; at; slice; _ } ->
       bytes_accessor ppf ~target ~run ~name ~at ~slice
@@ -948,7 +951,7 @@ let end_at ppf ~target ~t ~ends (r : record) =
 let pp_ok_get ppf ~name =
   Fmt.pf ppf
     "let failed = Invalid_argument %S\n\n\
-     let[@inline always] ok (c : 'b check) = c >= 0\n\n\
+     let[@inline always] is_ok (c : 'b check) = c >= 0\n\n\
      let[@inline always] get (c : 'b check) : 'b view =\n\
      if c >= 0 then c else raise failed\n\n"
     (name ^ ".get: the check failed")
@@ -1075,8 +1078,10 @@ let pp_members ppf ~target ~t ~ends (r : record) =
    [check] is the scanner's. The writer binds [Int32_u] and [Int64_u] where
    the text reads them. A record's [end_at] is written when an accessor
    needs it, so the records are written to text parents first, then put
-   children first. With the text, whether it reads [mask32]. *)
-let ml ?(values = fun _ -> "") ~target t =
+   children first; the root's, with [ends], is for its fold. With the text,
+   whether it reads [mask32]. *)
+let ml ?(values = fun _ -> "") ?(ends = false) ~target t =
+  let root_ends = ends in
   let ends = Hashtbl.create 8 in
   let text f =
     let b = Buffer.create 4096 in
@@ -1088,6 +1093,7 @@ let ml ?(values = fun _ -> "") ~target t =
   let root =
     text (fun ppf ->
         pp_ok_get ppf ~name:t.root.codec_name;
+        if root_ends then end_at ppf ~target ~t ~ends t.root;
         pp_members ppf ~target ~t ~ends t.root;
         Fmt.pf ppf "%s" (values t.root))
   in
@@ -1141,11 +1147,12 @@ let pp_types ppf ~codec =
     codec codec
 
 let pp_ok_get_val ~target ppf =
-  pp_val ~target ppf "ok" "'b check -> bool"
-    "[ok c] is [true] iff the check [c] passed.";
+  pp_val ~target ppf "is_ok" "'b check -> bool"
+    "[is_ok k] is [true] iff the check [k] passed.";
   pp_val ~target ppf "get" "'b check -> 'b view"
-    "[get c] is the record of the check [c]. Raises [Invalid_argument] if [ok \
-     c] is [false]: test {!ok} first, a refused record is input, not misuse."
+    "[get k] is the view of the record the check [k] passed. Raises \
+     [Invalid_argument] if [is_ok k] is [false]: a refused record is input, \
+     test {!is_ok} first."
 
 let moved =
   " If bytes of [b] written since the check move it out of [b], it is read as \
@@ -1170,13 +1177,13 @@ let pp_member_val ~target ~t ppf (r : record) = function
       let m = module_name t sub in
       pp_val ~target ppf name
         (String.concat " -> "
-           [ named target; length; "'b view"; Fmt.str "'b %s.check" m ])
+           [ named target; "'b view"; Fmt.str "'b %s.check" m ])
         (Fmt.str
-           "[%s b len v] is the record [%s] of [v], [len] the length of [b], \
-            as a check of {!module-%s} that passes iff the record is present \
-            and its fixed bytes lie in [b]. The check of [v] made the record's \
-            checks and none runs again: if bytes of [b] were written since, a \
-            read may return a value they break, never a byte outside [b]."
+           "[%s b v] is the record [%s] of [v] as a check of {!module-%s}, \
+            which passes iff the record is present and its fixed bytes lie in \
+            [b]. The check of [v] made the record's checks and none runs \
+            again: if bytes of [b] were written since, a read may return a \
+            value they break, never a byte outside [b]."
            name name m)
   | Bytes { name; slice; _ } ->
       (* Bytesrw states no portability, so a slice's accessor has none. *)
@@ -1226,18 +1233,19 @@ let mli ?(values = fun _ _ -> ()) ppf ~target t =
       pp_val ~target ppf "check"
         (String.concat " -> "
            [ named target; length; "off:int"; "len:int"; "'b check" ])
-        "[check b length ~off ~len] is the answer of the checks {!val-fold} \
-         makes on the record at [off] in the [len] bytes there, in [b] of \
-         length [length]. It never raises: bad bounds or a bad record give an \
-         answer {!ok} refuses."
+        "[check b length ~off ~len] is the check of the record at [off] in the \
+         [len] bytes there, as [Wire.Codec.View.check] makes it, where \
+         [length] is [Wire.Buf.length b], read once per buffer. It never \
+         raises and allocates nothing: a window [b] does not hold is refused."
   | Some size ->
       pp_val ~target ppf "check"
-        (String.concat " -> " [ named target; length; "int"; "'b check" ])
+        (String.concat " -> " [ named target; length; "off:int"; "'b check" ])
         (Fmt.str
-           "[check b length off] is the answer of the checks {!val-fold} makes \
-            on the record at [off], whose %d bytes must lie in [b] of length \
-            [length], as [Wire.Codec.View.check] takes them. It never raises: \
-            bad bounds or a bad record give an answer {!ok} refuses."
+           "[check b length ~off] is the check of the record at [off], whose \
+            %d bytes must lie in [b], as [Wire.Codec.View.check] makes it, \
+            where [length] is [Wire.Buf.length b], read once per buffer. It \
+            never raises and allocates nothing: a negative [off] or a record \
+            [b] does not hold is refused."
            size));
   pp_ok_get_val ~target ppf;
   List.iter (pp_member_val ~target ~t ppf t.root) t.root.members;
@@ -1245,7 +1253,7 @@ let mli ?(values = fun _ _ -> ()) ppf ~target t =
   values ppf t.root
 
 let of_codec ?(reserved = []) c =
-  { (v ~reserved (Gen.to_struct c)) with size = Wire.Codec.size c }
+  { (v ~reserved (Gen.to_struct c)) with size = Wire.Codec.fixed_size c }
 
 (* {1 The plan} *)
 

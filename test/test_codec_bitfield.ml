@@ -143,21 +143,21 @@ let test_codec_bitfield_overflow_1bit () =
   let ws = Codec.min_size codec in
   let buf = Bytes.create ws in
   (try
-     Codec.encode codec 2 buf 0;
+     Codec.encode codec 2 buf ~off:0;
      Alcotest.fail "expected overflow for 1-bit field with value 2"
    with Invalid_argument _ -> ());
   (* 0 and 1 should work *)
-  Codec.encode codec 0 buf 0;
-  Codec.encode codec 1 buf 0
+  Codec.encode codec 0 buf ~off:0;
+  Codec.encode codec 1 buf ~off:0
 
 let test_fixed_byte_region_size_of_value () =
   let check_string label typ cases =
     let codec = Codec.v label Fun.id Codec.[ Field.v "data" typ $ Fun.id ] in
     List.iter
       (fun (case, value, expected) ->
-        Alcotest.(check int) (case ^ " size") 3 (Codec.encoded_size codec value);
+        Alcotest.(check int) (case ^ " size") 3 (Codec.size codec value);
         let buf = Bytes.create 3 in
-        Codec.encode codec value buf 0;
+        Codec.encode codec value buf ~off:0;
         Alcotest.(check bytes) case (Bytes.of_string expected) buf)
       cases
   in
@@ -184,11 +184,9 @@ let test_fixed_byte_region_size_of_value () =
       let slice =
         Bytesrw.Bytes.Slice.make bytes ~first:0 ~length:(Bytes.length bytes)
       in
-      Alcotest.(check int)
-        (case ^ " slice size") 3
-        (Codec.encoded_size codec slice);
+      Alcotest.(check int) (case ^ " slice size") 3 (Codec.size codec slice);
       let buf = Bytes.create 3 in
-      Codec.encode codec slice buf 0;
+      Codec.encode codec slice buf ~off:0;
       Alcotest.(check bytes) (case ^ " slice") (Bytes.of_string expected) buf)
     cases
 
@@ -199,8 +197,8 @@ let test_packed_bf_size () =
     Codec.v "Packed" (fun a b -> (a, b)) Codec.[ f_a $ fst; f_b $ snd ]
   in
   Alcotest.(check int)
-    "encoded_size matches min_size" (Codec.min_size codec)
-    (Codec.encoded_size codec (0, 0))
+    "Codec.size matches min_size" (Codec.min_size codec)
+    (Codec.size codec (0, 0))
 
 type packed_bool_header = {
   magic : string;
@@ -228,10 +226,10 @@ let test_packed_mapped_bf_size () =
     "min_size counts packed bool bitfield once" 6
     (Codec.min_size packed_bool_header_codec);
   Alcotest.(check int)
-    "encoded_size matches min_size" 6
-    (Codec.encoded_size packed_bool_header_codec value);
+    "Codec.size matches min_size" 6
+    (Codec.size packed_bool_header_codec value);
   let buf = Bytes.create 6 in
-  Codec.encode packed_bool_header_codec value buf 0;
+  Codec.encode packed_bool_header_codec value buf ~off:0;
   Alcotest.(check string)
     "encoded contact header shape" "dtn!\x04\x01"
     (Bytes.unsafe_to_string buf)
@@ -287,53 +285,18 @@ let test_view_set_bitfield () =
     (codec, cf_a, cf_d)
   in
   let buf = Bytes.of_string "\xB4\x12\x34\xAB" in
-  Codec.set codec cf_a buf 0 3;
+  setter codec cf_a buf 0 3;
   Alcotest.(check int) "get a after set" 3 ((reader codec cf_a) buf 0);
-  let r = decode_ok (Codec.decode codec buf 0) in
+  let r = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.(check int) "b preserved" 20 r.b;
   Alcotest.(check int) "c preserved" 0x1234 r.c;
   Alcotest.(check int) "d preserved" 0xAB r.d;
-  Codec.set codec cf_d buf 0 0x42;
+  setter codec cf_d buf 0 0x42;
   Alcotest.(check int) "get d after set" 0x42 ((reader codec cf_d) buf 0);
-  let r = decode_ok (Codec.decode codec buf 0) in
+  let r = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.(check int) "a still 3" 3 r.a;
   Alcotest.(check int) "b still 20" 20 r.b;
   Alcotest.(check int) "c still 0x1234" 0x1234 r.c
-
-(* -- Bitfields read from a record's word -- *)
-
-type bf_rec = { hi : int; lo : int }
-
-let bf_f_hi = Field.v "hi" (bits ~width:4 U8)
-let bf_f_lo = Field.v "lo" (bits ~width:4 U8)
-let bf_cf_hi = Codec.(bf_f_hi $ fun r -> r.hi)
-let bf_cf_lo = Codec.(bf_f_lo $ fun r -> r.lo)
-
-let bf_codec =
-  Codec.v "BfBatch" (fun hi lo -> { hi; lo }) Codec.[ bf_cf_hi; bf_cf_lo ]
-
-let test_bitfield_word_read () =
-  (* Default [bit_order = Msb_first]: [hi] is the top nibble. *)
-  let buf = Bytes.create 1 in
-  Bytes.set_uint8 buf 0 0xA7;
-  let k = Codec.Word.(check (reader bf_codec)) buf 0 in
-  let w = Codec.Word.get k in
-  let hi = Codec.Word.(read (field bf_codec bf_cf_hi)) w in
-  let lo = Codec.Word.(read (field bf_codec bf_cf_lo)) w in
-  let get_hi = reader bf_codec bf_cf_hi in
-  let get_lo = reader bf_codec bf_cf_lo in
-  Alcotest.(check int) "Word.read hi = get hi" (get_hi buf 0) hi;
-  Alcotest.(check int) "Word.read lo = get lo" (get_lo buf 0) lo;
-  Alcotest.(check int) "hi" 0xA hi;
-  Alcotest.(check int) "lo" 0x7 lo
-
-let test_bitfield_word_non_bf_raises () =
-  let f_x = Field.v "x" (map ~decode:UInt8.to_int ~encode:UInt8.v uint8) in
-  let cf_x = Codec.(f_x $ fun x -> x) in
-  let codec = Codec.v "NonBf" (fun x -> x) Codec.[ cf_x ] in
-  match Codec.Word.field codec cf_x with
-  | _ -> Alcotest.fail "expected Invalid_argument"
-  | exception Invalid_argument _ -> ()
 
 (* -- Adversarial bit-order tests --
 
@@ -357,16 +320,16 @@ let test_bitorder_ipv4_vihl_decode () =
   (* RFC 791: first byte of an IPv4 header with Version=4, IHL=5 is 0x45,
      Version in the top nibble, IHL in the bottom nibble. *)
   let buf = Bytes.of_string "\x45" in
-  let r = decode_ok (Codec.decode ipv4_vihl_codec buf 0) in
+  let r = decode_ok (Codec.decode ipv4_vihl_codec buf ~off:0) in
   Alcotest.(check int) "Version = 4 (top nibble)" 4 r.v;
   Alcotest.(check int) "IHL = 5 (bottom nibble)" 5 r.ihl
 
 let test_bitorder_ipv4vihl_encode_roundtrip () =
   let original = { v = 4; ihl = 5 } in
   let buf = Bytes.create 1 in
-  Codec.encode ipv4_vihl_codec original buf 0;
+  Codec.encode ipv4_vihl_codec original buf ~off:0;
   Alcotest.(check int) "encoded byte" 0x45 (Bytes.get_uint8 buf 0);
-  let decoded = decode_ok (Codec.decode ipv4_vihl_codec buf 0) in
+  let decoded = decode_ok (Codec.decode ipv4_vihl_codec buf ~off:0) in
   Alcotest.(check int) "roundtrip v" original.v decoded.v;
   Alcotest.(check int) "roundtrip ihl" original.ihl decoded.ihl
 
@@ -385,7 +348,7 @@ let test_bitorder_ipv4_flags_frag () =
   (* RFC 791: Flags (3 bits) then Fragment Offset (13 bits), MSB-first.
      Flags = 0b010 (DF set), FragOffset = 0 -> 0x4000. *)
   let buf = Bytes.of_string "\x40\x00" in
-  let r = decode_ok (Codec.decode ipv4_flags_frag_codec buf 0) in
+  let r = decode_ok (Codec.decode ipv4_flags_frag_codec buf ~off:0) in
   Alcotest.(check int) "Flags = 0b010" 0b010 r.flags;
   Alcotest.(check int) "FragOffset = 0" 0 r.frag
 
@@ -403,7 +366,7 @@ let mcu_reg_codec =
 let test_bitorder_lsbfirst_opt_in () =
   (* MSVC-style C struct: first declared field in the low bits. *)
   let buf = Bytes.of_string "\xA5" in
-  let r = decode_ok (Codec.decode mcu_reg_codec buf 0) in
+  let r = decode_ok (Codec.decode mcu_reg_codec buf ~off:0) in
   Alcotest.(check int) "lo (Lsb_first)" 0x5 r.lo;
   Alcotest.(check int) "hi (Lsb_first)" 0xA r.hi
 
@@ -424,7 +387,7 @@ let test_bitorder_diff_start_newword () =
      regression that would let mismatched bit orders silently collide. *)
   Alcotest.(check int) "wire size = 2" 2 (Codec.min_size bit_order_split_codec);
   let buf = Bytes.create 2 in
-  Codec.encode bit_order_split_codec { x = 0xA; y = 0x5 } buf 0;
+  Codec.encode bit_order_split_codec { x = 0xA; y = 0x5 } buf ~off:0;
   Alcotest.(check int)
     "byte 0 = 0xA0 (Msb_first x)" 0xA0 (Bytes.get_uint8 buf 0);
   Alcotest.(check int)
@@ -472,8 +435,4 @@ let suite =
         test_bitorder_lsbfirst_opt_in;
       Alcotest.test_case "bit_order: different orders separate words" `Quick
         test_bitorder_diff_start_newword;
-      Alcotest.test_case "bitfield: Word.read matches get" `Quick
-        test_bitfield_word_read;
-      Alcotest.test_case "bitfield: a mapped field is no word field" `Quick
-        test_bitfield_word_non_bf_raises;
     ] )

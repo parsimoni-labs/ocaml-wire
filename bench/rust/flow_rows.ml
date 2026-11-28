@@ -1,5 +1,5 @@
 (* The rows of the flow classifier that parse with Wire.Codec or with the
-   generated record modules, and the row that takes the keys from an array:
+   generated modules, and the row that takes the keys from an array:
    each hands the key of every packet to [Flow_table]. The dune rules of this
    directory copy this file as [Flow_rows_parse], with [Flow_table] standing
    for [Flow_sum], and as [Flow_rows_keys], with [Flow_table] standing for
@@ -60,7 +60,7 @@ let classify_value (p : Packet_stack.capture) =
 
 let flow_codec buf (offs : int array) _ =
   for i = 0 to Array.length offs - 1 do
-    match Codec.decode pcap_record buf (offs.(i) - 16) with
+    match Codec.decode pcap_record buf ~off:(offs.(i) - 16) with
     | Error _ -> ()
     | Ok p -> classify_value p
   done
@@ -70,8 +70,8 @@ let flow_codec buf (offs : int array) _ =
    capture ending at [cap] included. *)
 let view_ports b len ~cap o proto =
   if proto = 6 then
-    let c = G_tcp.check b len o in
-    if not (G_tcp.ok c) then -1
+    let c = G_tcp.check b len ~off:o in
+    if not (G_tcp.is_ok c) then -1
     else
       let t = G_tcp.get c in
       if o + (G_tcp.data_offset b t * 4) > cap then -1
@@ -81,8 +81,8 @@ let view_ports b len ~cap o proto =
   else if proto = 17 then
     if o + 8 > cap then -1
     else
-      let c = G_udp.check b len o in
-      if not (G_udp.ok c) then -1
+      let c = G_udp.check b len ~off:o in
+      if not (G_udp.is_ok c) then -1
       else
         let u = G_udp.get c in
         (UInt16.to_int (G_udp.src_port b u) lsl 16)
@@ -91,8 +91,8 @@ let view_ports b len ~cap o proto =
 
 let view_ipv4 b len ~cap o =
   if o + 20 <= cap then
-    let c = G_ipv4.check b len o in
-    if G_ipv4.ok c then
+    let c = G_ipv4.check b len ~off:o in
+    if G_ipv4.is_ok c then
       let ip = G_ipv4.get c in
       let hlen = (G_ipv4.ihl b ip :> int) * 4
       and total = UInt16.to_int (G_ipv4.total_length b ip) in
@@ -111,8 +111,8 @@ let view_ipv4 b len ~cap o =
 
 let view_ipv6 b len ~cap o =
   if o + 40 <= cap then
-    let c = G_ipv6.check b len o in
-    if G_ipv6.ok c then
+    let c = G_ipv6.check b len ~off:o in
+    if G_ipv6.is_ok c then
       let ip = G_ipv6.get c in
       let proto = UInt8.to_int (G_ipv6.next_header b ip) in
       let ports = view_ports b len ~cap (o + 40) proto in
@@ -132,8 +132,8 @@ let view_ipv6 b len ~cap o =
 let view_frame b len o caplen =
   let cap = o + caplen in
   if caplen >= 14 then
-    let c = G_eth.check b len o in
-    if G_eth.ok c then
+    let c = G_eth.check b len ~off:o in
+    if G_eth.is_ok c then
       let ty = UInt16.to_int (G_eth.ether_type b (G_eth.get c)) in
       if ty = 0x0800 then view_ipv4 b len ~cap (o + 14)
       else if ty = 0x86dd then view_ipv6 b len ~cap (o + 14)
@@ -152,16 +152,16 @@ let flow_view buf (offs : int array) (lens : int array) =
    and places it again, and each field read by its accessor. *)
 module S = G_capture
 
-let check_ipv4 b len ip =
+let check_ipv4 b ip =
   let ports =
-    let t = S.Captured_ipv4.tcp b len ip in
-    if S.Stack_tcp.ok t then
+    let t = S.Captured_ipv4.tcp b ip in
+    if S.Stack_tcp.is_ok t then
       let t = S.Stack_tcp.get t in
       ((S.Stack_tcp.src_port b t :> int) lsl 16)
       lor (S.Stack_tcp.dst_port b t :> int)
     else
-      let u = S.Captured_ipv4.udp b len ip in
-      if S.Stack_udp_header.ok u then
+      let u = S.Captured_ipv4.udp b ip in
+      if S.Stack_udp_header.is_ok u then
         let u = S.Stack_udp_header.get u in
         ((S.Stack_udp_header.src_port b u :> int) lsl 16)
         lor (S.Stack_udp_header.dst_port b u :> int)
@@ -174,16 +174,16 @@ let check_ipv4 b len ip =
     ~ports
     ~bytes:(S.Captured_ipv4.total_length b ip :> int)
 
-let check_ipv6 b len ip =
+let check_ipv6 b ip =
   let ports =
-    let t = S.Stack_ipv6.tcp b len ip in
-    if S.Stack_tcp.ok t then
+    let t = S.Stack_ipv6.tcp b ip in
+    if S.Stack_tcp.is_ok t then
       let t = S.Stack_tcp.get t in
       ((S.Stack_tcp.src_port b t :> int) lsl 16)
       lor (S.Stack_tcp.dst_port b t :> int)
     else
-      let u = S.Stack_ipv6.udp b len ip in
-      if S.Stack_udp_header.ok u then
+      let u = S.Stack_ipv6.udp b ip in
+      if S.Stack_udp_header.is_ok u then
         let u = S.Stack_udp_header.get u in
         ((S.Stack_udp_header.src_port b u :> int) lsl 16)
         lor (S.Stack_udp_header.dst_port b u :> int)
@@ -204,13 +204,13 @@ let check_ipv6 b len ip =
 
 let check_frame b len o caplen =
   let c = S.check b len ~off:o ~len:caplen in
-  if S.ok c then
+  if S.is_ok c then
     let v = S.get c in
-    let k4 = S.ipv4 b len v in
-    if S.Captured_ipv4.ok k4 then check_ipv4 b len (S.Captured_ipv4.get k4)
+    let k4 = S.ipv4 b v in
+    if S.Captured_ipv4.is_ok k4 then check_ipv4 b (S.Captured_ipv4.get k4)
     else
-      let k6 = S.ipv6 b len v in
-      if S.Stack_ipv6.ok k6 then check_ipv6 b len (S.Stack_ipv6.get k6)
+      let k6 = S.ipv6 b v in
+      if S.Stack_ipv6.is_ok k6 then check_ipv6 b (S.Stack_ipv6.get k6)
 
 let flow_check buf (offs : int array) (lens : int array) =
   match Wire_runtime.Buf.v buf with
@@ -219,6 +219,45 @@ let flow_check buf (offs : int array) (lens : int array) =
       for i = 0 to Array.length offs - 1 do
         check_frame b len offs.(i) lens.(i)
       done
+
+(* wire.ocaml fold: the fold of [Packet_stack.capture] over the frames of the
+   index, its [f] given the classifier's fields, each under a layer an
+   option: [ipv4.protocol] is [None] where the packet holds no IPv4 header,
+   [ipv4.tcp.src_port] where it holds no TCP header. *)
+let some f = function Some x -> f x | None -> 0
+let u16 = some UInt16.to_int
+let u32 = some UInt32.to_int
+
+let[@inline always] ports tcp_sp tcp_dp udp_sp udp_dp =
+  match (tcp_sp, udp_sp) with
+  | Some sp, _ -> (UInt16.to_int sp lsl 16) lor u16 tcp_dp
+  | None, Some sp -> (UInt16.to_int sp lsl 16) lor u16 udp_dp
+  | None, None -> 0
+
+let[@inline always] classify () ~ipv4_total_length:len4 ~ipv4_protocol:proto4
+    ~ipv4_src:src4 ~ipv4_dst:dst4 ~ipv4_tcp_src_port:tsp4
+    ~ipv4_tcp_dst_port:tdp4 ~ipv4_udp_src_port:usp4 ~ipv4_udp_dst_port:udp4
+    ~ipv6_payload_length:len6 ~ipv6_next_header:nh6 ~ipv6_src0:s0 ~ipv6_src1:s1
+    ~ipv6_src2:s2 ~ipv6_src3:s3 ~ipv6_dst0:d0 ~ipv6_dst1:d1 ~ipv6_dst2:d2
+    ~ipv6_dst3:d3 ~ipv6_tcp_src_port:tsp6 ~ipv6_tcp_dst_port:tdp6
+    ~ipv6_udp_src_port:usp6 ~ipv6_udp_dst_port:udp6 =
+  match (proto4, nh6) with
+  | Some proto, _ ->
+      Flow_table.add4 ~src:(u32 src4) ~dst:(u32 dst4)
+        ~proto:(UInt8.to_int proto)
+        ~ports:(ports tsp4 tdp4 usp4 udp4)
+        ~bytes:(u16 len4)
+  | None, Some nh ->
+      Flow_table.add6 ~s0:(u32 s0) ~s1:(u32 s1) ~s2:(u32 s2) ~s3:(u32 s3)
+        ~d0:(u32 d0) ~d1:(u32 d1) ~d2:(u32 d2) ~d3:(u32 d3)
+        ~proto:(UInt8.to_int nh)
+        ~ports:(ports tsp6 tdp6 usp6 udp6)
+        ~bytes:(40 + u16 len6)
+  | None, None -> ()
+
+let flow_fold buf (offs : int array) (lens : int array) =
+  G_flow.fold buf ~offs ~lens ~invalid:Fun.id ~init:() ~f:classify
+  |> Result.fold ~ok:Fun.id ~error:snd
 
 (* The keys [keys] of {!Flow_keys}, handed to the sink without a parse. *)
 let replay (keys : int array) =

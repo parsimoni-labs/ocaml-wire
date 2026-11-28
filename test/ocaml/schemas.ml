@@ -308,6 +308,30 @@ let overflow =
         (c $ fun (_, _, _, _, x) -> x);
       ]
 
+type remainder = UInt16.t * UInt32.t * int * int
+
+let remainder_make even word lo hi = (even, word, lo, hi)
+
+(* Remainders by constants: of a field, of a sum past the native int, which is
+   computed on 64 bits, and of a sum over two bitfields of one word. *)
+let remainder =
+  let near_max = max_int - 5 in
+  let lo = Field.v "Lo" (bits ~width:4 U8) in
+  Codec.v "Remainder" remainder_make
+    Codec.
+      [
+        ( Field.v "Even" uint16be ~self_constraint:(fun self ->
+              Expr.(self mod int 2 = int 0))
+        $ fun (x, _, _, _) -> x );
+        ( Field.v "Word" uint32be ~self_constraint:(fun self ->
+              Expr.((self + int near_max) mod int 7 <> int 3))
+        $ fun (_, x, _, _) -> x );
+        (lo $ fun (_, _, x, _) -> x);
+        ( Field.v "Hi" (bits ~width:4 U8) ~self_constraint:(fun self ->
+              Expr.(((Field.ref lo * int 3) + self) mod int 5 <> int 4))
+        $ fun (_, _, _, x) -> x );
+      ]
+
 type sized = UInt32.t * Bytesrw.Bytes.Slice.t option * UInt8.t
 
 (* The high half of [n], whose square needs the 32 bits of [n]'s own type. *)

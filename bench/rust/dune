@@ -18,25 +18,14 @@
 ; The generated modules, one rule each, for the compiler that builds them.
 
 (rule
- (targets g_stack.ml g_stack.mli)
- (action
-  (run ./gen.exe %{targets} --visitor checksum=%{dep:stack_step.ml})))
-
-(rule
  (targets g_selected.ml g_selected.mli)
  (action
-  (run ./gen.exe %{targets} --visitor checksum=%{dep:selected_step.ml})))
+  (run ./gen.exe %{targets})))
 
 (rule
  (targets g_flow.ml g_flow.mli)
  (action
-  (run
-   ./gen.exe
-   %{targets}
-   --visitor
-   classify=%{dep:flow_step.ml}
-   --visitor
-   parse=%{dep:flow_parse.ml})))
+  (run ./gen.exe %{targets})))
 
 (rule
  (targets g_capture.ml g_capture.mli)
@@ -44,27 +33,27 @@
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_eth.ml g_eth.mli g_eth_codec.ml g_eth_codec.mli)
+ (targets g_eth.ml g_eth.mli)
  (action
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_ipv4.ml g_ipv4.mli g_ipv4_codec.ml g_ipv4_codec.mli)
+ (targets g_ipv4.ml g_ipv4.mli)
  (action
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_ipv6.ml g_ipv6.mli g_ipv6_codec.ml g_ipv6_codec.mli)
+ (targets g_ipv6.ml g_ipv6.mli)
  (action
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_tcp.ml g_tcp.mli g_tcp_codec.ml g_tcp_codec.mli)
+ (targets g_tcp.ml g_tcp.mli)
  (action
   (run ./gen.exe %{targets})))
 
 (rule
- (targets g_udp.ml g_udp.mli g_udp_codec.ml g_udp_codec.mli)
+ (targets g_udp.ml g_udp.mli)
  (action
   (run ./gen.exe %{targets})))
 
@@ -113,7 +102,7 @@
 (rule
  (copy flow_rows.mli flow_rows_keys.mli))
 
-;; flow_swap.ml over the interpreted twins of the header modules, by replacing
+;; flow_swap.ml over the interpreted form of the header modules, by replacing
 ;; the one line that picks them, and both over the sink Flow_sum, as for flow_rows.ml.
 
 (rule
@@ -153,19 +142,13 @@
  (copy flow_swap.mli flow_swap_interpreted_parse.mli))
 
 ;; The flow table is flow_table.ox.ml on OxCaml, whose slots hold unboxed
-;; words, and flow_table.std.ml elsewhere; the visitor of the fold [parse] is
-;; flow_parse.ox.ml on OxCaml, which folds the keys in an unboxed pair, and
-;; flow_parse.std.ml elsewhere.
+;; words, and flow_table.std.ml elsewhere.
 
 (executable
  (name bench)
  (modules
   bench
-  stack_step
-  selected_step
-  g_stack
   g_selected
-  stack_read
   selected_read
   flow_table
   flow_int
@@ -174,10 +157,7 @@
   flow_rows
   flow_rows_parse
   flow_rows_keys
-  flow_step
-  flow_parse
   g_flow
-  flow_read
   flow_mix
   swap
   flow_swap
@@ -189,12 +169,7 @@
   g_ipv4
   g_ipv6
   g_tcp
-  g_udp
-  g_eth_codec
-  g_ipv4_codec
-  g_ipv6_codec
-  g_tcp_codec
-  g_udp_codec)
+  g_udp)
  (libraries
   bench_lib
   bytesrw
@@ -208,9 +183,4 @@
    flow_table.ml
    from
    (stdlib_upstream_compatible -> flow_table.ox.ml)
-   (-> flow_table.std.ml))
-  (select
-   flow_parse.ml
-   from
-   (stdlib_upstream_compatible -> flow_parse.ox.ml)
-   (-> flow_parse.std.ml))))
+   (-> flow_table.std.ml))))

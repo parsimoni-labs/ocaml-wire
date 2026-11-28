@@ -27,7 +27,7 @@ let registry_record =
 let registry_enum_color = enum "Color" [ ("Red", 1); ("Green", 2); ("Blue", 3) ]
 
 (* Two bitfields packed into one base word, as a record whose field list the
-   fuzzer keeps: the shape where a [Codec.set] that rewrites the whole word
+   fuzzer keeps: the shape where a [View.set] that rewrites the whole word
    instead of its own bits destroys the neighbour, and the only shape in the
    registry where two fields share a byte. The hand-built [bitpack_*] gens
    pack the same way but seal their codec, so their slots are not addressable

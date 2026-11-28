@@ -7,6 +7,7 @@ make build              # dune build
 make test               # dune runtest
 make test-wasm          # test/wasm under node via wasm_of_ocaml (needs wasm_of_ocaml, node)
 make 3d                 # validate all schemas with EverParse (needs everparse-3d.exe)
+make asn1               # verify the test/asn1 modules with everparse-asn1 (needs everparse-asn1.exe)
 make prove              # F* proves the scanners proofs/fstar-gen lists (needs EverParse)
 make verify             # Z3 checks the generated code against 3d.exe (needs EverParse, z3)
 make bench              # EverParse C vs OCaml (needs everparse-3d.exe)
@@ -35,17 +36,20 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 
 - `lib/` -- core `wire` library: DSL types, Everparse codegen, Codec (parse/encode)
 - `lib/3d/` -- `wire.3d` sublibrary: EverParse pipeline (generate .3d, run everparse-3d.exe, generate C tests)
+- `lib/asn1/` -- `wire.asn1` sublibrary: everparse-asn1 pipeline (write .asn, run everparse-asn1.exe, generate C tests); the `Wire.Asn1` DSL itself is in `lib/`
 - `lib/stubs/` -- `wire.stubs` sublibrary: generate OCaml/C FFI stubs for generated validators
-- `lib/ocaml/` -- `wire.ocaml` sublibrary: a fixed-size codec written out as OCaml (or OxCaml)
-- `lib/rust/` -- `wire.rust` sublibrary: the same codec written out as dependency-free Rust
+- `lib/runtime/` -- `wire.runtime` sublibrary: what a generated OCaml module links instead of `wire` (`Buf`, `Error`, the integer carriers)
+- `lib/ocaml/` -- `wire.ocaml` sublibrary: the generated form of a codec, an OCaml (or OxCaml) module with its check, views, values and fold
+- `lib/rust/` -- `wire.rust` sublibrary: the same module written out as dependency-free Rust
 - `lib/diff/` -- `wire.diff` sublibrary: differential test infrastructure
 - `test/stubs/` -- Wire_stubs test suite (compile + EverParse e2e tests)
+- `test/asn1/` -- the `.asn` modules of `Wire.Asn1` types: expect tests, and the everparse-asn1 check `make asn1` runs
 - `examples/` -- protocol definitions as Wire DSL examples
   - `examples/space/` -- space protocols (CLCW, SpacePacket, TMFrame, etc.)
   - `examples/net/` -- TCP/IP headers (Ethernet, IPv4, TCP, UDP) with zero-copy `byte_slice` demo
 - `bench/` -- benchmarks using schemas from `examples/`
-  - `bench/demo/` -- field-level codec benchmark (EverParse C validation vs FFI vs OCaml `Codec.get`/`Codec.set`)
-  - `bench/clcw/` -- CLCW polling loop, uses `Codec.Word`
+  - `bench/demo/` -- field-level codec benchmark (EverParse C validation vs FFI vs OCaml `Codec.View.check`, then `Codec.View.read` or `Codec.View.set` of the field)
+  - `bench/clcw/` -- CLCW polling loop: `Codec.View.check` of each word, its fields read with `Codec.View.read`
   - `bench/routing/` -- APID demux throughput
   - `bench/gateway/` -- TM frame reassembly
   - `bench/apps/` -- the routing, gateway and CLCW workloads in Wire.Codec, generated OCaml/OxCaml, generated Rust and crates
@@ -58,22 +62,40 @@ The rules that keep tests portable to js_of_ocaml and wasm_of_ocaml
 
 ## Feature shippability
 
-Every feature in `ocaml-wire` must project cleanly to EverParse 3D. A
-feature that decodes/encodes on the OCaml side but has no clean 3D
-projection is **not shipped**. The OCaml side and the 3D side are part
-of the same release-shaped unit; partial work goes in a branch but
-does not merge until both halves land.
+A feature ships when a verified parser backend expresses it and its
+projection is checked there. Today the backends are EverParse 3D and
+everparse-asn1. One wire description projects each codec to the
+backend that expresses it:
 
-A shape that cannot project is rejected when it is built, never
+- a codec 3D can express projects to 3D and is checked there;
+- a codec that needs what only everparse-asn1 has (DER tags and
+  lengths, OPTIONAL decided by peeking at a tag, SET OF ordering)
+  projects to everparse-asn1 and is checked there;
+- a codec that nests codecs of both kinds projects each nested codec
+  to its own backend, handed over as a byte region that backend's
+  validator checks, and each is checked.
+
+A feature that decodes/encodes on the OCaml side but has no checked
+verified projection is **not shipped**. The OCaml side and its
+projection are part of the same release-shaped unit; partial work goes
+in a branch but does not merge until both halves land.
+
+A shape no backend can express is rejected when it is built, never
 half-supported in OCaml: the combinator raises `Invalid_argument` with a
 message naming the shape and the reason, and every rejection has a unit
 test asserting it. The reject predicate mirrors the handler's supported
-set (`Field.is_repeat_case_body` mirrors `Codec.read_elem`). Before
+set (`Field.is_repeat_case_body` mirrors `Codec_elem.read_elem`). Before
 extending an element handler to a new shape, check that the shape
 projects in that position (as a repeat element, not only standalone).
 
 The EverParse limits that decide what projects, and so what must be
-rejected, are listed in [docs/projection.md](docs/projection.md#what-3d-cannot-express).
+rejected, are listed in [docs/projection.md](docs/projection.md#what-3d-cannot-express)
+for 3D and in [docs/asn1.md](docs/asn1.md#refused-when-built) for
+everparse-asn1. The `Wire.Asn1` combinators mirror everparse-asn1's
+checks (recursion, an implicit tag on a CHOICE, tags a decoder cannot
+tell apart, DEFAULT on a constructed type) as the binary combinators
+mirror 3D's. The DER rules and the handover between backends are in
+[docs/asn1.md](docs/asn1.md).
 
 ### Tagged unions
 
@@ -100,6 +122,24 @@ bits. Widths without a power-of-two size have no alias and go through
 `uint`; a new name is added only for a width a real protocol
 needs, and never by renaming an existing type. A carrier narrower than
 its field is a carrier defect, fixed by changing the carrier.
+
+## API names
+
+A codec has two forms with the same concepts under the same names: the
+interpreted form, `wire` alone (`Codec.View`), and the generated form, the
+module `Wire_ocaml` or `Wire_rust` writes from the codec, each field an
+accessor named after it. "Interpreted" and "generated" name an interpreter
+against a code generator, as in Carette, Kiselyov and Shan's "Finally
+Tagless, Partially Evaluated"; never "twin", "dynamic" or "compiled", since
+ocamlopt compiles both. Each concept has one name and one way to do it: one
+check, one accessor and one setter per field, one record write, one fold.
+A name has a precedent in a well-known library: `is_ok` as `Result.is_ok`,
+`get` as `Option.get` (raising on the empty case), `fold ~init ~f` as
+`ListLabels.fold_left`, `set_<field>` as protobuf's C++ `set_foo()`, `check`
+as EverParse's `<Base>Check<T>` wrapper, `sub` as `Bytes.sub`; `size` is the
+encoded size of a value and `fixed_size` the constant size.
+The measurements behind the API's shape are in
+[docs/execution.md](docs/execution.md).
 
 ## Tests and commits
 
@@ -157,13 +197,12 @@ measures the trick, not the library, and its win belongs in the generator.
 **Application benchmarks** (`bench/clcw/`, `bench/routing/`, `bench/gateway/`)
 add real workloads on top of field access. The C loop calls the EverParse
 validator for field extraction, then runs application logic. The OCaml loop
-does the same work as a user would, in the terms of docs/api.md: the
-interpreted view loop for the `Wire.Codec` rows (`Codec.View.check`, `is_ok`
-and `get` once per header, `Codec.View.read` per field and `Codec.View.set`
-per field written in place), the same loop over the generated module for the
-generated rows (`check`, `is_ok`, `get`, an accessor per field, `set_<field>`
-and `write`), and a fold with its visitor `~f` where the workload is one pass
-over many records.
+does the same work with the codec's views, as a user would:
+`Codec.View.check`, `is_ok` and `get` once per header, then `Codec.View.read`
+of a field made once by `Codec.View.field`, and `Codec.encode` of the record
+per header written. The generated rows run the same loop over the generated
+module (`check`, `is_ok`, `get`, an accessor per field, and `write` per
+header written).
 
 **Cross-language benchmark** (`bench/rust/`, `make bench-rust`) is the one
 exception to the three tiers: it measures the code generators against

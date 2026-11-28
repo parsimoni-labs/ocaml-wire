@@ -3,7 +3,6 @@ type 'b length = int
 type any = Any : 'b t -> any [@@unboxed]
 
 let[@inline] v buf = Any buf
-let local = v
 let[@inline] length b = Bytes.length b
 
 let pp_length ppf n =

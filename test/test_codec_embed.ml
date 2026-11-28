@@ -13,7 +13,7 @@ let test_codec_embed_decode () =
   Bytes.set_uint8 buf 1 0x42;
   Bytes.set_uint16_be buf 2 0x1234;
   Bytes.set_uint8 buf 4 0xBB;
-  let r = decode_ok (Codec.decode outer_codec buf 0) in
+  let r = decode_ok (Codec.decode outer_codec buf ~off:0) in
   Alcotest.(check int) "header" 0xAA (UInt8.to_int r.header);
   Alcotest.(check int) "inner.tag" 0x42 (UInt8.to_int r.inner.tag);
   Alcotest.(check int) "inner.value" 0x1234 (UInt16.to_int r.inner.value);
@@ -28,7 +28,7 @@ let test_codec_embed_encode () =
     }
   in
   let buf = Bytes.create 5 in
-  Codec.encode outer_codec v buf 0;
+  Codec.encode outer_codec v buf ~off:0;
   Alcotest.(check int) "header byte" 0xAA (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "tag byte" 0x42 (Bytes.get_uint8 buf 1);
   Alcotest.(check int) "value bytes" 0x1234 (Bytes.get_uint16_be buf 2);
@@ -43,8 +43,8 @@ let test_codec_embed_roundtrip () =
     }
   in
   let buf = Bytes.create 5 in
-  Codec.encode outer_codec original buf 0;
-  let decoded = decode_ok (Codec.decode outer_codec buf 0) in
+  Codec.encode outer_codec original buf ~off:0;
+  let decoded = decode_ok (Codec.decode outer_codec buf ~off:0) in
   Alcotest.(check int)
     "header"
     (UInt8.to_int original.header)
@@ -97,7 +97,7 @@ let test_codec_embed_bitfield () =
      flags at bottom nibble. version=0xA, flags=0x5 -> byte = 0xA5. *)
   Bytes.set_uint8 buf 2 0xA5;
   Bytes.set_uint8 buf 3 0xFF;
-  let r = decode_ok (Codec.decode bf_outer_codec buf 0) in
+  let r = decode_ok (Codec.decode bf_outer_codec buf ~off:0) in
   Alcotest.(check int) "id" 0x1234 (UInt16.to_int r.id);
   Alcotest.(check int) "version" 0xA r.bf.version;
   Alcotest.(check int) "flags" 0x5 r.bf.flags;
@@ -112,7 +112,7 @@ let test_codec_embed_nested () =
   Bytes.set_uint8 buf 0 0x42;
   Bytes.set_uint16_be buf 1 0xABCD;
   Bytes.set_uint8 buf 3 0xFF;
-  let r = decode_ok (Codec.decode l0_codec buf 0) in
+  let r = decode_ok (Codec.decode l0_codec buf ~off:0) in
   Alcotest.(check int) "l2.x" 0x42 (UInt8.to_int r.inner.inner.x);
   Alcotest.(check int) "l1.y" 0xABCD (UInt16.to_int r.inner.y);
   Alcotest.(check int) "l0.z" 0xFF (UInt8.to_int r.z)
@@ -125,8 +125,8 @@ let test_codec_embed_nested_roundtrip () =
     }
   in
   let buf = Bytes.create 4 in
-  Codec.encode l0_codec original buf 0;
-  let decoded = decode_ok (Codec.decode l0_codec buf 0) in
+  Codec.encode l0_codec original buf ~off:0;
+  let decoded = decode_ok (Codec.decode l0_codec buf ~off:0) in
   Alcotest.(check int)
     "l2.x"
     (UInt8.to_int original.inner.inner.x)
@@ -173,7 +173,7 @@ let test_codec_field_shadow () =
   Bytes.set_uint8 buf 1 3;
   (* parent.shared *)
   Bytes.blit_string "ABC" 0 buf 2 3;
-  let r = decode_ok (Codec.decode shadow_outer_codec buf 0) in
+  let r = decode_ok (Codec.decode shadow_outer_codec buf ~off:0) in
   Alcotest.(check int) "inner.shared" 5 (UInt8.to_int r.inner.si_x);
   Alcotest.(check int) "parent.shared" 3 (UInt8.to_int r.shared);
   Alcotest.(check string) "data" "ABC" r.data
@@ -217,13 +217,14 @@ let test_codec_embed_tail () =
   let answers n =
     let b = Bytes.init n (fun i -> Char.chr (i + 1)) in
     [
-      answer (fun () -> show (ok (Codec.decode framed_tail b 0)));
-      answer (fun () -> ok (Codec.validate framed_tail b 0) |> fun () -> "");
+      answer (fun () -> show (ok (Codec.decode framed_tail b ~off:0)));
       answer (fun () ->
-          match ok (Codec.decode gated_tail b 0) with
+          ok (Codec.validate framed_tail b ~off:0) |> fun () -> "");
+      answer (fun () ->
+          match ok (Codec.decode gated_tail b ~off:0) with
           | _, Some t -> show t
           | _, None -> "none");
-      answer (fun () -> ok (Codec.validate gated_tail b 0) |> fun () -> "");
+      answer (fun () -> ok (Codec.validate gated_tail b ~off:0) |> fun () -> "");
     ]
   in
   let check n want =

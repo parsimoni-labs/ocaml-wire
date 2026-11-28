@@ -1,8 +1,8 @@
 (** APID demux throughput benchmark.
 
     Simulates a SpaceWire CCSDS Packet Transfer Protocol router, each header
-    checked by Wire's [Codec.Word.check] and its fields taken with
-    [Codec.Word.read] -- all field access is generated from the Wire DSL. The C
+    checked by Wire's [Codec.View.check] and its fields read with
+    [Codec.View.read] -- all field access is generated from the Wire DSL. The C
     baseline uses EverParse-generated validators for field extraction. *)
 
 open Bench_lib

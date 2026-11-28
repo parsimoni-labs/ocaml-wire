@@ -8,28 +8,25 @@ let write file s =
   output_string oc s;
   close_out oc
 
-(* The scanner of [Schemas.stacked] with its fold [fold], after [Step], the
-   visitor it calls. [Step] adds up the outputs, which it takes as [int64]. *)
+(* The module of [Schemas.stacked] with a fold of all its integer fields,
+   those of the record it holds under [inner]. *)
 let stacked target =
-  let fields = Wire_ocaml.outputs Schemas.stacked in
-  let args = List.map (fun (name, _) -> "~" ^ name) fields
-  and terms =
-    List.map
-      (fun (name, is_bool) ->
-        if is_bool then "Bool.to_int " ^ name else "Int64.to_int " ^ name)
-      fields
-  and m = Wire_ocaml.(v ~target ~folds:[ fold "fold" ] Schemas.stacked)
-  and visitors = [ ("fold", "step.ml") ] in
-  write "s_stacked.ml"
-    ("module Step = struct\n\
-      type t = int\n\n\
-      let invalid acc = acc - 1\n\
-      let[@inline] valid acc " ^ String.concat " " args ^ " =\nacc + "
-   ^ String.concat " + " terms ^ "\nend\n\n"
-    ^ Wire_ocaml.to_ml ~visitors m);
-  write "s_stacked.mli"
-    ("module Step : sig\n  type t = int\nend\n\n"
-    ^ Wire_ocaml.to_mli ~visitors m)
+  let m =
+    Wire_ocaml.v ~target
+      ~fold:
+        [
+          "kind";
+          "flags";
+          "inner.version";
+          "inner.ihl";
+          "inner.length";
+          "inner.ttl";
+          "inner.proto";
+        ]
+      Schemas.stacked
+  in
+  write "s_stacked.ml" (Wire_ocaml.to_ml m);
+  write "s_stacked.mli" (Wire_ocaml.to_mli m)
 
 let () =
   let target =

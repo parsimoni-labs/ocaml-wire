@@ -1,42 +1,62 @@
-(* The module generated from [Packet_stack.capture] and its interpreted twin
-   fold [Scan_step] alike, on a corpus of frames. *)
+(* The fold of the module generated from [Packet_stack.capture] hands its
+   [f] what the codec decodes, frame by frame, on a corpus of frames: in an
+   index, in slots and one frame at a time. *)
 
-(* The swap: one line picks the module, the code under it is the same. *)
-(* On OxCaml the generated folds take their buffer [local], which a functor
-   argument's signature cannot state for OCaml too: each is applied in full. *)
-module Generated = struct
-  let fold_step b off len ~init = S_capture_step.fold_step b off len ~init
+open Wire
 
-  let fold_step_frames b off len ~stride ~init =
-    S_capture_step.fold_step_frames b off len ~stride ~init
+(* The fields the module's fold hands out, as the generator names them. *)
+let show proto src dst tcp udp next dst3 =
+  let o f = function Some x -> string_of_int (f x) | None -> "-" in
+  String.concat " "
+    [
+      o UInt8.to_int proto;
+      o UInt32.to_int src;
+      o UInt32.to_int dst;
+      o UInt16.to_int tcp;
+      o UInt16.to_int udp;
+      o UInt8.to_int next;
+      o UInt32.to_int dst3;
+    ]
 
-  let fold_step_index b ~offs ~lens ~init =
-    S_capture_step.fold_step_index b ~offs ~lens ~init
-end
+(* The same fields of the record the codec decodes from the frame alone, or
+   ["invalid"]. *)
+let decoded buf off len =
+  if off < 0 || len < 0 || off > Bytes.length buf - len then "invalid"
+  else
+    match Codec.decode Packet_stack.capture (Bytes.sub buf off len) ~off:0 with
+    | Error _ -> "invalid"
+    | Ok (r : Packet_stack.capture) ->
+        let ipv4 f = Option.map f r.ipv4 and ipv6 f = Option.map f r.ipv6 in
+        let ( >>= ) = Option.bind in
+        show
+          (ipv4 (fun (i : Packet_stack.captured_ipv4) -> i.protocol))
+          (ipv4 (fun (i : Packet_stack.captured_ipv4) -> i.src))
+          (ipv4 (fun (i : Packet_stack.captured_ipv4) -> i.dst))
+          ( r.ipv4 >>= fun (i : Packet_stack.captured_ipv4) ->
+            Option.map (fun (t : Packet_stack.tcp) -> t.dst_port) i.tcp )
+          ( r.ipv4 >>= fun (i : Packet_stack.captured_ipv4) ->
+            Option.map (fun (u : Packet_stack.udp_header) -> u.dst_port) i.udp
+          )
+          (ipv6 (fun (i : Packet_stack.ipv6) -> i.next_header))
+          (ipv6 (fun (i : Packet_stack.ipv6) -> i.dst3))
 
-module Interpreted = S_capture_step_codec.Make (struct
-  type r = Packet_stack.capture
+let invalid acc = "invalid" :: acc
 
-  let codec = Packet_stack.capture
-end)
+let f acc ~ipv4_protocol ~ipv4_src ~ipv4_dst ~ipv4_tcp_dst_port
+    ~ipv4_udp_dst_port ~ipv6_next_header ~ipv6_dst3 =
+  show ipv4_protocol ipv4_src ipv4_dst ipv4_tcp_dst_port ipv4_udp_dst_port
+    ipv6_next_header ipv6_dst3
+  :: acc
 
-module Flows (S : sig
-  val fold_step : bytes -> int -> int -> init:Scan_step.t -> Scan_step.t
+let index buf ~offs ~lens =
+  match S_capture_step.fold buf ~offs ~lens ~invalid ~init:[] ~f with
+  | Ok l -> List.rev l
+  | Error _ -> Alcotest.fail "index: an error with invalid"
 
-  val fold_step_frames :
-    bytes -> int -> int -> stride:int -> init:Scan_step.t -> Scan_step.t
-
-  val fold_step_index :
-    bytes -> offs:int array -> lens:int array -> init:Scan_step.t -> Scan_step.t
-end) =
-struct
-  let index buf ~offs ~lens = S.fold_step_index buf ~offs ~lens ~init:[]
-
-  let frames buf ~stride =
-    S.fold_step_frames buf 0 (Bytes.length buf) ~stride ~init:[]
-
-  let one buf off len = S.fold_step buf off len ~init:[]
-end
+let slots buf ~stride =
+  match S_capture_step.fold buf ~stride ~invalid ~init:[] ~f with
+  | Ok l -> List.rev l
+  | Error _ -> Alcotest.fail "slots: an error with invalid"
 
 (* {1 The corpus} *)
 
@@ -101,26 +121,23 @@ let lens =
 let offs = Array.init n (fun i -> i * stride)
 
 let test_same () =
-  let module G = Flows (Generated) in
-  let module I = Flows (Interpreted) in
   let seen = Alcotest.(list string) in
-  Alcotest.check seen "fold_step_index" (G.index buf ~offs ~lens)
-    (I.index buf ~offs ~lens);
-  Alcotest.check seen "fold_step_frames" (G.frames buf ~stride)
-    (I.frames buf ~stride);
+  Alcotest.check seen "index"
+    (List.init n (fun i -> decoded buf offs.(i) lens.(i)))
+    (index buf ~offs ~lens);
+  Alcotest.check seen "slots"
+    (List.init n (fun i -> decoded buf (i * stride) stride))
+    (slots buf ~stride);
   List.iter
     (fun (off, len) ->
       Alcotest.check seen
-        (Fmt.str "fold_step %d %d" off len)
-        (G.one buf off len) (I.one buf off len))
+        (Fmt.str "frame %d %d" off len)
+        [ decoded buf off len ]
+        (index buf ~offs:[| off |] ~lens:[| len |]))
     [ (0, 64); (-1, 64); (0, -1); (Bytes.length buf - 10, 20); (64, 0) ];
-  let valid = List.filter (( <> ) "invalid") (G.frames buf ~stride) in
+  let valid = List.filter (( <> ) "invalid") (slots buf ~stride) in
   let kinds = List.length (List.sort_uniq String.compare valid) in
   if kinds < 8 then Alcotest.failf "only %d kinds of valid frames" kinds
 
 let suite =
-  ( "scan",
-    [
-      Alcotest.test_case "generated and interpreted, one signature" `Quick
-        test_same;
-    ] )
+  ("scan", [ Alcotest.test_case "the fold against the codec" `Quick test_same ])

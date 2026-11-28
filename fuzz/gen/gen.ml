@@ -37,8 +37,8 @@ type 'a t = {
       (* The record's own field list, kept so a property can address one field
          at a time. [Codec.v] holds each field's Wire field and projection while
          it builds the codec and would otherwise drop both once the codec is
-         sealed, which is why the registry has [Codec.get] / [Codec.set]
-         coverage only through hand-built codecs. [] where a shape has no
+         sealed, which is why the registry has per-field view coverage only
+         through hand-built codecs. [] where a shape has no
          addressable fields; [addressed] then falls back to the one-field
          wrapper [codec_of_typ] builds over the gen's typ. *)
 }
@@ -46,7 +46,7 @@ type 'a t = {
 (* One addressable field of a record gen. The field type ['a] differs from
    entry to entry, so a list of them only exists once ['a] is packed away
    behind the three things a per-field property needs: the Wire field that
-   names the slot to [Codec.get] / [Codec.set], the projection out of the
+   names the slot to [Codec.View.field], the projection out of the
    record, and the equality to compare two reads with. *)
 and 'r field_check =
   | Field_check : {
@@ -134,7 +134,7 @@ let bytes_any = Alcobar.map Alcobar.[ Alcobar.bytes ] bytes_of_string
 
 (* Every leaf gen wraps its typ in this one-field record, so the name and the
    single field are defined once: [addressed] rebuilds the same pair to reach
-   the slot through [Codec.get] / [Codec.set]. *)
+   the slot through [Codec.View.field]. *)
 let leaf_codec_name = "_leaf"
 let leaf_slot_name = "v"
 let leaf_field typ = Wire.Codec.(Wire.Field.v leaf_slot_name typ $ fun v -> v)
@@ -162,12 +162,12 @@ let triple_fields (name_a, f_a) (name_b, f_b) (name_c, f_c) =
   let proj_c (_, _, c) = c in
   [ slot name_a f_a proj_a; slot name_b f_b proj_b; slot name_c f_c proj_c ]
 
-(* The canonical bytes for [v]: a buffer sized by [encoded_size] then
+(* The canonical bytes for [v]: a buffer sized by [Codec.size] then
    filled by [encode]. *)
 let encode_via_codec codec v =
-  let sz = Wire.Codec.encoded_size codec v in
+  let sz = Wire.Codec.size codec v in
   let buf = Bytes.create sz in
-  Wire.Codec.encode codec v buf 0;
+  Wire.Codec.encode codec v buf ~off:0;
   buf
 
 (* Hostile-value streams. [check_encode_safety] requires encode to refuse each

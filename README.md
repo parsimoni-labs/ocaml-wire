@@ -1,6 +1,6 @@
 # ocaml-wire
 
-Binary wire format DSL with EverParse 3D output.
+One description of a binary format for OCaml, Rust and verified C.
 
 ## Overview
 
@@ -12,17 +12,22 @@ are written by hand, though, and a `.3d` file gives you a validator, not a
 serialiser or a codec for the language the application is written in.
 
 Wire describes a binary format once, as an OCaml value, and derives from that
-single description both a zero-copy OCaml codec, for parsing and serialising,
-and the EverParse `.3d` schema that compiles to a verified C parser. Define
-the format, then:
+single description a zero-copy OCaml codec, for parsing and serialising,
+standalone OCaml, OxCaml and Rust modules that do the same work with every
+offset a constant, and the EverParse `.3d` schema that compiles to a verified
+C parser. Define the format, then:
 
 - **Name reusable fields** with `Field.v` and assemble records with `Codec`
-- **Read and write fields in-place** via `Codec.get` / `Codec.set` --
-  zero-copy, with zero per-call allocation for parameter-free immediate types
-  (int, bool)
+- **Check a record once, then read and write its fields in place** via
+  `Codec.View` -- zero-copy, with no allocation for the view and an integer
+  field, nor for the check of a record of constant size
+- **Fold over many records** via `Codec.View.fold`, the fields it names read
+  during each record's check
 - **Decode records** via `Codec.decode`, allocate validated encodings with
   `Codec.to_bytes` / `Codec.to_string`, or encode into an existing buffer with
   `Codec.encode`
+- **Generate a standalone OCaml or OxCaml module** via `Wire_ocaml`
+- **Generate dependency-free `no_std` Rust** via `Wire_rust`
 - **Export EverParse `.3d` schemas** via `Everparse.project` / `Everparse.write`
 - **Generate verified C artifacts** via `Wire_3d.run`
 - **Generate OCaml FFI stubs** via `Wire_stubs` when OCaml should call the C
@@ -49,7 +54,7 @@ let f_flags   = Field.v "Flags"   (bits ~width:4 U8)
 let f_length  = Field.v "Length"  uint16be
 let f_tag     = Field.v "Tag"     uint8
 
-(* Bind fields before the codec -- same objects used for get/set *)
+(* Bind fields before the codec -- the same definitions a view reads *)
 let bf_version = Codec.(f_version $ (fun p -> p.version))
 let bf_flags   = Codec.(f_flags   $ (fun p -> p.flags))
 let bf_length  = Codec.(f_length  $ (fun p -> p.length))
@@ -69,7 +74,7 @@ for framed streams and concatenated records. When the buffer should contain
 exactly one record, require full consumption explicitly:
 
 ```ocaml
-let decode_packet buf = Codec.decode ~consume:`All codec buf 0
+let decode_packet buf = Codec.decode ~consume:`All codec buf ~off:0
 ```
 
 ```
@@ -82,22 +87,38 @@ let decode_packet buf = Codec.decode ~consume:`All codec buf 0
 
 ### Zero-copy field access
 
+A view is a record that passed every check of its codec; its fields are then
+read and written in place, with no check of their own.
+
 ```ocaml
-(* Applied to the codec and the field once: the reader and the writer *)
-let get_version = Codec.get codec bf_version
-let set_version = Codec.set codec bf_version
+module View = Codec.View
+
+(* Resolved once: where the field lies in [codec], its reader and writer *)
+let version = View.field codec bf_version
 
 let buf =
   Codec.to_bytes codec
     { version = 1; flags = 2; length = UInt16.v 1024; tag = UInt8.zero }
-(* Read version without allocating a record; bytes too short for it, or
-   that make no value of it, are an error. *)
-let () =
-  match get_version buf 0 with
-  | Ok v -> assert (v = 1)
-  | Error e -> Fmt.failwith "%a" Error.pp e
 
-let () = set_version buf 0 3     (* mutate version in place *)
+let () =
+  let (Buf.Any b) = Buf.v buf in
+  (* Bytes that fail a check are a refused check, never an exception *)
+  let c = View.check codec b ~off:0 in
+  if View.is_ok c then begin
+    let v = View.get c in
+    assert (View.read b v version = 1);  (* no record allocated *)
+    View.set b v version 3               (* mutate version in place *)
+  end
+  else
+    Fmt.failwith "%a" Error.pp (Result.get_error (Codec.validate codec buf ~off:0))
+```
+
+A fold checks each record of a buffer and hands the fields it names to a
+function:
+
+```ocaml
+let versions buf =
+  View.fold codec Codec.[ bf_version ] buf ~init:[] ~f:(fun acc v -> v :: acc)
 ```
 
 ### Dependent sizes
@@ -136,8 +157,8 @@ let stubs () =
     [ Wire_stubs.C codec ]
 ```
 
-For unusual EverParse constructs that have no codec equivalent yet, use the
-`Everparse.Raw` API.
+Every schema comes from a codec: a construct with no codec equivalent has no
+public route to 3D.
 
 ## Consuming from C
 
@@ -267,9 +288,8 @@ let diagram = Ascii.of_codec codec
 let () = print_string diagram
 ```
 
-`Ascii.pp_codec` is the `Format` version, and `of_struct` / `pp_struct` take a
-`Types.struct_` for a description that has no codec. A field whose width is not
-known until decode renders as a full-width row carrying its size expression:
+`Ascii.pp_codec` is the `Format` version. A field whose width is not known
+until decode renders as a full-width row carrying its size expression:
 
 ```
  +-------------------------------+
@@ -333,7 +353,7 @@ let codec =
       f_data $ (fun r -> r.data) ]
 
 let env = Codec.env codec |> Param.bind max_len (UInt16.v 1024)
-let _ = Codec.decode ~env codec buf 0
+let _ = Codec.decode ~env codec buf ~off:0
 let len = Param.get env out_len
 ```
 

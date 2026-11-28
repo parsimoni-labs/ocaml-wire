@@ -495,7 +495,7 @@ let rest_group =
 type nary =
   | N :
       (cell list -> 'f)
-      * ('f, cell array) Wire.Codec.fields
+      * ('f, cell array, cell array) Wire.Codec.fields
       * cell array field_check list
       -> nary
 
@@ -545,8 +545,8 @@ let flat ?(impure = false) name (groups : group list) : cell array t =
   let codec = Wire.Codec.v name (k []) fields in
   let general = Wire.Private.Testing.general codec in
   let encode v =
-    let buf = Bytes.create (Wire.Codec.encoded_size general v) in
-    Wire.Codec.encode general v buf 0;
+    let buf = Bytes.create (Wire.Codec.size general v) in
+    Wire.Codec.encode general v buf ~off:0;
     buf
   in
   let value =

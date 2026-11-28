@@ -25,7 +25,7 @@ let packet_tests () =
           List.find
             (fun b ->
               Bytes.length b = 128
-              && Result.is_ok (Wire.Codec.decode c.codec b 0))
+              && Result.is_ok (Wire.Codec.decode c.codec b ~off:0))
             (c.corpus ())
         in
         let create ?(bytes = 64) ?(maximum = 65549) packing =
@@ -34,8 +34,8 @@ let packet_tests () =
         let check frame (result : Io.result) =
           let expected =
             match
-              ( Wire.Codec.decode c.codec frame 0,
-                Wire.Codec.size_at c.codec frame 0 )
+              ( Wire.Codec.decode c.codec frame ~off:0,
+                Wire.Codec.size_at c.codec frame ~off:0 )
             with
             | Error _, _ | _, Error _ -> None
             | Ok value, Ok n -> Some (n, c.project value)

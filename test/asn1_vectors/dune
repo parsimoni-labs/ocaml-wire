@@ -1,0 +1,3 @@
+(library
+ (name asn1_vectors)
+ (libraries fmt))

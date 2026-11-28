@@ -1,7 +1,7 @@
 (* Tests for wire_3d.ml: the 3D shape of adversarial projections. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 
 (* A case that shells out to EverParse skips when [3d.exe] is absent, as in
    [Test_wire_3d]. *)
@@ -15,8 +15,10 @@ let read_file path = In_channel.with_open_bin path In_channel.input_all
 (* -- Adversarial projection tests for 3D-shape transformations -- *)
 
 let to_3d_string s =
-  let m = Wire.Everparse.Raw.module_ [ Wire.Everparse.Raw.typedef s ] in
-  Wire.Everparse.Raw.to_3d m
+  let m =
+    Wire.Private.Everparse.Raw.module_ [ Wire.Private.Everparse.Raw.typedef s ]
+  in
+  Wire.Private.Everparse.Raw.to_3d m
 
 let contains s sub =
   let lsub = String.length sub in
@@ -198,7 +200,7 @@ let test_field_optional_byte_array () =
           Field.optional "Body" ~present:cond (byte_array ~size:(int 8)) $ snd;
         ]
   in
-  let s = Everparse.Raw.struct_of_codec codec in
+  let s = Private.Everparse.Raw.struct_of_codec codec in
   let out = to_3d_string s in
   Alcotest.(check bool)
     "byte-size suffix uses inner size" true (contains out "8")
@@ -303,6 +305,34 @@ let test_nested_field_projects () =
       (Sys.file_exists (Filename.concat dir "NestedProj.c"))
   end
 
+(* Each half of a codec mixing binary and DER is checked by its own backend:
+   EverParse verifies the 3D of the binary record holding DER, whose DER value
+   is a byte region of its declared size, and of the binary codec a DER value
+   holds under a containing. *)
+let test_der_regions_project () =
+  needs_3d_exe ();
+  let framed = Asn1_modules.framed in
+  (match Wire_3d.batch_check [ Everparse.project framed ] with
+  | Ok () -> ()
+  | Error e -> Alcotest.failf "standalone Framed: %s" e);
+  (let (Asn1_modules.Packed t) = Asn1_modules.wrapped in
+   match Wire_3d.batch_check (Asn1.contained (Asn1.codec t)) with
+   | Ok () -> ()
+   | Error e -> Alcotest.failf "the binary Wrapped holds: %s" e);
+  let dir = Filename.temp_dir "wire_3d_der" "" in
+  Fun.protect
+    ~finally:(fun () -> Wire_3d.rm_rf dir)
+    (fun () ->
+      Wire_3d.run ~outdir:dir [ Everparse.project ~mode:`Ffi framed ];
+      let compile file =
+        Fmt.kstr Sys.command "cc %s -I %s -c %s -o %s > %s 2>&1"
+          Wire_3d.strict_cc_flags (Filename.quote dir)
+          (Filename.quote (Filename.concat dir file))
+          Filename.null Filename.null
+      in
+      Alcotest.(check int) "the validator compiles" 0 (compile "Framed.c");
+      Alcotest.(check int) "the visitor compiles" 0 (compile "Framed_Fields.c"))
+
 let test_keyword_field_escaped () =
   let s =
     struct_ "Esc2"
@@ -323,10 +353,10 @@ let test_keyword_field_escaped () =
 let test_extern_names_wrapped () =
   let base = "Smp27bits15u16belsbbits15u16belsbbits15u16belsbbits15u1" in
   let schema =
-    Wire.Everparse.Raw.project_struct ~mode:`Ffi
+    Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi
       (struct_ base [ field "f0" uint16be; field "f1" uint8 ])
   in
-  let setters = Wire.Everparse.visitor_setters schema in
+  let setters = Wire.Private.Everparse.visitor_setters schema in
   (* EverParse changes the case of a setter's name, nothing else. *)
   let symbol i = String.lowercase_ascii (fst (List.nth setters i)) in
   let wrapped =
@@ -377,10 +407,10 @@ let test_extern_names_wrapped () =
    case and underscores, and with it its own value type. *)
 let test_extern_names_by_name () =
   let schema =
-    Wire.Everparse.Raw.project_struct ~mode:`Ffi
+    Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi
       (struct_ "order_by_name" [ field "f0" uint16be; field "f1" uint8 ])
   in
-  let setters = Wire.Everparse.visitor_setters schema in
+  let setters = Wire.Private.Everparse.visitor_setters schema in
   Alcotest.(check int) "two setters to pair" 2 (List.length setters);
   let declared name =
     String.lowercase_ascii (String.concat "" (String.split_on_char '_' name))
@@ -419,7 +449,7 @@ let test_extern_names_by_name () =
    own name. *)
 let visitor_of fields =
   let schema =
-    Wire.Everparse.Raw.project_struct ~mode:`Ffi (struct_ "Kw" fields)
+    Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi (struct_ "Kw" fields)
   in
   let dir = Filename.temp_dir "wire_3d_visitor" "" in
   Fun.protect
@@ -431,7 +461,7 @@ let visitor_of fields =
              (fun (setter, c_type) ->
                Fmt.str "extern void %s(WIRECTX *ctx, uint32_t idx, %s v);\n"
                  setter c_type)
-             (Wire.Everparse.visitor_setters schema))
+             (Wire.Private.Everparse.visitor_setters schema))
       in
       Out_channel.with_open_bin (Filename.concat dir "Kw_ExternalAPI.h")
         (fun oc -> Out_channel.output_string oc api);
@@ -515,7 +545,7 @@ let test_keyword_fields_e2e () =
         field "restrict" uint8;
       ]
   in
-  let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi s in
+  let schema = Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi s in
   let dir = Filename.temp_dir "wire_3d_kw" "" in
   Fun.protect
     ~finally:(fun () -> ignore (Fmt.kstr Sys.command "rm -rf %s" dir))
@@ -562,6 +592,8 @@ let suite =
       Alcotest.test_case "bare uint64 projects" `Slow test_bare_uint64_projects;
       Alcotest.test_case "nested field projects through EverParse" `Slow
         test_nested_field_projects;
+      Alcotest.test_case "DER regions project through EverParse" `Slow
+        test_der_regions_project;
       Alcotest.test_case "visitor: field names" `Quick test_visitor_names;
       Alcotest.test_case "keyword field names (needs 3d.exe)" `Quick
         test_keyword_fields_e2e;

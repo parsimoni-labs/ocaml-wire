@@ -2,7 +2,7 @@
 
     One field type read or written at a fixed offset: the scalar and byte-span
     readers and encoders, the refinement and enum checks they run, and the
-    bytes-only fast paths of {!Codec.get} and {!Codec.set}. Internal to
+    bytes-only fast paths of {!Codec.get} and {!Codec.View.set}. Internal to
     {!Codec}. *)
 
 val out_of_bounds : unit -> 'a

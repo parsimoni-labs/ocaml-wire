@@ -1,6 +1,6 @@
 (** Unsigned 32-bit integer.
 
-    Backed by {!Optint.t}: an unboxed native [int] on a 64-bit host, a boxed
+    Backed by [Optint.t]: an unboxed native [int] on a 64-bit host, a boxed
     [int32] where the native [int] is narrower. This is what lets a value with
     bit 31 set survive decoding on js_of_ocaml / wasm_of_ocaml, where a plain
     [int] would drop it. *)
@@ -23,6 +23,28 @@ val zero : t
 
 val pp : Format.formatter -> t -> unit
 (** Pretty-printer for unsigned 32-bit values. *)
+
+val [@zero_alloc] to_int : t -> int
+(** [to_int t] is the value as a native [int]. Exact on a 64-bit host; on a
+    narrower one a value with bit 31 set does not fit and is truncated, so
+    prefer {!to_int32} across such a boundary. *)
+
+val [@zero_alloc] of_int : int -> t
+(** [of_int n] is [n] as an unsigned 32-bit value. Raises [Invalid_argument]
+    when [n] is outside the range, rather than masking it to a legal value the
+    caller did not mean. Use {!of_int32} to reinterpret a bit pattern. *)
+
+val to_int32 : t -> int32
+(** [to_int32 t] is the value as an [int32] (its bit pattern, exact on every
+    platform). *)
+
+val of_int32 : int32 -> t
+(** [of_int32 n] is the [int32] bit pattern as a 32-bit value: the same value
+    {!le} and {!be} decode those four bytes to, on every platform. Prefer it to
+    [Optint.of_int32], which keeps the signed view and so yields a negative
+    number for a word with bit 31 set where [Optint.t] is a wide native int. *)
+
+(**/**)
 
 val le : bytes -> int -> t
 (** [le buf off] reads a little-endian value from [buf] at offset [off]. *)
@@ -47,28 +69,6 @@ val mask32 : int
 (** The low-32-bit mask, [0xFFFF_FFFF] where the native [int] is wide and the
     all-ones no-op mask where it is narrower. Computed at run time so the
     out-of-range constant never reaches a narrow-int bytecode target. *)
-
-val [@zero_alloc] to_int : t -> int
-(** [to_int t] is the value as a native [int]. Exact on a 64-bit host; on a
-    narrower one a value with bit 31 set does not fit and is truncated, so
-    prefer {!to_int32} across such a boundary. *)
-
-val [@zero_alloc] of_int : int -> t
-(** [of_int n] is [n] as an unsigned 32-bit value. Raises [Invalid_argument]
-    when [n] is outside the range, rather than masking it to a legal value the
-    caller did not mean. Use {!of_int32} to reinterpret a bit pattern. *)
-
-val to_int32 : t -> int32
-(** [to_int32 t] is the value as an [int32] (its bit pattern, exact on every
-    platform). *)
-
-val of_int32 : int32 -> t
-(** [of_int32 n] is the [int32] bit pattern as a 32-bit value: the same value
-    {!le} and {!be} decode those four bytes to, on every platform. Prefer it to
-    [Optint.of_int32], which keeps the signed view and so yields a negative
-    number for a word with bit 31 set where [Optint.t] is a wide native int. *)
-
-(**/**)
 
 val unsafe_le : bytes -> int -> t
 (** [unsafe_le buf off] is the little-endian value at [off], read with no bounds

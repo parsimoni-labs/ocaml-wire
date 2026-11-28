@@ -4,7 +4,9 @@
 open Wire
 open Test_helpers
 
-let projected c = Everparse.Raw.to_3d (Everparse.project ~mode:`Ffi c).module_
+let projected c =
+  Private.Everparse.Raw.to_3d
+    (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi c))
 
 let projects_to what c sub =
   let s = projected c in
@@ -208,7 +210,7 @@ let test_arith_presence_and_size () =
   in
   check_refused "a per-byte sum past the native int" false past;
   let accepts b =
-    Result.is_ok (Codec.decode (past ()) (Bytes.make 4 (Char.chr b)) 0)
+    Result.is_ok (Codec.decode (past ()) (Bytes.make 4 (Char.chr b)) ~off:0)
   in
   Alcotest.(check bool) "b = 4" true (accepts 4);
   Alcotest.(check bool) "b = 5" false (accepts 5);
@@ -225,7 +227,7 @@ let test_arith_wide () =
       Expr.(fun a l -> a + int k <> int max_int && l >= int 0)
       ()
   in
-  let decodes c s = Result.is_ok (Codec.decode c (Bytes.of_string s) 0) in
+  let decodes c s = Result.is_ok (Codec.decode c (Bytes.of_string s) ~off:0) in
   Alcotest.(check bool) "a = 4" true (decodes near "\004\000\000");
   Alcotest.(check bool) "a = 5" false (decodes near "\005\000\000");
   Alcotest.(check bool) "a = 255" true (decodes near "\255\000\000");
@@ -246,7 +248,7 @@ let test_arith_wide () =
         ]
   in
   let present s =
-    match Codec.decode square (Bytes.of_string s) 0 with
+    match Codec.decode square (Bytes.of_string s) ~off:0 with
     | Ok (_, d) -> Some (Option.is_some d)
     | Error _ -> None
   in
@@ -419,7 +421,7 @@ let test_arith_per_byte () =
           $ Fun.id;
         ]
   in
-  let accepts s = Result.is_ok (Codec.decode c (Bytes.of_string s) 0) in
+  let accepts s = Result.is_ok (Codec.decode c (Bytes.of_string s) ~off:0) in
   Alcotest.(check bool) "sizeof this is 1 per byte" true (accepts "\x01\x00");
   Alcotest.(check bool) "a byte past it" false (accepts "\x02\x00")
 

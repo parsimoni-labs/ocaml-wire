@@ -14,8 +14,8 @@ let equal_snapshot (v, s, a, n, c) (v', s', a', n', c') =
 
 let expected bytes =
   match
-    ( Wire.Codec.decode Packet_stack.codec bytes 0,
-      Wire.Codec.size_at Packet_stack.codec bytes 0 )
+    ( Wire.Codec.decode Packet_stack.codec bytes ~off:0,
+      Wire.Codec.size_at Packet_stack.codec bytes ~off:0 )
   with
   | Error _, _ | _, Error _ ->
       { accepted = false; consumed = 0; contribution = 0L }
@@ -24,7 +24,7 @@ let expected bytes =
         accepted = true;
         consumed;
         contribution =
-          Int64.of_int (Stack_read.fold 0 bytes 0 (Bytes.length bytes));
+          Int64.of_int (Selected_read.batch ~stride:(Bytes.length bytes) bytes);
       }
 
 let run ~stalls ~resets frames =

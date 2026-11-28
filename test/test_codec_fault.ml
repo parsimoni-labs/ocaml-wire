@@ -24,10 +24,10 @@ let check ?env codec bytes expected =
   let name = Fmt.str "%S" bytes in
   Alcotest.(check string)
     (name ^ " decode") expected
-    (result (Codec.decode ?env codec buf 0));
+    (result (Codec.decode ?env codec buf ~off:0));
   Alcotest.(check string)
     (name ^ " validate") expected
-    (result (Codec.validate ?env codec buf 0))
+    (result (Codec.validate ?env codec buf ~off:0))
 
 let le10 s = Expr.(s <= int 10)
 
@@ -274,10 +274,10 @@ let test_after_span_base () =
   let buf = Bytes.of_string "\255\255\001\001a\003" in
   Alcotest.(check string)
     "decode" "t@5 field"
-    (result (Codec.decode after_span buf 2));
+    (result (Codec.decode after_span buf ~off:2));
   Alcotest.(check string)
     "validate" "t@5 field"
-    (result (Codec.validate after_span buf 2))
+    (result (Codec.validate after_span buf ~off:2))
 
 let suite =
   ( "codec_fault",

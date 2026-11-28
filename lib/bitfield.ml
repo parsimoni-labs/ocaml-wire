@@ -9,8 +9,9 @@ let equal = Types.equal_bitfield_base
 (* The word helpers below reach their bytes with [Unchecked.u8] and write a
    u32 as two halves, so a caller whose offset is not already known to be in
    the buffer checks the whole span with this first: the decoders have checked
-   the frame's extent before they read a word, but [Codec.set] takes its offset
-   from the application. Raises what [Bytes.get_uint8] raises, so a bitfield
+   the frame's extent before they read a word, but [Codec.View.set] may be
+   given a field of another codec of the same record type, which lies past the
+   frame its view was checked in. Raises what [Bytes.get_uint8] raises, so a bitfield
    accessor refuses a short buffer the same way whatever its base. *)
 let[@inline always] check_word buf off n =
   if off < 0 || off > Bytes.length buf - n then

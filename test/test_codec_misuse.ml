@@ -1,7 +1,7 @@
 (* Tests for codec.ml: API misuse and accessor contracts. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 open Test_helpers
 
 (* -- API misuse / safety tests -- *)
@@ -44,49 +44,49 @@ let test_undecodable_description_is_invalid_argument () =
         Alcotest.failf "%s: raised Failure %S, which the contract forbids" name
           m
   in
-  (* [of_string] returning at all, [Ok] or [Error], is the failure [expect]
+  (* [decode_typ] returning at all, [Ok] or [Error], is the failure [expect]
      reports. *)
   let returned = function Ok _ | Error _ -> () in
   List.iter expect
     [
       (* Direct decode and encode of a form with no reader or writer. *)
-      ( "of_string type_ref",
-        fun () -> returned (of_string (type_ref "T") "abcd") );
-      ( "of_string qualified_ref",
-        fun () -> returned (of_string (qualified_ref "M" "T") "abcd") );
-      ( "of_string apply",
-        fun () -> returned (of_string (apply uint8 [ int 1 ]) "abcd") );
-      ("to_string type_ref", fun () -> ignore (to_string (type_ref "T") 0));
-      ( "to_string qualified_ref",
-        fun () -> ignore (to_string (qualified_ref "M" "T") 0) );
-      ( "to_string apply",
-        fun () -> ignore (to_string (apply uint8 [ int 1 ]) (UInt8.v 0)) );
-      ( "to_string struct_typ",
+      ( "decode_typ type_ref",
+        fun () -> returned (decode_typ (type_ref "T") "abcd") );
+      ( "decode_typ qualified_ref",
+        fun () -> returned (decode_typ (qualified_ref "M" "T") "abcd") );
+      ( "decode_typ apply",
+        fun () -> returned (decode_typ (apply uint8 [ int 1 ]) "abcd") );
+      ("encode_typ type_ref", fun () -> ignore (encode_typ (type_ref "T") 0));
+      ( "encode_typ qualified_ref",
+        fun () -> ignore (encode_typ (qualified_ref "M" "T") 0) );
+      ( "encode_typ apply",
+        fun () -> ignore (encode_typ (apply uint8 [ int 1 ]) (UInt8.v 0)) );
+      ( "encode_typ struct_typ",
         fun () ->
           ignore
-            (to_string (struct_typ (struct_ "MisuseS" [ field "a" uint8 ])) ())
+            (encode_typ (struct_typ (struct_ "MisuseS" [ field "a" uint8 ])) ())
       );
       (* A cross-field reference evaluated where there is no record. *)
-      ( "of_string size ref outside a struct",
-        fun () ->
-          returned (of_string (byte_array ~size:(Field.ref f_absent)) "\003abc")
-      );
-      ( "to_string size ref outside a struct",
-        fun () ->
-          ignore (to_string (byte_array ~size:(Field.ref f_absent)) "abc") );
-      ( "of_string int64 ref outside a struct",
+      ( "decode_typ size ref outside a struct",
         fun () ->
           returned
-            (of_string
+            (decode_typ (byte_array ~size:(Field.ref f_absent)) "\003abc") );
+      ( "encode_typ size ref outside a struct",
+        fun () ->
+          ignore (encode_typ (byte_array ~size:(Field.ref f_absent)) "abc") );
+      ( "decode_typ int64 ref outside a struct",
+        fun () ->
+          returned
+            (decode_typ
                (where Expr.(Field.int64 f_absent64 = int64 0L) uint8)
                "\003") );
       (* A casetype value no case projects. *)
-      ( "to_string casetype no case matches",
-        fun () -> ignore (to_string misuse_casetype (Other 5)) );
+      ( "encode_typ casetype no case matches",
+        fun () -> ignore (encode_typ misuse_casetype (Other 5)) );
       ( "Codec.encode casetype no case matches",
         fun () ->
-          Codec.encode misuse_casetype_codec (Other 5) (Bytes.make 8 '\000') 0
-      );
+          Codec.encode misuse_casetype_codec (Other 5) (Bytes.make 8 '\000')
+            ~off:0 );
       (* A codec sealed against a field it never got. *)
       ( "Codec.v where ref to a field not in the codec",
         fun () ->
@@ -107,7 +107,7 @@ let test_undecodable_description_is_invalid_argument () =
                  ]) );
     ]
 
-(* [Codec.encoded_size] answers how many bytes [Codec.encode] will write, and a
+(* [Codec.size] answers how many bytes [Codec.encode] will write, and a
    caller sizes its buffer from that answer. For a casetype value no case
    projects there are no such bytes: encode refuses it. Answering with the tag
    width instead sent the caller off to allocate for a write that cannot happen
@@ -120,33 +120,33 @@ let test_size_of_value_refuses_unmatched_case () =
   let buf = Bytes.make 8 '\000' in
   let sized =
     invalid_argument_message (fun () ->
-        ignore (Codec.encoded_size misuse_casetype_codec (Other 5) : int))
+        ignore (Codec.size misuse_casetype_codec (Other 5) : int))
   in
   (match sized with
   | None ->
       Alcotest.fail
-        "Codec.encoded_size answered with a size for a value no case projects"
+        "Codec.size answered with a size for a value no case projects"
   | Some _ -> ());
   let encoded =
     invalid_argument_message (fun () ->
-        Codec.encode misuse_casetype_codec (Other 5) buf 0)
+        Codec.encode misuse_casetype_codec (Other 5) buf ~off:0)
   in
   Alcotest.(check (option string))
     "size_of_value refuses in encode's own words" encoded sized;
   (* The control: a value a case does project still sizes what encode writes. *)
-  let n = Codec.encoded_size misuse_casetype_codec (B (UInt8.v 9)) in
-  Codec.encode misuse_casetype_codec (B (UInt8.v 9)) buf 0;
+  let n = Codec.size misuse_casetype_codec (B (UInt8.v 9)) in
+  Codec.encode misuse_casetype_codec (B (UInt8.v 9)) buf ~off:0;
   Alcotest.(check int) "a projected value sizes its tag and its body" 2 n;
   Alcotest.(check string)
     "and encode wrote exactly those bytes" "\002\009" (Bytes.sub_string buf 0 n)
 
 let test_get_field_notin_codec () =
-  (* get with a field that was never added to this codec raises Not_found
-     at staging time *)
+  (* View.field with a field that was never added to this codec raises
+     Invalid_argument where the field is resolved *)
   let cf_x = Codec.(Field.v "x" uint8 $ fun v -> v) in
   let cf_y = Codec.(Field.v "y" uint8 $ fun v -> v) in
   let codec = Codec.v "OnlyX" (fun v -> v) [ cf_x ] in
-  match Codec.get codec cf_y with
+  match Codec.View.field codec cf_y with
   | _f -> Alcotest.fail "expected Invalid_argument for unknown field"
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
@@ -161,7 +161,7 @@ let test_set_field_notin_codec () =
   let cf_x = Codec.(Field.v "x" uint8 $ fun v -> v) in
   let cf_y = Codec.(Field.v "y" uint8 $ fun v -> v) in
   let codec = Codec.v "OnlyX2" (fun v -> v) [ cf_x ] in
-  match Codec.set codec cf_y with
+  match setter codec cf_y with
   | _f -> Alcotest.fail "expected Invalid_argument for unknown field"
   | exception Invalid_argument _ -> ()
 
@@ -184,21 +184,8 @@ let test_lookalike_field_handles () =
   Alcotest.(check int)
     "rebinding the same Field.t works" 0x1234
     (UInt16.to_int (read buf 0));
-  expect_foreign_field ~op:"Codec.get" ~field:"word" ~codec:"WordOwner"
-    (fun () ->
-      let _f = Codec.get word_codec lookalike_word in
-      ());
-  expect_foreign_field ~op:"Codec.set" ~field:"word" ~codec:"WordOwner"
-    (fun () ->
-      let _f = Codec.set word_codec lookalike_word in
-      ());
-
-  let flags = Field.v "flags" (bits ~width:4 U16be) in
-  let flags_field = Codec.(flags $ Fun.id) in
-  let lookalike_flags = Codec.(Field.v "flags" (bits ~width:4 U16) $ Fun.id) in
-  let flags_codec = Codec.v "FlagsOwner" Fun.id [ flags_field ] in
-  expect_foreign_field ~op:"Codec.Word.field" ~field:"flags" ~codec:"FlagsOwner"
-    (fun () -> ignore (Codec.Word.field flags_codec lookalike_flags));
+  expect_foreign_field ~op:"Codec.View.field" ~field:"word" ~codec:"WordOwner"
+    (fun () -> ignore (Codec.View.field word_codec lookalike_word));
 
   let payload = Field.v "payload" (byte_slice ~size:(int 2)) in
   let payload_field = Codec.(payload $ Fun.id) in
@@ -206,10 +193,9 @@ let test_lookalike_field_handles () =
     Codec.(Field.v "payload" (byte_slice ~size:(int 1)) $ Fun.id)
   in
   let payload_codec = Codec.v "PayloadOwner" Fun.id [ payload_field ] in
-  let module P = (val Codec.View.codec payload_codec) in
   expect_foreign_field ~op:"Codec.View.field" ~field:"payload"
     ~codec:"PayloadOwner" (fun () ->
-      ignore (Codec.View.field P.codec lookalike_payload))
+      ignore (Codec.View.field payload_codec lookalike_payload))
 
 let expect_foreign_env ~op ~codec f =
   match f () with
@@ -238,11 +224,11 @@ let test_foreign_env_codec_operations () =
   let env_b = Codec.env codec_b |> Param.bind p_b (UInt8.v 0xff) in
   let buf = Bytes.of_string "\x01" in
   expect_foreign_env ~op:"Codec.encode" ~codec:"EnvA" (fun () ->
-      Codec.encode ~env:env_b codec_a (UInt8.v 1) buf 0);
+      Codec.encode ~env:env_b codec_a (UInt8.v 1) buf ~off:0);
   expect_foreign_env ~op:"Codec.decode" ~codec:"EnvA" (fun () ->
-      Codec.decode ~env:env_b codec_a buf 0);
+      Codec.decode ~env:env_b codec_a buf ~off:0);
   expect_foreign_env ~op:"Codec.validate" ~codec:"EnvA" (fun () ->
-      Codec.validate ~env:env_b codec_a buf 0);
+      Codec.validate ~env:env_b codec_a buf ~off:0);
   let p_c = Param.input "limit_c" uint8 in
   let p_d = Param.input "floor_d" uint8 in
   let f_c = Field.v "v" uint8 in
@@ -256,12 +242,12 @@ let test_foreign_env_codec_operations () =
   in
   let env_a = Codec.env codec_a |> Param.bind p_a (UInt8.v 0xff) in
   expect_foreign_env ~op:"Codec.encode" ~codec:"EnvC" (fun () ->
-      Codec.encode ~env:env_a codec_c (UInt8.v 1) buf 0);
+      Codec.encode ~env:env_a codec_c (UInt8.v 1) buf ~off:0);
   expect_foreign_env ~op:"Codec.decode" ~codec:"EnvC" (fun () ->
-      Codec.decode ~env:env_a codec_c buf 0)
+      Codec.decode ~env:env_a codec_c buf ~off:0)
 
 let test_env_from_wrong_codec () =
-  (* Using env from codec1 with get ~env on codec2 *)
+  (* Using env from codec1 with check ~env on codec2 *)
   let out1 = Param.output "out_wrong" uint8 in
   let f_ref = Field.v "v" uint8 in
   let cf_v1 =
@@ -275,13 +261,13 @@ let test_env_from_wrong_codec () =
   let cf_v2 = Codec.(Field.v "v" uint8 $ fun v -> v) in
   let codec2 = Codec.v "Wrong2" (fun v -> v) [ cf_v2 ] in
   let env1 = Codec.env codec1 in
-  expect_foreign_env ~op:"Codec.get" ~codec:"Wrong2" (fun () ->
-      Codec.get ~env:env1 codec2 cf_v2)
+  let buf = Bytes.of_string "\x01" in
+  expect_foreign_env ~op:"Codec.View.check" ~codec:"Wrong2" (fun () ->
+      accepts ~env:env1 codec2 buf 0)
 
 let test_env_wrongcodec_with_action () =
   (* Using env from a different codec with an action field.
-     The env has too few param slots -- get raises Invalid_argument
-     at staging time. *)
+     The env has too few param slots -- check raises Invalid_argument. *)
   let out = Param.output "out_oob" uint8 in
   let f_ref = Field.v "v" uint8 in
   let cf_v =
@@ -296,8 +282,8 @@ let test_env_wrongcodec_with_action () =
   let cf_w = Codec.(Field.v "w" uint8 $ fun v -> v) in
   let codec_empty = Codec.v "NoParams" (fun v -> v) [ cf_w ] in
   let wrong_env = Codec.env codec_empty in
-  match Codec.get ~env:wrong_env codec_with_action cf_v with
-  | _f -> Alcotest.fail "expected Invalid_argument for wrong env"
+  match accepts ~env:wrong_env codec_with_action (Bytes.of_string "\x01") 0 with
+  | _ -> Alcotest.fail "expected Invalid_argument for wrong env"
   | exception Invalid_argument msg ->
       Alcotest.(check bool)
         "mentions codec name" true
@@ -308,7 +294,7 @@ let test_decode_short_buffer () =
   let cf_x = Codec.(Field.v "x" uint16be $ fun v -> v) in
   let codec = Codec.v "Short" (fun v -> v) [ cf_x ] in
   let buf = Bytes.of_string "\x42" in
-  match Codec.decode codec buf 0 with
+  match Codec.decode codec buf ~off:0 with
   | Ok _ -> Alcotest.fail "expected EOF error"
   | Error { Error.kind = Unexpected_eof _; _ } -> ()
   | Error e -> Alcotest.failf "wrong error: %a" Error.pp e
@@ -318,13 +304,13 @@ let test_encode_short_buffer () =
   let cf_x = Codec.(Field.v "x" uint16be $ fun v -> v) in
   let codec = Codec.v "ShortEnc" (fun v -> v) [ cf_x ] in
   let buf = Bytes.of_string "\x42" in
-  match Codec.encode codec (UInt16.v 0x1234) buf 0 with
+  match Codec.encode codec (UInt16.v 0x1234) buf ~off:0 with
   | () -> Alcotest.fail "expected error for short buffer"
   | exception Invalid_argument _ -> ()
 
 (* -- Accessor and container contracts -- *)
 
-(* [Codec.set] documents [Invalid_argument] "leaving the buffer untouched". A
+(* [Codec.View.set] documents [Invalid_argument] "leaving [b] unchanged". A
    sub-codec field writes the whole sub-record and validates it afterwards, so
    the refusal used to arrive with the rejected byte already on the wire. *)
 let test_set_refusal_leaves_buffer_untouched () =
@@ -335,104 +321,21 @@ let test_set_refusal_leaves_buffer_untouched () =
   let inner = Codec.v "SetRollbackInner" Fun.id Codec.[ inner_f $ Fun.id ] in
   let outer_f = Codec.(Field.v "v" (codec inner) $ Fun.id) in
   let outer = Codec.v "SetRollbackOuter" Fun.id Codec.[ outer_f ] in
-  let set = Codec.set outer outer_f in
-  let buf = Bytes.make 1 '\xee' in
+  let set = setter outer outer_f in
+  let buf = Bytes.make 1 '\x14' in
   (match set buf 0 (UInt8.v 200) with
-  | () -> Alcotest.fail "Codec.set accepted a value the sub-codec refuses"
+  | () -> Alcotest.fail "setter accepted a value the sub-codec refuses"
   | exception Invalid_argument _ -> ());
   Alcotest.(check string)
-    "buffer untouched after a refused set" "\xee" (Bytes.to_string buf);
+    "buffer untouched after a refused set" "\x14" (Bytes.to_string buf);
   set buf 0 (UInt8.v 42);
   Alcotest.(check string)
     "an accepted set still writes" "\x2a" (Bytes.to_string buf)
 
-(* A bitfield accessor takes its offset from the caller, so it has to check
-   that its base word is in the buffer. The U32 word helpers reached the bytes
-   unchecked, so [Codec.get] on a frame shorter than the word answered with
-   whatever followed the buffer -- the same bytes read one value at base 0 and
-   another once the frame moved along the buffer, and neither was in the frame
-   -- while [Codec.set] laid down the low half of the word before the high half
-   raised. Walked over every base and every offset that puts part of the word
-   past the end: only the U32 bases were unchecked, and the half-written word
-   only shows on a field the low half carries. *)
-let bounds_bitpack base bit_order (w_a, w_b, w_c) =
-  let f_a = Field.v "a" (bits ~bit_order ~width:w_a base) in
-  let f_b = Field.v "b" (bits ~bit_order ~width:w_b base) in
-  let f_c = Field.v "c" (bits ~bit_order ~width:w_c base) in
-  let proj_a (a, _, _) = a and proj_b (_, b, _) = b and proj_c (_, _, c) = c in
-  let codec =
-    Codec.v "BfBounds"
-      (fun a b c -> (a, b, c))
-      Codec.[ f_a $ proj_a; f_b $ proj_b; f_c $ proj_c ]
-  in
-  ( codec,
-    [
-      ("a", Codec.( $ ) f_a proj_a);
-      ("b", Codec.( $ ) f_b proj_b);
-      ("c", Codec.( $ ) f_c proj_c);
-    ] )
-
-let bitpack_bases =
-  [
-    ("U16", U16, Msb_first, (3, 2, 11));
-    ("U16be", U16be, Lsb_first, (3, 2, 11));
-    ("U32", U32, Msb_first, (6, 10, 16));
-    ("U32be", U32be, Lsb_first, (6, 10, 16));
-  ]
-
-(* Every (base, field) pair with the word size the base needs. *)
-let iter_bitpacks f =
-  List.iter
-    (fun (name, base, bit_order, widths) ->
-      let codec, fields = bounds_bitpack base bit_order widths in
-      let word = Codec.min_size codec in
-      List.iter (fun (fname, field) -> f name word fname field codec) fields)
-    bitpack_bases
-
-let test_get_bitfield_word_past_buffer () =
-  iter_bitpacks (fun name word fname field codec ->
-      let get = Codec.get codec field in
-      let expect_refusal len off =
-        let buf = Bytes.make len '\xff' in
-        match get buf off with
-        | Error { Error.kind = Unexpected_eof _; _ } -> ()
-        | Error e ->
-            Alcotest.failf "%s field %s: %a at offset %d of a %d-byte buffer"
-              name fname Error.pp e off len
-        | Ok v ->
-            Alcotest.failf
-              "%s field %s: read %d at offset %d of a %d-byte buffer" name fname
-              v off len
-      in
-      (* No room for the word at all, and room for it but not where the frame
-         starts. *)
-      for len = 0 to word - 1 do
-        expect_refusal len 0
-      done;
-      for off = 1 to word do
-        expect_refusal word off
-      done)
-
-let test_set_bitfield_word_past_buffer_writes_nothing () =
-  iter_bitpacks (fun name word fname field codec ->
-      let set = Codec.set codec field in
-      for len = 0 to word - 1 do
-        let buf = Bytes.make len '\x00' in
-        (match set buf 0 1 with
-        | () ->
-            Alcotest.failf
-              "%s field %s: Codec.set wrote a word into a %d-byte buffer" name
-              fname len
-        | exception Invalid_argument _ -> ());
-        Alcotest.(check string)
-          (Fmt.str "%s field %s: %d-byte buffer untouched" name fname len)
-          (String.make len '\x00') (Bytes.to_string buf)
-      done)
-
-(* [Codec.get] had no reader for a statically gated optional and fell through
-   to a bare [Failure], on fields [Codec.decode] reads without trouble. Check
+(* A view had no reader for a statically gated optional and fell through to a
+   bare [Failure], on fields [Codec.decode] reads without trouble. Check
    both flavours and both gates against what decode returns. *)
-let test_get_static_optional_agrees_with_decode () =
+let test_view_static_optional_agrees_with_decode () =
   let f_len =
     Field.optional_or "Len" ~present:Expr.true_ ~default:UInt8.zero uint8
   in
@@ -453,7 +356,7 @@ let test_get_static_optional_agrees_with_decode () =
       [ cf_len; cf_on; cf_off; cf_or_off; cf_data ]
   in
   let buf = Bytes.of_string "\003\009abc" in
-  let len, on, off, or_off, _ = decode_ok (Codec.decode c buf 0) in
+  let len, on, off, or_off, _ = decode_ok (Codec.decode c buf ~off:0) in
   let read f = (reader c f) buf 0 in
   Alcotest.(check int)
     "optional_or, gate on" (UInt8.to_int len)
@@ -470,11 +373,11 @@ let test_get_static_optional_agrees_with_decode () =
     "optional_or, gate off is the default" (UInt8.to_int or_off)
     (UInt8.to_int (read cf_or_off));
   Alcotest.(check string) "span sized by the optional_or" "abc" (read cf_data);
-  (* And the matching setter, so a field [get] can read is one [set] can
+  (* And the matching setter, so a field a view reads is one it can
      write. The absent gates own no bytes, so writing them moves nothing. *)
-  Codec.set c cf_on buf 0 (Some (UInt8.v 5));
-  Codec.set c cf_off buf 0 None;
-  Codec.set c cf_or_off buf 0 (UInt8.v 7);
+  setter c cf_on buf 0 (Some (UInt8.v 5));
+  setter c cf_off buf 0 None;
+  setter c cf_or_off buf 0 (UInt8.v 7);
   Alcotest.(check (option int))
     "set then get, gate on" (Some 5)
     (Option.map UInt8.to_int (read cf_on));
@@ -482,9 +385,8 @@ let test_get_static_optional_agrees_with_decode () =
     "the absent gates wrote no bytes" "\003\005abc" (Bytes.to_string buf)
 
 (* A runtime gate is decided by an expression over sibling fields, which only
-   the compiled record plan evaluates. The accessor cannot read it, and has to
-   say so with the exception the interface documents. *)
-let test_get_dynamic_optional_refuses_cleanly () =
+   the record's bytes decide: a view reads the field as decode does. *)
+let test_view_dynamic_optional_agrees_with_decode () =
   let f_gate = Field.v "gate" uint8 in
   let f_pay =
     Field.optional "pay" ~present:Expr.(Field.ref f_gate <> int 0) uint16be
@@ -495,9 +397,16 @@ let test_get_dynamic_optional_refuses_cleanly () =
       (fun gate pay -> (gate, pay))
       [ Codec.(f_gate $ fst); cf_pay ]
   in
-  Alcotest.(check bool)
-    "Codec.get refuses a runtime-gated optional with Invalid_argument" true
-    (raises_invalid (fun () -> Codec.get c cf_pay))
+  let read = reader c cf_pay in
+  List.iter
+    (fun bytes ->
+      let buf = Bytes.of_string bytes in
+      let _, pay = decode_ok (Codec.decode c buf ~off:0) in
+      Alcotest.(check (option int))
+        (Fmt.str "gate %d" (Bytes.get_uint8 buf 0))
+        (Option.map UInt16.to_int pay)
+        (Option.map UInt16.to_int (read buf 0)))
+    [ "\x01\x12\x34"; "\x00" ]
 
 (* A [repeat] element whose decoder runs to the end of the buffer cannot be
    iterated: the first element takes the whole budget, so anything the encoder
@@ -557,9 +466,9 @@ let test_repeat_bounded_element_roundtrips () =
       (UInt8.v 1, (UInt8.v 2, "\000\000")); (UInt8.v 3, (UInt8.v 4, "\000\000"));
     ]
   in
-  let buf = Bytes.create (Codec.encoded_size outer xs) in
-  Codec.encode outer xs buf 0;
-  let ys = decode_ok (Codec.decode outer buf 0) in
+  let buf = Bytes.create (Codec.size outer xs) in
+  Codec.encode outer xs buf ~off:0;
+  let ys = decode_ok (Codec.decode outer buf ~off:0) in
   let elem_equal (a, (b, s)) (a', (b', s')) =
     UInt8.equal a a' && UInt8.equal b b' && String.equal s s'
   in
@@ -589,7 +498,7 @@ let test_encode_impure_byte_array_getter () =
   let buf = Bytes.make 17 '\x00' in
   for start = 0 to 1 do
     calls := start;
-    match Codec.encode c () buf 0 with
+    match Codec.encode c () buf ~off:0 with
     | () ->
         Alcotest.(check string)
           "a whole value" (String.make 16 'a')
@@ -607,17 +516,14 @@ let check_entry_points_agree (type r) what (c : r Codec.t) bytes =
     | exception exn when Wire.Private.Types.is_parse_error exn -> "refused"
   in
   let decoded =
-    match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
+    match Codec.decode c buf ~off:0 with Ok _ -> "ok" | Error _ -> "refused"
   in
   Alcotest.(check string)
     (what ^ ": validate") decoded
-    (verdict (fun () -> ok (Codec.validate c buf 0)));
+    (verdict (fun () -> ok (Codec.validate c buf ~off:0)));
   Alcotest.(check string)
     (what ^ ": check") decoded
-    (let module V = (val Codec.View.codec c) in
-     let (Buf.Any b) = Buf.v buf in
-     if Codec.View.(ok (check V.codec b (Buf.length b) 0)) then "ok"
-     else "refused")
+    (if accepts c buf 0 then "ok" else "refused")
 
 (* A fixed-size field after the last span must fit in the buffer too. *)
 let test_fixed_after_span_fits () =
@@ -663,22 +569,22 @@ let test_decode_reports_validate_first_failure () =
     | Ok _ -> Alcotest.failf "%s accepted the record" what
     | Error e -> Fmt.str "%a" Error.pp e
   in
-  let first = error "first decode" (Codec.decode c buf 0) in
+  let first = error "first decode" (Codec.decode c buf ~off:0) in
   let validated =
-    match Codec.validate c buf 0 with
+    match Codec.validate c buf ~off:0 with
     | Ok () -> Alcotest.fail "validate accepted the record"
     | Error e -> Fmt.str "%a" Error.pp e
   in
   Alcotest.(check string) "first decode" validated first;
   Alcotest.(check string)
     "second decode" validated
-    (error "second decode" (Codec.decode c buf 0));
+    (error "second decode" (Codec.decode c buf ~off:0));
   Alcotest.(check string)
     "consume all" validated
-    (error "consume all" (Codec.decode ~consume:`All c buf 0));
+    (error "consume all" (Codec.decode ~consume:`All c buf ~off:0));
   Alcotest.(check string)
     "with an env" validated
-    (error "with an env" (Codec.decode ~env:(Codec.env c) c buf 0))
+    (error "with an env" (Codec.decode ~env:(Codec.env c) c buf ~off:0))
 
 (* A codec with params checks before it reads too: its decode reports
    [validate]'s first failure, [a]'s constraint at byte 0 rather than [b]'s
@@ -713,18 +619,21 @@ let test_decode_params_reports_validate_first_failure () =
     | Error e -> Fmt.str "%a" Error.pp e
   in
   let validated =
-    match Codec.validate ~env:(env ()) c buf 0 with
+    match Codec.validate ~env:(env ()) c buf ~off:0 with
     | Ok () -> Alcotest.fail "validate accepted the record"
     | Error e -> Fmt.str "%a" Error.pp e
   in
   Alcotest.(check string)
     "decode" validated
-    (error "decode" (Codec.decode ~env:(env ()) c buf 0));
+    (error "decode" (Codec.decode ~env:(env ()) c buf ~off:0));
   Alcotest.(check string)
     "consume all" validated
-    (error "consume all" (Codec.decode ~consume:`All ~env:(env ()) c buf 0));
+    (error "consume all"
+       (Codec.decode ~consume:`All ~env:(env ()) c buf ~off:0));
   Alcotest.(check int) "no map decode on a refused record" 0 !calls;
-  (match Codec.decode ~env:(env ()) c (Bytes.of_string "\x01\x00\x07") 0 with
+  (match
+     Codec.decode ~env:(env ()) c (Bytes.of_string "\x01\x00\x07") ~off:0
+   with
   | Ok (_, _, c) when UInt8.to_int c = 7 -> ()
   | Ok _ -> Alcotest.fail "wrong value"
   | Error e -> Alcotest.failf "valid record refused: %a" Error.pp e);
@@ -754,10 +663,12 @@ let test_validate_data_sized_fields () =
   let agree what c bytes =
     let buf = Bytes.of_string bytes in
     let decoded =
-      match Codec.decode c buf 0 with Ok _ -> "ok" | Error _ -> "refused"
+      match Codec.decode c buf ~off:0 with Ok _ -> "ok" | Error _ -> "refused"
     in
     let validated =
-      match Codec.validate c buf 0 with Ok () -> "ok" | Error _ -> "refused"
+      match Codec.validate c buf ~off:0 with
+      | Ok () -> "ok"
+      | Error _ -> "refused"
     in
     Alcotest.(check string) (what ^ ": decode") "refused" decoded;
     Alcotest.(check string) (what ^ ": validate") decoded validated
@@ -849,15 +760,10 @@ let suite =
       Alcotest.test_case
         "size_of_value: a casetype value no case projects raises" `Quick
         test_size_of_value_refuses_unmatched_case;
-      Alcotest.test_case "get: a bitfield word past the buffer is an error"
-        `Quick test_get_bitfield_word_past_buffer;
-      Alcotest.test_case "set: a bitfield word past the buffer writes nothing"
-        `Quick test_set_bitfield_word_past_buffer_writes_nothing;
-      Alcotest.test_case "get: statically gated optionals agree with decode"
-        `Quick test_get_static_optional_agrees_with_decode;
-      Alcotest.test_case
-        "get: runtime-gated optional refused with Invalid_argument" `Quick
-        test_get_dynamic_optional_refuses_cleanly;
+      Alcotest.test_case "view: statically gated optionals agree with decode"
+        `Quick test_view_static_optional_agrees_with_decode;
+      Alcotest.test_case "view: runtime-gated optional agrees with decode"
+        `Quick test_view_dynamic_optional_agrees_with_decode;
       Alcotest.test_case "repeat: element ending in a greedy sub-codec rejected"
         `Quick test_repeat_rejects_nested_greedy_element;
       Alcotest.test_case "repeat: bounded element round-trips" `Quick

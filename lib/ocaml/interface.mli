@@ -22,7 +22,7 @@ val record_preamble :
     and the map. *)
 
 val record_members :
-  ?views:bool ->
+  ?accessor:(Planner.field -> string) ->
   Format.formatter ->
   target:target ->
   simd:bool ->
@@ -31,20 +31,21 @@ val record_members :
   plan:Planner.plan ->
   size:int ->
   unit
-(** [record_members ?views ppf ~target ~simd ~maps ~codec ~plan ~size] states
+(** [record_members ?accessor ppf ~target ~simd ~maps ~codec ~plan ~size] states
     the members a fixed record adds: its size, record, decoders, writes, and,
-    unless [views], its reads. With [views], the module's views read the fields.
-*)
+    with [accessor], the views of a module with no walk, [accessor f] the
+    accessor of each field [f]. *)
 
 val scan_preamble :
   Format.formatter -> codec:string -> plan:Planner.plan -> unit
 (** [scan_preamble ppf ~codec ~plan] is the head of the interface of a module
-    whose folds hand out outputs of [plan]. *)
+    whose walk covers its codec. *)
 
-val scan_members :
+val pp_fold :
   Format.formatter ->
   target:target ->
-  plan:Planner.plan ->
-  folds:Scan_module.fold list ->
+  paths:string list ->
+  types:string list ->
   unit
-(** [scan_members ppf ~target ~plan ~folds] states each of [folds]. *)
+(** [pp_fold ppf ~target ~paths ~types] states [fold], whose [f] takes the
+    fields [paths], of the OCaml types [types]. *)

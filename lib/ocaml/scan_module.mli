@@ -25,36 +25,63 @@ type scan = {
   m : Emitter.mode;
   ppf : Format.formatter;
   taken : (string, unit) Hashtbl.t;
+  args : arg list option;
+      (** The arguments the fold hands [f], which it takes with [invalid] as
+          arguments; [None] for a fold that calls a visitor by name. *)
 }
 (** What a scanner is written from: the plan, the outputs it hands out, the mode
-    of its walks, where it writes and the names of the functions it has written.
-*)
+    of its walks, where it writes, the names of the functions it has written and
+    how its fold is given its consumer. *)
+
+and arg = {
+  label : string;  (** The label [f] takes it with: its path joined by ['_']. *)
+  value : output;  (** Its output. *)
+  typed : string -> string;
+      (** The text of its value in its carrier, from that of an [int]. *)
+  own : output option;  (** Its presence, when the field is optional. *)
+  layered : bool;  (** It is reached through a layer: one option more. *)
+  layer : output option;
+      (** The presence of the innermost optional layer of its path. *)
+}
+(** A field a fold hands its [f]. *)
 
 val slots : plan -> output list -> output list
 (** [slots plan outputs] is the outputs among [outputs] that are slots; see
     {!Wire_ocaml.Plan.slots}. *)
 
+val step : string
+(** [step] is the name of the walks of the fold of a module, as the F* rendering
+    names them: [fold_step], [fold_step_frames] and [fold_step_index]. *)
+
 type fold = {
-  name : string;
-  selected : output list;  (** The outputs it hands out. *)
-  visitor : string;  (** The module it calls by name. *)
+  selected : output list;  (** The outputs its walk binds and hands out. *)
+  args : arg list;  (** What it hands [f], in order. *)
 }
-(** A fold a module declares. *)
+(** The fold a module declares. *)
 
 val walks :
   ?decide:(Decision.t -> unit) ->
   target:[ `OCaml | `OxCaml ] ->
-  folds:fold list ->
+  ?fold:fold ->
   ?size:int ->
   taken:(string, unit) Hashtbl.t ->
   plan ->
   string
-(** [walks ?decide ~target ~folds ?size ~taken plan] is the walks of a module
-    over [plan]: for each of [folds] named [n], [n], [n_frames] and [n_index],
-    which call its visitor by name. Then [check]: [check b length ~off ~len], or
-    [check b length off] for a codec of constant [size]. Each function it writes
-    is named apart from [taken], which it adds to. [decide] is given each
-    decision the walks take, in the order it writes them. *)
+(** [walks ?decide ~target ?fold ?size ~taken plan] is the walks of a module
+    over [plan]: with [fold], {!step}, its [_frames] and [_index], which take
+    [~f] and [~invalid] after [~init] and call [f] with the [args] of [fold] in
+    order where a record passes and [invalid] where it does not. Then [check]:
+    [check b length ~off ~len], or [check b length ~off] for a codec of constant
+    [size]. Each function it writes is named apart from [taken], which it adds
+    to. [decide] is given each decision the walks take, in the order it writes
+    them. *)
+
+val pp_fold : Format.formatter -> name:string -> size:int option -> unit
+(** [pp_fold ppf ~name ~size] writes [fold] of the module [name], whose records
+    take [size] bytes when constant, over the walks of {!walks}, and the
+    functions that find the error of the first record it refuses. It calls
+    [validate], [check], [is_ok] and [no_error], and [end_at] where [size] is
+    [None]. *)
 
 val without_dead_bindings : string -> string
 (** [without_dead_bindings text] is [text] without the bindings it never reads.

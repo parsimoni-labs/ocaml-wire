@@ -29,7 +29,8 @@ module Codec = struct
      separately declared lookalike field, even when its name and type match. *)
   let wire_codec_fields fields =
     let rec go : type f r.
-        int -> (f, r) fields -> (f, r) Wire.Codec.fields * r field_check list =
+        int -> (f, r) fields -> (f, r, r) Wire.Codec.fields * r field_check list
+        =
      fun i -> function
        | [] -> (Wire.Codec.[], [])
        | f :: rest ->
@@ -180,8 +181,8 @@ module Codec = struct
               (fun (s : env_strategy) -> s.positive (Wire.Codec.env codec))
               env_strategy
           in
-          let buf = Bytes.create (Wire.Codec.encoded_size codec v) in
-          Wire.Codec.encode ?env codec v buf 0;
+          let buf = Bytes.create (Wire.Codec.size codec v) in
+          Wire.Codec.encode ?env codec v buf ~off:0;
           (v, buf))
     in
     let random = random_of fields in

@@ -3,11 +3,11 @@
    Each test compares the exact rendered output against an expected string. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 open Test_helpers
 
 let check name s expected =
-  let output = Ascii.of_struct s in
+  let output = Private.Ascii.of_struct s in
   Alcotest.(check string) name expected output
 
 let ruler =
@@ -102,7 +102,7 @@ let test_variable () =
         field "len" uint16be; field "data" (byte_array ~size:(field_ref f_len));
       ]
   in
-  let output = Ascii.of_struct s in
+  let output = Private.Ascii.of_struct s in
   (* Variable-length output has a full-width row for the data field *)
   Alcotest.(check bool)
     "contains len" true
@@ -118,7 +118,7 @@ let test_variable () =
    shifts, [sizeof] and parameter references. *)
 
 let renders name s expect =
-  let output = Ascii.of_struct s in
+  let output = Private.Ascii.of_struct s in
   if String.contains output '?' then
     Alcotest.failf "%s: expression dropped from diagram:@\n%s" name output;
   Alcotest.(check bool)
@@ -169,7 +169,7 @@ let test_param_ref () =
   renders "rest_bytes" s "total - sizeof(this)"
 
 let wide self_int64 =
-  struct_ "Wide" [ Field.Named (Field.v "mask" ~self_int64 uint64be) ]
+  struct_ "Wide" [ Wire.Private.Named (Field.v "mask" ~self_int64 uint64be) ]
 
 let test_int64_operators () =
   renders "land64"
@@ -210,11 +210,13 @@ let test_pp_struct () =
   let s = struct_ "P" [ field "a" uint8; field "b" uint8 ] in
   let buf = Buffer.create 128 in
   let ppf = Format.formatter_of_buffer buf in
-  Ascii.pp_struct ppf s;
+  Private.Ascii.pp_struct ppf s;
   Format.pp_print_flush ppf ();
   let output = Buffer.contents buf in
   Alcotest.(check string)
-    "pp_struct matches of_struct" (Ascii.of_struct s) output
+    "pp_struct matches of_struct"
+    (Private.Ascii.of_struct s)
+    output
 
 (* -- Suite -- *)
 

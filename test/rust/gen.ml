@@ -1,6 +1,6 @@
 (* Writes the Rust module Wire_rust generates for each codec of [Schemas]
    and each structured case of [Diff_codecs.scan_cases], with a fold of
-   every output and one of none, into the directory given as the first
+   every integer field, into the directory given as the first
    argument, and a [lib.rs] that compiles them as one [no_std] crate. *)
 
 let write file s =
@@ -38,11 +38,22 @@ let constant present =
   in
   under 4
 
-(* Each module, with a fold of every output and one of none. *)
-let modules =
-  let v n c =
-    Wire_rust.(v ~name:n ~folds:[ fold "fold"; fold ~outputs:[] "checks" ] c)
+(* The path of every integer field of [c], as a fold names it. *)
+let paths c =
+  let rec go prefix (view : Wire_ocaml.Views.t) =
+    List.concat_map
+      (function
+        | Wire_ocaml.Views.Int { name; _ } -> [ prefix ^ name ]
+        | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
+        | Bool _ | Bytes _ -> [])
+      view.members
   in
+  go "" (Wire_ocaml.Views.v c)
+
+(* Each module, with a fold of every integer field, and the packet stack's
+   with a fold of none too. *)
+let modules =
+  let v n c = Wire_rust.v ~name:n ~fold:(paths c) c in
   [
     v "ipv4" Schemas.ipv4;
     v "checked" Schemas.checked;
@@ -53,10 +64,12 @@ let modules =
     v "signed" Schemas.signed;
     v "sized" Schemas.sized;
     v "overflow" Schemas.overflow;
+    v "remainder" Schemas.remainder;
     v "gated" (Schemas.gated 8);
     v "nested" (Schemas.nested 8);
     v "shared" Schemas.shared;
     v "stack" Packet_stack.codec;
+    Wire_rust.v ~name:"stack_checks" ~fold:[] Packet_stack.codec;
     v "capture" Packet_stack.capture;
     v "always" (constant true);
     v "never" (constant false);

@@ -81,8 +81,8 @@ let sweep_schemas ~mode ~tag keep =
     Fuzz_gen.registry
     |> List.filter (fun (name, _) -> keep name)
     |> List.mapi (fun i (label, Fuzz_gen.Pack g) ->
-        let s = Wire.Everparse.project ~mode (Fuzz_gen.codec g) in
-        { s with Wire.Everparse.name = batch_module_name i tag label })
+        let name = batch_module_name i tag label in
+        Wire.Everparse.project ~mode (Wire.Codec.rename name (Fuzz_gen.codec g)))
 
 (* Each mode is swept through the writer that actually ships it, since the two
    writers do not render the same schema the same way: the [`Ffi] one emits a
@@ -95,15 +95,15 @@ let sweep_schemas ~mode ~tag keep =
    which is what [Wire_3d.generate_3d_standalone] calls. *)
 let standalone_check schemas =
   let job (s : Wire.Everparse.t) dir =
-    Wire.Everparse.write ~mode:`Standalone ~outdir:dir ~name:s.name [ s ];
+    Wire.Everparse.write ~mode:`Standalone ~outdir:dir
+      ~name:(Wire.Everparse.name s) [ s ];
     match
       Wire_3d.parse_3d ~batch:true ~outdir:dir (Wire.Everparse.filename s)
     with
     | Ok () -> ()
     | Error m -> failwith m
   in
-  Wire_3d.pool
-    (List.map (fun (s : Wire.Everparse.t) -> (s.name, job s)) schemas)
+  Wire_3d.pool (List.map (fun s -> (Wire.Everparse.name s, job s)) schemas)
   |> Result.map ignore
 
 let run check = function [] -> None | schemas -> Some (check schemas)
@@ -288,8 +288,11 @@ let corpus_lines codec =
       | _ -> None)
 
 let input_params codec =
-  match (Wire.Everparse.project ~mode:`Standalone codec).source with
-  | Some source -> Wire.Everparse.Raw.input_param_names source
+  match
+    Wire.Private.Everparse.source
+      (Wire.Everparse.project ~mode:`Standalone codec)
+  with
+  | Some source -> Wire.Private.Everparse.Raw.input_param_names source
   | None -> []
 
 (* A registry codec's corpus and input parameters, computed once, when its
@@ -331,12 +334,12 @@ let env_of codec pnames pvals =
            (Wire.Codec.env codec) pnames pvals)
 
 let record_spans codec env b =
-  match Wire.Codec.decode ?env codec b 0 with
+  match Wire.Codec.decode ?env codec b ~off:0 with
   | Error _ -> false
   | Ok _ -> (
-      match Wire.Codec.validate ?env codec b 0 with
+      match Wire.Codec.validate ?env codec b ~off:0 with
       | Error _ -> false
-      | Ok () -> Wire.Codec.size_at ?env codec b 0 = Ok (Bytes.length b))
+      | Ok () -> Wire.Codec.size_at ?env codec b ~off:0 = Ok (Bytes.length b))
 
 (* Shapes whose accepting side the seeder cannot construct, so
    [generate_corpus] refuses rather than emit a corpus that says the same thing
@@ -352,7 +355,7 @@ let no_corpus_seed =
        here that a better seeder could not remove. *)
     "all_bytes";
     (* A per-byte refinement is not one of the constraint forms
-       [Everparse.Raw.field_seeds] names a value for, so nothing seeds the
+       [Private.Everparse.Raw.field_seeds] names a value for, so nothing seeds the
        accepting side and all 24 lines come out rejected. The flat
        [byte_array_where(4)] is in the same position and stays out of this list
        only by luck: it draws no seed either, and lands exactly one accepted
@@ -403,14 +406,14 @@ let corpus_oracle_case (label, Fuzz_gen.Pack g) =
    re-encodes to different bytes for the same value. *)
 let reencodes g codec env v sz =
   let buf = Bytes.create sz in
-  match Wire.Codec.encode ?env codec v buf 0 with
+  match Wire.Codec.encode ?env codec v buf ~off:0 with
   | exception exn when Wire.Private.Types.is_parse_error exn ->
       Fmt.kstr
         (fun s -> Some s)
         "re-encoding raised %a" Wire.Error.pp
         (Wire.Private.Types.parse_error_of exn)
   | () -> (
-      match Wire.Codec.decode ?env codec buf 0 with
+      match Wire.Codec.decode ?env codec buf ~off:0 with
       | Error e ->
           Fmt.kstr
             (fun s -> Some s)
@@ -424,19 +427,19 @@ let reencodes g codec env v sz =
    0, so a param-sized field measured as empty and a caller sizing a buffer
    from the answer got one too short. *)
 let accepted_agrees g codec env b =
-  match Wire.Codec.decode ?env codec b 0 with
+  match Wire.Codec.decode ?env codec b ~off:0 with
   | Error _ -> None
   | Ok v -> (
       let len = Bytes.length b in
-      match Wire.Codec.encoded_size ?env codec v with
+      match Wire.Codec.size ?env codec v with
       | exception Invalid_argument m ->
           Fmt.kstr
             (fun s -> Some s)
-            "encoded_size refused an accepted record: %s" m
+            "Codec.size refused an accepted record: %s" m
       | sz when not (Int.equal sz len) ->
           Fmt.kstr
             (fun s -> Some s)
-            "encoded_size answers %d for a %d byte record" sz len
+            "Codec.size answers %d for a %d byte record" sz len
       | sz -> reencodes g codec env v sz)
 
 (* A rejected record: the offset is a real position, and a failure about one
@@ -448,7 +451,7 @@ let accepted_agrees g codec env b =
    to. *)
 let rejection_is_attributed codec env b =
   let len = Bytes.length b in
-  match Wire.Codec.decode ?env codec b 0 with
+  match Wire.Codec.decode ?env codec b ~off:0 with
   | Ok _ -> None
   | Error e -> (
       if e.Wire.Error.at < 0 || e.Wire.Error.at > len then

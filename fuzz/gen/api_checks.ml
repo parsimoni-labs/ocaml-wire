@@ -119,60 +119,52 @@ let check_string label expected actual =
   if not (String.equal expected actual) then
     Alcobar.failf "%s: expected %S, got %S" label expected actual
 
-(* [Codec.get] of [f] on bytes a positive holds. *)
-let getter codec f =
-  let read = Wire.Codec.get codec f in
-  fun buf off ->
-    match read buf off with
-    | Ok v -> v
-    | Error e -> Alcobar.failf "Codec.get: %a" Wire.Error.pp e
+module View = Wire.Codec.View
+
+(* The view of the record of [codec] at [base] in [buf], which a positive
+   holds, handed to [k]. *)
+type 'x with_view = { k : 'b. 'b Wire.Buf.t -> ('b, api_access) View.t -> 'x }
+
+let with_view codec buf base { k } =
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let c = View.check codec b ~off:base in
+  if not (View.is_ok c) then Alcobar.failf "Codec.View.check refused";
+  k b (View.get c)
 
 let check_api_getters (codec : api_access Wire.Codec.t) bf_a bf_hi bf_lo
     bf_payload buf base a hi lo payload_s =
-  let get_a = getter codec bf_a in
-  let get_hi = getter codec bf_hi in
-  let get_lo = getter codec bf_lo in
-  let get_payload = getter codec bf_payload in
-  check_int "Codec.get scalar" a (Wire.UInt8.to_int (get_a buf base));
-  check_int "Codec.get bitfield hi" hi (get_hi buf base);
-  check_int "Codec.get bitfield lo" lo (get_lo buf base);
-  check_string "Codec.get slice" payload_s
-    (string_of_slice (get_payload buf base));
-  let module V = (val Wire.Codec.View.codec codec) in
-  let (Wire.Buf.Any b) = Wire.Buf.v buf in
-  let k = Wire.Codec.View.check V.codec b (Wire.Buf.length b) base in
-  if not (Wire.Codec.View.ok k) then Alcobar.failf "Codec.View.check refused";
-  let r = Wire.Codec.View.get k in
-  check_string "Codec.View.read slice" payload_s
-    (string_of_slice
-       (Wire.Codec.View.read (Wire.Codec.View.field V.codec bf_payload) b r))
+  let f_a = View.field codec bf_a
+  and f_hi = View.field codec bf_hi
+  and f_lo = View.field codec bf_lo
+  and f_payload = View.field codec bf_payload in
+  with_view codec buf base
+    {
+      k =
+        (fun b v ->
+          check_int "View.read scalar" a (Wire.UInt8.to_int (View.read b v f_a));
+          check_int "View.read bitfield hi" hi (View.read b v f_hi);
+          check_int "View.read bitfield lo" lo (View.read b v f_lo);
+          check_string "View.read slice" payload_s
+            (string_of_slice (View.read b v f_payload)));
+    }
 
-let check_api_bitfields (codec : api_access Wire.Codec.t) bf_hi bf_lo buf base
-    hi lo =
-  let module V = (val Wire.Codec.View.codec codec) in
-  let (Wire.Buf.Any b) = Wire.Buf.v buf in
-  let k = Wire.Codec.View.check V.codec b (Wire.Buf.length b) base in
-  if not (Wire.Codec.View.ok k) then Alcobar.failf "Codec.View.check refused";
-  let r = Wire.Codec.View.get k in
-  let read f = Wire.Codec.View.read (Wire.Codec.View.field V.codec f) b r in
-  check_int "Codec.View.read hi" hi (read bf_hi);
-  check_int "Codec.View.read lo" lo (read bf_lo)
-
-(* [byte_slice] is the mutable zero-copy span: both staged access and record
+(* [byte_slice] is the mutable zero-copy span: both a view's read and record
    decode must retain an alias to the caller's buffer, in both directions. *)
 let check_api_slice_aliases codec bf_payload buf base =
   let module Slice = Bytesrw.Bytes.Slice in
-  let get = getter codec bf_payload in
-  let payload = get buf base in
+  let f_payload = View.field codec bf_payload in
+  let payload =
+    with_view codec buf base { k = (fun b v -> View.read b v f_payload) }
+  in
   let first = Slice.first payload in
   let original = Bytes.get_uint8 buf first in
   let changed = original lxor 0xFF in
   Bytes.set_uint8 (Slice.bytes payload) first changed;
-  check_int "Codec.get slice aliases buffer" changed (Bytes.get_uint8 buf first);
+  check_int "View.read slice aliases buffer" changed (Bytes.get_uint8 buf first);
   Bytes.set_uint8 buf first original;
-  check_int "buffer aliases Codec.get slice" original
+  check_int "buffer aliases View.read slice" original
     (Bytes.get_uint8 (Slice.bytes payload) first);
-  match Wire.Codec.decode codec buf base with
+  match Wire.Codec.decode codec buf ~off:base with
   | Error e ->
       Alcobar.failf "Codec.decode for slice alias failed: %a" Wire.Error.pp e
   | Ok decoded ->
@@ -185,27 +177,29 @@ let check_api_slice_aliases codec bf_payload buf base =
 
 let check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
     next_lo next_payload_s =
-  let get_a = getter codec bf_a in
-  let get_hi = getter codec bf_hi in
-  let get_lo = getter codec bf_lo in
-  let get_payload = getter codec bf_payload in
-  let set_a = Wire.Codec.set codec bf_a in
-  let set_hi = Wire.Codec.set codec bf_hi in
-  let set_lo = Wire.Codec.set codec bf_lo in
-  let set_payload = Wire.Codec.set codec bf_payload in
-  set_a buf base (Wire.UInt8.v next_a);
-  set_hi buf base next_hi;
-  set_lo buf base next_lo;
-  set_payload buf base (slice_of_string next_payload_s);
-  check_int "Codec.set scalar" next_a (Wire.UInt8.to_int (get_a buf base));
-  check_int "Codec.set bitfield hi" next_hi (get_hi buf base);
-  check_int "Codec.set bitfield lo" next_lo (get_lo buf base);
-  check_string "Codec.set slice" next_payload_s
-    (string_of_slice (get_payload buf base))
+  let f_a = View.field codec bf_a
+  and f_hi = View.field codec bf_hi
+  and f_lo = View.field codec bf_lo
+  and f_payload = View.field codec bf_payload in
+  with_view codec buf base
+    {
+      k =
+        (fun b v ->
+          View.set b v f_a (Wire.UInt8.v next_a);
+          View.set b v f_hi next_hi;
+          View.set b v f_lo next_lo;
+          View.set b v f_payload (slice_of_string next_payload_s);
+          check_int "View.set scalar" next_a
+            (Wire.UInt8.to_int (View.read b v f_a));
+          check_int "View.set bitfield hi" next_hi (View.read b v f_hi);
+          check_int "View.set bitfield lo" next_lo (View.read b v f_lo);
+          check_string "View.set slice" next_payload_s
+            (string_of_slice (View.read b v f_payload)));
+    }
 
 let check_api_decode_after_set codec buf base next_a next_hi next_lo
     next_payload_s =
-  match Wire.Codec.decode codec buf base with
+  match Wire.Codec.decode codec buf ~off:base with
   | Ok decoded ->
       check_int "Codec.decode after set scalar" next_a
         (Wire.UInt8.to_int decoded.a);
@@ -225,9 +219,8 @@ let check_api_accessors a hi lo payload_s next_a next_hi next_lo next_payload_s
   let base = 1 in
   let sz = Wire.Codec.min_size codec in
   let buf = Bytes.make (sz + 2) '\xCC' in
-  Wire.Codec.encode codec value buf base;
+  Wire.Codec.encode codec value buf ~off:base;
   check_api_getters codec bf_a bf_hi bf_lo bf_payload buf base a hi lo payload_s;
-  check_api_bitfields codec bf_hi bf_lo buf base hi lo;
   check_api_slice_aliases codec bf_payload buf base;
   check_api_setters codec bf_a bf_hi bf_lo bf_payload buf base next_a next_hi
     next_lo next_payload_s;
@@ -249,8 +242,9 @@ let u8_array_equal a b =
 let check_custom_seq a b c d =
   let values = Array.map Wire.UInt8.v [| a; b; c; d |] in
   let typ = Wire.array_seq custom_array_seq ~len:(Wire.int 4) Wire.uint8 in
-  let encoded = Wire.to_bytes typ values in
-  (match Wire.of_bytes typ encoded with
+  let value_codec = codec_of_typ typ in
+  let encoded = Wire.Codec.to_bytes value_codec values in
+  (match Wire.Codec.decode value_codec encoded ~off:0 with
   | Ok decoded ->
       if not (u8_array_equal decoded values) then
         Alcobar.failf "array_seq custom seq mismatch"
@@ -271,8 +265,8 @@ let check_custom_seq a b c d =
         ]
   in
   let buf = Bytes.create 5 in
-  Wire.Codec.encode codec values buf 0;
-  match Wire.Codec.decode codec buf 0 with
+  Wire.Codec.encode codec values buf ~off:0;
+  match Wire.Codec.decode codec buf ~off:0 with
   | Ok decoded ->
       if not (u8_array_equal decoded values) then
         Alcobar.failf "repeat_seq custom seq mismatch"
@@ -294,25 +288,21 @@ let check_struct_validator len data_s =
   Bytes.set_uint8 bytes 0 len;
   Bytes.set_uint8 bytes 1 0;
   Bytes.blit_string data_s 0 bytes 2 (String.length data_s);
-  let validator = Wire.Codec.validator_of_struct raw_struct in
-  check_int "Codec.struct_min_size" 2 (Wire.Codec.struct_min_size validator);
+  let validator = Wire.Private.validator_of_struct raw_struct in
+  check_int "Codec.struct_min_size" 2 (Wire.Private.struct_min_size validator);
   check_int "Codec.struct_size_of" (Bytes.length bytes)
-    (Wire.Codec.struct_size_of validator bytes 0);
-  (match Wire.Codec.wire_size_info_of_validator validator with
+    (Wire.Private.struct_size_of validator bytes 0);
+  (match Wire.Private.wire_size_info_of_validator validator with
   | `Fixed _ -> Alcobar.failf "raw all_bytes struct unexpectedly fixed"
   | `Variable size_of ->
       check_int "Codec.wire_size_info_of_validator" (Bytes.length bytes)
         (size_of bytes 0));
-  (match Wire.Codec.validate_struct validator bytes 0 with
+  match Wire.Private.validate_struct validator bytes 0 with
   | Ok () -> ()
   | Error e ->
       Alcobar.failf "validate_struct rejected positive: %a" Wire.Error.pp e
   | exception Invalid_argument e ->
-      Alcobar.failf "validate_struct crashed: %s" e);
-  match Wire.of_bytes (Wire.Private.Types.struct_typ raw_struct) bytes with
-  | Ok () -> ()
-  | Error e ->
-      Alcobar.failf "Raw.struct_typ direct decode failed: %a" Wire.Error.pp e
+      Alcobar.failf "validate_struct crashed: %s" e
 
 (* [Field.action] reports the action attached via [Field.v]'s [?action] (none on
    a plain field, [Some] on an annotated one), and [Action.pp] renders the
@@ -355,7 +345,7 @@ let check_metadata_helpers () =
       uint8
   in
   check_string "Field.name" "Meta" (Field.name f_meta);
-  check_int "Field.typ" 1 (Option.get (size (Field.typ f_meta)));
+  check_int "Field.typ" 1 (Option.get (fixed_size (Field.typ f_meta)));
   (match Field.constraint_ f_meta with
   | Some _ -> ()
   | None -> Alcobar.failf "Field.constraint_ missing");
@@ -363,8 +353,8 @@ let check_metadata_helpers () =
   | Some doc -> check_string "Field.doc" "metadata" doc
   | None -> Alcobar.failf "Field.doc missing");
   check_string "Field.pp" "Meta" (Fmt.str "%a" Field.pp f_meta);
-  let _ = Field.decl_of_packed (Field.Named f_meta) in
-  let _ = Field.decl_of_packed (Field.Anon (Field.anon uint8)) in
+  let _ = Private.decl_of_packed (Private.Named f_meta) in
+  let _ = Private.decl_of_packed (Private.Anon (Field.anon uint8)) in
   let p_in, p_out = check_param_metadata () in
   let f_src = Field.v "Src" uint8 in
   let copy_action =
@@ -383,14 +373,14 @@ let check_metadata_helpers () =
   let env_by_name = Wire.Codec.env codec |> Param.bind_by_name "Limit" 8 in
   check_int "Param.bind_by_name" 8 (UInt8.to_int (Param.get env_by_name p_in));
   let buf = bytes_of_octets [ 7; 1 ] in
-  (match Wire.Codec.decode ~env codec buf 0 with
+  (match Wire.Codec.decode ~env codec buf ~off:0 with
   | Ok _ -> check_int "Param.get output" 7 (UInt8.to_int (Param.get env p_out))
   | Error e -> Alcobar.failf "param/action decode failed: %a" Error.pp e);
   check_string "Codec schema name" "ApiParam"
-    (Wire.Everparse.project ~mode:`Ffi codec).Wire.Everparse.name;
+    (Wire.Everparse.name (Wire.Everparse.project ~mode:`Ffi codec));
   let renamed = Wire.Codec.rename "ApiParamRenamed" codec in
   check_string "Codec.rename" "ApiParamRenamed"
-    (Wire.Everparse.project ~mode:`Ffi renamed).Wire.Everparse.name;
+    (Wire.Everparse.name (Wire.Everparse.project ~mode:`Ffi renamed));
   if Wire.Codec.doc codec <> None then
     Alcobar.failf "Codec.doc unexpectedly set";
   (* [pp_value] encodes the value to read its fields back, and encode refuses a
@@ -407,130 +397,136 @@ let check_metadata_helpers () =
   in
   if not (String.contains pp_value 'S') then
     Alcobar.failf "pp_value did not include field output: %S" pp_value;
-  check_int "Wire.size fixed" 1 (Option.get (size uint8));
-  match size all_bytes with
+  check_int "Wire.fixed_size fixed" 1 (Option.get (fixed_size uint8));
+  match fixed_size all_bytes with
   | None -> ()
-  | Some n -> Alcobar.failf "Wire.size all_bytes = Some %d" n
+  | Some n -> Alcobar.failf "Wire.fixed_size all_bytes = Some %d" n
 
 let public_raw_struct () =
   let len_field =
-    Wire.Everparse.Raw.field "Len" ~constraint_:Wire.Expr.true_
+    Wire.Private.Everparse.Raw.field "Len" ~constraint_:Wire.Expr.true_
       ~action:
         (Wire.Action.on_success [ Wire.Action.return_bool Wire.Expr.true_ ])
       Wire.uint8
   in
-  let data_field = Wire.Everparse.Raw.field "Data" Wire.all_bytes in
+  let data_field = Wire.Private.Everparse.Raw.field "Data" Wire.all_bytes in
   let raw_struct =
-    Wire.Everparse.Raw.struct_ "ApiRaw"
-      [ len_field; Wire.Everparse.Raw.anon_field Wire.uint8; data_field ]
+    Wire.Private.Everparse.Raw.struct_ "ApiRaw"
+      [
+        len_field; Wire.Private.Everparse.Raw.anon_field Wire.uint8; data_field;
+      ]
   in
   (len_field, raw_struct)
 
 let check_everparse_schema raw_struct =
-  let schema = Wire.Everparse.Raw.project_struct ~mode:`Ffi raw_struct in
+  let schema =
+    Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi raw_struct
+  in
   check_string "Everparse.filename" "ApiRaw.3d" (Wire.Everparse.filename schema);
-  if not (Wire.Everparse.uses_wire_ctx schema) then
+  if not (Wire.Private.Everparse.uses_wire_ctx schema) then
     Alcobar.failf "schema_of_struct did not use WireCtx";
-  (match Wire.Everparse.entrypoint_struct schema with
+  (match Wire.Private.Everparse.entrypoint_struct schema with
   | Some _ -> ()
   | None -> Alcobar.failf "schema_of_struct has no entrypoint");
-  let visitor_fields = Wire.Everparse.visitor_fields schema in
-  assert_contains "Everparse.visitor_fields"
-    (List.map (fun f -> f.Wire.Everparse.name) visitor_fields)
+  let visitor_fields = Wire.Private.Everparse.visitor_fields schema in
+  assert_contains "Private.Everparse.visitor_fields"
+    (List.map (fun f -> f.Wire.Private.Everparse.name) visitor_fields)
     [ "Len"; "Data" ];
-  if Wire.Everparse.visitor_setters schema = [] then
-    Alcobar.failf "Everparse.visitor_setters empty";
-  if Wire.Everparse.extern_fn_names schema = [] then
-    Alcobar.failf "Everparse.extern_fn_names empty"
+  if Wire.Private.Everparse.visitor_setters schema = [] then
+    Alcobar.failf "Private.Everparse.visitor_setters empty";
+  if Wire.Private.Everparse.extern_fn_names schema = [] then
+    Alcobar.failf "Private.Everparse.extern_fn_names empty"
 
 let check_raw_struct_metadata raw_struct len_field =
-  let forms = Wire.Everparse.field_action_forms raw_struct in
+  let forms = Wire.Private.Everparse.field_action_forms raw_struct in
   if List.length forms <> 3 then
     Alcobar.failf "field_action_forms returned %d fields" (List.length forms);
   check_string "Raw.struct_name" "ApiRaw"
-    (Wire.Everparse.Raw.struct_name raw_struct);
+    (Wire.Private.Everparse.Raw.struct_name raw_struct);
   assert_contains "Raw.field_names"
-    (Wire.Everparse.Raw.field_names raw_struct)
+    (Wire.Private.Everparse.Raw.field_names raw_struct)
     [ "Len"; "Data" ];
   let projected =
-    Wire.Everparse.Raw.struct_project raw_struct ~name:"ApiProjected"
+    Wire.Private.Everparse.Raw.struct_project raw_struct ~name:"ApiProjected"
       ~keep:[ len_field ]
   in
-  let _ = Wire.Everparse.Raw.field_ref len_field in
-  let _ = Wire.Everparse.Raw.struct_typ raw_struct in
-  (match Wire.Everparse.Raw.struct_size raw_struct with
+  let _ = Wire.Private.Everparse.Raw.field_ref len_field in
+  let _ = Wire.Private.Everparse.Raw.struct_typ raw_struct in
+  (match Wire.Private.Everparse.Raw.struct_size raw_struct with
   | None -> ()
   | Some n -> Alcobar.failf "Raw.struct_size all_bytes = Some %d" n);
   assert_contains "Raw.struct_project"
-    (Wire.Everparse.Raw.field_names projected)
+    (Wire.Private.Everparse.Raw.field_names projected)
     [ "Len" ]
 
 let public_param_struct () =
-  let p = Wire.Everparse.Raw.param "Limit" Wire.uint8 in
-  let p_out = Wire.Everparse.Raw.mutable_param "Out" Wire.uint16be in
+  let p = Wire.Private.Everparse.Raw.param "Limit" Wire.uint8 in
+  let p_out = Wire.Private.Everparse.Raw.mutable_param "Out" Wire.uint16be in
   let param_struct =
-    Wire.Everparse.Raw.param_struct "ApiParamRaw" [ p; p_out ]
-      [ Wire.Everparse.Raw.field "Value" Wire.uint8 ]
+    Wire.Private.Everparse.Raw.param_struct "ApiParamRaw" [ p; p_out ]
+      [ Wire.Private.Everparse.Raw.field "Value" Wire.uint8 ]
   in
   (p, param_struct)
 
 let check_raw_param_metadata param_struct raw_struct =
-  if List.length (Wire.Everparse.Raw.struct_params param_struct) <> 2 then
-    Alcobar.failf "Raw.struct_params length mismatch";
+  if List.length (Wire.Private.Everparse.Raw.struct_params param_struct) <> 2
+  then Alcobar.failf "Raw.struct_params length mismatch";
   assert_contains "Raw.input_param_names"
-    (Wire.Everparse.Raw.input_param_names param_struct)
+    (Wire.Private.Everparse.Raw.input_param_names param_struct)
     [ "Limit" ];
-  if Wire.Everparse.Raw.input_param_c_types param_struct = [] then
+  if Wire.Private.Everparse.Raw.input_param_c_types param_struct = [] then
     Alcobar.failf "Raw.input_param_c_types empty";
-  if Wire.Everparse.Raw.field_kinds raw_struct = [] then
+  if Wire.Private.Everparse.Raw.field_kinds raw_struct = [] then
     Alcobar.failf "Raw.field_kinds empty";
   let app =
-    Wire.Everparse.Raw.apply
-      (Wire.Everparse.Raw.type_ref "ApiParamRaw")
+    Wire.Private.Everparse.Raw.apply
+      (Wire.Private.Everparse.Raw.type_ref "ApiParamRaw")
       [ Wire.int 3 ]
   in
-  let _ = Fmt.str "%a" Wire.Everparse.Raw.pp_typ app in
+  let _ = Fmt.str "%a" Wire.Private.Everparse.Raw.pp_typ app in
   let _ =
-    Fmt.str "%a" Wire.Everparse.Raw.pp_typ
-      (Wire.Everparse.Raw.qualified_ref "Api" "Other")
+    Fmt.str "%a" Wire.Private.Everparse.Raw.pp_typ
+      (Wire.Private.Everparse.Raw.qualified_ref "Api" "Other")
   in
   ()
 
 let check_raw_module_helpers raw_struct p param_struct =
   let module_ =
-    Wire.Everparse.Raw.module_ ~doc:"api raw module"
+    Wire.Private.Everparse.Raw.module_ ~doc:"api raw module"
       [
-        Wire.Everparse.Raw.define "ApiLimit" 255;
-        Wire.Everparse.Raw.extern_probe ~init:true "ApiProbe";
-        Wire.Everparse.Raw.extern_probe "ApiProbeNoInit";
-        Wire.Everparse.Raw.extern_fn "ApiExtern" [ p ] Wire.uint8;
-        Wire.Everparse.Raw.enum_decl "ApiEnum"
+        Wire.Private.Everparse.Raw.define "ApiLimit" 255;
+        Wire.Private.Everparse.Raw.extern_probe ~init:true "ApiProbe";
+        Wire.Private.Everparse.Raw.extern_probe "ApiProbeNoInit";
+        Wire.Private.Everparse.Raw.extern_fn "ApiExtern" [ p ] Wire.uint8;
+        Wire.Private.Everparse.Raw.enum_decl "ApiEnum"
           [ ("Zero", 0); ("One", 1) ]
           Wire.uint8;
-        Wire.Everparse.Raw.casetype_decl "ApiCase" [] Wire.uint8
+        Wire.Private.Everparse.Raw.casetype_decl "ApiCase" [] Wire.uint8
           [
-            Wire.Everparse.Raw.decl_case 1 Wire.uint8;
-            Wire.Everparse.Raw.decl_default Wire.uint16be;
+            Wire.Private.Everparse.Raw.decl_case 1 Wire.uint8;
+            Wire.Private.Everparse.Raw.decl_default Wire.uint16be;
           ];
-        Wire.Everparse.Raw.typedef ~entrypoint:true ~export:true ~output:true
-          ~doc:"raw entry" raw_struct;
-        Wire.Everparse.Raw.typedef param_struct;
+        Wire.Private.Everparse.Raw.typedef ~entrypoint:true ~export:true
+          ~output:true ~doc:"raw entry" raw_struct;
+        Wire.Private.Everparse.Raw.typedef param_struct;
       ]
   in
-  let rendered = Wire.Everparse.Raw.to_3d module_ in
+  let rendered = Wire.Private.Everparse.Raw.to_3d module_ in
   if String.length rendered = 0 then Alcobar.failf "Raw.to_3d empty";
-  let rendered_enum = Wire.Everparse.Raw.to_3d ~enum_as_type:true module_ in
+  let rendered_enum =
+    Wire.Private.Everparse.Raw.to_3d ~enum_as_type:true module_
+  in
   if String.length rendered_enum = 0 then
     Alcobar.failf "Raw.to_3d ~enum_as_type empty";
-  let _ = Fmt.str "%a" Wire.Everparse.Raw.pp_module module_ in
+  let _ = Fmt.str "%a" Wire.Private.Everparse.Raw.pp_module module_ in
   let module_schema =
-    Wire.Everparse.Raw.of_module ~name:"ApiModule" ~module_ ~wire_size:1
+    Wire.Private.Everparse.Raw.of_module ~name:"ApiModule" ~module_ ~wire_size:1
   in
-  check_string "Raw.of_module" "ApiModule" module_schema.Wire.Everparse.name;
+  check_string "Raw.of_module" "ApiModule" (Wire.Everparse.name module_schema);
   let codec = fst5 (api_access_codec ()) in
-  let st = Wire.Everparse.Raw.struct_of_codec codec in
+  let st = Wire.Private.Everparse.Raw.struct_of_codec codec in
   let _ = Wire.Everparse.project ~mode:`Standalone codec in
-  let _ = Fmt.str "%a" Wire.Ascii.pp_struct st in
+  let _ = Fmt.str "%a" Wire.Private.Ascii.pp_struct st in
   let _ = Fmt.str "%a" Wire.Ascii.pp_codec codec in
   ()
 
@@ -613,9 +609,9 @@ let check_write_helpers_once () =
   Wire.Everparse.write ~mode:`Ffi ~outdir [ schema ];
   Wire.Everparse.write ~mode:`Standalone ~outdir ~name:"ApiDoc" [ doc_schema ];
   merged_write_once ~outdir;
-  Wire.Everparse.Raw.to_3d_file ~enum_as_type:true
+  Wire.Private.Everparse.Raw.to_3d_file ~enum_as_type:true
     (Filename.concat outdir "ApiRawDirect.3d")
-    schema.module_
+    (Wire.Private.Everparse.module_ schema)
 
 (* Direct checks for a representative slice of the public [Wire] API -- field /
    bitfield / slice accessors and setters, custom sequences, struct validation,

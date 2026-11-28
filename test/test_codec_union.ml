@@ -52,8 +52,8 @@ let packet kind body =
   }
 
 let encoded codec v =
-  let buf = Bytes.create (Codec.encoded_size codec v) in
-  Codec.encode codec v buf 0;
+  let buf = Bytes.create (Codec.size codec v) in
+  Codec.encode codec v buf ~off:0;
   Bytes.to_string buf
 
 let wire_of = encoded packet_codec
@@ -63,7 +63,7 @@ let test_decode () =
     decode_ok
       (Codec.decode packet_codec
          (Bytes.of_string "\x02\xde\xad\xbe\xef\x00\x00\x01\x00\x7e")
-         0)
+         ~off:0)
   in
   Alcotest.(check bool) "data" true (r.body = `Data (UInt32.of_int 256));
   Alcotest.(check int) "tail" 0x7e (UInt8.to_int r.tail)
@@ -73,9 +73,11 @@ let test_roundtrip () =
     (fun (p, expected) ->
       let s = wire_of p in
       Alcotest.(check string) "bytes" expected s;
-      let r = decode_ok (Codec.decode packet_codec (Bytes.of_string s) 0) in
+      let r =
+        decode_ok (Codec.decode packet_codec (Bytes.of_string s) ~off:0)
+      in
       Alcotest.(check bool) "value" true (r = p);
-      decode_ok (Codec.validate packet_codec (Bytes.of_string s) 0))
+      decode_ok (Codec.validate packet_codec (Bytes.of_string s) ~off:0))
     [
       (packet 1 (`Ping (UInt16.v 0x1234)), "\x01\xde\xad\xbe\xef\x12\x34\x7e");
       ( packet 2 (`Data (UInt32.of_int 7)),
@@ -89,7 +91,8 @@ let test_encode_mismatch () =
   let p = packet 2 (`Ping (UInt16.v 1)) in
   Alcotest.(check bool)
     "refused" true
-    (raises_invalid (fun () -> Codec.encode packet_codec p (Bytes.create 16) 0))
+    (raises_invalid (fun () ->
+         Codec.encode packet_codec p (Bytes.create 16) ~off:0))
 
 (* The default branch carries its tag, but not one a case claims: those bytes
    would decode as the case. *)
@@ -97,7 +100,8 @@ let test_encode_default_claimed () =
   let p = packet 1 (`Other (UInt8.v 1, UInt8.v 5)) in
   Alcotest.(check bool)
     "refused" true
-    (raises_invalid (fun () -> Codec.encode packet_codec p (Bytes.create 16) 0))
+    (raises_invalid (fun () ->
+         Codec.encode packet_codec p (Bytes.create 16) ~off:0))
 
 let closed_codec =
   let f_tag = Field.v "Tag" uint8 in
@@ -116,14 +120,14 @@ let closed_codec =
 
 let test_unknown_tag () =
   let buf = Bytes.of_string "\x63\x00\x00" in
-  (match Codec.decode closed_codec buf 0 with
+  (match Codec.decode closed_codec buf ~off:0 with
   | Error { Error.kind = Invalid_tag n; field; at } ->
       Alcotest.(check int) "tag" 99 n;
       Alcotest.(check int) "at the tag field" 0 at;
       Alcotest.(check (list string)) "field" [ "V" ] field
   | Error e -> Alcotest.failf "expected Invalid_tag, got %a" Error.pp e
   | Ok _ -> Alcotest.fail "decoded an unclaimed tag");
-  match Codec.validate closed_codec buf 0 with
+  match Codec.validate closed_codec buf ~off:0 with
   | Error { Error.kind = Invalid_tag 99; _ } -> ()
   | Error e -> Alcotest.failf "expected Invalid_tag, got %a" Error.pp e
   | Ok () -> Alcotest.fail "validated an unclaimed tag"
@@ -131,7 +135,9 @@ let test_unknown_tag () =
 let test_truncated () =
   expect_kind
     (function Unexpected_eof _ -> true | _ -> false)
-    (Codec.decode packet_codec (Bytes.of_string "\x02\xde\xad\xbe\xef\x00") 0)
+    (Codec.decode packet_codec
+       (Bytes.of_string "\x02\xde\xad\xbe\xef\x00")
+       ~off:0)
 
 (* Tags too large or too sparse for the lookup table take the comparing path;
    two unions may read the one tag. *)
@@ -167,10 +173,10 @@ let test_wide_tags () =
   in
   List.iter
     (fun (v, expected) ->
-      let buf = Bytes.create (Codec.encoded_size wide_codec v) in
-      Codec.encode wide_codec v buf 0;
+      let buf = Bytes.create (Codec.size wide_codec v) in
+      Codec.encode wide_codec v buf ~off:0;
       Alcotest.(check string) "bytes" expected (Bytes.to_string buf);
-      let back = decode_ok (Codec.decode wide_codec buf 0) in
+      let back = decode_ok (Codec.decode wide_codec buf ~off:0) in
       Alcotest.(check string) "decoded" expected (encoded wide_codec back))
     [ (v4, "\x08\x00\x04\x00\x06"); (v6, "\x86\xdd\x00\x04\x06") ]
 
@@ -195,10 +201,10 @@ let test_bitfield_tag () =
         ]
   in
   let v = (5, 0xa, Either.Right (UInt8.v 0x42)) in
-  let buf = Bytes.create (Codec.encoded_size c v) in
-  Codec.encode c v buf 0;
+  let buf = Bytes.create (Codec.size c v) in
+  Codec.encode c v buf ~off:0;
   Alcotest.(check int) "size" 2 (Bytes.length buf);
-  let back = decode_ok (Codec.decode c buf 0) in
+  let back = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check string) "decoded" "\x5a\x42" (encoded c back)
 
 let test_non_integer_tag_rejected () =
@@ -222,10 +228,10 @@ let test_projection () =
 let test_validate_no_alloc () =
   skip_unless_gc_counters ();
   let buf = Bytes.of_string "\x02\xde\xad\xbe\xef\x00\x00\x01\x00\x7e" in
-  decode_ok (Codec.validate packet_codec buf 0);
+  decode_ok (Codec.validate packet_codec buf ~off:0);
   let before = Gc.minor_words () in
   for _ = 1 to 1000 do
-    decode_ok (Codec.validate packet_codec buf 0)
+    decode_ok (Codec.validate packet_codec buf ~off:0)
   done;
   let after = Gc.minor_words () in
   Alcotest.(check (float 0.)) "words" 0. (after -. before)

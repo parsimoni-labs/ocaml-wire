@@ -26,8 +26,8 @@ let schema name codec size default make_data =
     size;
     default;
     make_data;
-    decode = Wire.Codec.decode codec;
-    encode = Wire.Codec.encode codec;
+    decode = (fun buf off -> Wire.Codec.decode codec buf ~off);
+    encode = (fun v buf off -> Wire.Codec.encode codec v buf ~off);
   }
 
 (* -- Nested codec schemas for allocation tracking -- *)
@@ -336,59 +336,62 @@ let cf_lockout = Space.bf_cw_lockout
 let cf_wait = Space.bf_cw_wait
 let cf_retransmit = Space.bf_cw_retransmit
 
-(* A CLCW field of a word the bench wrote itself. *)
-let clcw_field f =
-  let read = Wire.Codec.get clcw_codec f in
-  fun buf off ->
-    match read buf off with
-    | Ok v -> v
-    | Error e -> Fmt.failwith "CLCW: %a" Wire.Error.pp e
+module V = Wire.Codec.View
+
+(* The view of a CLCW word the bench wrote itself. *)
+let clcw_view b off =
+  let k = V.check clcw_codec b ~off in
+  if V.is_ok k then V.get k
+  else Fmt.failwith "CLCW: the check refused the word at %d" off
 
 let run_zero_copy () =
   let data = clcw_data n_values in
-  let get_report = clcw_field cf_report in
-  let set_report = Wire.Codec.set clcw_codec cf_report in
+  let report = V.field clcw_codec cf_report in
   Fmt.pr "  CLCW zero-copy get...\n%!";
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do
-      ignore (get_report data.(i) 0)
+      let (Wire.Buf.Any b) = Wire.Buf.v data.(i) in
+      ignore (V.read b (clcw_view b 0) report)
     done
   done;
   Fmt.pr "  CLCW zero-copy set...\n%!";
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do
-      set_report data.(i) 0 42
+      let (Wire.Buf.Any b) = Wire.Buf.v data.(i) in
+      V.set b (clcw_view b 0) report 42
     done
   done;
   Fmt.pr "  CLCW zero-copy roundtrip...\n%!";
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do
-      let x = get_report data.(i) 0 in
-      set_report data.(i) 0 x
+      let (Wire.Buf.Any b) = Wire.Buf.v data.(i) in
+      let v = clcw_view b 0 in
+      V.set b v report (V.read b v report)
     done
   done
 
 let run_clcw_polling () =
   let data = clcw_data n_values in
-  let get_lockout = clcw_field cf_lockout in
-  let get_wait = clcw_field cf_wait in
-  let get_retransmit = clcw_field cf_retransmit in
-  let get_report = clcw_field cf_report in
+  let lockout = V.field clcw_codec cf_lockout in
+  let wait = V.field clcw_codec cf_wait in
+  let retransmit = V.field clcw_codec cf_retransmit in
+  let report = V.field clcw_codec cf_report in
   Fmt.pr "  CLCW polling (4 bitfield reads per word)...\n%!";
   for _ = 1 to iterations do
     for i = 0 to Array.length data - 1 do
-      let buf = data.(i) in
-      let lockout = get_lockout buf 0 in
-      let wait = get_wait buf 0 in
-      let retransmit = get_retransmit buf 0 in
-      let report = get_report buf 0 in
+      let (Wire.Buf.Any b) = Wire.Buf.v data.(i) in
+      let v = clcw_view b 0 in
+      let lockout = V.read b v lockout in
+      let wait = V.read b v wait in
+      let retransmit = V.read b v retransmit in
+      let report = V.read b v report in
       ignore (Sys.opaque_identity (lockout + wait + retransmit + report))
     done
   done
 
 let run_kexinit () =
   let buf = kexinit_wire () in
-  let decode = Wire.Codec.decode kexinit_codec in
+  let decode buf off = Wire.Codec.decode kexinit_codec buf ~off in
   Fmt.pr "  KEXINIT decode (10 length-prefixed name-lists)...\n%!";
   for _ = 1 to iterations do
     for _ = 1 to n_values do

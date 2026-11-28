@@ -1,6 +1,6 @@
 (** APID demux: a SpaceWire CCSDS Packet Transfer Protocol router counting the
     packets of each route, each header checked by Wire's
-    {!Wire.Codec.Word.check} and its fields taken with {!Wire.Codec.Word.read}.
+    {!Wire.Codec.View.check} and its fields read with {!Wire.Codec.View.read}.
     The OCaml rows of [bench/routing] and [bench/apps] run it. *)
 
 val generate_stream : int -> bytes * int * int
@@ -41,8 +41,8 @@ val run_packets :
 val stamp : bytes -> int -> apid:int -> seq:int -> dlen:Wire.UInt16.t -> unit
 (** [stamp out o ~apid ~seq ~dlen] writes at [o] in [out] the header of a
     telemetry packet with a secondary header, unsegmented, with APID [apid],
-    sequence count [seq] and data length [dlen], by Wire's {!Wire.Codec.writer}
-    of {!Space.packet_default} and those three fields. *)
+    sequence count [seq] and data length [dlen], by Wire's {!Wire.Codec.encode}
+    of {!Space.packet_default} with those three fields. *)
 
 val restamp : buf:bytes -> total_bytes:int -> out:bytes -> int -> unit
 (** [restamp ~buf ~total_bytes ~out n] reads the headers of [n] packets as

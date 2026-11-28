@@ -15,11 +15,14 @@ let clcw_word ~status ~cop ~vcid ~no_rf ~no_bitlock ~lockout ~wait ~retransmit
 let test_clcw_layout () =
   let buf = Bytes.create Space.clcw_size in
   let get f =
-    let read = Codec.get Space.clcw_codec f in
+    let f = Codec.View.field Space.clcw_codec f in
     fun buf off ->
-      match read buf off with
-      | Ok v -> v
-      | Error e -> Alcotest.failf "%a" Error.pp e
+      let (Buf.Any b) = Buf.v buf in
+      let k = Codec.View.check Space.clcw_codec b ~off in
+      if not (Codec.View.is_ok k) then
+        Alcotest.failf "%a" Error.pp
+          (Result.get_error (Codec.validate Space.clcw_codec buf ~off));
+      Codec.View.read b (Codec.View.get k) f
   in
   let lockout = get Space.bf_cw_lockout and wait = get Space.bf_cw_wait in
   let retransmit = get Space.bf_cw_retransmit in
