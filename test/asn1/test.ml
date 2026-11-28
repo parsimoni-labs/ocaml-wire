@@ -318,6 +318,43 @@ let test_framed () =
     "no binary under a containing" []
     (List.map Everparse.name (Asn1.contained Asn1_modules.framed))
 
+(* The binary half of the same codec projects to 3D, the DER value a byte
+   region of its declared size: 3D checks the framing, everparse-asn1 the DER
+   held in it. *)
+let framed_3d =
+  {|entrypoint
+typedef struct WireFramed
+{
+   UINT16BE len;
+   UINT8 key[:byte-size len];
+} Framed;
+
+|}
+
+let framed_3d_ffi =
+  {|extern typedef struct WireWireCtx WireCtx
+
+extern unit FramedSetU16BE(mutable WireCtx *ctx, UINT32 idx, UINT16BE v)
+
+extern unit FramedSetBytes(mutable WireCtx *ctx, UINT32 idx, UINT32 v)
+
+entrypoint
+typedef struct WireFramed(mutable WireCtx *ctx)
+{
+   UINT16BE len {:on-success FramedSetU16BE(ctx, (UINT32) 0, len); return true; };
+   UINT8 key[:byte-size len] {:on-success FramedSetBytes(ctx, (UINT32) 1, (UINT32) 2); return true; };
+} Framed;
+
+|}
+
+let test_framed_3d () =
+  let text mode =
+    Private.Everparse.Raw.to_3d
+      (Private.Everparse.module_ (Everparse.project ~mode Asn1_modules.framed))
+  in
+  Alcotest.(check string) "standalone" framed_3d (text `Standalone);
+  Alcotest.(check string) "ffi" framed_3d_ffi (text `Ffi)
+
 let test_wrapped () =
   Alcotest.(check (list string))
     "the binary contents only" [ "Payload" ]
@@ -419,6 +456,7 @@ let suite =
       Alcotest.test_case "times, IRIs and RELATIVE-OID" `Quick
         (check_module "Times" Asn1_modules.times ~roots:[ "Times" ] times_asn);
       Alcotest.test_case "DER in a binary codec" `Quick test_framed;
+      Alcotest.test_case "DER in a binary codec: 3D" `Quick test_framed_3d;
       Alcotest.test_case "DER under a containing" `Quick
         (check_module "Wrapped" Asn1_modules.wrapped ~roots:[ "Wrapped" ]
            wrapped_asn);
