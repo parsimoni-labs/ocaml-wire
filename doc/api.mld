@@ -162,7 +162,7 @@ let routes buf =
 ]}
 
 The generated [check] takes the buffer's length, which a loop reads once per
-buffer with {!Wire.Buf.length}: read in each check, it would cost nine
+buffer with {!Wire.Buf.val-length}: read in each check, it would cost nine
 instructions per record that ocamlopt does not hoist out of the loop.
 Otherwise switching is a one-to-one rename:
 

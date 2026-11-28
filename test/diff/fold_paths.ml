@@ -9,20 +9,21 @@ type leaf = {
 
 (* An optional field's presence is a [Bool] member of the same record, its
    output the field's followed by [_present]. *)
-let presence (view : Wire_ocaml.view) output =
+let presence (view : Wire_ocaml.Views.t) output =
   let p = output ^ "_present" in
   if
     List.exists
-      (function Wire_ocaml.Bool { output; _ } -> output = p | _ -> false)
+      (function
+        | Wire_ocaml.Views.Bool { output; _ } -> output = p | _ -> false)
       view.members
   then Some p
   else None
 
 let leaves c =
-  let rec go steps (view : Wire_ocaml.view) =
+  let rec go steps (view : Wire_ocaml.Views.t) =
     List.concat_map
       (function
-        | Wire_ocaml.Int { name; output; carrier } ->
+        | Wire_ocaml.Views.Int { name; output; carrier } ->
             let steps = steps @ [ name ] in
             [
               {
@@ -38,7 +39,7 @@ let leaves c =
         | Bool _ | Bytes _ -> [])
       view.members
   in
-  go [] (Wire_ocaml.views c)
+  go [] (Wire_ocaml.Views.v c)
 
 let paths ls = List.map (fun l -> l.path) ls
 

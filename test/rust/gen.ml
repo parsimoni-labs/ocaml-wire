@@ -40,15 +40,15 @@ let constant present =
 
 (* The path of every integer field of [c], as a fold names it. *)
 let paths c =
-  let rec go prefix (view : Wire_ocaml.view) =
+  let rec go prefix (view : Wire_ocaml.Views.t) =
     List.concat_map
       (function
-        | Wire_ocaml.Int { name; _ } -> [ prefix ^ name ]
+        | Wire_ocaml.Views.Int { name; _ } -> [ prefix ^ name ]
         | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
         | Bool _ | Bytes _ -> [])
       view.members
   in
-  go "" (Wire_ocaml.views c)
+  go "" (Wire_ocaml.Views.v c)
 
 (* Each module, with a fold of every integer field, and the packet stack's
    with a fold of none too. *)

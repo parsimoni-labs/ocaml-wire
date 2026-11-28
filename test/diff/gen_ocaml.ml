@@ -23,12 +23,12 @@ type field = {
 let accessors c =
   List.map
     (function
-      | Wire_ocaml.Int { name; _ }
+      | Wire_ocaml.Views.Int { name; _ }
       | Bool { name; _ }
       | Record { name; _ }
       | Bytes { name; _ } ->
           name)
-    (Wire_ocaml.views c).members
+    (Wire_ocaml.Views.v c).members
 
 let fields c =
   let accs = accessors c in
@@ -189,12 +189,12 @@ let pp_full ~m ppf ls =
     m pp_visitor ls
 
 (* The outputs of [view], each [fill]. *)
-let rec view_zeros ~fill (view : Wire_ocaml.view) =
+let rec view_zeros ~fill (view : Wire_ocaml.Views.t) =
   Fmt.str "List.concat [%s]"
     (String.concat "; "
        (List.map
           (function
-            | Wire_ocaml.Int { output; _ } | Bool { output; _ } ->
+            | Wire_ocaml.Views.Int { output; _ } | Bool { output; _ } ->
                 Fmt.str "[ (%S, %s) ]" output fill
             | Bytes _ -> "[]"
             | Record { presence; view; _ } ->
@@ -208,12 +208,12 @@ let rec view_zeros ~fill (view : Wire_ocaml.view) =
    scanner [m], from the view [v] of [bb]: a record that is absent hands out
    0 for each of its outputs, and a mandatory one whose check fails
    [min_int], which no reference states. *)
-let rec view_outputs ~m ~path (view : Wire_ocaml.view) =
+let rec view_outputs ~m ~path (view : Wire_ocaml.Views.t) =
   Fmt.str "(List.concat [%s])"
     (String.concat "; " (List.map (view_member ~m ~path) view.members))
 
 and view_member ~m ~path = function
-  | Wire_ocaml.Int { name; output; carrier } ->
+  | Wire_ocaml.Views.Int { name; output; carrier } ->
       Fmt.str "[ (%S, %s (%s.%s bb v)) ]" output
         (match carrier with Some m -> m ^ ".to_int" | None -> "Fun.id")
         path name
@@ -260,12 +260,12 @@ let pp_view_backend ppf ~m ~codec ~ls c =
     fields (pp_full ~m) ls frame check m
     (if
        List.for_all
-         (function Wire_ocaml.Bytes _ -> true | _ -> false)
-         (Wire_ocaml.views c).members
+         (function Wire_ocaml.Views.Bytes _ -> true | _ -> false)
+         (Wire_ocaml.Views.v c).members
      then "_"
      else "v")
     m
-    (view_outputs ~m ~path:m (Wire_ocaml.views c))
+    (view_outputs ~m ~path:m (Wire_ocaml.Views.v c))
 
 (* Whether the module holds a fixed record's members, which the record
    glue reads: its [encode] is its [write]. Without them its values go through

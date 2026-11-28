@@ -15,7 +15,7 @@ type leaf = {
 
 val leaves : 'r Wire.Codec.t -> leaf list
 (** [leaves c] is every integer field of [c]'s views, in declaration order.
-    Raises [Invalid_argument] as {!Wire_ocaml.views} does. *)
+    Raises [Invalid_argument] as {!Wire_ocaml.Views.v} does. *)
 
 val accepted : (string list -> 'a) -> leaf list -> leaf list
 (** [accepted make ls] is [ls], or, when [make] of their paths raises

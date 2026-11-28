@@ -19,15 +19,15 @@ let () =
   spec dir "Stack" Packet_stack.codec;
   spec dir "BfConstrained" Demo.bf_constrained_codec;
   spec dir "ReservedFields" Demo.reserved_fields_codec;
-  let rec paths prefix (view : Wire_ocaml.view) =
+  let rec paths prefix (view : Wire_ocaml.Views.t) =
     List.concat_map
       (function
-        | Wire_ocaml.Int { name; _ } -> [ prefix ^ name ]
+        | Wire_ocaml.Views.Int { name; _ } -> [ prefix ^ name ]
         | Record { name; view; _ } -> paths (prefix ^ name ^ ".") view
         | Bool _ | Bytes _ -> [])
       view.members
   in
-  let fold = paths "" (Wire_ocaml.views Packet_stack.codec) in
+  let fold = paths "" (Wire_ocaml.Views.v Packet_stack.codec) in
   let stack target = Wire_ocaml.(to_ml (v ~target ~fold Packet_stack.codec)) in
   write dir "stack_step.gen" (stack `OCaml);
   write dir "stack_step_ox.gen" (stack `OxCaml);

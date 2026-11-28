@@ -270,34 +270,38 @@ val outputs : 'r Wire.Codec.t -> (string * bool) list
     ['_'], and for each optional field [<path>_present], flagged [true]. A field
     in an anonymous one is checked but not an output. A field's label is the
     OCaml name the module gives it, its record field and its accessor unless the
-    module defines that name ({{!views}Views}), for either target: the field's
-    name lower-cased, any character other than a letter, a digit or ['_'] turned
-    into ['_'], prefixed with ["f_"] when that is empty or starts with a digit,
-    and suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the
-    code for the default target compiles on an OxCaml compiler too. Raises
+    module defines that name ({!modules}), for either target: the field's name
+    lower-cased, any character other than a letter, a digit or ['_'] turned into
+    ['_'], prefixed with ["f_"] when that is empty or starts with a digit, and
+    suffixed with ['_'] when it is a keyword of OCaml or of OxCaml, so the code
+    for the default target compiles on an OxCaml compiler too. Raises
     [Invalid_argument] for a codec no fold covers. *)
 
-type view = { module_name : string option; members : view_member list }
-(** The views of a record: its module, [None] for the codec's own, and its
-    accessors in declaration order. *)
+(** The views of a module, its accessors as the tests and the proofs name them.
+*)
+module Views : sig
+  type t = { module_name : string option; members : member list }
+  (** The views of a record: its module, [None] for the codec's own, and its
+      accessors in declaration order. *)
 
-(** An accessor and the output of {!outputs} it reads. *)
-and view_member =
-  | Int of { name : string; output : string; carrier : string option }
-      (** An integer field, and the module of its accessor's type when that is
-          not [int]: ["Wire_runtime.UInt16"] for a 16-bit integer. *)
-  | Bool of { name : string; output : string }
-      (** The presence of an optional field that holds no record. *)
-  | Record of { name : string; presence : string option; view : view }
-      (** A field that holds a record, with the output of its presence when it
-          is optional. *)
-  | Bytes of { name : string; slice : bool }
-      (** A named field of bytes, which no fold hands out: a
-          [Bytesrw.Bytes.Slice.t] when [slice], a [string] otherwise. *)
+  (** An accessor and the output of {!outputs} it reads. *)
+  and member =
+    | Int of { name : string; output : string; carrier : string option }
+        (** An integer field, and the module of its accessor's type when that is
+            not [int]: ["Wire_runtime.UInt16"] for a 16-bit integer. *)
+    | Bool of { name : string; output : string }
+        (** The presence of an optional field that holds no record. *)
+    | Record of { name : string; presence : string option; view : t }
+        (** A field that holds a record, with the output of its presence when it
+            is optional. *)
+    | Bytes of { name : string; slice : bool }
+        (** A named field of bytes, which no fold hands out: a
+            [Bytesrw.Bytes.Slice.t] when [slice], a [string] otherwise. *)
 
-val views : 'r Wire.Codec.t -> view
-(** [views c] is the views the module of [c] has. Raises [Invalid_argument] for
-    a codec no fold covers. *)
+  val v : 'r Wire.Codec.t -> t
+  (** [v c] is the views the module of [c] has. Raises [Invalid_argument] for a
+      codec no fold covers. *)
+end
 
 val fstar :
   ?fields:string list ->
@@ -693,7 +697,7 @@ module Plan : sig
 
   val records : ?reserved:string list -> 'r Wire.Codec.t -> records
   (** [records ?reserved c] is the records the views of [c]'s module reach, with
-      its accessors named as {!views} names them, a name of [reserved] escaped
+      its accessors named as {!Views.v} names them, a name of [reserved] escaped
       as a keyword is. Raises [Invalid_argument] with the reason for a codec no
       fold covers. *)
 

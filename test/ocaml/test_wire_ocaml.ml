@@ -36,15 +36,15 @@ let mli ?(target = `OCaml) c = Wire_ocaml.(to_mli (v ~target c))
 
 (* The path of every integer field of [c], as a fold names it. *)
 let paths c =
-  let rec go prefix (view : Wire_ocaml.view) =
+  let rec go prefix (view : Wire_ocaml.Views.t) =
     List.concat_map
       (function
-        | Wire_ocaml.Int { name; _ } -> [ prefix ^ name ]
+        | Wire_ocaml.Views.Int { name; _ } -> [ prefix ^ name ]
         | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
         | Bool _ | Bytes _ -> [])
       view.members
   in
-  go "" (Wire_ocaml.views c)
+  go "" (Wire_ocaml.Views.v c)
 
 let scanner ?(target = `OCaml) ?fields c =
   let fold = match fields with Some f -> f | None -> paths c in

@@ -816,15 +816,15 @@ type texts = { stock : walks; ox : walks }
 (* The path of every integer field of [c], each under the records that hold
    it: the fields of a fold that reads them all. *)
 let paths c =
-  let rec go prefix (view : Wire_ocaml.view) =
+  let rec go prefix (view : Wire_ocaml.Views.t) =
     List.concat_map
       (function
-        | Wire_ocaml.Int { name; _ } -> [ prefix ^ name ]
+        | Wire_ocaml.Views.Int { name; _ } -> [ prefix ^ name ]
         | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
         | Bool _ | Bytes _ -> [])
       view.members
   in
-  go "" (Wire_ocaml.views c)
+  go "" (Wire_ocaml.Views.v c)
 
 let texts c =
   match Wire_ocaml.fstar ~codec:"M" c with

@@ -20,58 +20,63 @@ let map path ~typ m = { path; ocaml = typ; typ = Typ m }
 let named = Option.map (List.map (fun m -> (m.path, m.ocaml, m.typ)))
 let outputs = scanner_fields
 
-type view = { module_name : string option; members : view_member list }
+module Views = struct
+  type t = { module_name : string option; members : member list }
 
-and view_member =
-  | Int of { name : string; output : string; carrier : string option }
-  | Bool of { name : string; output : string }
-  | Record of { name : string; presence : string option; view : view }
-  | Bytes of { name : string; slice : bool }
+  and member =
+    | Int of { name : string; output : string; carrier : string option }
+    | Bool of { name : string; output : string }
+    | Record of { name : string; presence : string option; view : t }
+    | Bytes of { name : string; slice : bool }
 
-(* The outputs of a record reached by the path [prefix] are named after it,
-   with the field's name as the folds hand it out, unescaped. *)
-let views c =
-  let t =
-    Option.get
-      (Writer.views (Writer.v ~require:`Walk ~codec:(Gen.to_struct c).name c))
-  in
-  let global prefix name = if prefix = "" then name else prefix ^ "_" ^ name in
-  let rec view prefix (r : View_module.record) =
-    {
-      module_name = r.module_name;
-      members =
-        List.map
-          (function
-            | View_module.Scalar { name; field } ->
-                let o = Option.get field.output in
-                Int
-                  {
-                    name;
-                    output = global prefix o.name;
-                    carrier = Option.map fst (View_module.carrier field);
-                  }
-            | View_module.Bytes { name; slice; _ } -> Bytes { name; slice }
-            | Present { name; presence } ->
-                Bool { name; output = global prefix presence.name }
-            | Sub { name; sub; presence } ->
-                let path = String.concat "_" (Option.get sub.path) in
-                Record
-                  {
-                    name;
-                    presence =
-                      Option.map
-                        (fun (o : output) -> global prefix o.name)
-                        presence;
-                    view =
-                      view (global prefix path)
-                        (List.find
-                           (fun (r : View_module.record) -> r.id = sub.codec_id)
-                           t.records);
-                  })
-          r.members;
-    }
-  in
-  view "" t.root
+  (* The outputs of a record reached by the path [prefix] are named after it,
+     with the field's name as the folds hand it out, unescaped. *)
+  let v c =
+    let t =
+      Option.get
+        (Writer.views (Writer.v ~require:`Walk ~codec:(Gen.to_struct c).name c))
+    in
+    let global prefix name =
+      if prefix = "" then name else prefix ^ "_" ^ name
+    in
+    let rec view prefix (r : View_module.record) =
+      {
+        module_name = r.module_name;
+        members =
+          List.map
+            (function
+              | View_module.Scalar { name; field } ->
+                  let o = Option.get field.output in
+                  Int
+                    {
+                      name;
+                      output = global prefix o.name;
+                      carrier = Option.map fst (View_module.carrier field);
+                    }
+              | View_module.Bytes { name; slice; _ } -> Bytes { name; slice }
+              | Present { name; presence } ->
+                  Bool { name; output = global prefix presence.name }
+              | Sub { name; sub; presence } ->
+                  let path = String.concat "_" (Option.get sub.path) in
+                  Record
+                    {
+                      name;
+                      presence =
+                        Option.map
+                          (fun (o : output) -> global prefix o.name)
+                          presence;
+                      view =
+                        view (global prefix path)
+                          (List.find
+                             (fun (r : View_module.record) ->
+                               r.id = sub.codec_id)
+                             t.records);
+                    })
+            r.members;
+      }
+    in
+    view "" t.root
+end
 
 let fstar ?fields ~codec c =
   try Fstar_module.modules ?fields ~codec c

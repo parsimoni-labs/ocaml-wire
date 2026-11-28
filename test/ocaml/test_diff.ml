@@ -12,15 +12,15 @@ let contains s sub =
   go 0
 
 let paths c =
-  let rec go prefix (view : Wire_ocaml.view) =
+  let rec go prefix (view : Wire_ocaml.Views.t) =
     List.concat_map
       (function
-        | Wire_ocaml.Int { name; _ } -> [ prefix ^ name ]
+        | Wire_ocaml.Views.Int { name; _ } -> [ prefix ^ name ]
         | Record { name; view; _ } -> go (prefix ^ name ^ ".") view
         | Bool _ | Bytes _ -> [])
       view.members
   in
-  go "" (Wire_ocaml.views c)
+  go "" (Wire_ocaml.Views.v c)
 
 let scanner c = Wire_ocaml.(to_ml (v ~target:`OCaml ~fold:(paths c) c))
 
