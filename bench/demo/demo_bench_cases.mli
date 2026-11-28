@@ -31,7 +31,7 @@ type 'a read_case =
       label : string;
       size : int;
       dataset : dataset;
-      struct_ : Wire.Everparse.struct_;
+      struct_ : Wire.Private.Everparse.struct_;
       codec : 'r Wire.Codec.t;
       get : bytes -> int -> ('a, Wire.Error.t) result;
       set : bytes -> int -> 'a -> unit;
@@ -99,7 +99,7 @@ val projection_cases : packed_case list
 (** [projection_cases] is the subset of read cases used for EverParse C
     projection. *)
 
-val projection_structs : Wire.Everparse.struct_ list
+val projection_structs : Wire.Private.Everparse.struct_ list
 (** [projection_structs] is the list of EverParse struct definitions derived
     from projection cases. *)
 
@@ -108,5 +108,5 @@ val read_benchmark_cases : packed_case list
     Wire types. *)
 
 val write_benchmark_cases : write_case list
-(** [write_benchmark_cases] is the list of write benchmark cases for Codec.set.
-*)
+(** [write_benchmark_cases] is the list of write benchmark cases for
+    Codec.View.set. *)

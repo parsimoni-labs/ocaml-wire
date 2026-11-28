@@ -1,7 +1,7 @@
 (** CLCW polling loop benchmark.
 
     Simulates a COP-1 receiver polling CLCW words, each word checked by Wire's
-    [Codec.Word.check] and its fields taken with [Codec.Word.read] -- all field
+    [Codec.View.check] and its fields read with [Codec.View.read] -- all field
     access is generated from the Wire DSL. The C tier uses EverParse-generated
     validators for field extraction. *)
 

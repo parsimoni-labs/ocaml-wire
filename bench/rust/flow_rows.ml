@@ -60,7 +60,7 @@ let classify_value (p : Packet_stack.capture) =
 
 let flow_codec buf (offs : int array) _ =
   for i = 0 to Array.length offs - 1 do
-    match Codec.decode pcap_record buf (offs.(i) - 16) with
+    match Codec.decode pcap_record buf ~off:(offs.(i) - 16) with
     | Error _ -> ()
     | Ok p -> classify_value p
   done

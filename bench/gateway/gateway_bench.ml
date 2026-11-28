@@ -1,7 +1,7 @@
 (** TM frame reassembly benchmark.
 
     Simulates a downlink TM frame processor, each header checked by Wire's
-    [Codec.Word.check] and its fields taken with [Codec.Word.read] -- all field
+    [Codec.View.check] and its fields read with [Codec.View.read] -- all field
     access is generated from the Wire DSL. The C baseline uses
     EverParse-generated validators for field extraction. *)
 

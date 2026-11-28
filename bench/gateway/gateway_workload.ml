@@ -1,8 +1,9 @@
 (* TM frame reassembly: the frame stream and the walk over the packets each
-   frame carries, each header checked by Wire's [Codec.Word.check] and its
-   fields taken with [Codec.Word.read]. *)
+   frame carries, each header checked by Wire's [Codec.View.check] and its
+   fields read from the view with [Codec.View.read]. *)
 
 module C = Wire.Codec
+module V = C.View
 
 let cadu_size = 1115
 let hdr = Wire.Codec.min_size Space.tm_frame_codec
@@ -14,7 +15,6 @@ let cf_tf_vcid = Space.bf_tf_vcid
 let cf_tf_first_hdr = Space.bf_tf_first_hdr
 let cf_sp_apid = Space.bf_sp_apid
 let cf_sp_seq_count = Space.bf_sp_seq_count
-let cf_sp_data_len = Space.bf_sp_data_len
 
 (* FNV-1a in OCaml's 63-bit [int]: the 64-bit offset basis and prime taken
    modulo 2^63, each product wrapping modulo 2^63 as [int] arithmetic does.
@@ -29,31 +29,33 @@ let generate_frames n =
   let buf = Bytes.create (n * cadu_size) in
   let total_pkts = ref 0 in
   let carry = ref 0 in
-  let set_vcid = C.set Space.tm_frame_codec cf_tf_vcid in
-  let set_fhp = C.set Space.tm_frame_codec cf_tf_first_hdr in
-  let set_apid = C.set Space.packet_codec cf_sp_apid in
-  let set_seq = C.set Space.packet_codec cf_sp_seq_count in
-  let set_dlen = C.set Space.packet_codec cf_sp_data_len in
+  let frame_header vcid first_hdr =
+    { Space.tm_frame_default with Space.vcid; first_hdr }
+  in
   for frame = 0 to n - 1 do
     let base = frame * cadu_size in
-    Wire.Codec.encode Space.tm_frame_codec Space.tm_frame_default buf base;
-    set_vcid buf base (frame mod 8);
+    let vcid = frame mod 8 in
     if frame mod 64 = 63 then begin
       (* An idle frame: its first header pointer, 0x7FE, says that no packet
          starts in it, so a reader walks no packet there. The packet spanning
          into it is lost, and the next frame starts a packet at its first
          byte. *)
-      set_fhp buf base idle_fhp;
+      C.encode Space.tm_frame_codec (frame_header vcid idle_fhp) buf ~off:base;
       carry := 0
     end
     else begin
-      set_fhp buf base !carry;
+      C.encode Space.tm_frame_codec (frame_header vcid !carry) buf ~off:base;
       let data_off = ref (base + hdr + !carry) in
       while !data_off + pkt_size <= base + cadu_size do
         let o = !data_off in
-        set_apid buf o (!total_pkts mod 2048);
-        set_seq buf o (!total_pkts mod 16384);
-        set_dlen buf o (Wire.UInt16.v (pkt_payload - 1));
+        C.encode Space.packet_codec
+          {
+            Space.packet_default with
+            Space.apid = !total_pkts mod 2048;
+            seq_count = !total_pkts mod 16384;
+            data_len = Wire.UInt16.v (pkt_payload - 1);
+          }
+          buf ~off:o;
         data_off := o + pkt_size;
         incr total_pkts
       done;
@@ -64,27 +66,25 @@ let generate_frames n =
   done;
   (buf, !total_pkts)
 
-(* Each header is read once, then the fields the walk needs taken from it. *)
-module W = C.Word
-
-let frame_header = W.reader Space.tm_frame_codec
-let p_vcid = W.field Space.tm_frame_codec cf_tf_vcid
-let p_fhp = W.field Space.tm_frame_codec cf_tf_first_hdr
-let packet_header = W.reader Space.packet_codec
-let p_apid = W.field Space.packet_codec cf_sp_apid
-let p_seq = W.field Space.packet_codec cf_sp_seq_count
+(* Each header is checked once, then the fields the walk needs read from its
+   view. *)
+let p_vcid = V.field Space.tm_frame_codec cf_tf_vcid
+let p_fhp = V.field Space.tm_frame_codec cf_tf_first_hdr
+let p_apid = V.field Space.packet_codec cf_sp_apid
+let p_seq = V.field Space.packet_codec cf_sp_seq_count
 
 (* The packets of the frame at [base], whose first header pointer is [fhp]. *)
 let walk_packets buf base ~fhp on_packet =
   let data_start = base + hdr in
   let off = ref (data_start + fhp) in
   let data_end = data_start + data_field_size in
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
   while !off + pkt_size <= data_end do
-    let k = W.check packet_header buf !off in
-    if W.ok k then begin
-      let w = W.get k in
-      let apid = W.read p_apid w in
-      let seq = W.read p_seq w in
+    let k = V.check Space.packet_codec b ~off:!off in
+    if V.is_ok k then begin
+      let v = V.get k in
+      let apid = V.read b v p_apid in
+      let seq = V.read b v p_seq in
       on_packet apid seq;
       off := !off + pkt_size
     end
@@ -101,11 +101,12 @@ type state = {
 let state buf =
   let n_frames = Bytes.length buf / cadu_size in
   let scan_frame buf base =
-    let k = W.check frame_header buf base in
-    if W.ok k then begin
-      let w = W.get k in
-      let vcid = W.read p_vcid w in
-      let fhp = W.read p_fhp w in
+    let (Wire.Buf.Any b) = Wire.Buf.v buf in
+    let k = V.check Space.tm_frame_codec b ~off:base in
+    if V.is_ok k then begin
+      let v = V.get k in
+      let vcid = V.read b v p_vcid in
+      let fhp = V.read b v p_fhp in
       ignore (Sys.opaque_identity vcid);
       walk_packets buf base ~fhp (fun _apid _seq -> ())
     end
@@ -118,50 +119,62 @@ let state buf =
 let reset state = state.reset_cycle ()
 let step state () = state.scan_once ()
 
+(* The packets of the data field of a frame, from [off] up to [data_end],
+   hashed into [checksum]. *)
+let frame_packets b checksum ~off ~data_end =
+  let off = ref off in
+  while !off + pkt_size <= data_end do
+    let o = !off in
+    let k = V.check Space.packet_codec b ~off:o in
+    if V.is_ok k then begin
+      let v = V.get k in
+      let apid = V.read b v p_apid in
+      let seq = V.read b v p_seq in
+      checksum := hash_int (hash_int !checksum apid) seq;
+      off := o + pkt_size
+    end
+    else off := data_end
+  done
+
 (* The packet loop of each frame, written out as the generated rows write
    theirs, with the hash in a local. *)
 let checksum state =
-  let buf = state.buf in
+  let (Wire.Buf.Any b) = Wire.Buf.v state.buf in
   let checksum = ref checksum_init in
   for frame = 0 to state.n_frames - 1 do
     let base = frame * cadu_size in
-    let k = W.check frame_header buf base in
-    if W.ok k then begin
-      let w = W.get k in
-      let fhp = W.read p_fhp w in
-      checksum := hash_int (hash_int !checksum (W.read p_vcid w)) fhp;
-      let data_end = base + hdr + data_field_size in
-      let off = ref (base + hdr + fhp) in
-      while !off + pkt_size <= data_end do
-        let o = !off in
-        let k = W.check packet_header buf o in
-        if W.ok k then begin
-          let w = W.get k in
-          let apid = W.read p_apid w in
-          let seq = W.read p_seq w in
-          checksum := hash_int (hash_int !checksum apid) seq;
-          off := o + pkt_size
-        end
-        else off := data_end
-      done
+    let k = V.check Space.tm_frame_codec b ~off:base in
+    if V.is_ok k then begin
+      let v = V.get k in
+      let fhp = V.read b v p_fhp in
+      checksum := hash_int (hash_int !checksum (V.read b v p_vcid)) fhp;
+      frame_packets b checksum
+        ~off:(base + hdr + fhp)
+        ~data_end:(base + hdr + data_field_size)
     end
   done;
   !checksum
 
 (* The header {!Space.tm_frame_default} encodes, spacecraft 0x1FF, OCF flag
    set, segment length identifier 3, with the four fields a frame varies. *)
-let write_frame_header =
-  C.writer Space.tm_frame_codec Space.tm_frame_default
-    [ cf_tf_vcid; Space.bf_tf_mc_count; Space.bf_tf_vc_count; cf_tf_first_hdr ]
+let write_frame_header out o vcid mc_count vc_count first_hdr =
+  C.encode Space.tm_frame_codec
+    { Space.tm_frame_default with Space.vcid; mc_count; vc_count; first_hdr }
+    out ~off:o
 
 (* The header {!Space.packet_default} encodes, a telemetry packet with a
    secondary header, unsegmented, with the three fields a packet varies. *)
-let write_packet_header =
-  C.writer Space.packet_codec Space.packet_default
-    [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ]
-
 let pkt_dlen = Wire.UInt16.v (pkt_payload - 1)
-let stamp out o ~apid ~seq = write_packet_header out o apid seq pkt_dlen
+
+let stamp out o ~apid ~seq =
+  C.encode Space.packet_codec
+    {
+      Space.packet_default with
+      Space.apid;
+      seq_count = seq;
+      data_len = pkt_dlen;
+    }
+    out ~off:o
 
 let frame ~out n =
   let carry = ref 0 and p = ref 0 in

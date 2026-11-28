@@ -11,9 +11,9 @@ val f_minimal_value : Wire.UInt8.t Wire.Field.t
 (** Zero-copy field accessor for the Value field. *)
 
 val bf_minimal_value : (Wire.UInt8.t, minimal) Wire.Codec.field
-(** Bound field for Codec.get/set on Value. *)
+(** Bound field for the views of the Value field. *)
 
-val minimal_struct : Wire.Everparse.Raw.struct_
+val minimal_struct : Wire.Private.Everparse.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
 val minimal_size : int
@@ -43,9 +43,9 @@ val f_ints_u64be : Wire.UInt64.t Wire.Field.t
 (** Zero-copy field accessor for the U64BE field (boxed int64). *)
 
 val bf_ints_u64be : (Wire.UInt64.t, all_ints) Wire.Codec.field
-(** Bound field for Codec.get/set on U64BE. *)
+(** Bound field for the views of the U64BE field. *)
 
-val all_ints_struct : Wire.Everparse.Raw.struct_
+val all_ints_struct : Wire.Private.Everparse.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
 val all_ints_size : int
@@ -68,9 +68,9 @@ val f_bf8_value : int Wire.Field.t
 (** Zero-copy field accessor for the Value bitfield (5 bits in bf_uint8). *)
 
 val bf_bf8_value : (int, bf8) Wire.Codec.field
-(** Bound field for Codec.get/set on Value. *)
+(** Bound field for the views of the Value field. *)
 
-val bf8_struct : Wire.Everparse.Raw.struct_
+val bf8_struct : Wire.Private.Everparse.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
 val bf8_size : int
@@ -93,9 +93,9 @@ val f_bf16_id : int Wire.Field.t
 (** Zero-copy field accessor for the Id bitfield (11 bits in bf_uint16be). *)
 
 val bf_bf16_id : (int, bf16) Wire.Codec.field
-(** Bound field for Codec.get/set on Id. *)
+(** Bound field for the views of the Id field. *)
 
-val bf16_struct : Wire.Everparse.Raw.struct_
+val bf16_struct : Wire.Private.Everparse.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
 val bf16_size : int
@@ -119,9 +119,9 @@ val f_bf32_pri : int Wire.Field.t
 *)
 
 val bf_bf32_pri : (int, bf32) Wire.Codec.field
-(** Bound field for Codec.get/set on Priority. *)
+(** Bound field for the views of the Priority field. *)
 
-val bf32_struct : Wire.Everparse.Raw.struct_
+val bf32_struct : Wire.Private.Everparse.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
 val bf32_size : int
@@ -150,9 +150,9 @@ val f_bool_active : bool Wire.Field.t
 *)
 
 val bf_bool_active : (bool, bool_fields) Wire.Codec.field
-(** Bound field for Codec.get/set on Active. *)
+(** Bound field for the views of the Active field. *)
 
-val bool_fields_struct : Wire.Everparse.Raw.struct_
+val bool_fields_struct : Wire.Private.Everparse.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
 val bool_fields_size : int
@@ -187,9 +187,9 @@ val f_mixed_timestamp : Wire.UInt64.t Wire.Field.t
     fields). *)
 
 val bf_mixed_timestamp : (Wire.UInt64.t, large_mixed) Wire.Codec.field
-(** Bound field for Codec.get/set on Timestamp. *)
+(** Bound field for the views of the Timestamp field. *)
 
-val large_mixed_struct : Wire.Everparse.Raw.struct_
+val large_mixed_struct : Wire.Private.Everparse.Raw.struct_
 (** Struct definition for 3D codegen. *)
 
 val large_mixed_size : int
@@ -209,14 +209,14 @@ type mapped = { priority : priority; value : Wire.UInt8.t }
 val mapped_codec : mapped Wire.Codec.t
 (** Mapped-priority codec. *)
 
-val mapped_struct : Wire.Everparse.Raw.struct_
+val mapped_struct : Wire.Private.Everparse.Raw.struct_
 (** 3D struct for mapped. *)
 
 val f_mp_priority : priority Wire.Field.t
 (** Priority field. *)
 
 val bf_mp_priority : (priority, mapped) Wire.Codec.field
-(** Bound field for Codec.get/set on Priority. *)
+(** Bound field for the views of the Priority field. *)
 
 val f_mp_value : Wire.UInt8.t Wire.Field.t
 (** Value field. *)
@@ -238,14 +238,14 @@ type cases_demo = { type_ : ptype; id : int }
 val cases_demo_codec : cases_demo Wire.Codec.t
 (** Cases-demo codec. *)
 
-val cases_demo_struct : Wire.Everparse.Raw.struct_
+val cases_demo_struct : Wire.Private.Everparse.Raw.struct_
 (** 3D struct for cases-demo. *)
 
 val f_cd_type : ptype Wire.Field.t
 (** Type field. *)
 
 val bf_cd_type : (ptype, cases_demo) Wire.Codec.field
-(** Bound field for Codec.get/set on PacketType. *)
+(** Bound field for the views of the PacketType field. *)
 
 val f_cd_id : int Wire.Field.t
 (** ID field. *)
@@ -267,14 +267,14 @@ type enum_demo = { status : status; code : Wire.UInt8.t }
 val enum_demo_codec : enum_demo Wire.Codec.t
 (** Enum-demo codec. *)
 
-val enum_demo_struct : Wire.Everparse.Raw.struct_
+val enum_demo_struct : Wire.Private.Everparse.Raw.struct_
 (** 3D struct for enum-demo. *)
 
 val f_en_status : status Wire.Field.t
 (** Status field. *)
 
 val bf_en_status : (status, enum_demo) Wire.Codec.field
-(** Bound field for Codec.get/set on StatusCode. *)
+(** Bound field for the views of the StatusCode field. *)
 
 val f_en_code : Wire.UInt8.t Wire.Field.t
 (** Code field. *)
@@ -295,7 +295,7 @@ type constrained = { version : Wire.UInt8.t; data : Wire.UInt8.t }
 val constrained_codec : constrained Wire.Codec.t
 (** Constrained codec. *)
 
-val constrained_struct : Wire.Everparse.Raw.struct_
+val constrained_struct : Wire.Private.Everparse.Raw.struct_
 (** 3D struct for constrained. *)
 
 val f_co_version : Wire.UInt8.t Wire.Field.t
@@ -305,7 +305,7 @@ val f_co_data : Wire.UInt8.t Wire.Field.t
 (** Data field. *)
 
 val bf_co_data : (Wire.UInt8.t, constrained) Wire.Codec.field
-(** Bound field for Codec.get/set on Data. *)
+(** Bound field for the views of the Data field. *)
 
 val constrained_size : int
 (** Wire size. *)
@@ -345,46 +345,46 @@ val bf_constrained_codec : bf_constrained Wire.Codec.t
     The following are struct/module definitions exercising Wire DSL features
     that target EverParse 3D output. They don't have Codec views. *)
 
-val array_struct : Wire.Everparse.Raw.struct_
+val array_struct : Wire.Private.Everparse.Raw.struct_
 (** Array field demo. *)
 
-val byte_array_struct : Wire.Everparse.Raw.struct_
+val byte_array_struct : Wire.Private.Everparse.Raw.struct_
 (** Byte-array field demo. *)
 
-val all_bytes_struct : Wire.Everparse.Raw.struct_
+val all_bytes_struct : Wire.Private.Everparse.Raw.struct_
 (** All-bytes field demo. *)
 
-val all_zeros_struct : Wire.Everparse.Raw.struct_
+val all_zeros_struct : Wire.Private.Everparse.Raw.struct_
 (** All-zeros field demo. *)
 
-val single_elem_struct : Wire.Everparse.Raw.struct_
+val single_elem_struct : Wire.Private.Everparse.Raw.struct_
 (** Single-element array demo. *)
 
-val single_elem_at_most_struct : Wire.Everparse.Raw.struct_
+val single_elem_at_most_struct : Wire.Private.Everparse.Raw.struct_
 (** Single-element at-most demo. *)
 
-val anon_field_struct : Wire.Everparse.Raw.struct_
+val anon_field_struct : Wire.Private.Everparse.Raw.struct_
 (** Anonymous field demo. *)
 
-val action_struct : Wire.Everparse.Raw.struct_
+val action_struct : Wire.Private.Everparse.Raw.struct_
 (** Action field demo. *)
 
-val action_full_struct : Wire.Everparse.Raw.struct_
+val action_full_struct : Wire.Private.Everparse.Raw.struct_
 (** Full action demo with mutable param. *)
 
-val param_demo_struct : Wire.Everparse.Raw.struct_
+val param_demo_struct : Wire.Private.Everparse.Raw.struct_
 (** Parameterised struct demo. *)
 
-val param_payload_struct : Wire.Everparse.Raw.struct_
+val param_payload_struct : Wire.Private.Everparse.Raw.struct_
 (** Parameterised byte_array demo: payload sized by input parameter. *)
 
-val casetype_module : Wire.Everparse.Raw.module_
+val casetype_module : Wire.Private.Everparse.Raw.module_
 (** Casetype module demo. *)
 
-val extern_module : Wire.Everparse.Raw.module_
+val extern_module : Wire.Private.Everparse.Raw.module_
 (** Extern function module demo. *)
 
-val type_ref_module : Wire.Everparse.Raw.module_
+val type_ref_module : Wire.Private.Everparse.Raw.module_
 (** Type-reference module demo. *)
 
 val qualified_ref_example : unit Wire.typ

@@ -1,10 +1,11 @@
 (* APID demux: the packet stream and the routing loop, each header checked by
-   Wire's [Codec.Word.check] and its fields taken with [Codec.Word.read]. *)
+   Wire's [Codec.View.check] and its fields read from the view with
+   [Codec.View.read]. *)
 
 module C = Wire.Codec
+module V = C.View
 
 let cf_sp_apid = Space.bf_sp_apid
-let cf_sp_seq_count = Space.bf_sp_seq_count
 let cf_sp_data_len = Space.bf_sp_data_len
 
 let apid_of_index i =
@@ -40,16 +41,18 @@ let generate_stream n =
   let buf = Bytes.create !total in
   let off = ref 0 in
   let payload_total = ref 0 in
-  let set_apid = C.set Space.packet_codec cf_sp_apid in
-  let set_seq = C.set Space.packet_codec cf_sp_seq_count in
-  let set_dlen = C.set Space.packet_codec cf_sp_data_len in
   for i = 0 to min n (whole + 1) - 1 do
     let apid = apid_of_index i in
     let plen = payload_size_of_apid apid in
     let o = !off in
-    set_apid buf o apid;
-    set_seq buf o (i mod 16384);
-    set_dlen buf o (Wire.UInt16.v (plen - 1));
+    C.encode Space.packet_codec
+      {
+        Space.packet_default with
+        Space.apid;
+        seq_count = i mod 16384;
+        data_len = Wire.UInt16.v (plen - 1);
+      }
+      buf ~off:o;
     off := o + hdr + plen;
     payload_total := !payload_total + if i < whole then plen else tail
   done;
@@ -76,23 +79,22 @@ let pp_counts ppf (hk, sci, diag, idle) =
 let route_of_apid apid = routing_table.(apid)
 let hdr = Wire.Codec.min_size Space.packet_codec
 
-(* A header is read once, then its APID and data length taken from it. *)
-module W = C.Word
-
-let header = W.reader Space.packet_codec
-let p_apid = W.field Space.packet_codec cf_sp_apid
-let p_dlen = W.field Space.packet_codec cf_sp_data_len
+(* A header is checked once, then its APID and data length read from its
+   view. *)
+let p_apid = V.field Space.packet_codec cf_sp_apid
+let p_dlen = V.field Space.packet_codec cf_sp_data_len
 
 type state = { off : int ref; handler_counts : int array }
 
 let step ~buf ~total_bytes state () =
   if !(state.off) + hdr > total_bytes then state.off := 0;
   let o = !(state.off) in
-  let k = W.check header buf o in
-  if W.ok k then begin
-    let w = W.get k in
-    let apid = W.read p_apid w in
-    let dlen = W.read p_dlen w in
+  let (Wire.Buf.Any b) = Wire.Buf.v buf in
+  let k = V.check Space.packet_codec b ~off:o in
+  if V.is_ok k then begin
+    let v = V.get k in
+    let apid = V.read b v p_apid in
+    let dlen = V.read b v p_dlen in
     let route = route_of_apid apid in
     state.handler_counts.(route) <- state.handler_counts.(route) + 1;
     state.off := o + hdr + Wire.UInt16.to_int dlen + 1
@@ -120,11 +122,10 @@ let run_packets ~buf ~total_bytes state n_pkts =
 
 (* The header {!Space.packet_default} encodes, a telemetry packet with a
    secondary header, unsegmented, with the three fields a router writes. *)
-let write_header =
-  C.writer Space.packet_codec Space.packet_default
-    [ cf_sp_apid; cf_sp_seq_count; cf_sp_data_len ]
-
-let stamp out o ~apid ~seq ~dlen = write_header out o apid seq dlen
+let stamp out o ~apid ~seq ~dlen =
+  C.encode Space.packet_codec
+    { Space.packet_default with Space.apid; seq_count = seq; data_len = dlen }
+    out ~off:o
 
 let restamp ~buf ~total_bytes ~out n =
   let seqs = Array.make n_routes 0 in
@@ -132,11 +133,12 @@ let restamp ~buf ~total_bytes ~out n =
   for _ = 1 to n do
     if !off + hdr > total_bytes then off := 0;
     let o = !off in
-    let k = W.check header buf o in
-    if W.ok k then begin
-      let w = W.get k in
-      let apid = W.read p_apid w in
-      let dlen = W.read p_dlen w in
+    let (Wire.Buf.Any b) = Wire.Buf.v buf in
+    let k = V.check Space.packet_codec b ~off:o in
+    if V.is_ok k then begin
+      let v = V.get k in
+      let apid = V.read b v p_apid in
+      let dlen = V.read b v p_dlen in
       let route = route_of_apid apid in
       let seq = seqs.(route) in
       seqs.(route) <- (seq + 1) land 0x3FFF;

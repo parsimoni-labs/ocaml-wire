@@ -51,7 +51,8 @@ let metadata (Diff_codecs.Scan case) names maximum length bytes =
     else
       Option.bind bytes (fun b ->
           match
-            (Wire.Codec.decode case.codec b 0, Wire.Codec.size_at case.codec b 0)
+            ( Wire.Codec.decode case.codec b ~off:0,
+              Wire.Codec.size_at case.codec b ~off:0 )
           with
           | Ok v, Ok n -> Some (case.project v, n)
           | Error _, _ | _, Error _ -> None)

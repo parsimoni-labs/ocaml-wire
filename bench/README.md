@@ -3,7 +3,8 @@
 All benchmarks derive from the same Wire DSL definition. The field-level
 demo benchmark (`bench/demo/`) compares three tiers:
 
-1. **Pure OCaml** -- `Wire.Codec.get/set` (zero-copy field access)
+1. **Pure OCaml** -- `Wire.Codec.View`: a check of the record, then a read or
+   a write of the field in place (zero-copy field access)
 2. **EverParse C** -- EverParse-generated verified C validator with field extraction in a tight C loop
 3. **OCaml->C FFI** -- calling the EverParse C validator from OCaml
 
@@ -13,10 +14,10 @@ compare the OCaml, OxCaml and Rust code generators across languages.
 
 Metrics: ns/op, allocation (words), ratio vs C, throughput.
 
-The C validator checks the schema as it extracts fields. The reader OCaml
-`Codec.get c f` makes reads the requested field and does not validate the whole record;
-call `Codec.validate` separately when that is required. The timing ratio
-therefore includes different amounts of validation work.
+The C validator checks the schema as it extracts fields, and so does the OCaml
+row: `Codec.View.check` runs every check of the record once, then
+`Codec.View.read` reads the requested field from the view with no check of its
+own.
 
 ## Rules
 
@@ -52,8 +53,8 @@ make bench-demo           # requires EverParse (everparse-3d.exe in PATH)
 
 Throughput on realistic workloads. The C loop calls the EverParse validator for
 field extraction, then runs application logic. The OCaml loop does the same
-work with `Codec.Word.check` and `Codec.Word.read`, and writes with
-`Codec.writer`.
+work with `Codec.View.check`, `is_ok` and `get` per header and
+`Codec.View.read` per field, and writes each header with `Codec.encode`.
 
 | Target | Scenario | Protocols |
 |---|---|---|
@@ -83,7 +84,7 @@ relay does to produce it:
 
 | Row | Implementation | API |
 |---|---|---|
-| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.Word.check`, `ok` and `get` per header, then `Codec.Word.read` per field, for CLCW too. Writing: `Codec.writer` of the default header and the fields that vary, one call per header |
+| `Wire.Codec` | the OCaml workload (OCaml 5, OxCaml) | `Codec.View.check`, `is_ok` and `get` per header, then `Codec.View.read` of a `Codec.View.field` per field, for CLCW too. Writing: `Codec.encode` of the default header with the fields that vary, one call per header |
 | `wire.ocaml` | generated OCaml, the module `Wire_ocaml.v` declares for `Space.packet_codec`, `Space.tm_frame_codec`, `Space.clcw_codec`: default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | `check b len off` per header, the check of a codec of constant size, which takes no window, then an accessor per field. Writing: `write`, which takes the fields' values and tests each bitfield's range, per header |
 | `wire.rust` | generated Rust, the module `Wire_rust.v` declares for the same codecs | `check(buf, off)` and `get` per header, then an accessor per field, for CLCW too. Writing: `encode` of a `Record` literal per header |
 | `spacepackets` 0.19 (routing, gateway packets) | hand-written, zerocopy-based | `SpHeader::from_be_bytes`, then `apid()`, `data_len()`, `seq_count()`. Writing: `SpHeader::new_from_fields`, then `write_to_slice` |
@@ -274,9 +275,8 @@ build 16 CLCW words, with the byte order folded into the shifts. Stock OCaml
 also assembles the 32-bit word on tagged integers, with a `sxtw` on each
 side of the `rev` that does nothing (`sxtw x3, w2`, `rev w4, w3`,
 `sxtw x5, w4`, `str w5`), where OxCaml builds it untagged. `Wire.Codec`
-writes a header with one call to the writer `Codec.writer` makes, which puts the
-default header and the fields that vary together in an `int` and stores it.
-These headers are at most 6 bytes, so no row stores a 64-bit word: the
+writes a header with `Codec.encode` of a record, whose code has not been read
+since the writer it replaces. These headers are at most 6 bytes, so no row stores a 64-bit word: the
 generated writes are `str w` and `strh`, and the only `dmb ishld` OxCaml puts
 in a write loop is the one before the per-route sequence count's `int array`
 store of `routing_write`.
@@ -321,8 +321,8 @@ pick for exactly this work:
 | Row | Implementation | API |
 |---|---|---|
 | `Wire.Codec stack decode` | interpreted codec (OCaml 5, OxCaml) | `Codec.decode` of one bounded stack codec |
-| `Wire.Codec stack check/enter/read` | interpreted codec (OCaml 5, OxCaml) | `View.check` of the same bounded stack codec, which builds nothing, then `View.enter` of each layer present (a `View.sub` or `View.sub_option` per sub-codec field) and a `View.read` of a `View.field` per field |
-| `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | a `Codec.View.codec` per header codec; `View.check`/`View.ok`/`View.get` per header, then a `View.read` of a `View.field` per field; the harness links the layers |
+| `Wire.Codec stack check/sub/read` | interpreted codec (OCaml 5, OxCaml) | `View.check` of the same bounded stack codec, which builds nothing, then `View.sub` of each layer present (a `View.layer` of `Codec.layer` or `Codec.opt_layer` per sub-codec field) and a `View.read` of a `View.field` per field |
+| `Wire.Codec check/read, linked headers` | interpreted codecs of the fixed headers (OCaml 5, OxCaml) | `View.check`/`View.is_ok`/`View.get` per header, then a `View.read` of a `View.field` per field; the harness links the layers |
 | `wire.ocaml fused stack`, `selected outputs` | generated OCaml, default target on OCaml 5, ``~target:`OxCaml`` on OxCaml | the fold `checksum` of the stack and `checksum_frames` (batch), which call the checksum visitor by name; `selected outputs` hands out only the checksum's fields |
 | `wire.ocaml View.check/view, linked headers` | generated OCaml record modules of the fixed headers | `check b len off`/`ok`/`get` per fixed header, then an accessor `<field> b v` per field; the harness links the layers, as the `wire.rust, linked headers` row does |
 | `wire.rust fused stack`, `selected outputs` | generated Rust, `Wire_rust.v` of the stack | the fold `checksum_frames` (batch), handing the outputs to the checksum visitor `gen.exe` writes; `selected outputs` hands out only the checksum's fields |
