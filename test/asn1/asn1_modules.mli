@@ -44,7 +44,8 @@ val wrapped : packed
 (** [wrapped] holds a DER value and a binary record under [containing]. *)
 
 val types : (string * packed) list
-(** [types] is each type with the name of its module. *)
+(** [types] is each type with the name of its module, the SubjectPublicKeyInfo
+    and Certificate of examples/x509 included. *)
 
 val all : Asn1.schema list
 (** [all] is the module of each of {!types}, and of {!framed}. *)

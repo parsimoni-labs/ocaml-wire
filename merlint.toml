@@ -29,8 +29,9 @@ exclude = ["E912"]
 files = "proofs/fstar/plans/extracted/*.ml"
 exclude = ["E001", "E010", "E106", "E110", "E210", "E310", "E332", "E505"]
 
-# The interface docs/asn1.md designs, not yet implemented: the module loses
-# this exclusion with the tests of its implementation.
+# The pipeline docs/asn1.md designs: test/asn1 runs tool and run with
+# BUILD_EVERPARSE=1; the stubs and the differential harness are not
+# implemented. The module loses this exclusion with their tests.
 [[rules]]
 files = "lib/asn1/wire_asn1.ml"
 exclude = ["E605"]

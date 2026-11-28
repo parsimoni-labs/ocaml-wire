@@ -99,10 +99,11 @@ verify:
 3d:
 	dune exec examples/validate_3d.exe
 
-# everparse-asn1 parses and elaborates every module of test/asn1: the tool is
-# $(EVERPARSE_ASN1), else everparse-asn1.exe in PATH or ~/.local/everparse/bin.
+# everparse-asn1 verifies every module of test/asn1 in F* and its C compiles
+# (needs everparse-asn1.exe in PATH or ~/.local/everparse/bin, with the F*, Z3
+# and libraries of its EverParse prefix).
 asn1:
-	dune build @test/asn1/asn1
+	BUILD_EVERPARSE=1 dune build @test/asn1/runtest
 
 bench: bench-demo bench-routing bench-gateway bench-clcw
 

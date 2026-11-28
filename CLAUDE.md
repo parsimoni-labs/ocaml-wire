@@ -7,7 +7,7 @@ make build              # dune build
 make test               # dune runtest
 make test-wasm          # test/wasm under node via wasm_of_ocaml (needs wasm_of_ocaml, node)
 make 3d                 # validate all schemas with EverParse (needs everparse-3d.exe)
-make asn1               # parse the test/asn1 modules with everparse-asn1 (needs everparse-asn1.exe)
+make asn1               # verify the test/asn1 modules with everparse-asn1 (needs everparse-asn1.exe)
 make prove              # F* proves the scanners proofs/fstar-gen lists (needs EverParse)
 make verify             # Z3 checks the generated code against 3d.exe (needs EverParse, z3)
 make bench              # EverParse C vs OCaml (needs everparse-3d.exe)

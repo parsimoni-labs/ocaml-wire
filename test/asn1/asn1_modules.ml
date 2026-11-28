@@ -545,6 +545,8 @@ let types =
     ("X509Lite", Packed x509lite);
     ("Times", Packed times);
     ("Wrapped", Packed wrapped);
+    ("Rfc5280Spki", Packed Rfc5280.spki);
+    ("Rfc5280", Packed Rfc5280.certificate);
   ]
 
 let all =
