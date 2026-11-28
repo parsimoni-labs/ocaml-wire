@@ -48,8 +48,8 @@
 type target = [ `OCaml | `OxCaml ]
 (** The compiler the generated code is for. [`OxCaml] adds [[@zero_alloc]]
     checks on [write] and on the check [validate] runs, holds the values its
-    walks read as unboxed [int64_u], and takes the buffers it does not keep
-    [local]. *)
+    walks read as unboxed [int64_u], and takes some buffers [local]
+    ({!modules}). *)
 
 type map
 (** The type for a {!Wire.map} the generated code calls by its OCaml path. *)
@@ -145,12 +145,15 @@ val main : t list -> unit
     ...) takes a trailing ['_'], as a keyword does.
 
     The signatures are those of the [`OCaml] target. A module for [`OxCaml]
-    takes every buffer it does not keep [local]: [check], [validate], [decode],
-    [encode], the accessors, the setters, [write] and [fold] take
-    [bytes @ local] or ['b Wire.Buf.t @ local], so a caller passes a buffer
-    allocated on its stack. A function of a [local] buffer is no function of a
-    global one, so such a module meets these signatures with each such buffer
-    argument [local], and a test ascribes it to that copy of them. *)
+    takes some buffers [local]: [validate], [decode], [encode] and [write] of a
+    module that holds a record of constant size take [bytes @ local], so the
+    buffer may be on the caller's stack; [check] and each accessor that does not
+    answer a slice take ['b Wire.Buf.t @ local], a buffer {!Wire.Buf.v} named.
+    The setters, an accessor of bytes as a slice, [fold], and [validate],
+    [decode] and [encode] of a module that walks its record take their buffer
+    global. A function of a [local] buffer is no function of a global one, so
+    such a module meets these signatures with each [local] buffer argument
+    [local], and a test ascribes it to that copy of them. *)
 
 (* Open question 1, measured: a view does not carry its buffer. *)
 

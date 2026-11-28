@@ -240,6 +240,23 @@
   boxed_loads)
  (libraries schemas wire wire.runtime wire.ocaml net bytesrw fmt alcotest))
 
+; The signatures of Wire_ocaml with the buffers the OxCaml target takes
+; [local] (test_signature.ox.ml, OxCaml syntax), which every module above is
+; ascribed to: a library, so that only an OxCaml compiler builds it.
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (action
+  (copy test_signature.ox.ml test_signature.ml)))
+
+(library
+ (name signature_ox)
+ (enabled_if
+  (= %{ocaml-config:ox} true))
+ (modules test_signature)
+ (libraries gens_ox wire wire.ocaml))
+
 (executable
  (name test)
  (modules test)
