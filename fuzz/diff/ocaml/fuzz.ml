@@ -5,14 +5,14 @@
     EverParse backend compares, and the flat records of a longer run of the same
     sample. {!Ocaml_index} holds the module generated for each one the generator
     accepts. On every input both sides must agree on decode and validate, error
-    included, on the bytes encode writes, on every getter and on [Valid.v] with
-    its reads, over [bytes] and over a bigarray. A codec the generator refuses
-    must be one it documents it cannot specialise, or one whose field names
-    would spell an OCaml name twice.
+    included, on the bytes encode writes, and on its check with every accessor.
+    A codec the generator refuses must be one it documents it cannot specialise,
+    or one whose field names would spell an OCaml name twice.
 
-    The scanners are compared on every sampled shape, fixed or not, and on the
-    structured cases of {!Diff_codecs.scan_cases}, with the EverParse C
-    validators too when they are built. *)
+    The folds and views of the modules generated with a fold are compared on
+    every sampled shape, fixed or not, and on the structured cases of
+    {!Diff_codecs.scan_cases}, with the EverParse C validators too when they are
+    built. *)
 
 let refused label = List.map (fun (l, msg) -> (l, List.assoc l label, msg))
 

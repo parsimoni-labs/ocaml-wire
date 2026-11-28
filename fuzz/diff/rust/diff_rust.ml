@@ -1,5 +1,6 @@
 type case = {
   id : int;
+  outputs : string list;
   full : string list;
   selected : string list;
   checks : bool;
@@ -101,9 +102,9 @@ let named names res ~base =
 (* The check at [off] in the [len] bytes there, then every output read
    through the accessors. *)
 let view m buf off len =
-  let res = slots ~n:1 ~k:(List.length m.full) in
+  let res = slots ~n:1 ~k:(List.length m.outputs) in
   match run m ~op:op_view ~off ~len ~res buf with
-  | 1, res -> Some (named m.full res ~base:0)
+  | 1, res -> Some (named m.outputs res ~base:0)
   | 0, _ -> None
   | n, _ -> Alcobar.failf "rust view: outcome %d" n
 
@@ -145,7 +146,7 @@ let fold_ops m sel (name, outputs) =
         ~extra:((n :: Array.to_list offs) @ Array.to_list lens)
         ~res:(slots ~n ~k) buf
     with
-    | -1, _ -> Alcobar.failf "rust %s_index: refused" name
+    | -1, _ -> Alcobar.failf "rust %s over an index: refused" name
     | n, res -> frames outputs res n
   in
   {
@@ -160,8 +161,8 @@ let folds m = List.mapi (fold_ops m) (fold_names m)
 let full m = (fold_ops m 0 ("full", m.full)).scan
 
 let views c m =
-  Diff_ocaml.view_scan ~name:"rust views" ~codec:c ~fields:m.full ~full:(full m)
-    (view m)
+  Diff_ocaml.view_scan ~name:"rust views" ~codec:c ~fields:m.outputs
+    ~full:(full m) (view m)
 
 let values c m =
   Diff_ocaml.values_scan ~name:"rust values" ~codec:c ~fields:m.full
@@ -196,7 +197,7 @@ let readers c m =
           List.filter_map
             (fun (f : Wire_ocaml.Plan.field) ->
               match f.output with
-              | Some o when List.mem o.name m.full ->
+              | Some o when List.mem o.name m.outputs ->
                   Some (o.name, Diff_ocaml.reference c f.name)
               | _ -> None)
             fs

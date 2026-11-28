@@ -1,11 +1,11 @@
 (* Writes the Rust backend of the differential fuzzer into the directory given
-   as the first argument: the module [Wire_rust.v] generates for each codec
-   it compares, with the folds [full] of every output, [selected] of every
-   other one and, for a structured case, [checks] of none; and [lib.rs],
-   which compiles them into one [no_std] static library whose C entry point,
-   [wire_rs_call], runs one operation of one module. Writes [rust_index.ml]
-   in the current directory: each module's number, outputs and shape, and the
-   codecs refused with the reason.
+   as the first argument: the modules [Wire_rust.v] generates for each codec
+   it compares, one with a fold of every integer field, one of every other
+   field and, for a structured case, one of none ({!Fold_paths}); and
+   [lib.rs], which compiles them into one [no_std] static library whose C
+   entry point, [wire_rs_call], runs one operation of one codec's modules.
+   Writes [rust_index.ml] in the current directory: each codec's number,
+   outputs and shape, and the codecs refused with the reason.
 
    The codecs are those of [Diff_ocaml.scan_codecs], which hold the flat
    records of [Diff_ocaml.codecs], the structured cases of
@@ -47,11 +47,13 @@ type case = {
   group : string;  (** Its list in the index. *)
   label : string;
   id : int;
-  src : string;
+  srcs : (string * string) list;  (** Each module's name and source. *)
+  outputs : string list;  (** The outputs the views read. *)
   full : string list;
   selected : string list;
-  types : (string * string list) list;
-      (** The Rust type of each output of each fold. *)
+  folds : (string * Fold_paths.leaf list) list;
+      (** The module of each fold, [full], [selected], then [checks], and the
+          fields it hands out. *)
   checks : bool;
   fixed : bool;
   settable : (string * string) list;
@@ -59,8 +61,6 @@ type case = {
   flat : bool;  (** Every byte of the record is a setter's. *)
   view : string;  (** The glue that reads the views into [res]. *)
 }
-
-let every_other all = List.filteri (fun i _ -> i mod 2 = 0) all
 
 (* The outputs of a record's views, named as [Wire_ocaml.outputs] names them,
    each read through the accessors into [res] by its index in [full]: an
@@ -130,48 +130,61 @@ let view_glue (all : P.records) full =
                   pr "res[%d] = %d;" (idx (global prefix o.name)) k)
                 presence
             in
-            pr "match %s.%s().get() {" var (accessor r m);
-            pr "Some(%s) => {" v;
+            pr "let k = %s.%s();" var (accessor r m);
+            pr "if k.is_ok() {";
+            pr "let %s = k.get();" v;
             present 1;
             view ~var:v
               ~path:
                 (path ^ "::"
                 ^ String.lowercase_ascii (Option.get sr.module_name))
               prefix' sr;
-            pr "}";
-            pr "None => {";
+            pr "} else {";
             present 0;
             List.iter
               (fun o ->
                 pr "res[%d] = %s;" (idx o)
                   (if Option.is_none presence then "ABSENT" else "0"))
               (outputs prefix' sr);
-            pr "}";
             pr "}")
       r.members
   in
   view ~var:"v" ~path:"m" "" all.root;
   Buffer.contents b
 
+(* The module [name] of [c] with a fold of [ls], each kept where the
+   generator takes it. *)
+let module_of ~name c ls =
+  let make fold = Wire_rust.v ~name ~fold c in
+  let ls = Fold_paths.accepted make ls in
+  (ls, make (List.map (fun (l : Fold_paths.leaf) -> l.path) ls))
+
 (* Each codec [Wire_rust.v] takes, as case [id], or its refusal. *)
 let case ~group ~structured ~id label c =
-  let full = List.map fst (Wire_ocaml.outputs c) in
-  let selected = every_other full in
-  let folds =
-    Wire_rust.[ fold "full"; fold ~outputs:selected "selected" ]
-    @ if structured then [ Wire_rust.fold ~outputs:[] "checks" ] else []
+  let outputs = List.map fst (Wire_ocaml.outputs c) in
+  let leaves = Fold_paths.leaves c in
+  let name = Fmt.str "c%d" id in
+  let modules =
+    [
+      ("full", name, leaves);
+      ("selected", name ^ "_s", Fold_paths.every_other leaves);
+    ]
+    @ if structured then [ ("checks", name ^ "_c", []) ] else []
   in
-  let m = Wire_rust.v ~name:(Fmt.str "c%d" id) ~folds c in
-  let plan = P.v c in
-  let typ (o : P.output) =
-    if o.is_bool then "bool"
-    else
-      let w = o.wire_width in
-      Fmt.str "%s%d"
-        (if o.signed then "i" else "u")
-        (if w <= 8 then 8 else if w <= 16 then 16 else 32)
+  let modules =
+    List.map
+      (fun (fold, name, ls) ->
+        let ls, m = module_of ~name c ls in
+        (fold, name, ls, m))
+      modules
   in
-  let types names = List.map typ (P.select plan names) in
+  let fold_outputs fold =
+    List.find_map
+      (fun (f, _, ls, _) ->
+        if f = fold then Some (Fold_paths.outputs ls) else None)
+      modules
+    |> Option.get
+  in
   let all = P.records c in
   let settable =
     List.map
@@ -187,17 +200,16 @@ let case ~group ~structured ~id label c =
     group;
     label;
     id;
-    src = Wire_rust.to_rs m;
-    full;
-    selected;
-    types =
-      ([ ("full", types None); ("selected", types (Some selected)) ]
-      @ if structured then [ ("checks", []) ] else []);
+    srcs = List.map (fun (_, name, _, m) -> (name, Wire_rust.to_rs m)) modules;
+    outputs;
+    full = fold_outputs "full";
+    selected = fold_outputs "selected";
+    folds = List.map (fun (_, name, ls, _) -> (name, ls)) modules;
     checks = structured;
     fixed;
     settable;
     flat;
-    view = view_glue all full;
+    view = view_glue all outputs;
   }
 
 let contains s sub =
@@ -241,6 +253,33 @@ extern "C" fn rust_eh_personality() {}
 // What a mandatory record's output reads where its check fails: OCaml's
 // min_int, which no reference states.
 const ABSENT: i64 = -(1i64 << 62);
+
+// A field a fold hands out as the outputs read it: an integer as itself, a
+// presence as 0 or 1, and an absent field, [None] at any depth, as 0.
+trait Out {
+    fn out(self) -> i64;
+}
+
+macro_rules! out {
+    ($($t:ty),*) => { $(impl Out for $t { fn out(self) -> i64 { self as i64 } })* };
+}
+
+out!(u8, u16, u32, u64, i8, i16, i32, i64);
+
+impl Out for bool {
+    fn out(self) -> i64 {
+        self as i64
+    }
+}
+
+impl<T: Out> Out for Option<T> {
+    fn out(self) -> i64 {
+        match self {
+            Some(x) => x.out(),
+            None => 0,
+        }
+    }
+}
 
 // An error in [res] and [txt]: its offset, its kind and the kind's values,
 // and its path, the names each followed by a NUL.
@@ -295,44 +334,104 @@ macro_rules! errors {
 }
 |}
 
-(* The visitor of a fold whose outputs have the Rust types [types], writing
-   each frame's flag and outputs in [res] from the slot [k]. *)
-let pp_visitor ppf (fold, types) =
-  let n = List.length types in
+(* The closure of a fold of [ls], writing each record's flag and outputs in
+   the cells from the slot [k]: each field, then its own presence where it
+   has one. *)
+let pp_closure ppf (ls : Fold_paths.leaf list) =
+  let w = List.length (Fold_paths.outputs ls) + 1 in
+  let xs = List.mapi (fun i l -> (l, Fmt.str "x%d" i)) ls in
+  Fmt.pf ppf "|k%s| {@\n"
+    (String.concat "" (List.map (fun (_, x) -> ", " ^ x) xs));
   Fmt.pf ppf
-    "    pub struct V_%s<'r> { pub res: &'r mut [i64], pub k: usize }@\n\
-    \    impl<'r> m::%s::Visitor for V_%s<'r> {@\n\
-    \        fn valid(&mut self%a) {@\n\
-    \            let b = self.k * %d;@\n\
-    \            if b + %d > self.res.len() { return; }@\n\
-    \            self.res[b] = 1;@\n"
-    fold fold fold
-    Fmt.(list ~sep:nop (fun ppf (i, t) -> pf ppf ", o%d: %s" i t))
-    (List.mapi (fun i t -> (i, t)) types)
-    (n + 1) (n + 1);
-  for i = 0 to n - 1 do
-    Fmt.pf ppf "            self.res[b + %d] = o%d as i64;@\n" (i + 1) i
-  done;
+    "                        let b = k * %d;@\n\
+    \                        if b + %d <= cells.len() {@\n\
+    \                            cells[b].set(1);@\n"
+    w w;
+  let i = ref 1 in
+  List.iter
+    (fun ((l : Fold_paths.leaf), x) ->
+      let present =
+        Option.map
+          (fun _ ->
+            if l.layered then
+              Fmt.str "match &%s { Some(Some(_)) => 1, _ => 0 }" x
+            else Fmt.str "match &%s { Some(_) => 1, None => 0 }" x)
+          l.own
+      in
+      let at = !i in
+      incr i;
+      Option.iter
+        (fun p ->
+          Fmt.pf ppf "                            cells[b + %d].set(%s);@\n" !i
+            p;
+          incr i)
+        present;
+      Fmt.pf ppf
+        "                            cells[b + %d].set(Out::out(%s));@\n" at x)
+    xs;
   Fmt.pf ppf
-    "            self.k += 1;@\n\
-    \        }@\n\
-    \        fn invalid(&mut self) {@\n\
-    \            let b = self.k * %d;@\n\
-    \            if b + %d > self.res.len() { return; }@\n\
-    \            self.res[b] = 0;@\n\
-    \            self.k += 1;@\n\
-    \        }@\n\
-    \    }@\n"
-    (n + 1) (n + 1)
+    "                        }@\n\
+    \                        k + 1@\n\
+    \                    }"
+
+(* The fold of the module [name], the [i]-th of its codec, handing out [ls]:
+   operation 5 on the frame of [len] bytes at [off], 6 over the slots of a
+   stride of those bytes, 7 over the index of the arguments. Each writes a
+   record's flag and its outputs, or 0 for a refused one, and answers the
+   records it folded, or -1 for bounds or a stride it refuses. *)
+let pp_fold_call ppf i (name, ls) =
+  let w = List.length (Fold_paths.outputs ls) + 1 in
+  Fmt.pf ppf
+    "            %d => {@\n\
+    \                let cells = \
+     core::cell::Cell::from_mut(res).as_slice_of_cells();@\n\
+    \                let mut invalid = |k: usize| -> usize {@\n\
+    \                    let b = k * %d;@\n\
+    \                    if b + %d <= cells.len() { cells[b].set(0); }@\n\
+    \                    k + 1@\n\
+    \                };@\n\
+    \                let (buf, records) = match op {@\n\
+    \                    5 => {@\n\
+    \                        if neg { return 0; }@\n\
+    \                        (buf, \
+     super::%s::Records::Frames(core::slice::from_ref(&off), \
+     core::slice::from_ref(&len)))@\n\
+    \                    }@\n\
+    \                    6 => {@\n\
+    \                        if neg || a[5] <= 0 { return -1; }@\n\
+    \                        match off.checked_add(len).and_then(|e| \
+     buf.get(off..e)) {@\n\
+    \                            Some(frame) => (frame, \
+     super::%s::Records::Slots(a[5] as usize)),@\n\
+    \                            None => return -1,@\n\
+    \                        }@\n\
+    \                    }@\n\
+    \                    _ => {@\n\
+    \                        let n = a[5] as usize;@\n\
+    \                        (buf, \
+     super::%s::Records::Frames(super::usizes(&a[6..6 + n]), \
+     super::usizes(&a[6 + n..6 + 2 * n])))@\n\
+    \                    }@\n\
+    \                };@\n\
+    \                match super::%s::fold(buf, records, 0usize, Some(&mut \
+     invalid), %a) {@\n\
+    \                    Ok(k) => if op == 5 { cells[0].get() as i32 } else { \
+     k as i32 },@\n\
+    \                    Err(_) => -1,@\n\
+    \                }@\n\
+    \            }@\n"
+    i w w name name name name pp_closure ls
 
 let pp_case ppf c =
   let m = Fmt.str "c%d" c.id in
-  Fmt.pf ppf "#[path = \"%s.rs\"]@\nmod %s;@\n@\n" m m;
+  List.iter
+    (fun (name, _) ->
+      Fmt.pf ppf "#[path = \"%s.rs\"]@\nmod %s;@\n@\n" name name)
+    c.srcs;
   Fmt.pf ppf
-    "mod g%d {@\n    use super::%s as m;@\n    use super::ABSENT;@\n@\n" c.id m;
+    "mod g%d {@\n    use super::%s as m;@\n    use super::{Out, ABSENT};@\n@\n"
+    c.id m;
   Fmt.pf ppf "    errors!(m);@\n@\n";
-  let folds = c.types in
-  List.iter (pp_visitor ppf) folds;
   let check =
     if c.fixed then
       "match off.checked_add(len).and_then(|e| buf.get(off..e)) { Some(f) => \
@@ -367,8 +466,10 @@ let pp_case ppf c =
     \                Err(e) => 200 + err(e, res, txt),@\n\
     \            },@\n\
     \            3 => match m::decode(buf, 0) {@\n\
-    \                Ok(_) => match m::check(buf, 0%s).get() {@\n\
-    \                    Some(v) => {@\n"
+    \                Ok(_) => {@\n\
+    \                    let k = m::check(buf, 0%s);@\n\
+    \                    if k.is_ok() {@\n\
+    \                        let v = k.get();@\n"
     (if c.fixed then "" else ", buf.len()");
   List.iter
     (fun (acc, set) ->
@@ -379,25 +480,29 @@ let pp_case ppf c =
     c.settable;
   Fmt.pf ppf
     "                        0@\n\
+    \                    } else {@\n\
+    \                        -3@\n\
     \                    }@\n\
-    \                    None => -3,@\n\
-    \                },@\n\
+    \                }@\n\
     \                Err(e) => 200 + err(e, res, txt),@\n\
     \            },@\n\
-    \            8 => match m::at(buf, 0).get().and_then(m::of_view) {@\n\
-    \                Some(r) => match m::encode(&r, out, off) { Ok(()) => 0, \
-     Err(e) => err(e, res, txt) },@\n\
-    \                None => -4,@\n\
-    \            },@\n\
+    \            8 => {@\n\
+    \                let k = m::at(buf, 0);@\n\
+    \                match if k.is_ok() { m::of_view(k.get()) } else { None } {@\n\
+    \                    Some(r) => match m::encode(&r, out, off) { Ok(()) => \
+     0, Err(e) => err(e, res, txt) },@\n\
+    \                    None => -4,@\n\
+    \                }@\n\
+    \            }@\n\
     \            9 => %s,@\n\
     \            4 => {@\n\
     \                if neg { return 0; }@\n\
     \                let c = %s;@\n\
-    \                match c.get() {@\n\
-    \                    Some(v) => {@\n\
-     %s                        1@\n\
-    \                    }@\n\
-    \                    None => 0,@\n\
+    \                if c.is_ok() {@\n\
+    \                    let v = c.get();@\n\
+     %s                    1@\n\
+    \                } else {@\n\
+    \                    0@\n\
     \                }@\n\
     \            }@\n"
     (match List.rev c.settable with
@@ -407,29 +512,8 @@ let pp_case ppf c =
           set
     | [] -> "-5")
     check c.view;
-  let fold_call i (f, _) =
-    Fmt.pf ppf
-      "            %d => {@\n\
-      \                let mut v = V_%s { res, k: 0 };@\n\
-      \                match op {@\n\
-      \                    5 => { if neg { return 0; } m::%s(&mut v, buf, off, \
-       len); v.res[0] as i32 }@\n\
-      \                    6 => { if neg || a[5] < 0 { return -1; } if \
-       m::%s_frames(&mut v, buf, off, len, a[5] as usize) { v.k as i32 } else \
-       { -1 } }@\n\
-      \                    _ => {@\n\
-      \                        let n = a[5] as usize;@\n\
-      \                        let offs = super::usizes(&a[6..6 + n]);@\n\
-      \                        let lens = super::usizes(&a[6 + n..6 + 2 * n]);@\n\
-      \                        if m::%s_index(&mut v, buf, offs, lens) { v.k \
-       as i32 } else { -1 }@\n\
-      \                    }@\n\
-      \                }@\n\
-      \            }@\n"
-      i f f f f
-  in
   Fmt.pf ppf "            _ => match sel {@\n";
-  List.iteri fold_call folds;
+  List.iteri (pp_fold_call ppf) c.folds;
   Fmt.pf ppf
     "                _ => -1,@\n            },@\n        }@\n    }@\n}@\n@\n"
 
@@ -476,10 +560,10 @@ let pp_index ppf ~cases ~refused ~scan_refused =
         (fun c ->
           if c.group = group then
             Fmt.pf ppf
-              "    (%S, { Diff_rust.id = %d; full = %a; selected = %a; checks \
-               = %b; fixed = %b; flat = %b });@\n"
-              c.label c.id strings c.full strings c.selected c.checks c.fixed
-              c.flat)
+              "    (%S, { Diff_rust.id = %d; outputs = %a; full = %a; selected \
+               = %a; checks = %b; fixed = %b; flat = %b });@\n"
+              c.label c.id strings c.outputs strings c.full strings c.selected
+              c.checks c.fixed c.flat)
         cases;
       Fmt.pf ppf "  ]@\n@\n")
     [ "structured"; "schemas"; "sampled" ];
@@ -568,7 +652,10 @@ let () =
       Diff_ocaml.codecs
   in
   List.iter
-    (fun c -> write (Filename.concat dir (Fmt.str "c%d.rs" c.id)) c.src)
+    (fun c ->
+      List.iter
+        (fun (name, src) -> write (Filename.concat dir (name ^ ".rs")) src)
+        c.srcs)
     cases;
   let lib = Buffer.create 65536 in
   let ppf = Format.formatter_of_buffer lib in

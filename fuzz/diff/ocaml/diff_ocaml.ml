@@ -506,7 +506,8 @@ let values_scan ~name ~codec ~fields ~full v =
   }
 
 (* The views, checked on each frame against [Codec.View.check] on the frame's
-   bytes alone and against the scanner's own outputs, every one of them. *)
+   bytes alone and against the outputs of the module's fold, each of which the
+   views hand out too. *)
 let view_scan (type r) ~name ~(codec : r Wire.Codec.t) ~fields ~full view =
   let scan buf off len =
     let got = view buf off len in
@@ -525,12 +526,18 @@ let view_scan (type r) ~name ~(codec : r Wire.Codec.t) ~fields ~full view =
         (if accepted then "rejects" else "accepts");
     let want = full buf off len in
     let sorted = Option.map (List.sort compare) in
-    if sorted want <> sorted got then
-      Alcobar.failf "%s: the scanner hands out %a, the views %a" name
+    let folded =
+      match want with
+      | None -> got
+      | Some w ->
+          Option.map (List.filter (fun (n, _) -> List.mem_assoc n w)) got
+    in
+    if sorted want <> sorted folded then
+      Alcobar.failf "%s: the fold hands out %a, the views %a" name
         Fmt.(option ~none:(any "nothing") (list (pair string int)))
         want
         Fmt.(option ~none:(any "nothing") (list (pair string int)))
-        got;
+        folded;
     got
   in
   {
@@ -658,7 +665,7 @@ let scan_batches ?strides (Reference r as ref_) oracle backends buf off len =
                   (batch buf off len stride)
               in
               if want <> got then
-                Alcobar.failf "%s: %s fold_frames with stride %d diverged"
+                Alcobar.failf "%s: %s fold over slots of %d bytes diverged"
                   r.label backend.scan_name stride)
             backend.scan_batch)
         backends)

@@ -3,23 +3,23 @@
 
     {!Rust_index} lists the module generated for each codec, all compiled into
     one [no_std] static library. Each module is compared as the OCaml backend
-    compares the OCaml module of the same codec: its folds [full], [selected]
-    and, for a structured case, [checks], through one frame, the frames of a
-    stride and an index; its check with every accessor; and its values, decode
-    written back by encode in the bytes size measures, and validate, errors
-    exactly. The structured cases of {!Diff_codecs.scan_cases} run on their
-    boundary corpus and on random inputs, with the EverParse C validator too
-    when it is built; scanned schemas of test/ocaml, whose arithmetic overflows
-    the native int or whose decision tree shares a subtree, on theirs; and every
-    sampled shape the OCaml scanner accepts on random inputs. A record of
-    constant size of {!Diff_ocaml.codecs} is also compared at offsets from 0 to
-    past the end of the buffer: validate and decode, every accessor, encode into
-    buffers around the record and the setters; and records of [Schemas.checked]
-    that break its constraints or its [where] clause are encoded by both, errors
-    compared exactly. The library is compiled with overflow checks, so
-    arithmetic that would wrap aborts the run. A codec the generator refuses
-    must be one it documents it cannot specialise, or one whose field names
-    would spell a Rust name twice. *)
+    compares the OCaml module of the same codec: the folds of its modules of
+    every field, of every other one and, for a structured case, of none, through
+    one frame, the slots of a stride and an index; its check with every
+    accessor; and its values, decode written back by encode in the bytes size
+    measures, and validate, errors exactly. The structured cases of
+    {!Diff_codecs.scan_cases} run on their boundary corpus and on random inputs,
+    with the EverParse C validator too when it is built; scanned schemas of
+    test/ocaml, whose arithmetic overflows the native int or whose decision tree
+    shares a subtree, on theirs; and every sampled shape the OCaml scanner
+    accepts on random inputs. A record of constant size of {!Diff_ocaml.codecs}
+    is also compared at offsets from 0 to past the end of the buffer: validate
+    and decode, every accessor, encode into buffers around the record and the
+    setters; and records of [Schemas.checked] that break its constraints or its
+    [where] clause are encoded by both, errors compared exactly. The library is
+    compiled with overflow checks, so arithmetic that would wrap aborts the run.
+    A codec the generator refuses must be one it documents it cannot specialise,
+    or one whose field names would spell a Rust name twice. *)
 
 let backends (type r) (c : r Wire.Codec.t) m =
   Diff_rust.folds m @ [ Diff_rust.views c m; Diff_rust.values c m ]

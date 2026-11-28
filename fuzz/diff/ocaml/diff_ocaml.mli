@@ -86,15 +86,15 @@ type scan_ops = {
   scan_batch :
     (bytes -> int -> int -> int -> (string * int) list option list option)
     option;
-      (** The frame fold with a stride: each frame's outputs, or [None] when it
-          rejects the bounds. *)
+      (** [scan_batch buf off len stride] is the fold over the slots of [stride]
+          bytes of the [len] bytes at [off]: each slot's outputs, or [None] when
+          the bounds or the stride are refused. *)
   scan_index :
     (bytes -> int array -> int array -> (string * int) list option list) option;
       (** The fold over an index, [offs] and [lens]: each frame's outputs, in
           order. *)
 }
-(** A generated scanner, through its decoder and its frame fold, or their
-    unboxed forms. *)
+(** A generated module through its fold, its views or its values. *)
 
 val view_scan :
   name:string ->
@@ -108,8 +108,8 @@ val view_scan :
     [len] bytes there and reads each of [fields] through the accessors, an
     absent one as 0. Each answer is compared, before {!check_scan} compares it
     with the reference, with [Wire.Codec.View.check] on the frame's bytes alone
-    and with [full], the scanner's own outputs, every one of them, those in
-    records a field holds included. Fails with {!Alcobar.failf}. *)
+    and with [full], the outputs of the module's fold of every field, on each
+    output [full] hands out. Fails with {!Alcobar.failf}. *)
 
 type values = {
   decode : bytes -> int -> (string, Wire.Error.t) result;
@@ -132,8 +132,8 @@ val values_scan :
     module of [codec]: on each frame, the bytes alone, [v]'s decode gives what
     {!Wire.Codec.decode} gives, written back by the generated and the codec's
     encoders alike, or the same error, and its validate agrees with
-    {!Wire.Codec.validate}; it then hands out [full], the module's own outputs.
-    Fails with {!Alcobar.failf}. *)
+    {!Wire.Codec.validate}; it then hands out [full], the outputs of the
+    module's fold. Fails with {!Alcobar.failf}. *)
 
 (** What a scanner is compared with: the codec, and the outputs it states for a
     frame it decodes ([known], or all of them when [None]). *)
@@ -165,7 +165,7 @@ val check_scan :
 (** [check_scan ?oracle r backends buf] compares each scanner with [r]'s codec
     on frames of [buf] at several offsets, bounds past the buffer included: the
     outputs, acceptance against {!Wire.Codec.decode}, its general path and
-    {!Wire.Codec.validate}, [fold_frames] at several strides, and, with
+    {!Wire.Codec.validate}, the fold over slots at several strides, and, with
     [oracle], the acceptance and consumed prefix of the EverParse C validators
     of the standalone and FFI projections, and the visitor scalars of the FFI
     one. A read must not change [buf]. Fails with {!Alcobar.failf}. *)
@@ -173,7 +173,7 @@ val check_scan :
 val scan_corpus :
   ?oracle:Diff_codecs.c_oracle -> Diff_codecs.scan_case -> scan_ops list -> unit
 (** [scan_corpus case backends] runs {!check_scan} on [case]'s corpus, and on
-    good, bad and partial frames joined for [fold_frames]. *)
+    good, bad and partial frames joined for the fold over slots. *)
 
 val scannable : 'r Wire.Codec.t -> bool
 (** [scannable c] is [true] when [c] is in the scope {!Wire_ocaml.v} documents
