@@ -148,7 +148,7 @@ let tags =
   in
   let ctx_exp = Asn1.required "contextExplicit" (Asn1.explicit 6 Asn1.bool) in
   let univ =
-    Asn1.required "universal" (Asn1.explicit ~cls:`Universal 9 Asn1.null)
+    Asn1.required "universal" (Asn1.explicit ~cls:`Universal 40 Asn1.null)
   in
   Asn1.sequence "Tags"
     (fun a b c d e -> (a, b, c, d, e))

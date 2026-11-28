@@ -106,7 +106,7 @@ Tags ::= SEQUENCE {
   private [PRIVATE 4] EXPLICIT INTEGER,
   contextImplicit [5] IMPLICIT INTEGER,
   contextExplicit [6] EXPLICIT BOOLEAN,
-  universal [UNIVERSAL 9] EXPLICIT NULL
+  universal [UNIVERSAL 40] EXPLICIT NULL
 }
 
 Optionals ::= SEQUENCE {

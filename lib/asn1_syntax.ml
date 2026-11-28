@@ -450,12 +450,61 @@ let tag_class ~combinator ?cls n =
     | Some `Private -> Private
   in
   tag_number ~combinator n;
-  if equal_class c Universal && n = 0 then
+  if equal_class c Universal && (n = 0 || n = 15) then
     Fmt.invalid_arg
-      "Wire.Asn1.%s: tag [UNIVERSAL 0] is reserved for the encoding rules \
-       (X.680 8.6, spec/ASN1.Syntax.fst:10-12)"
-      combinator;
+      "Wire.Asn1.%s: tag [UNIVERSAL %d] is reserved (X.690 8.1.2, \
+       spec/ASN1.Base.fst:444-452)"
+      combinator n;
   c
+
+(* The UNIVERSAL types everparse-asn1 reads constructed in DER, every other
+   one primitive (spec/ASN1.Base.fst:440-457), and the terminal each of 1 to
+   36 is, INTEGER and ENUMERATED one kind (spec/ASN1.Base.fst:407-436). *)
+let always_constructed n = List.mem n [ 8; 11; 16; 17; 29 ]
+
+let universal_terminal n =
+  if
+    List.mem n [ 1; 3; 4; 5; 6; 7; 12; 13; 18; 19; 20; 21; 22; 23; 24; 25 ]
+    || List.mem n [ 26; 27; 28; 30; 31; 32; 33; 35; 36 ]
+  then Some n
+  else if n = 2 || n = 10 then Some 2
+  else None
+
+(* The UNIVERSAL number of the terminal type an IMPLICIT tag replaces the tag
+   of, if it is one. *)
+let rec terminal_number : type a. a t -> int option = function
+  | Prim p -> universal_terminal (prim_number p)
+  | Size { inner; _ } -> terminal_number inner
+  | Implicit { inner; _ } -> terminal_number inner
+  | Keep_bytes t -> terminal_number t
+  | Map { inner; _ } -> terminal_number inner
+  | Any | Explicit _ | Sequence _ | Set _ | Sequence_of _ | Set_of _ | Choice _
+  | Containing _ ->
+      None
+
+(* A UNIVERSAL tag on a schema everparse-asn1 verifies: constructed only on a
+   type DER encodes constructed, or on a number above 36, and primitive only on
+   the terminal type the number is, or on a number no type has
+   (spec/ASN1.Spec.Conformance.fst:351-394, the [wf] its writers require). *)
+let check_universal ~combinator tag inner =
+  let n = tag.number in
+  let fail why =
+    Fmt.invalid_arg
+      "Wire.Asn1.%s: [UNIVERSAL %d] %s, which everparse-asn1 does not verify \
+       (spec/ASN1.Base.fst:440-457, spec/ASN1.Spec.Conformance.fst:351-394)"
+      combinator n why
+  in
+  if equal_class tag.cls Universal then
+    if tag.constructed then (
+      if not (always_constructed n || n > 36) then
+        fail "on a constructed encoding, which DER gives that type primitive")
+    else if always_constructed n then
+      fail "on a primitive encoding, which DER gives that type constructed"
+    else
+      match universal_terminal n with
+      | None -> ()
+      | Some k when terminal_number inner = Some k -> ()
+      | Some _ -> fail "on a type other than the one that tag numbers"
 
 (* The constructed bit an IMPLICIT tag takes from the type it replaces the tag
    of, or why it has no tag to replace. *)
@@ -482,12 +531,16 @@ let implicit ?cls n t =
   let cls = tag_class ~combinator:"implicit" ?cls n in
   match implicit_flag t with
   | Ok constructed ->
-      Implicit { tag = { cls; constructed; number = n }; inner = t }
+      let tag = { cls; constructed; number = n } in
+      check_universal ~combinator:"implicit" tag t;
+      Implicit { tag; inner = t }
   | Error why -> Fmt.invalid_arg "Wire.Asn1.implicit: [%d] IMPLICIT on %s" n why
 
 let explicit ?cls n t =
   let cls = tag_class ~combinator:"explicit" ?cls n in
-  Explicit { tag = { cls; constructed = true; number = n }; inner = t }
+  let tag = { cls; constructed = true; number = n } in
+  check_universal ~combinator:"explicit" tag t;
+  Explicit { tag; inner = t }
 
 (* Names and values in the .asn text, which a DEFAULT and a defined_by key need
    when they are built, and the printer below. *)

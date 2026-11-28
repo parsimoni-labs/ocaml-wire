@@ -541,7 +541,31 @@ let test_universal_0 () =
   rejects ~msg:"tag [UNIVERSAL 0] is reserved" (fun () ->
       Asn1.implicit ~cls:`Universal 0 Asn1.bool);
   rejects ~msg:"tag [UNIVERSAL 0] is reserved" (fun () ->
-      Asn1.explicit ~cls:`Universal 0 Asn1.bool)
+      Asn1.explicit ~cls:`Universal 0 Asn1.bool);
+  rejects ~msg:"tag [UNIVERSAL 15] is reserved" (fun () ->
+      Asn1.implicit ~cls:`Universal 15 Asn1.bool)
+
+(* A UNIVERSAL tag everparse-asn1 verifies only where DER gives its type the
+   form the tag has, and on the terminal type it numbers (the writers' [wf],
+   spec/ASN1.Spec.Conformance.fst:351-394): a run of everparse-asn1 on
+   [UNIVERSAL 9] EXPLICIT NULL and on [UNIVERSAL 7] IMPLICIT OCTET STRING
+   fails their [ok_] obligation. *)
+let test_universal_form () =
+  let null = Asn1.null and seq = Asn1.sequence_of Asn1.bool in
+  rejects ~msg:"[UNIVERSAL 9] on a constructed encoding" (fun () ->
+      Asn1.explicit ~cls:`Universal 9 null);
+  rejects ~msg:"[UNIVERSAL 7] on a type other than the one that tag numbers"
+    (fun () -> Asn1.implicit ~cls:`Universal 7 Asn1.octet_string);
+  rejects ~msg:"[UNIVERSAL 16] on a primitive encoding" (fun () ->
+      Asn1.implicit ~cls:`Universal 16 Asn1.bool);
+  rejects ~msg:"[UNIVERSAL 4] on a constructed encoding" (fun () ->
+      Asn1.implicit ~cls:`Universal 4 seq);
+  builds (fun () -> Asn1.explicit ~cls:`Universal 40 null);
+  builds (fun () -> Asn1.explicit ~cls:`Universal 16 null);
+  builds (fun () -> Asn1.implicit ~cls:`Universal 8 seq);
+  builds (fun () -> Asn1.implicit ~cls:`Universal 10 Asn1.integer);
+  builds (fun () -> Asn1.implicit ~cls:`Universal 9 Asn1.octet_string);
+  builds (fun () -> Asn1.implicit ~cls:`Universal 4 Asn1.octet_string)
 
 let test_keep_bytes_alternative () =
   rejects ~msg:"keep_bytes on a CHOICE alternative" (fun () ->
@@ -762,6 +786,8 @@ let suite =
       Alcotest.test_case "reject: OID arc 2^32" `Quick test_oid_arc_2_32;
       Alcotest.test_case "reject: tag number 2^32" `Quick test_tag_2_32;
       Alcotest.test_case "reject: UNIVERSAL 0" `Quick test_universal_0;
+      Alcotest.test_case "reject: UNIVERSAL tag of another form or type" `Quick
+        test_universal_form;
       Alcotest.test_case "reject: keep_bytes on alternative" `Quick
         test_keep_bytes_alternative;
       Alcotest.test_case "reject: keep_bytes on DEFAULT" `Quick
