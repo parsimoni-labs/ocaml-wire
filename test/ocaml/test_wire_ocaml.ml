@@ -443,9 +443,6 @@ let test_refined () =
     (decoded ~fix:fix_refined Schemas.refined 200
     @ List.init 300 (fun _ -> wild ()))
 
-(* A codec the generator cannot specialise is refused when the code is
-   generated, naming the field and why, rather than given a module with fewer
-   functions. *)
 (* Arithmetic near the top of the native int reads and writes as the codec
    does. *)
 let test_overflow () =
@@ -468,6 +465,9 @@ let test_overflow () =
         (u32 1l, 0, 0, u32 Int32.min_int, u32 Int32.min_int);
       ])
 
+(* A codec the generator cannot specialise is refused when the code is
+   generated, naming the field and why, rather than given a module with fewer
+   functions. *)
 let test_refused () =
   let refused ~maps name =
     match Wire_ocaml.(to_ml (v ~target:`OCaml ~maps Schemas.mapped)) with
@@ -511,6 +511,42 @@ let test_refused () =
   | _ -> Alcotest.fail "a 64-bit field was generated"
   | exception Invalid_argument m ->
       Alcotest.(check bool) "names the field" true (contains m "Big")
+
+(* Shapes no module reads are refused, naming the field and the shape: an
+   integer of [n] bytes, which holds an [Optint.Int63.t] that [wire.runtime]
+   has no carrier for; a byte array whose bytes have a condition, which needs a
+   loop over its bytes; and a remainder. *)
+let test_refused_shapes () =
+  let refused : type a. string -> a Field.t -> string list -> unit =
+   fun what field needles ->
+    let c =
+      Codec.v "Shape"
+        (fun n x -> (n, x))
+        Codec.[ Field.v "n" uint8 $ fst; field $ snd ]
+    in
+    match ml c with
+    | _ -> Alcotest.failf "%s: generated" what
+    | exception Invalid_argument m ->
+        List.iter
+          (fun needle ->
+            if not (contains m needle) then
+              Alcotest.failf "%s: %S does not name %S" what m needle)
+          needles
+  in
+  refused "a 3-byte integer" (Field.v "x" (uint 3)) [ "field x"; "UINTBE(3)" ];
+  refused "a 3-byte little-endian integer"
+    (Field.v "x" (uint ~endian:Little 3))
+    [ "field x"; "UINT(3)" ];
+  refused "a byte array with a condition on its bytes"
+    (Field.v "x"
+       (byte_array_where ~size:(int 3) ~per_byte:(fun b ->
+            Expr.(b >= int 32 && b <= int 126))))
+    [ "field x"; "[:byte-size 3]"; ">= 32" ];
+  let n = Field.v "n" uint8 in
+  refused "a remainder by a field"
+    (Field.v "x" uint8 ~self_constraint:(fun self ->
+         Expr.(Field.ref n >= int 1 && self mod Field.ref n = int 0)))
+    [ "field x"; "expression"; "%" ]
 
 (* Field names that spell one OCaml name twice, once lower-cased, escaped or
    suffixed, are refused naming both fields, as is a name the generated module
@@ -1643,6 +1679,7 @@ let suite =
       Alcotest.test_case "adjacent fields" `Quick test_packed;
       Alcotest.test_case "errors in the codec's order" `Quick test_refined;
       Alcotest.test_case "overflowing arithmetic" `Quick test_overflow;
+      Alcotest.test_case "refused shapes" `Quick test_refused_shapes;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "clashing names are refused" `Quick test_clash;
       Alcotest.test_case "no literal needs more than 31 bits" `Quick

@@ -99,11 +99,13 @@ val v :
 
     Raises [Invalid_argument], naming the field and the reason, for a codec no
     module covers: parameters, actions, a field of a type it does not read (a
-    repetition, a tagged union), or a map [maps] does not name; for a path of
-    [fold] that names no field or a field no fold reads, and for two paths of
-    [fold] that give one label; for [~maps] or [~simd:true] on a codec the
-    module does not cover; for [~simd:true] with the [`OCaml] target; and naming
-    both fields when two of them would define the same OCaml name. *)
+    repetition, a tagged union, a {!Wire.uint} or {!Wire.uint_var} integer, a
+    {!Wire.byte_array_where}), an expression it does not write (a division, a
+    remainder), or a map [maps] does not name; for a path of [fold] that names
+    no field or a field no fold reads, and for two paths of [fold] that give one
+    label; for [~maps] or [~simd:true] on a codec the module does not cover; for
+    [~simd:true] with the [`OCaml] target; and naming both fields when two of
+    them would define the same OCaml name. *)
 
 val name : t -> string
 (** [name t] is the name of [t]'s module: its file is [name t ^ ".ml"]. *)
