@@ -18,7 +18,9 @@
    stack_fold.h
    (glob_files ../../schemas/*.h)
    ../../schemas/EthernetStack.c)
-  (flags :standard -I ../.. -I ../../schemas)))
+  ; A setter of stack_inline.c the validator does not call leaves the call to
+  ; the shipped visitor, which writes past the custom WIRECTX.
+  (flags :standard -Werror=unused-function -I ../.. -I ../../schemas)))
 
 (executable
  (name everparse)

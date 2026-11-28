@@ -1484,7 +1484,7 @@ let test_locate_3d_exe () =
   in
   Alcotest.(check bool)
     "locate_3d_exe agrees with PATH plus the ~/.local/everparse fallback"
-    (found "everparse-3d.exe" || found "3d.exe")
+    (found "everparse-3d.exe")
     (Option.is_some (Wire_3d.locate_3d_exe ()))
 
 let test_main_exists () =

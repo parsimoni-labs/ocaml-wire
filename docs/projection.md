@@ -39,8 +39,8 @@ combinator must reject when it is built. The README's
 
 3D computes every integer expression in a fixed-width unsigned type and F*
 must prove each operation stays inside it, where the OCaml decoder computes
-with exact integers. 3d.exe (EverParse v2026.10.27) types an expression as
-follows:
+with exact integers. 3d.exe (EverParse v2026.10.27 and v2026.11.13) types an
+expression as follows:
 
 - A literal has the smallest of `UINT8`, `UINT16`, `UINT32` and `UINT64`
   that holds it (`300` is a `UINT16`, `4294967296` a `UINT64`). There are no

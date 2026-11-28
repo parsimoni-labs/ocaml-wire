@@ -37,7 +37,10 @@ typedef struct StackOut {
   uint16_t ipv4_udp_length;
 } WIRECTX;
 
-/* No member the checksum reads is a byte range. */
+/* The setters take their 3D names, which EthernetStack_Fields.h maps to the
+   C names of the EverParse release that wrote the validator.
+
+   No member the checksum reads is a byte range. */
 static inline void EthernetStackSetBytes(WIRECTX *ctx, uint32_t idx,
                                          uint32_t v) {
   (void)ctx;
@@ -45,7 +48,7 @@ static inline void EthernetStackSetBytes(WIRECTX *ctx, uint32_t idx,
   (void)v;
 }
 
-static inline void EthernetStackSetU16be(WIRECTX *ctx, uint32_t idx,
+static inline void EthernetStackSetU16BE(WIRECTX *ctx, uint32_t idx,
                                          uint16_t v) {
   switch (idx) {
   case ETHERNETSTACK_IDX_ETHER_TYPE: ctx->ether_type = v; break;
@@ -75,7 +78,7 @@ static inline void EthernetStackSetU8(WIRECTX *ctx, uint32_t idx, uint8_t v) {
   }
 }
 
-static inline void EthernetStackSetU32be(WIRECTX *ctx, uint32_t idx,
+static inline void EthernetStackSetU32BE(WIRECTX *ctx, uint32_t idx,
                                          uint32_t v) {
   switch (idx) {
   case ETHERNETSTACK_IDX_IPV4_SRC: ctx->ipv4_src = v; break;
@@ -87,8 +90,8 @@ static inline void EthernetStackSetU32be(WIRECTX *ctx, uint32_t idx,
 }
 
 /* The validator, under a name of its own: the default-visitor row links the
-   shipped one from libbenchcodecs.a into the same executable. Its
-   ExternalAPI.h declarations of the setters above take their internal
+   shipped one from libbenchcodecs.a into the same executable. The
+   declarations of the setters above in its headers take their internal
    linkage. */
 #define EthernetStackValidateWireEthernetStack ep_inline_validate
 #include "EthernetStack.c"
