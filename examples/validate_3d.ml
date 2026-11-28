@@ -152,7 +152,7 @@ let test_schemas () =
 
 let () =
   if Option.is_none (Wire_3d.locate_3d_exe ()) then begin
-    Fmt.pr "everparse-3d.exe (or 3d.exe) not found, skipping validation\n";
+    Fmt.pr "everparse-3d.exe not found, skipping validation\n";
     exit 0
   end;
   Alcotest.run "validate_3d"

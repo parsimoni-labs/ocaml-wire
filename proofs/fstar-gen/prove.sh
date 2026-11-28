@@ -18,8 +18,8 @@
 # all written, so the cache holds only what the current sources need.
 #
 # F*, Z3 and 3d.exe come with EverParse (EVERPARSE, default
-# ~/.local/everparse). scripts/fstar-gen/prove.exe finds 3d.exe there under
-# either of its names, as Wire_3d does, and runs each tool.
+# ~/.local/everparse). scripts/fstar-gen/prove.exe finds 3d.exe there as
+# Wire_3d does, under the name everparse-3d.exe, and runs each tool.
 # Checked modules go to WIRE_FSTAR_CACHE, one directory per F* version, and
 # 3d.exe's output to a directory named by the digest of the .3d; prune
 # removes every other version and digest. The default is fstar-cache in the

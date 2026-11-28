@@ -452,6 +452,94 @@ let test_extern_names_by_name () =
               c_type)))
     setters
 
+(* Since v2026.11, the [_ExternalAPI.h] EverParse writes only includes the
+   module's header, which F* writes and which declares the extern setters. Each
+   setter takes its name from the header the include names. *)
+let test_extern_names_through_include () =
+  let schema =
+    Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi
+      (struct_ "Included" [ field "f0" uint16be; field "f1" uint8 ])
+  in
+  let setters = Wire.Private.Everparse.visitor_setters schema in
+  Alcotest.(check int) "two setters to pair" 2 (List.length setters);
+  let module_header =
+    String.concat ""
+      (List.map
+         (fun (name, c_type) ->
+           Fmt.str "extern void %s(WIRECTX *, uint32_t, %s);\n" name c_type)
+         setters)
+  in
+  let dir = Filename.temp_dir "wire_3d_include" "" in
+  let impl =
+    Fun.protect
+      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      (fun () ->
+        let write name text =
+          Out_channel.with_open_bin (Filename.concat dir name) (fun oc ->
+              Out_channel.output_string oc text)
+        in
+        write "Included_ExternalAPI.h" "#include \"Included.h\"\n";
+        write "Included.h" module_header;
+        Wire_3d.write_fields ~outdir:dir [ schema ];
+        read_file (Filename.concat dir "Included_Fields.c"))
+  in
+  List.iter
+    (fun (name, c_type) ->
+      Alcotest.(check bool)
+        (Fmt.str "%s takes %s" name c_type)
+        true
+        (contains impl
+           (Fmt.str "void %s(WIRECTX *ctx, uint32_t idx, %s v)" name c_type)))
+    setters
+
+(* EverParse v2026.10 lowercases the run after a digit in a setter's C name
+   ([RenamedSetU16be]) and v2026.11 keeps the 3D name ([RenamedSetU16BE]).
+   [_Fields.h] maps each 3D name the C does not use to the C name, so a visitor
+   written with the 3D names builds against the C of either release. *)
+let test_fields_header_aliases () =
+  let schema =
+    Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi
+      (struct_ "Renamed" [ field "f0" uint16be; field "f1" uint8 ])
+  in
+  let setters = Wire.Private.Everparse.visitor_setters schema in
+  Alcotest.(check (list string))
+    "the 3D names"
+    [ "RenamedSetU16BE"; "RenamedSetU8" ]
+    (List.sort String.compare (List.map fst setters));
+  let fields_header c_name =
+    let dir = Filename.temp_dir "wire_3d_alias" "" in
+    Fun.protect
+      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      (fun () ->
+        let header =
+          String.concat ""
+            (List.map
+               (fun (name, c_type) ->
+                 Fmt.str "extern void %s(WIRECTX *, uint32_t, %s);\n"
+                   (c_name name) c_type)
+               setters)
+        in
+        Out_channel.with_open_bin (Filename.concat dir "Renamed_ExternalAPI.h")
+          (fun oc -> Out_channel.output_string oc header);
+        Wire_3d.write_fields ~outdir:dir [ schema ];
+        read_file (Filename.concat dir "Renamed_Fields.h"))
+  in
+  let v2026_10 name =
+    if String.ends_with ~suffix:"BE" name then
+      String.sub name 0 (String.length name - 2) ^ "be"
+    else name
+  in
+  let older = fields_header v2026_10 in
+  Alcotest.(check bool)
+    "the renamed setter is aliased" true
+    (contains older "#define RenamedSetU16BE RenamedSetU16be");
+  Alcotest.(check bool)
+    "a setter of one name is not" false
+    (contains older "#define RenamedSetU8");
+  Alcotest.(check bool)
+    "no alias when the C keeps the 3D names" false
+    (contains (fields_header Fun.id) "#define RenamedSet")
+
 (* The default visitor of a schema, written next to a stand-in for the
    [_ExternalAPI.h] 3d.exe would emit, which declares each setter under its
    own name. *)
@@ -575,6 +663,10 @@ let suite =
         test_extern_names_wrapped;
       Alcotest.test_case "extern names paired by name, not order" `Quick
         test_extern_names_by_name;
+      Alcotest.test_case "extern names through the module header" `Quick
+        test_extern_names_through_include;
+      Alcotest.test_case "_Fields.h aliases the 3D setter names" `Quick
+        test_fields_header_aliases;
       Alcotest.test_case "projection: var inlines into uses" `Quick
         test_var_inlines;
       Alcotest.test_case "projection: var scoping inside if" `Quick

@@ -25,8 +25,8 @@ make cppcheck           # static analysis of the hand-written C (skips if cppche
 make clean              # dune clean
 ```
 
-`make bench` requires EverParse (`everparse-3d.exe`, or `3d.exe` before
-v2026.10, in PATH or `~/.local/everparse/bin/`).
+`make bench` requires EverParse v2026.10.27 or later (`everparse-3d.exe` in
+PATH or `~/.local/everparse/bin/`).
 All bench/prof/memtrace targets use `--profile=bench`: the release profile
 with `-O3` on every unit, the libraries a benchmark links included
 (`dune-workspace`).

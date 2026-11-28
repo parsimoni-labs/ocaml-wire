@@ -303,13 +303,9 @@
 - `Wire_3d.generate_corpus` keeps each seeded input under 4 KiB, where a
   16-bit length gave lines of up to 64 KiB (#455, @samoht)
 
-- `Wire_3d` finds EverParse's 3D compiler under its new name,
-  `everparse-3d.exe` (EverParse v2026.10 and later), as well as `3d.exe`,
-  and gives that release's F* the larger reduction budget a flat record of
-  16 fields needs. Use EverParse v2026.10.27 or later for a region of a
-  constant size holding a record (`nested ~size:(int 4) (codec r)`): earlier
-  releases fail to build its C validator (project-everest/everparse#321)
-  (#514, @samoht)
+- `Wire_3d` needs EverParse v2026.10.27 or later, runs only `everparse-3d.exe`,
+  and reads the setters from either header layout, `<Name>_ExternalAPI.h` or,
+  since v2026.11.13, `<Name>.h` (#514, #PR, @samoht)
 
 - `Wire.Codec.decode` rejects a malformed packet faster: it reports the
   check that fails where it finds it, rather than checking the packet again.

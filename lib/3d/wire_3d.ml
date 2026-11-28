@@ -101,17 +101,51 @@ let check_name_collisions schemas =
 let extern_api_path ~outdir s =
   Filename.concat outdir (file_base s ^ "_ExternalAPI.h")
 
+(* The names of the [#include "..."] lines of [text]. *)
+let quoted_includes text =
+  List.filter_map
+    (fun line ->
+      match String.split_on_char '"' (String.trim line) with
+      | [ directive; name; _ ]
+        when String.equal
+               (String.concat ""
+                  (String.split_on_char ' ' (String.trim directive)))
+               "#include" ->
+          Some name
+      | _ -> None)
+    (String.split_on_char '\n' text)
+
+(* The text of the header [path], followed by that of every header it
+   includes, in turn, by a quoted name that is a file in [outdir]. *)
+let header_text ~outdir path =
+  let seen = Hashtbl.create 4 in
+  let rec read path =
+    if Hashtbl.mem seen path || not (Sys.file_exists path) then ""
+    else begin
+      Hashtbl.add seen path ();
+      let text = In_channel.with_open_text path In_channel.input_all in
+      String.concat "\n"
+        (text
+        :: List.map
+             (fun name -> read (Filename.concat outdir name))
+             (quoted_includes text))
+    end
+  in
+  read path
+
 (* The extern callback names are read straight out of the [_ExternalAPI.h]
    file EverParse has just generated rather than predicted with [pascal_case],
    so the visitor defines exactly what that header declares.
+
+   Since v2026.11, [_ExternalAPI.h] declares nothing itself: it includes the
+   module's header, which F* writes and which holds the declarations, so the
+   headers it includes are read with it.
 
    KaRaMeL pretty-prints the declaration to a column budget, so a long enough
    schema name puts [extern void] and the name it introduces on separate lines.
    Scanning the file as one string rather than line by line reads both layouts. *)
 let read_extern_names ~outdir s =
-  let text =
-    In_channel.with_open_text (extern_api_path ~outdir s) In_channel.input_all
-  in
+  let text = header_text ~outdir (extern_api_path ~outdir s) in
   let len = String.length text in
   let prefix = "extern void" in
   let plen = String.length prefix in
@@ -154,8 +188,7 @@ let write_3d ~outdir schemas =
 let locate_3d_exe () =
   locate_3d_exe ~win32:Sys.win32 ~getenv:Sys.getenv_opt ~executable
 
-let tool name =
-  locate ~names:[ name ] ~win32:Sys.win32 ~getenv:Sys.getenv_opt ~executable
+let tool name = locate ~name ~win32:Sys.win32 ~getenv:Sys.getenv_opt ~executable
 
 let everparse_version exe =
   let ic = Unix.open_process_args_in exe [| exe; "--version" |] in
@@ -297,15 +330,16 @@ let with_freestanding_endianness content =
    into that copy after 3d.exe has run: patching a file that is not there yet,
    or skipping the patch because the file already exists, both leave the
    shipped header [#error]ing on the cross target the standalone C archive is
-   meant to serve. Falls back to EverParse's source copy when there is nothing
-   in [outdir] to patch. *)
+   meant to serve. Falls back to the copy the EverParse release installs when
+   there is nothing in [outdir] to patch. *)
 let patch_everparse_endianness ~outdir =
   let dst = Filename.concat outdir "EverParseEndianness.h" in
   let src =
     if Sys.file_exists dst then dst
     else begin
       let src =
-        Filename.concat (everparse_dir ()) "src/3d/EverParseEndianness.h"
+        List.fold_left Filename.concat (everparse_dir ())
+          [ "lib"; "everparse"; "3d"; "EverParseEndianness.h" ]
       in
       if not (Sys.file_exists src) then
         Fmt.failwith "Cannot find EverParseEndianness.h at %s" src;
@@ -382,8 +416,9 @@ let check_visitor_names s =
   check "struct member" Wire.Private.Everparse.visitor_member
 
 (* Typed-struct visitor: one C struct per schema with one member per named field,
-   plus a [WireSet*] implementation that switches on idx to populate it. *)
-let write_fields_header ~outdir s =
+   plus a [WireSet*] implementation that switches on idx to populate it.
+   [names] pairs each setter's 3D name with its C name. *)
+let write_fields_header ~outdir s names =
   let fields = Wire.Private.Everparse.visitor_fields s in
   let base = file_base s in
   let ident = c_ident s in
@@ -417,6 +452,13 @@ let write_fields_header ~outdir s =
     fields;
   if fields = [] then pr "  int _unused;@\n";
   pr "} %sFields;@\n" ident;
+  let renamed = List.filter (fun (logical, c) -> logical <> c) names in
+  if renamed <> [] then begin
+    pr "@\n/* The 3D name of each setter the C spells otherwise, so that a@\n";
+    pr "   visitor defining its setters under the 3D names builds against@\n";
+    pr "   the C of any EverParse release. */@\n";
+    List.iter (fun (logical, c) -> pr "#define %s %s@\n" logical c) renamed
+  end;
   pr "#endif@\n";
   Format.pp_print_flush ppf ();
   close_out oc
@@ -438,16 +480,13 @@ let emit_setter_case ppf logical f =
         Fmt.pf ppf "    case %d: f->%s = (%s) v; break;@\n" f.idx member
           f.c_type
 
-(* EverParse renames some setter symbols when emitting [.c] (for example,
-   uppercase runs after a digit are lowercased, and a snake-case schema name is
-   CamelCased, as [everparse_name] does). Read the actual symbol names from the
-   just-generated [_ExternalAPI.h] rather than re-deriving them. EverParse
-   changes only their case and underscores, and since v2026.10 it does not keep
-   the declaration order, so each setter takes the name equal to its own up to
-   case and underscores; the suffixes that tell one schema's setters apart have
-   neither. A header this cannot read yields a setter with no name, and leaving
-   it out would emit a [_Fields.c] missing setters the validator calls; say
-   which file came up short instead. *)
+(* The setter symbols are read from the just-generated headers rather than
+   re-derived, as EverParse declares them in an order of its own. Each setter
+   takes the declared name equal to its own up to case and underscores, the
+   only changes EverParse makes to a symbol; the suffixes that tell one
+   schema's setters apart have neither. A header this cannot read yields a
+   setter with no name, and leaving it out would emit a [_Fields.c] missing
+   setters the validator calls; say which file came up short instead. *)
 let setter_key name =
   String.lowercase_ascii (String.concat "" (String.split_on_char '_' name))
 
@@ -466,12 +505,11 @@ let physical_setter_names ~outdir s setters =
             (extern_api_path ~outdir s))
     setters
 
-let write_fields_impl ~outdir s =
+let write_fields_impl ~outdir s physical_names =
   let fields = Wire.Private.Everparse.visitor_fields s in
   let setters = Wire.Private.Everparse.visitor_setters s in
   let base = file_base s in
   let ident = c_ident s in
-  let physical_names = physical_setter_names ~outdir s setters in
   let path = Filename.concat outdir (base ^ "_Fields.c") in
   let oc = open_out path in
   let ppf = Format.formatter_of_out_channel oc in
@@ -505,8 +543,11 @@ let write_fields ~outdir schemas =
   List.iter
     (fun s ->
       if Wire.Private.Everparse.uses_wire_ctx s then begin
-        write_fields_header ~outdir s;
-        write_fields_impl ~outdir s
+        let setters = Wire.Private.Everparse.visitor_setters s in
+        let physical = physical_setter_names ~outdir s setters in
+        write_fields_header ~outdir s
+          (List.map2 (fun (logical, _) c -> (logical, c)) setters physical);
+        write_fields_impl ~outdir s physical
       end)
     schemas
 

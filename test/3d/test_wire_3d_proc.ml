@@ -11,7 +11,7 @@ let read_file path = In_channel.with_open_text path In_channel.input_all
 (* The fake EverParse below is a shell script, which only a POSIX system runs. *)
 let needs_posix () = if Sys.win32 then Alcotest.skip ()
 
-(* [with_fake_3d f] puts a fake [3d.exe] first on PATH, one that reports no
+(* [with_fake_3d f] puts a fake [everparse-3d.exe] first on PATH, one that reports no
    version, so it is run with no flag of Wire's own, and otherwise writes its cwd
    and then each argument on a line of [observed], in the directory [--odir]
    names or else in that cwd, and calls [f ~outdir ~exe ~observed] with an
@@ -20,7 +20,7 @@ let with_fake_3d f =
   needs_posix ();
   let outdir = Filename.temp_dir "wire 3d;out " "" in
   let bindir = Filename.temp_dir "wire 3d;bin " "" in
-  let exe = Filename.concat bindir "3d.exe" in
+  let exe = Filename.concat bindir "everparse-3d.exe" in
   let observed = Filename.concat outdir "observed" in
   let old_path = Sys.getenv_opt "PATH" in
   Fun.protect
@@ -130,16 +130,18 @@ let test_spawn_keeps_cwd () =
             !runs)
         all)
 
-(* The search for 3d.exe, with the environment and the file system given. *)
+(* The search for everparse-3d.exe, with the environment and the file system
+   given. *)
 let locate ~win32 env exes =
   Wire_3d.Private.locate_3d_exe ~win32
     ~getenv:(fun var -> List.assoc_opt var env)
     ~executable:(fun path -> List.mem path exes)
 
-let exe_in dir = Filename.concat dir "3d.exe"
+let exe_in dir = Filename.concat dir "everparse-3d.exe"
 
 let home_exe home =
-  List.fold_left Filename.concat home [ ".local"; "everparse"; "bin"; "3d.exe" ]
+  List.fold_left Filename.concat home
+    [ ".local"; "everparse"; "bin"; "everparse-3d.exe" ]
 
 let test_locate_3d_exe () =
   let check name expected found =
@@ -180,37 +182,18 @@ let test_locate_3d_exe () =
        [ ("PATH", "/usr/bin"); ("HOME", "/home/me") ]
        [ home_exe "/home/me" ]);
   check "no PATH, HOME or USERPROFILE" None (locate ~win32:false [] []);
-  let renamed dir = Filename.concat dir "everparse-3d.exe" in
-  check "EverParse v2026.10 and later: everparse-3d.exe"
-    (Some (renamed "/opt/bin"))
-    (locate ~win32:false [ ("PATH", "/opt/bin") ] [ renamed "/opt/bin" ]);
-  check "everparse-3d.exe before 3d.exe in one directory"
-    (Some (renamed "/opt/bin"))
-    (locate ~win32:false
-       [ ("PATH", "/opt/bin") ]
-       [ exe_in "/opt/bin"; renamed "/opt/bin" ]);
-  check "an earlier PATH directory wins over the name"
+  check "an earlier PATH directory wins"
     (Some (exe_in "/usr/bin"))
     (locate ~win32:false
        [ ("PATH", "/usr/bin:/opt/bin") ]
-       [ exe_in "/usr/bin"; renamed "/opt/bin" ]);
-  check "HOME holding everparse-3d.exe"
-    (Some
-       (List.fold_left Filename.concat "/home/me"
-          [ ".local"; "everparse"; "bin"; "everparse-3d.exe" ]))
-    (locate ~win32:false
-       [ ("PATH", "/usr/bin"); ("HOME", "/home/me") ]
-       [
-         List.fold_left Filename.concat "/home/me"
-           [ ".local"; "everparse"; "bin"; "everparse-3d.exe" ];
-       ]);
+       [ exe_in "/usr/bin"; exe_in "/opt/bin" ]);
   check "nothing executable" None
     (locate ~win32:true
        [ ("PATH", tools); ("HOME", "/home/me"); ("USERPROFILE", "/home/me") ]
        [])
 
-(* Each name EverParse has given its 3D compiler is found in a real directory
-   on PATH, the newer when both are there. *)
+(* In a real directory on PATH, everparse-3d.exe is found and 3d.exe, the name
+   of EverParse's 3D compiler before v2026.10, is not. *)
 let test_locate_3d_exe_names () =
   let dir = Filename.temp_dir "wire_3d_names" "" in
   Fun.protect
@@ -229,13 +212,13 @@ let test_locate_3d_exe_names () =
           ~executable:Sys.file_exists
       in
       let old = touch "3d.exe" in
-      Alcotest.(check (option string)) "3d.exe" (Some old) (locate ());
-      let renamed = touch "everparse-3d.exe" in
+      Alcotest.(check (option string)) "3d.exe alone" None (locate ());
+      let current = touch "everparse-3d.exe" in
       Alcotest.(check (option string))
-        "everparse-3d.exe next to 3d.exe" (Some renamed) (locate ());
+        "everparse-3d.exe next to 3d.exe" (Some current) (locate ());
       Sys.remove old;
       Alcotest.(check (option string))
-        "everparse-3d.exe alone" (Some renamed) (locate ()))
+        "everparse-3d.exe alone" (Some current) (locate ()))
 
 (* A job that raises fails alone, whatever it raises, in both pools, and the
    failure names it with its output and the message of what it raised. Each
@@ -362,8 +345,8 @@ let suite =
         test_run_3d_spawned;
       Alcotest.test_case "two spawns leave the parent's cwd alone" `Quick
         test_spawn_keeps_cwd;
-      Alcotest.test_case "locate 3d.exe" `Quick test_locate_3d_exe;
-      Alcotest.test_case "locate each name of the 3D compiler" `Quick
+      Alcotest.test_case "locate everparse-3d.exe" `Quick test_locate_3d_exe;
+      Alcotest.test_case "locate the 3D compiler by its one name" `Quick
         test_locate_3d_exe_names;
       Alcotest.test_case "pools give the same results" `Quick test_pools_agree;
       Alcotest.test_case "WIRE_3D_JOBS" `Quick test_max_jobs;
