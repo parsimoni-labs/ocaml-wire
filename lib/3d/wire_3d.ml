@@ -101,17 +101,51 @@ let check_name_collisions schemas =
 let extern_api_path ~outdir s =
   Filename.concat outdir (file_base s ^ "_ExternalAPI.h")
 
+(* The names of the [#include "..."] lines of [text]. *)
+let quoted_includes text =
+  List.filter_map
+    (fun line ->
+      match String.split_on_char '"' (String.trim line) with
+      | [ directive; name; _ ]
+        when String.equal
+               (String.concat ""
+                  (String.split_on_char ' ' (String.trim directive)))
+               "#include" ->
+          Some name
+      | _ -> None)
+    (String.split_on_char '\n' text)
+
+(* The text of the header [path], followed by that of every header it
+   includes, in turn, by a quoted name that is a file in [outdir]. *)
+let header_text ~outdir path =
+  let seen = Hashtbl.create 4 in
+  let rec read path =
+    if Hashtbl.mem seen path || not (Sys.file_exists path) then ""
+    else begin
+      Hashtbl.add seen path ();
+      let text = In_channel.with_open_text path In_channel.input_all in
+      String.concat "\n"
+        (text
+        :: List.map
+             (fun name -> read (Filename.concat outdir name))
+             (quoted_includes text))
+    end
+  in
+  read path
+
 (* The extern callback names are read straight out of the [_ExternalAPI.h]
    file EverParse has just generated rather than predicted with [pascal_case],
    so the visitor defines exactly what that header declares.
+
+   Since v2026.11, [_ExternalAPI.h] declares nothing itself: it includes the
+   module's header, which F* writes and which holds the declarations, so the
+   headers it includes are read with it.
 
    KaRaMeL pretty-prints the declaration to a column budget, so a long enough
    schema name puts [extern void] and the name it introduces on separate lines.
    Scanning the file as one string rather than line by line reads both layouts. *)
 let read_extern_names ~outdir s =
-  let text =
-    In_channel.with_open_text (extern_api_path ~outdir s) In_channel.input_all
-  in
+  let text = header_text ~outdir (extern_api_path ~outdir s) in
   let len = String.length text in
   let prefix = "extern void" in
   let plen = String.length prefix in

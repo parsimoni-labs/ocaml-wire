@@ -452,6 +452,46 @@ let test_extern_names_by_name () =
               c_type)))
     setters
 
+(* Since v2026.11, the [_ExternalAPI.h] EverParse writes only includes the
+   module's header, which F* writes and which declares the extern setters. Each
+   setter takes its name from the header the include names. *)
+let test_extern_names_through_include () =
+  let schema =
+    Wire.Private.Everparse.Raw.project_struct ~mode:`Ffi
+      (struct_ "Included" [ field "f0" uint16be; field "f1" uint8 ])
+  in
+  let setters = Wire.Private.Everparse.visitor_setters schema in
+  Alcotest.(check int) "two setters to pair" 2 (List.length setters);
+  let module_header =
+    String.concat ""
+      (List.map
+         (fun (name, c_type) ->
+           Fmt.str "extern void %s(WIRECTX *, uint32_t, %s);\n" name c_type)
+         setters)
+  in
+  let dir = Filename.temp_dir "wire_3d_include" "" in
+  let impl =
+    Fun.protect
+      ~finally:(fun () -> Wire_3d.rm_rf dir)
+      (fun () ->
+        let write name text =
+          Out_channel.with_open_bin (Filename.concat dir name) (fun oc ->
+              Out_channel.output_string oc text)
+        in
+        write "Included_ExternalAPI.h" "#include \"Included.h\"\n";
+        write "Included.h" module_header;
+        Wire_3d.write_fields ~outdir:dir [ schema ];
+        read_file (Filename.concat dir "Included_Fields.c"))
+  in
+  List.iter
+    (fun (name, c_type) ->
+      Alcotest.(check bool)
+        (Fmt.str "%s takes %s" name c_type)
+        true
+        (contains impl
+           (Fmt.str "void %s(WIRECTX *ctx, uint32_t idx, %s v)" name c_type)))
+    setters
+
 (* The default visitor of a schema, written next to a stand-in for the
    [_ExternalAPI.h] 3d.exe would emit, which declares each setter under its
    own name. *)
@@ -575,6 +615,8 @@ let suite =
         test_extern_names_wrapped;
       Alcotest.test_case "extern names paired by name, not order" `Quick
         test_extern_names_by_name;
+      Alcotest.test_case "extern names through the module header" `Quick
+        test_extern_names_through_include;
       Alcotest.test_case "projection: var inlines into uses" `Quick
         test_var_inlines;
       Alcotest.test_case "projection: var scoping inside if" `Quick
