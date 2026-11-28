@@ -114,8 +114,34 @@ let decode_ok = function
 let ok = function Ok v -> v | Error e -> Wire_runtime.Errors.fail e
 
 let reader ?env c f =
-  let read = Codec.get ?env c f in
-  fun buf off -> decode_ok (read buf off)
+  let f = Codec.View.field c f in
+  fun buf off ->
+    let (Buf.Any b) = Buf.v buf in
+    let k = Codec.View.check ?env c b ~off in
+    if not (Codec.View.is_ok k) then
+      Alcotest.failf "reader: %s refuses the record at %d" (Codec.name c) off;
+    Codec.View.read b (Codec.View.get k) f
+
+let setter ?env c f =
+  let f = Codec.View.field c f in
+  fun buf off x ->
+    let (Buf.Any b) = Buf.v buf in
+    let k = Codec.View.check ?env c b ~off in
+    if not (Codec.View.is_ok k) then
+      Alcotest.failf "setter: %s refuses the record at %d" (Codec.name c) off;
+    Codec.View.set b (Codec.View.get k) f x
+
+let accepts ?env c buf off =
+  let (Buf.Any b) = Buf.v buf in
+  Codec.View.is_ok (Codec.View.check ?env c b ~off)
+
+let codec_of_typ typ =
+  Codec.v "Value" Fun.id Codec.[ Field.v "value" typ $ Fun.id ]
+
+let decode_typ ?consume typ s =
+  Codec.decode ?consume (codec_of_typ typ) (Bytes.of_string s) ~off:0
+
+let encode_typ typ v = Codec.to_string (codec_of_typ typ) v
 
 let expect_constraint_fail = function
   | Ok _ -> Alcotest.fail "expected a Constraint_failed parse error"
@@ -129,11 +155,11 @@ let expect_kind pred = function
   | Error e -> Alcotest.failf "unexpected parse error: %a" Error.pp e
 
 let roundtrip name typ testable v =
-  Alcotest.check testable name v (decode_ok (of_string typ (to_string typ v)))
+  Alcotest.check testable name v (decode_ok (decode_typ typ (encode_typ typ v)))
 
 (* -- Codec test fixtures -- *)
 
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 
 let contains ~sub s = Re.execp (Re.compile (Re.str sub)) s
 
@@ -149,7 +175,7 @@ let index_of ~sub s =
 
 (* Project a codec to its 3D rendering for substring assertions. *)
 let render_3d codec =
-  to_3d (module_ [ typedef (Everparse.Raw.struct_of_codec codec) ])
+  to_3d (module_ [ typedef (Private.Everparse.Raw.struct_of_codec codec) ])
 
 (* Helper: encode record to string using Codec API *)
 let encode_record codec v = Ok (Codec.to_string codec v)
@@ -164,7 +190,7 @@ let decode_record codec s =
         field = [];
         kind = Unexpected_eof { expected = ws; got = String.length s };
       }
-  else Codec.decode codec (Bytes.of_string s) 0
+  else Codec.decode codec (Bytes.of_string s) ~off:0
 
 type simple_record = { a : UInt8.t; b : UInt16.t; c : UInt32.t }
 

@@ -258,10 +258,7 @@ module Private = struct
   let c_type_of = Types.c_type_of
 end
 
-(* The public [Codec] and [Everparse] over the internal ones. What the interface
-   adds to them, layers, views and folds, raises [Failure "unimplemented"]. *)
-
-let unimplemented () = failwith "unimplemented"
+(* The public [Codec] and [Everparse] over the internal ones. *)
 
 module Everparse = struct
   include Everparse
@@ -273,28 +270,23 @@ module Codec = struct
   module C = Codec
 
   type 'r t = 'r C.t
-  type ('a, 'r) field = ('a, 'r) C.field
+  type ('a, 'r) field = ('a, 'r) C.def
 
-  type ('f, 'k, 'r) fields =
+  type ('f, 'k, 'r) fields = ('f, 'k, 'r) C.Defs.t =
     | [] : ('k, 'k, 'r) fields
     | ( :: ) : ('a, 'r) field * ('f, 'k, 'r) fields -> ('a -> 'f, 'k, 'r) fields
 
-  let rec constructor_fields : type f r. (f, r, r) fields -> (f, r) C.fields =
-    function
-    | [] -> []
-    | f :: fs -> f :: constructor_fields fs
-
-  let ( $ ) = C.( $ )
+  let ( $ ) f proj = C.Def (C.( $ ) f proj)
 
   let v name ?where ?doc make fields =
-    C.v name ?where ?doc make (constructor_fields fields)
+    C.v name ?where ?doc make (C.fields_of_defs fields)
 
-  type ('s, 'r) layer = unit
+  type ('s, 'r) layer = ('s, 'r) C.layer
 
-  let layer _ = unimplemented ()
-  let opt_layer _ = unimplemented ()
-  let ( / ) _ _ = unimplemented ()
-  let ( // ) _ _ = unimplemented ()
+  let layer = C.layer
+  let opt_layer = C.opt_layer
+  let ( / ) = C.path
+  let ( // ) = C.under
   let name = C.name
   let rename = C.rename
   let doc = C.doc
@@ -311,21 +303,9 @@ module Codec = struct
   let pp_value = C.pp_value
 
   module View = struct
-    type ('b, 'r) check = int
-    type ('b, 'r) t = int
-    type ('a, 'r) field = unit
-    type ('s, 'r) layer = unit
+    include C.View
 
-    let check ?env:_ ?len:_ _ _ ~off:_ = unimplemented ()
-    let is_ok k = k >= 0
-    let get k = if k >= 0 then k else invalid_arg "Wire.Codec.View.get"
-    let field _ _ = unimplemented ()
-    let read _ _ _ = unimplemented ()
-    let set _ _ _ _ = unimplemented ()
-    let layer _ _ = unimplemented ()
-    let sub _ _ _ = unimplemented ()
-
-    let fold ?env:_ ?stride:_ ?offs:_ ?lens:_ ?invalid:_ _ _ _ ~init:_ ~f:_ =
-      unimplemented ()
+    type ('a, 'r) field = ('a, 'r) C.View.rfield
+    type ('s, 'r) layer = ('s, 'r) C.View.sub_layer
   end
 end

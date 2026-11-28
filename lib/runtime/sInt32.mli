@@ -32,25 +32,6 @@ val compare : t -> t -> int
 val equal : t -> t -> bool
 (** [equal a b] is [true] when [a] and [b] are the same value. *)
 
-val le : bytes -> int -> t
-(** [le buf off] reads a little-endian value from [buf] at offset [off]. *)
-
-val be : bytes -> int -> t
-(** [be buf off] reads a big-endian value from [buf] at offset [off]. *)
-
-val check_encode : t -> unit
-(** [check_encode v] raises [Invalid_argument] when [v] is not a signed 32-bit
-    value. Only reachable where the native [int] is wider than the field, which
-    is the only place a {!type-t} can hold a number 32 bits cannot. *)
-
-val set_le : bytes -> int -> t -> unit
-(** [set_le buf off v] writes [v] as little-endian into [buf] at offset [off].
-    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
-
-val set_be : bytes -> int -> t -> unit
-(** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off].
-    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
-
 val to_int32 : t -> int32
 (** [to_int32 t] is the value as an [int32], exact on every platform. *)
 
@@ -74,6 +55,25 @@ val [@zero_alloc] of_int : int -> t
     did not mean. *)
 
 (**/**)
+
+val le : bytes -> int -> t
+(** [le buf off] reads a little-endian value from [buf] at offset [off]. *)
+
+val be : bytes -> int -> t
+(** [be buf off] reads a big-endian value from [buf] at offset [off]. *)
+
+val check_encode : t -> unit
+(** [check_encode v] raises [Invalid_argument] when [v] is not a signed 32-bit
+    value. Only reachable where the native [int] is wider than the field, which
+    is the only place a {!type-t} can hold a number 32 bits cannot. *)
+
+val set_le : bytes -> int -> t -> unit
+(** [set_le buf off v] writes [v] as little-endian into [buf] at offset [off].
+    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
+
+val set_be : bytes -> int -> t -> unit
+(** [set_be buf off v] writes [v] as big-endian into [buf] at offset [off].
+    Raises [Invalid_argument] on a value {!check_encode} rejects. *)
 
 val unsafe_le : bytes -> int -> t
 (** [unsafe_le buf off] is the little-endian value at [off], read with no bounds

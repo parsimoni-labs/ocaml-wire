@@ -46,12 +46,6 @@ let struct_size_of = Codec_struct.size_of
 let struct_min_size = Codec_struct.min_size
 let wire_size_info_of_validator = Codec_struct.wire_size_info
 
-(* The fields a [writer] takes, in the order its arguments come. Declared
-   before [fields], so a list literal with no type to go by stays a [fields]. *)
-type ('f, 'r) args =
-  | [] : (unit, 'r) args
-  | ( :: ) : ('a, 'r) field * ('f, 'r) args -> ('a -> 'f, 'r) args
-
 (* Heterogeneous field list. [] seals the view; (::) adds a field.
    Tracks the constructor type: ('a -> 'b -> 'r, 'r) matches a
    constructor (fun a b -> ...). *)
@@ -823,90 +817,63 @@ let[@inline] get ?env (codec : _ t) f =
   | Some c -> component_get codec c f
   | None -> binary_get ?env codec f
 
-let[@inline] set (type a r) ?env (codec : r t) (f : (a, r) field) :
-    bytes -> int -> a -> unit =
-  (* As for [get]: an unbound param places the write on the wrong bytes, which
-     for a writer means overwriting a field the caller never named and leaving
-     the one it did name as it was. *)
-  require_env ~op:"set" codec env;
-  if Option.is_some codec.components then
-    Fmt.invalid_arg
-      "Codec.set: codec %S sets no field in place: its lengths move every \
-       offset"
-      codec.name;
-  let access = field_access ~op:"Codec.set" codec f in
-  let write = build_staged_writer f.typ access in
-  let rt = runtime ?env () in
-  match build_immediate_staged_writer f.typ access with
-  | Some write -> write
-  | None -> fun buf off value -> write rt buf off value
+(* {1 Definitions, layers and paths} *)
 
-(* {1 Writers} *)
+(* A definition as the public API holds it: a field bound to a record, or a
+   path to a field of a record a layer holds. *)
+type ('a, 'r) def =
+  | Def : ('a, 'r) field -> ('a, 'r) def
+  | Path : ('s, 'r) layer * ('a, 's) def -> ('a option, 'r) def
 
-open Codec_run
+and ('s, 'r) layer =
+  | Layer : ('s, 'r) field -> ('s, 'r) layer
+  | Opt_layer : ('s option, 'r) field -> ('s, 'r) layer
+  | Under : ('s, 'r) layer * ('t, 's) layer -> ('t, 'r) layer
 
-let slot_of : type a r. n:int -> r t -> (a, r) field -> a slot option =
- fun ~n codec f ->
-  let s eq ~at ~nb ~sh ~w ~bits = Some (slot eq ~n ~at ~nb ~s:sh ~w ~bits) in
-  match (field_access ~op:"Codec.writer" codec f, f.typ) with
-  | Bitfield { base = U8; byte_off; shift; width }, Bits _ ->
-      s Type.Equal ~at:byte_off ~nb:1 ~sh:shift ~w:width ~bits:true
-  | Bitfield { base = U16 Big; byte_off; shift; width }, Bits _ ->
-      s Type.Equal ~at:byte_off ~nb:2 ~sh:shift ~w:width ~bits:true
-  | Bitfield { base = U32 Big; byte_off; shift; width }, Bits _ ->
-      s Type.Equal ~at:byte_off ~nb:4 ~sh:shift ~w:width ~bits:true
-  | Fixed at, Uint8 -> s UInt8.int_eq ~at ~nb:1 ~sh:0 ~w:8 ~bits:false
-  | Fixed at, Int8 -> s SInt8.int_eq ~at ~nb:1 ~sh:0 ~w:8 ~bits:false
-  | Fixed at, Uint16 Big -> s UInt16.int_eq ~at ~nb:2 ~sh:0 ~w:16 ~bits:false
-  | Fixed at, Int16 Big -> s SInt16.int_eq ~at ~nb:2 ~sh:0 ~w:16 ~bits:false
-  | Fixed at, Uint32 Big -> (
-      match UInt32.int_eq with
-      | Some eq -> s eq ~at ~nb:4 ~sh:0 ~w:32 ~bits:false
-      | None -> None)
-  | Fixed at, Int32 Big -> (
-      match SInt32.int_eq with
-      | Some eq -> s eq ~at ~nb:4 ~sh:0 ~w:32 ~bits:false
-      | None -> None)
+(* The codec a field of type [t] holds, when it holds one as a layer does. *)
+let rec held : type s. s typ -> s t option = function
+  | Codec { codec_ref = Codec_ref c; _ } -> Some c
+  | Single_elem { elem; _ } -> held elem
+  | Optional_or { inner; _ } -> held inner
   | _ -> None
 
-(* Each field of [args] once. *)
-let rec wfields : type f r.
-    fast:bool -> n:int -> r t -> (f, r) args -> int list -> (f, r) wlist =
- fun ~fast ~n codec args seen ->
-  match args with
-  | [] -> WNil
-  | f :: rest ->
-      if List.mem f.id seen then
-        Fmt.invalid_arg "Codec.writer: field %S is written twice" f.name;
-      let w =
-        match if fast then slot_of ~n codec f else None with
-        | Some s -> Slot s
-        | None -> Setter (set codec f)
-      in
-      WCons (w, wfields ~fast ~n codec rest (f.id :: seen))
+let layer : type s r. (s, r) def -> (s, r) layer = function
+  | Def f -> (
+      match held f.typ with
+      | Some _ -> Layer f
+      | None ->
+          Fmt.invalid_arg "Codec.layer: field %S does not hold a record" f.name)
+  | Path _ -> invalid_arg "Codec.layer: a path is not a layer; use ( // )"
 
-let writer (type f r) (codec : r t) (template : r) (args : (f, r) args) :
-    bytes -> int -> f =
-  let n =
-    match (compiled codec).wire_size with
-    | Fixed n -> n
-    | Variable _ ->
-        Fmt.invalid_arg "Codec.writer: codec %S is not of a fixed size"
-          codec.name
-  in
-  require_env ~op:"writer" codec None;
-  let b = Bytes.create n in
-  encode codec template b 0;
-  let fast = n <= 7 && Sys.int_size >= 63 in
-  let ws = wfields ~fast ~n codec args [] in
-  if fast && all_slots ws then
-    let t = clear_slots ws (run_of_bytes b n) in
-    run_writer ~name:codec.name ~n t ws
-  else
-    let ws =
-      if all_slots ws then wfields ~fast:false ~n codec args [] else ws
-    in
-    set_writer ~name:codec.name ~n b ws
+let opt_layer : type s r. (s option, r) def -> (s, r) layer = function
+  | Def ({ typ = Optional { inner; _ }; _ } as f) -> (
+      match held inner with
+      | Some _ -> Opt_layer f
+      | None ->
+          Fmt.invalid_arg "Codec.opt_layer: field %S does not hold a record"
+            f.name)
+  | Def f ->
+      Fmt.invalid_arg "Codec.opt_layer: field %S is not a Field.optional" f.name
+  | Path _ -> invalid_arg "Codec.opt_layer: a path is not a layer; use ( // )"
+
+let path l f = Path (l, f)
+let under l l' = Under (l, l')
+
+(* The definitions a fold hands its function, in order, as the constructor of
+   [v] takes its fields: [[]] ends in the accumulator ['k]. *)
+module Defs = struct
+  type ('f, 'k, 'r) t =
+    | [] : ('k, 'k, 'r) t
+    | ( :: ) : ('a, 'r) def * ('f, 'k, 'r) t -> ('a -> 'f, 'k, 'r) t
+end
+
+(* The fields of [v] given as definitions; a path names no field of the
+   record. *)
+let rec fields_of_defs : type f r. (f, r, r) Defs.t -> (f, r) fields = function
+  | Defs.[] -> []
+  | Defs.(Def f :: rest) -> f :: fields_of_defs rest
+  | Defs.(Path _ :: _) ->
+      invalid_arg "Codec.v: a path names a field of a layer, not of the record"
 
 (* {1 Checked views} *)
 
@@ -927,125 +894,153 @@ let[@inline] passes pass input_end buf off =
       < 0
   | Steps _ -> steps_pass pass input_end buf off
 
-let[@inline never] accepts_slow env (t : 'r t) buf off =
-  off >= 0
-  &&
-  match validate_exn ?env t buf off with
-  | () -> true
-  | exception exn when Types.is_parse_error exn -> false
-
-(* Whether the record at [off] passes [validate], without its error. Small
-   enough to inline: the frame and the tests of a fixed-size codec, every
-   other codec out of line. *)
-let[@inline] accepts ?env (t : 'r t) buf off =
-  match env with
-  | None when t.n_params = 0 -> (
-      match Atomic.get t.compiled with
-      | Some c when c.fixed_frame >= 0 ->
-          let input_end = Input_end.of_bytes buf in
-          off >= 0
-          && off <= Input_end.to_int input_end - c.fixed_frame
-          && passes c.plain_pass input_end buf off
-      | _ -> accepts_slow env t buf off)
-  | _ -> accepts_slow env t buf off
-
 module View = struct
-  type 'r record_codec = 'r t
-  type ('a, 'r) record_field = ('a, 'r) field
+  type 'r codec = 'r t
+  type ('b, 'r) check = int
+  type ('b, 'r) t = int
 
-  let codec_get = get
-
-  (* A named codec holds what [accepts] decides on each call: [frame] is the
-     fixed frame of a codec checked by its plain pass alone, or [-1] for one
-     its walk or [validate] checks. Its name ['c] is a phantom. *)
-  type 'r named = {
-    codec : 'r record_codec;
-    env : Param.env option;
-    c : 'r compiled;
-    frame : int;
-    pass : pass;
-    walk : 'r Types.walk option;
-  }
-
-  type ('c, 'r) codec = 'r named
-
-  module type CODEC = sig
-    type c
-    type r
-
-    val codec : (c, r) codec
-  end
-
-  let named ?env (codec : _ record_codec) =
-    require_env ~op:"View.codec" codec env;
-    let compiled = compiled codec in
-    let walk =
-      match env with None when codec.n_params = 0 -> compiled.walk | _ -> None
-    in
-    let frame =
-      match (env, compiled.plain_pass, walk) with
-      | _, Steps _, Some _ -> -1
-      | None, _, _ when codec.n_params = 0 -> compiled.fixed_frame
-      | _ -> -1
-    in
-    { codec; env; c = compiled; frame; pass = compiled.plain_pass; walk }
-
-  let codec (type r) ?env (c : r record_codec) : (module CODEC with type r = r)
-      =
-    let v = named ?env c in
-    (module struct
-      type c
-      type nonrec r = r
-
-      let codec = v
-    end)
-
-  type ('b, 'c) check = int
-
-  (* A codec with a walk makes its checks with the walk, building nothing; any
-     other is checked by [validate]. *)
-  let[@inline never] check_slow v buf off =
-    let ok =
-      match v.walk with
-      | Some w ->
-          off >= 0 && Codec_walk.accepts w buf off (Input_end.of_bytes buf)
-      | None -> accepts_slow v.env v.codec buf off
-    in
-    if ok then off else -1
+  (* A codec whose views read with no environment: its checks are the plain
+     pass, or its walk, which no parameter changes. *)
+  let[@inline] plain env (t : _ codec) =
+    match env with None -> t.n_params = 0 | Some _ -> false
 
   let[@inline never] pass_slow pass buf off =
     passes pass (Input_end.of_bytes buf) buf off
 
-  (* The frame and a pass of one word test inline, a pass of word tests one
-     closure call, any other pass and any codec [validate] checks out of
-     line. *)
-  let[@inline] check v b len off =
-    let buf = (b : _ Buf.t :> bytes) and len = (len : _ Buf.length :> int) in
-    if v.frame < 0 then check_slow v buf off
-    else if off < 0 || off > len - v.frame then -1
+  (* Whether the record at [off] passes [validate] in the bytes before [stop],
+     without its error, [0 <= off <= stop <= Bytes.length buf]. A fixed-size
+     codec runs its plain pass, a codec with a walk the walk, and any other
+     [validate]'s checks. *)
+  let accepts env (t : _ codec) buf off stop =
+    let c = compiled t in
+    let input_end = Input_end.narrow (Input_end.of_bytes buf) stop in
+    if plain env t && c.fixed_frame >= 0 then
+      off <= stop - c.fixed_frame && passes c.plain_pass input_end buf off
     else
-      match v.pass with
-      | No_checks -> off
-      | Word { q; l; r; m; lo; hi; _ } ->
-          if Codec_intervals.within buf off q l r m lo hi then off else -1
-      | Intervals { words = Some f; _ } -> if f buf off then off else -1
-      | pass -> if pass_slow pass buf off then off else -1
+      match c.walk with
+      | Some w when plain env t -> Codec_walk.accepts w buf off input_end
+      | _ -> (
+          match
+            if stop = Bytes.length buf then validate_exn ?env t buf off
+            else c.validate_ctx (runtime ?env ()) input_end buf off
+          with
+          | () -> true
+          | exception exn when Types.is_parse_error exn -> false)
 
-  let[@inline] ok k = k >= 0
+  (* [stop] is the end of the window: [len] bytes from [off], or the end of
+     the buffer. A window the buffer does not hold is refused. *)
+  let[@inline never] check_slow env len (t : _ codec) buf off =
+    require_env ~op:"View.check" t env;
+    let length = Bytes.length buf in
+    let stop =
+      match len with
+      | None -> length
+      | Some len -> if len < 0 || len > length - off then -1 else off + len
+    in
+    if off < 0 || off > length || stop < 0 then -1
+    else if accepts env t buf off stop then off
+    else -1
 
-  type ('b, 'c) t = int
+  (* The frame and a pass of one word test inline, a pass of word tests one
+     closure call, any other pass, a window and any codec [validate] checks
+     out of line. *)
+  let[@inline] check ?env ?len (t : 'r codec) b ~off =
+    let buf = (b : _ Buf.t :> bytes) in
+    match (env, len, Atomic.get t.compiled) with
+    | None, None, Some c when c.fixed_frame >= 0 && t.n_params = 0 -> (
+        if off < 0 || off > Bytes.length buf - c.fixed_frame then -1
+        else
+          match c.plain_pass with
+          | No_checks -> off
+          | Word { q; l; r; m; lo; hi; _ } ->
+              if Codec_intervals.within buf off q l r m lo hi then off else -1
+          | Intervals { words = Some f; _ } -> if f buf off then off else -1
+          | pass -> if pass_slow pass buf off then off else -1)
+    | _ -> check_slow env len t buf off
+
+  let[@inline] is_ok k = k >= 0
 
   let[@inline never] refused () =
     invalid_arg "Codec.View.get: the check refused the record"
 
   let[@inline] get k = if k < 0 then refused () else k
   let offset r = r
-  let record_codec v = v.codec
-
-  include Codec_view
 
   let frame_of (c : _ compiled) =
     match c.wire_size with Fixed n -> n | Variable { min_size; _ } -> min_size
+
+  (* {2 Zeros} *)
+
+  (* What a read answers where the bytes written after the check move its
+     field out of the buffer: [0] for an integer, empty bytes, an absent
+     option. [None] for a type with no such value, such as a map whose decoder
+     refuses its wire zero. *)
+  let rec zero_of : type a. a typ -> a option = function
+    | Uint8 -> Some UInt8.zero
+    | Uint16 _ -> Some UInt16.zero
+    | Uint32 _ -> Some UInt32.zero
+    | Uint64 _ -> Some UInt64.zero
+    | Int8 -> Some SInt8.zero
+    | Int16 _ -> Some SInt16.zero
+    | Int32 _ -> Some SInt32.zero
+    | Int64 _ -> Some 0L
+    | Float32 _ -> Some 0.
+    | Float64 _ -> Some 0.
+    | Uint_var _ -> Some Optint.Int63.zero
+    | Bits _ -> Some 0
+    | Unit -> Some ()
+    | All_bytes -> Some ""
+    | All_zeros -> Some ""
+    | Zeroterm -> Some ""
+    | Zeroterm_at_most _ -> Some ""
+    | Byte_array _ -> Some ""
+    | Byte_array_where _ -> Some ""
+    | Byte_slice _ -> Some Slice.eod
+    | Where { inner; _ } -> zero_of inner
+    | Enum { base; _ } -> zero_of base
+    | Single_elem { elem; _ } -> zero_of elem
+    | Apply { typ; _ } -> zero_of typ
+    | Optional _ -> Some None
+    | Optional_or { default; _ } -> Some default
+    | Array { seq = Seq_map { empty; finish; _ }; _ } -> Some (finish empty)
+    | Repeat { seq = Seq_map { empty; finish; _ }; _ } -> Some (finish empty)
+    | Map { inner; decode; _ } -> (
+        match zero_of inner with
+        | Some w -> (
+            match decode w with
+            | v -> Some v
+            | exception (Invalid_argument _ | Failure _ | Not_found) -> None
+            | exception exn when Types.is_parse_error exn -> None)
+        | None -> None)
+    | Casetype _ | Union _ | Struct _ | Type_ref _ | Qualified_ref _ | Codec _
+      ->
+        None
+
+  (* A read that answers [zero] where its field has left the buffer, or
+     refuses with [Invalid_argument] for a type with no zero. *)
+  let[@inline never] no_zero name =
+    Fmt.invalid_arg
+      "Codec.View.read: field %S no longer lies in the buffer, and its type \
+       has no zero"
+      name
+
+  (* A staged read raises [Invalid_argument] on bytes outside the buffer. *)
+  let left_the_buffer = function
+    | Invalid_argument _ | Types.Unwalked -> true
+    | exn -> Types.is_parse_error exn
+
+  let or_zero name zero read buf r =
+    match read buf r with
+    | v -> v
+    | exception exn when left_the_buffer exn -> (
+        match zero with Some z -> z | None -> no_zero name)
+
+  (* {2 Fields} *)
+
+  type ('a, 'r) rfield = {
+    rd : 'a Codec_view.read;
+    wr : bytes -> int -> 'a -> unit;
+  }
 
   (* The type a view reads a field as, under the [where] and [enum] the check
      made: a view reads what is there, as the module [Wire_ocaml] writes does. *)
@@ -1054,53 +1049,117 @@ module View = struct
     | Enum { base; _ } -> read_as base
     | t -> t
 
-  let[@inline never] needs_a_check (v : _ codec) (f : _ record_field) =
+  let[@inline never] out_of_place codec name =
     Fmt.invalid_arg
-      "Codec.View.field: field %S of codec %S is read with a check: use \
-       Codec.View.checked_field"
-      f.name v.codec.name
+      "Codec.View.field: field %S of codec %S lies where an input parameter \
+       places it; read it with Codec.decode"
+      name codec
 
-  let field (type a r) (v : (_, r) codec) (f : (a, r) record_field) :
-      (a, _) field =
-    let access = field_access ~op:"Codec.View.field" v.codec f in
-    let size = frame_of v.c in
-    let plain = not (List.mem_assoc f.name v.c.field_actions) in
-    let typ = read_as f.typ in
-    let scalar =
-      if plain then field_scalar ~min_wire_size:size access typ else None
+  (* A field that no direct read takes: read with its staged reader, or, for a
+     shape with none, as the projection of the record decoded with no check
+     again. *)
+  let general (type a r) (codec : r codec) (c : r compiled)
+      (f : (a, r) Codec_repr.field) access : a Codec_view.read =
+    if has_input_params codec then out_of_place codec.name f.name;
+    let zero = zero_of f.typ in
+    let read =
+      match build_staged_reader f.typ access with
+      | read -> fun buf r -> read no_runtime (Input_end.of_bytes buf) buf r
+      | exception Invalid_argument _ ->
+          fun buf r ->
+            f.get (c.read checked_runtime (Input_end.of_bytes buf) buf r)
     in
-    match (scalar, typ, access) with
-    | Some s, _, _ -> (
-        match Option.bind (bits_of_scalar s) (word_field ~size) with
-        | Some f -> f
-        | None -> Scalar s)
-    | None, Bits _, Bitfield { base = U32 Big; byte_off = o; shift; width }
-      when plain && o >= 0 && o <= size - 4 -> (
+    Get (or_zero f.name zero read)
+
+  let resolve_read (type a r) (codec : r codec) (f : (a, r) Codec_repr.field)
+      (access : field_access) : a Codec_view.read =
+    let c = compiled codec in
+    let size = frame_of c in
+    let typ = read_as f.typ in
+    match field_scalar ~min_wire_size:size access typ with
+    | Some s -> (
         match
-          word_field ~size { o; n = 4; s = shift; w = width; eq = Equal }
+          Option.bind
+            (Codec_view.bits_of_scalar s)
+            (Codec_view.word_field ~size)
         with
         | Some f -> f
-        | None ->
-            let read = build_bf_accessor_reader (U32 Big) o shift width in
-            Get read)
-    | None, Byte_slice { size = Int length }, Fixed off
-      when plain && off >= 0 && length >= 0 && off <= size - length ->
-        Bytes { off; length }
-    | None, Byte_array { size = Int length }, Fixed off
-      when plain && off >= 0 && length >= 0 && off <= size - length ->
-        Get (fun buf r -> Bytes.sub_string buf (r + off) length)
-    | None, _, _ -> needs_a_check v f
+        | None -> Codec_view.scalar s)
+    | None -> (
+        match (typ, access) with
+        | Bits _, Bitfield { base = U32 Big; byte_off = o; shift; width }
+          when o >= 0 && o <= size - 4 -> (
+            match
+              Codec_view.word_field ~size
+                { o; n = 4; s = shift; w = width; eq = Equal }
+            with
+            | Some f -> f
+            | None ->
+                let read = build_bf_accessor_reader (U32 Big) o shift width in
+                Get (or_zero f.name (Some 0) read))
+        | Byte_slice { size = Int length }, Fixed off
+          when off >= 0 && length >= 0 && off <= size - length ->
+            Bytes { off; length }
+        | Byte_array { size = Int length }, Fixed off
+          when off >= 0 && length >= 0 && off <= size - length ->
+            Get
+              (fun buf r ->
+                if r + off > Bytes.length buf - length then ""
+                else Bytes.sub_string buf (r + off) length)
+        | _ -> general codec c f access)
 
-  let checked_field (type a r) (v : (_, r) codec) (f : (a, r) record_field) :
-      ((a, Error.t) result, _) field =
-    if Option.is_none v.codec.components then
-      ignore
-        (field_access ~op:"Codec.View.checked_field" v.codec f : field_access);
-    Get (codec_get ?env:v.env v.codec f)
+  let[@inline never] no_place codec name =
+    Fmt.invalid_arg
+      "Codec.View.set: field %S of codec %S has no constant place in the record"
+      name codec
 
-  (* A sub-codec field is data too: where its record starts in the record
-     around it, and the frame its views read in. A field at a constant offset
-     with no gate is [At] it; the walk of the record around it finds any other
+  let[@inline never] out_of_buffer name =
+    Fmt.invalid_arg "Codec.View.set: field %S does not lie in the buffer" name
+
+  (* A write in place of a field at a constant place, its bytes tested to lie
+     in the buffer first. A write that reads the record to size the field
+     answers bytes that size nothing with [Invalid_argument]. *)
+  let resolve_write (type a r) (codec : r codec) (f : (a, r) Codec_repr.field)
+      (access : field_access) : bytes -> int -> a -> unit =
+    let none _ _ _ = no_place codec.name f.name in
+    let parametric = has_input_params codec in
+    match access with
+    | Dynamic _ | Variable_dynamic _ -> none
+    | Variable _ when parametric -> none
+    | Fixed _ | Bitfield _ | Variable _ -> (
+        let bounded write =
+          match immediate_extent f.typ access with
+          | Some (off, width) ->
+              fun buf r x ->
+                if r + off > Bytes.length buf - width then out_of_buffer f.name
+                else write buf r x
+          | None -> write
+        in
+        match build_immediate_staged_writer f.typ access with
+        | Some write -> bounded write
+        | None -> (
+            match build_staged_writer f.typ access with
+            | write ->
+                bounded (fun buf r x ->
+                    match write no_runtime buf r x with
+                    | () -> ()
+                    | exception exn when Types.is_parse_error exn ->
+                        out_of_buffer f.name)
+            | exception Invalid_argument _ -> none))
+
+  let resolve (type a r) (codec : r codec) (f : (a, r) Codec_repr.field) :
+      (a, r) rfield =
+    let access = field_access ~op:"Codec.View.field" codec f in
+    { rd = resolve_read codec f access; wr = resolve_write codec f access }
+
+  let[@inline] read b r f = Codec_view.read f.rd (b : _ Buf.t :> bytes) r
+  let[@inline] set b r f x = f.wr (b : _ Buf.t :> bytes) r x
+
+  (* {2 Layers} *)
+
+  (* A layer is data too: where its record starts in the record around it,
+     and the frame its views read in. A field at a constant offset with no
+     gate is [At] it; the walk of the record around it finds any other
      ([Walked], [-1] when it is absent); without a walk, [Locate] and the
      field's gate ([present]) evaluate it from the record's bytes. *)
   type place =
@@ -1108,69 +1167,80 @@ module View = struct
     | Walked of (Types.cursor -> int)
     | Locate of (runtime -> Input_end.t -> bytes -> int -> int)
 
-  type ('cs, 'c) sub = {
+  type sub = {
     place : place;
     present : (runtime -> Input_end.t -> bytes -> int -> bool) option;
-    rt : runtime;
     sub_frame : int;
   }
 
-  (* The id of the codec a sub-codec field holds, and its presence gate. *)
-  let rec sub_codec : type a. a typ -> (int * bool expr option) option =
-    function
-    | Codec { codec_id; _ } -> Some (codec_id, None)
-    | Single_elem { elem; _ } -> sub_codec elem
-    | Optional_or { present; inner; _ } ->
-        Option.map (fun (id, _) -> (id, Some present)) (sub_codec inner)
-    | _ -> None
+  type ('s, 'r) sub_layer = One of sub | Chain of sub list
 
-  let make_sub ~op v (cv : _ codec) (f : _ record_field) typ =
-    if cv.codec.n_params > 0 then
-      Fmt.invalid_arg "%s: codec %S has input parameters" op cv.codec.name;
-    let access = field_access ~op v.codec f in
-    let id, present =
-      match typ with
-      | Some (id, present) -> (id, present)
-      | None ->
-          Fmt.invalid_arg "%s: field %S does not hold a sub-codec" op f.name
-    in
-    if id <> cv.codec.id then
-      Fmt.invalid_arg "%s: field %S does not hold codec %S" op f.name
-        cv.codec.name;
+  let[@inline never] parametric_layer codec name =
+    Fmt.invalid_arg
+      "Codec.View.layer: field %S of codec %S lies where an input parameter \
+       places it"
+      name codec
+
+  (* The sub of the field [f] of [codec], which holds the records of [held],
+     present where [gate] holds. *)
+  let make_sub (type s r) (codec : r codec) (held : s codec)
+      (f : (_, r) Codec_repr.field) gate =
+    let op = "Codec.View.layer" in
+    if held.n_params > 0 then
+      Fmt.invalid_arg "%s: codec %S has input parameters" op held.name;
+    let access = field_access ~op codec f in
+    let c = compiled codec in
+    let walk = if codec.n_params = 0 then c.walk else None in
     let place, present =
-      match (access, present, List.assoc_opt f.name v.c.places) with
+      match (access, gate, List.assoc_opt f.name c.places) with
       | (Fixed off | Variable { off; _ }), None, _ -> (At off, None)
-      | _, _, Some at when Option.is_some v.walk -> (Walked at, None)
+      | _, _, Some at when Option.is_some walk -> (Walked at, None)
       | (Fixed off | Variable { off; _ }), present, _ -> (At off, present)
       | (Dynamic fn | Variable_dynamic { off_fn = fn; _ }), present, _ ->
           (Locate fn, present)
       | Bitfield _, _, _ ->
-          Fmt.invalid_arg "%s: field %S does not hold a sub-codec" op f.name
+          Fmt.invalid_arg "%s: field %S does not hold a record" op f.name
     in
+    (match (place, present) with
+    | At _, None -> ()
+    | _ -> if has_input_params codec then parametric_layer codec.name f.name);
     {
       place;
-      present = Option.map (compile_bool_expr v.c.field_readers) present;
-      rt = runtime ?env:v.env ();
-      sub_frame = frame_of cv.c;
+      present = Option.map (compile_bool_expr c.field_readers) present;
+      sub_frame = frame_of (compiled held);
     }
 
-  let sub v cv (f : _ record_field) =
-    make_sub ~op:"Codec.View.sub" v cv f (sub_codec f.typ)
+  (* The gate of a field that holds a record: its own [Optional_or]'s. *)
+  let rec gate : type s. s typ -> bool expr option = function
+    | Optional_or { present; _ } -> Some present
+    | Single_elem { elem; _ } -> gate elem
+    | _ -> None
 
-  let sub_option v cv (f : (_ option, _) record_field) =
-    let typ =
-      match f.typ with
-      | Optional { present; inner } ->
-          Option.map (fun (id, _) -> (id, Some present)) (sub_codec inner)
-      | _ -> None
-    in
-    make_sub ~op:"Codec.View.sub_option" v cv f typ
+  let rec resolve_layer : type s r.
+      r codec -> (s, r) layer -> s codec * sub list =
+   fun codec -> function
+    | Layer f -> (
+        match held f.typ with
+        | Some h -> (h, [ make_sub codec h f (gate f.typ) ])
+        | None -> assert false)
+    | Opt_layer ({ typ = Optional { present; inner }; _ } as f) -> (
+        match held inner with
+        | Some h -> (h, [ make_sub codec h f (Some present) ])
+        | None -> assert false)
+    | Opt_layer _ -> assert false
+    | Under (l, l') ->
+        let s, subs = resolve_layer codec l in
+        let t, subs' = resolve_layer s l' in
+        (t, subs @ subs')
 
-  (* The check of the enclosing record ran the sub-record's checks where it is
+  let layer codec l =
+    match resolve_layer codec l with _, [ s ] -> One s | _, subs -> Chain subs
+
+  (* The check of the enclosing record ran the layer's checks where it is
      present, so entering it tests only that its frame lies in the buffer: a
      view reads its fields there with no check of their own. A record whose
-     bytes changed since may move the sub-record or raise in the reads that
-     place it; it is then refused. *)
+     bytes changed since may move the layer or raise in the reads that place
+     it; it is then refused. *)
   let[@inline] walked at buf r =
     at
       {
@@ -1181,35 +1251,206 @@ module View = struct
         wgates = 0;
       }
 
-  let[@inline never] enter_slow s buf len r =
+  let[@inline never] enter_slow s buf r =
+    let len = Bytes.length buf in
     let input_end = Input_end.of_bytes buf in
     match
       match (s.present, s.place) with
-      | Some present, _ when not (present s.rt input_end buf r) -> -1
+      | Some present, _ when not (present no_runtime input_end buf r) -> -1
       | _, At off -> r + off
-      | _, Locate fn -> r + fn s.rt input_end buf r
+      | _, Locate fn -> r + fn no_runtime input_end buf r
       | _, Walked at -> walked at buf r
     with
     | o -> if o >= 0 && o <= len - s.sub_frame then o else -1
     | exception Types.Unwalked -> -1
     | exception exn when Types.is_parse_error exn -> -1
 
-  (* A sub-record the walk places, which has no gate of its own: one call
-     with no dispatch. *)
-  let[@inline never] enter_walked at buf len r frame =
+  (* A layer the walk places, which has no gate of its own: one call with no
+     dispatch. *)
+  let[@inline never] enter_walked at buf r frame =
     match walked at buf r with
-    | o -> if o >= 0 && o <= len - frame then o else -1
+    | o -> if o >= 0 && o <= Bytes.length buf - frame then o else -1
     | exception Types.Unwalked -> -1
     | exception exn when Types.is_parse_error exn -> -1
 
-  let[@inline] enter s b len r =
-    let buf = (b : _ Buf.t :> bytes) and len = (len : _ Buf.length :> int) in
+  let[@inline] enter s buf r =
     match (s.place, s.present) with
     | At off, None ->
         let o = r + off in
-        if o <= len - s.sub_frame then o else -1
-    | Walked at, None -> enter_walked at buf len r s.sub_frame
-    | _ -> enter_slow s buf len r
+        if o <= Bytes.length buf - s.sub_frame then o else -1
+    | Walked at, None -> enter_walked at buf r s.sub_frame
+    | _ -> enter_slow s buf r
+
+  let rec enter_chain (subs : sub list) buf r =
+    match subs with
+    | [] -> r
+    | s :: rest ->
+        let o = enter s buf r in
+        if o < 0 then -1 else enter_chain rest buf o
+
+  let[@inline] sub_bytes l buf r =
+    match l with One s -> enter s buf r | Chain subs -> enter_chain subs buf r
+
+  let[@inline] sub b r l = sub_bytes l (b : _ Buf.t :> bytes) r
+
+  (* A path reads its field in the record its layers hold, [None] where one
+     is absent. *)
+  let rec field : type a r. r codec -> (a, r) def -> (a, r) rfield =
+   fun codec -> function
+    | Def f -> resolve codec f
+    | Path (l, d) ->
+        let held, subs = resolve_layer codec l in
+        let inner = field held d in
+        let l = match subs with [ s ] -> One s | subs -> Chain subs in
+        {
+          rd =
+            Get
+              (fun buf r ->
+                let o = sub_bytes l buf r in
+                if o < 0 then None else Some (Codec_view.read inner.rd buf o));
+          wr =
+            (fun _ _ _ ->
+              invalid_arg "Codec.View.set: a path has no constant place");
+        }
+
+  (* {2 Folds} *)
+
+  (* The fields of a fold resolved, and handed to [f] in a saturated call for
+     up to four of them. *)
+  let rec apply : type f k r.
+      r codec -> (f, k, r) Defs.t -> bytes -> int -> f -> k =
+   fun codec defs ->
+    match defs with
+    | Defs.[] -> fun _ _ k -> k
+    | Defs.[ a ] ->
+        let a = (field codec a).rd in
+        fun buf r k -> k (Codec_view.read a buf r)
+    | Defs.[ a; b ] ->
+        let a = (field codec a).rd and b = (field codec b).rd in
+        fun buf r k -> k (Codec_view.read a buf r) (Codec_view.read b buf r)
+    | Defs.[ a; b; c ] ->
+        let a = (field codec a).rd
+        and b = (field codec b).rd
+        and c = (field codec c).rd in
+        fun buf r k ->
+          k (Codec_view.read a buf r) (Codec_view.read b buf r)
+            (Codec_view.read c buf r)
+    | Defs.[ a; b; c; d ] ->
+        let a = (field codec a).rd
+        and b = (field codec b).rd
+        and c = (field codec c).rd
+        and d = (field codec d).rd in
+        fun buf r k ->
+          k (Codec_view.read a buf r) (Codec_view.read b buf r)
+            (Codec_view.read c buf r) (Codec_view.read d buf r)
+    | Defs.(a :: rest) ->
+        let a = (field codec a).rd and rest = apply codec rest in
+        fun buf r k -> rest buf r (k (Codec_view.read a buf r))
+
+  (* The error [validate] answers for the record at [off] in the bytes of its
+     window that [buf] holds, placed in [buf]. *)
+  let error env (t : _ codec) buf off len =
+    let length = Bytes.length buf in
+    let window =
+      if off < 0 || off > length then Bytes.empty
+      else Bytes.sub buf off (min (length - off) (max 0 len))
+    in
+    match validate ?env t window 0 with
+    | Error e -> { e with at = e.at + off }
+    | Ok () ->
+        (* The bytes at [off] hold a record of no bytes: back to back, it is
+           not followed by another. *)
+        ({ at = off; field = []; kind = Trailing_bytes (length - off) }
+          : Error.t)
+
+  (* Where the record at [off] ends, when it passes its check in the bytes
+     before [stop], [0 <= off <= stop <= Bytes.length buf]; [-1] otherwise. A
+     codec with a walk checks and measures the record in one pass. *)
+  (* Where the record [accepts] took ends, measured from its bytes. *)
+  let measured_end env (c : _ compiled) input_end buf off stop =
+    match c.wire_size with
+    | Fixed n -> off + n
+    | Variable { compute; _ } -> (
+        match compute (runtime ?env ()) input_end buf off with
+        | e -> if e >= off && e <= stop then e else -1
+        | exception exn when Types.is_parse_error exn -> -1)
+
+  let check_end env (t : _ codec) buf off stop =
+    let c = compiled t in
+    let input_end = Input_end.narrow (Input_end.of_bytes buf) stop in
+    match c.walk with
+    | _ when plain env t && c.fixed_frame >= 0 ->
+        if off <= stop - c.fixed_frame && passes c.plain_pass input_end buf off
+        then off + c.fixed_frame
+        else -1
+    | Some w when plain env t -> Codec_walk.end_of w buf off input_end
+    | _ ->
+        if accepts env t buf off stop then
+          measured_end env c input_end buf off stop
+        else -1
+
+  (* The end of the window of [len] bytes at [off], or [-1] where [buf] does
+     not hold it. *)
+  let[@inline] window_end buf off len =
+    if off < 0 || len < 0 || len > Bytes.length buf - off then -1 else off + len
+
+  let fold ?env ?stride ?offs ?lens ?invalid (t : 'r codec) fields =
+    let op = "Codec.View.fold" in
+    require_env ~op t env;
+    (match (stride, offs, lens, invalid) with
+    | Some s, _, _, _ when s <= 0 ->
+        Fmt.invalid_arg "%s: stride %d is not positive" op s
+    | Some _, Some _, _, _ | Some _, _, Some _, _ ->
+        Fmt.invalid_arg "%s: stride is given with offs" op
+    | _, Some o, Some l, _ when Array.length o <> Array.length l ->
+        Fmt.invalid_arg "%s: offs and lens differ in length" op
+    | _, Some _, None, _ | _, None, Some _, _ ->
+        Fmt.invalid_arg "%s: offs and lens are given together" op
+    | None, None, None, Some _ ->
+        Fmt.invalid_arg "%s: invalid is given with records back to back" op
+    | _ -> ());
+    let apply = apply t fields in
+    fun buf ~init ~f ->
+      let length = Bytes.length buf in
+      match (stride, offs, lens) with
+      | Some stride, _, _ ->
+          let n = length / stride in
+          let rec go acc i =
+            if i = n then Ok acc
+            else
+              let off = i * stride in
+              if check_end env t buf off (off + stride) >= 0 then
+                go (apply buf off (f acc)) (i + 1)
+              else
+                match invalid with
+                | Some invalid -> go (invalid acc) (i + 1)
+                | None -> Error (error env t buf off stride, acc)
+          in
+          go init 0
+      | None, Some offs, Some lens ->
+          let n = Array.length offs in
+          let rec go acc i =
+            if i = n then Ok acc
+            else
+              let off = offs.(i) and len = lens.(i) in
+              let stop = window_end buf off len in
+              if stop >= 0 && check_end env t buf off stop >= 0 then
+                go (apply buf off (f acc)) (i + 1)
+              else
+                match invalid with
+                | Some invalid -> go (invalid acc) (i + 1)
+                | None -> Error (error env t buf off len, acc)
+          in
+          go init 0
+      | _ ->
+          let rec go acc off =
+            if off >= length then Ok acc
+            else
+              let e = check_end env t buf off length in
+              if e <= off then Error (error env t buf off (length - off), acc)
+              else go (apply buf off (f acc)) e
+          in
+          go init 0
 end
 
 let name (t : _ t) = t.name
@@ -1249,66 +1490,6 @@ let pp_value (t : _ t) ppf v =
       | Error e -> Fmt.pf ppf "@ %s = <%a>;" name Error.pp e)
     (field_readers t);
   Fmt.pf ppf "@ }@]"
-
-(* -- Record words -- *)
-
-module Word = struct
-  type 'r codec = 'r t
-  type ('a, 'r) codec_field = ('a, 'r) field
-  type 'r t = 'r Codec_run.Word.t
-  type 'r reader = 'r Codec_run.Word.reader
-  type 'r check = 'r Codec_run.Word.check
-  type ('a, 'r) field = ('a, 'r) Codec_run.Word.field
-
-  let size ~op (codec : _ codec) =
-    match (compiled codec).wire_size with
-    | Fixed n when 8 * n < Sys.int_size -> n
-    | Fixed n ->
-        Fmt.invalid_arg "%s: codec %S has %d bytes, more than an int holds" op
-          codec.name n
-    | Variable _ ->
-        Fmt.invalid_arg "%s: codec %S is not of a fixed size" op codec.name
-
-  (* The extent of each field of [codec], in order, which places the error of
-     a record a buffer cuts as [get] places it. *)
-  let fields (codec : _ codec) =
-    let access = (compiled codec).field_access in
-    List.filter_map
-      (fun (Types.Field { field_name; field_typ; _ }) ->
-        Option.bind field_name (fun name ->
-            Option.bind (List.assoc_opt name access) (fun (_, access) ->
-                Option.map
-                  (fun (at, width) -> (name, at, width))
-                  (immediate_extent field_typ access))))
-      codec.struct_fields
-
-  let reader (codec : 'r codec) : 'r reader =
-    let n = size ~op:"Codec.Word.reader" codec in
-    Codec_run.Word.reader n ~fields:(fields codec)
-
-  let check = Codec_run.Word.check
-  let ok = Codec_run.Word.ok
-  let get = Codec_run.Word.get
-  let error = Codec_run.Word.error
-
-  let field (type a r) (codec : r codec) (f : (a, r) codec_field) : (a, r) field
-      =
-    let n = size ~op:"Codec.Word.field" codec in
-    ignore (field_access ~op:"Codec.Word.field" codec f : field_access);
-    match slot_of ~n codec f with
-    | None ->
-        Fmt.invalid_arg
-          "Codec.Word.field: field %S of codec %S is not a big-endian integer \
-           or a bitfield of a byte or a big-endian 16- or 32-bit word"
-          f.name codec.name
-    | Some s ->
-        let signed =
-          match f.typ with Int8 | Int16 _ | Int32 _ -> true | _ -> false
-        in
-        Codec_run.Word.field s.eq ~pos:s.pos ~width:s.width ~signed
-
-  let read = Codec_run.Word.read
-end
 
 (* -- Snapshot: batch bitfield access -- *)
 
@@ -1644,235 +1825,8 @@ module Testing = struct
         : string list)
 end
 
-type _ field_kind =
-  | Int : int field_kind
-  | UInt8 : UInt8.t field_kind
-  | UInt16 : UInt16.t field_kind
-  | UInt32 : UInt32.t field_kind
-  | SInt8 : SInt8.t field_kind
-  | SInt16 : SInt16.t field_kind
-  | SInt32 : SInt32.t field_kind
-  | String : string field_kind
-  | Slice : Bytesrw.Bytes.Slice.t field_kind
-
-let rec typ_eq : type a b. a Types.typ -> b field_kind -> (a, b) Type.eq option
-    =
- fun t k ->
-  match (t, k) with
-  | Types.Bits _, Int -> Some Type.Equal
-  | Types.Uint8, UInt8 -> Some Type.Equal
-  | Types.Uint16 _, UInt16 -> Some Type.Equal
-  | Types.Uint32 _, UInt32 -> Some Type.Equal
-  | Types.Int8, SInt8 -> Some Type.Equal
-  | Types.Int16 _, SInt16 -> Some Type.Equal
-  | Types.Int32 _, SInt32 -> Some Type.Equal
-  | Types.Byte_array _, String -> Some Type.Equal
-  | Types.Byte_slice _, Slice -> Some Type.Equal
-  | Types.Single_elem { elem; _ }, k -> typ_eq elem k
-  | Types.Where { inner; _ }, k -> typ_eq inner k
-  | Types.Enum { base; _ }, k -> typ_eq base k
-  | _ -> None
-
 module Gen = struct
   include Gen_core
-
-  type 'a kind = 'a field_kind =
-    | Int : int kind
-    | UInt8 : UInt8.t kind
-    | UInt16 : UInt16.t kind
-    | UInt32 : UInt32.t kind
-    | SInt8 : SInt8.t kind
-    | SInt16 : SInt16.t kind
-    | SInt32 : SInt32.t kind
-    | String : string kind
-    | Slice : Bytesrw.Bytes.Slice.t kind
-
-  (* {2 The interpreted twin} *)
-
-  type record = Record : 'r View.named -> record
-
-  let root c = Record (View.named c)
-
-  (* The field [i] of the record [v], as a field the views read. *)
-  let nth (type r) (v : r View.named) i =
-    match List.nth_opt (to_struct v.codec).fields i with
-    | Some (Types.Field { field_name = Some name; field_typ; _ }) ->
-        (name, Types.Pack_typ field_typ)
-    | Some _ | None -> Fmt.invalid_arg "%s: no named field at %d" v.codec.name i
-
-  let record_field (type a r) (c : r t) name (typ : a Types.typ) : (a, r) field
-      =
-    match named_field c name typ with
-    | Some f -> f
-    | None -> Fmt.invalid_arg "%s: no field %s" c.name name
-
-  let zero : type a. a kind -> a = function
-    | Int -> 0
-    | UInt8 -> UInt8.zero
-    | UInt16 -> UInt16.zero
-    | UInt32 -> UInt32.zero
-    | SInt8 -> SInt8.zero
-    | SInt16 -> SInt16.zero
-    | SInt32 -> SInt32.zero
-    | String -> ""
-    | Slice -> Bytesrw.Bytes.Slice.eod
-
-  let other_type c name =
-    Fmt.invalid_arg "%s: field %s has another type" c.name name
-
-  (* A field's read is a field of the views: one the views read with no
-     check, or [Get] of a read of any other. *)
-  type 'a reader = ('a, unit) View.field
-
-  let[@inline] read (h : _ reader) b r = View.read h b r
-
-  (* An integer output as a value of the kind [k]. *)
-  let of_output : type a. a kind -> int64 -> a =
-   fun k x ->
-    let i = Int64.to_int x in
-    let cast : type t. (t, int) Type.eq -> t = fun Type.Equal -> i in
-    match k with
-    | Int -> i
-    | UInt8 -> cast UInt8.int_eq
-    | UInt16 -> cast UInt16.int_eq
-    | SInt8 -> cast SInt8.int_eq
-    | SInt16 -> cast SInt16.int_eq
-    | UInt32 -> UInt32.of_int i
-    | SInt32 -> SInt32.of_int i
-    | String | Slice -> invalid_arg "Gen: bytes are no output"
-
-  (* A field the views read with no reader of their own, such as an optional
-     field behind a gate the record's bytes decide, is read with the record's
-     outputs, which name it by its label. *)
-  let output (v : _ View.named) name f : _ reader =
-    let s = to_struct v.codec and label = Names.ocaml_label name in
-    View.Get (fun buf r -> f (Scan_outputs.read s buf r) label)
-
-  (* A field a view reads with no check is one direct read; any other is read
-     with its check, answering what [fail] makes of the error, as the module
-     [Wire_ocaml] writes answers a field the bytes written after the check
-     move out of the buffer. *)
-  let view_field (v : _ View.named) name typ ~fail : _ reader option =
-    let f = record_field v.codec name typ in
-    match View.field v f with
-    | f -> Some f
-    | exception Invalid_argument _ -> (
-        match View.checked_field v f with
-        | f ->
-            Some
-              (View.Get
-                 (fun buf r ->
-                   match View.read_other f buf r with
-                   | Ok x -> x
-                   | Error _ -> fail))
-        | exception Invalid_argument _ -> None)
-
-  let field_at (type a) (Record v) i (k : a kind) : a reader =
-    let name, Types.Pack_typ typ = nth v i in
-    let by_output () =
-      output v name (fun o l -> of_output k (Scan_outputs.int o l))
-    in
-    let optional f =
-      View.Get
-        (fun buf r -> Option.value ~default:(zero k) (View.read_other f buf r))
-    in
-    match typ with
-    | Types.Optional { inner; _ } -> (
-        match typ_eq inner k with
-        | Some Type.Equal ->
-            Option.fold ~none:(by_output ()) ~some:optional
-              (view_field v name typ ~fail:None)
-        | None -> other_type v.codec name)
-    | Types.Optional_or { inner; _ } -> (
-        match typ_eq inner k with
-        | Some Type.Equal ->
-            Option.value ~default:(by_output ())
-              (view_field v name typ ~fail:(zero k))
-        | None -> other_type v.codec name)
-    | _ -> (
-        match typ_eq typ k with
-        | Some Type.Equal ->
-            Option.value ~default:(by_output ())
-              (view_field v name typ ~fail:(zero k))
-        | None -> other_type v.codec name)
-
-  let present_at (Record v) i =
-    let name, Types.Pack_typ typ = nth v i in
-    match typ with
-    | Types.Optional _ -> (
-        match view_field v name typ ~fail:None with
-        | Some h ->
-            View.Get (fun buf r -> Option.is_some (View.read_other h buf r))
-        | None ->
-            output v name (fun o l -> Scan_outputs.bool o (l ^ "_present")))
-    | _ -> Fmt.invalid_arg "%s: field %s is not optional" v.codec.name name
-
-  type 'a writer = { write : 'b. 'b Wire_runtime.Buf.t -> int -> 'a -> unit }
-
-  let set_at (type a) (Record v) i (k : a kind) : a writer =
-    let name, Types.Pack_typ typ = nth v i in
-    match typ_eq typ k with
-    | Some Type.Equal ->
-        let write = set v.codec (record_field v.codec name typ) in
-        { write = (fun b r x -> write (b : _ Wire_runtime.Buf.t :> bytes) r x) }
-    | None -> other_type v.codec name
-
-  (* The record a field of type [typ] holds, and the field as a sub-record. *)
-  let held : type a r.
-      r View.named ->
-      (a, r) field ->
-      a Types.typ ->
-      (record * (unit, unit) View.sub) option =
-   fun v f -> function
-    | Types.Codec { codec_ref = Codec_ref c; _ } ->
-        let w = View.named c in
-        Some (Record w, View.sub v w f)
-    | Types.Single_elem { elem = Types.Codec { codec_ref = Codec_ref c; _ }; _ }
-      ->
-        let w = View.named c in
-        Some (Record w, View.sub v w f)
-    | Types.Optional_or
-        { inner = Types.Codec { codec_ref = Codec_ref c; _ }; _ } ->
-        let w = View.named c in
-        Some (Record w, View.sub v w f)
-    | Types.Optional { inner = Types.Codec { codec_ref = Codec_ref c; _ }; _ }
-      ->
-        let w = View.named c in
-        Some (Record w, View.sub_option v w f)
-    | Types.Optional
-        {
-          inner =
-            Types.Single_elem
-              { elem = Types.Codec { codec_ref = Codec_ref c; _ }; _ };
-          _;
-        } ->
-        let w = View.named c in
-        Some (Record w, View.sub_option v w f)
-    | _ -> None
-
-  let held_at (Record v) i =
-    let name, Types.Pack_typ typ = nth v i in
-    match held v (record_field v.codec name typ) typ with
-    | Some h -> h
-    | None -> Fmt.invalid_arg "%s: field %s holds no record" v.codec.name name
-
-  let sub_at r i = fst (held_at r i)
-  let enter_at r i = snd (held_at r i)
-
-  let[@inline] enter (s : (unit, unit) View.sub) b len r : int =
-    View.enter s b len r
-
-  let[@inline] check_at (Record v) b length off : int =
-    View.check v b length off
-
-  let check_window (Record v) (b : _ Wire_runtime.Buf.t) length ~off ~len : int
-      =
-    let length = (length : _ Wire_runtime.Buf.length :> int) in
-    if off < 0 || len < 0 || off > length - len then -1
-    else if
-      accepts v.codec (Bytes.sub (b : _ Wire_runtime.Buf.t :> bytes) off len) 0
-    then off
-    else -1
 
   let scan c =
     let s = to_struct c in

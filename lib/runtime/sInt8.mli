@@ -41,6 +41,11 @@ val equal : t -> t -> bool
 val pp : Format.formatter -> t -> unit
 (** Pretty-printer for signed 8-bit values. *)
 
+val compare : t -> t -> int
+(** [compare] is the order of the values as integers. *)
+
+(**/**)
+
 val get : bytes -> int -> t
 (** [get buf off] reads the signed byte at offset [off]. Total: one byte spells
     only values the field holds. *)
@@ -48,8 +53,6 @@ val get : bytes -> int -> t
 val set : bytes -> int -> t -> unit
 (** [set buf off v] writes [v] as one signed byte at offset [off]. Needs no
     range check: every {!type-t} is a value the byte holds. *)
-
-(**/**)
 
 external unsafe_of_int : int -> t = "%identity"
 (** [unsafe_of_int n] is [n] with no check, for code that read [n] from a field

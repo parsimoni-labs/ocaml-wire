@@ -1168,9 +1168,13 @@ let decode walk general buf off =
   | exception Types.Unwalked -> named_error walk general buf off
   | exception exn when is_parse_error exn -> named_error walk general buf off
 
-(* Whether [walk] accepts the record at [off], the bytes stopping at [wend]. *)
-let accepts walk buf off wend =
-  match walk.wskip (cursor buf off wend) with
-  | () -> true
-  | exception Types.Unwalked -> false
-  | exception exn when Types.is_parse_error exn -> false
+(* Where the record at [off] ends when [walk] accepts it, the bytes stopping
+   at [wend], else [-1]. *)
+let end_of walk buf off wend =
+  let c = cursor buf off wend in
+  match walk.wskip c with
+  | () -> c.wpos
+  | exception Types.Unwalked -> -1
+  | exception exn when Types.is_parse_error exn -> -1
+
+let accepts walk buf off wend = end_of walk buf off wend >= 0

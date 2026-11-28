@@ -2,6 +2,53 @@
 
 ### Breaking
 
+- A view is indexed by its record type, not by a codec named through a
+  first-class module: `Codec.View.check c b ~off` (was
+  `View.check C.codec b (Buf.length b) off` after
+  `module C = (val View.codec c)`), `View.is_ok` (was `View.ok`),
+  `View.field c f`, `View.read b v f` (was `View.read f b v`) and
+  `View.set b v f x`. `View.codec`, `View.CODEC` and `View.checked_field`
+  are removed: `View.field` resolves every field, and a read answers the
+  field's zero where bytes written after the check move it out of the buffer
+  (#PR, @samoht)
+
+- A field that holds a record is a layer: `Codec.layer f` or
+  `Codec.opt_layer f`, resolved by `View.layer c l` (was `View.sub` and
+  `View.sub_option`), and `View.sub b v l` is the check of the record it
+  holds (was `View.enter s b len v`). `Codec.( / )` and `Codec.( // )` name a
+  field under a layer, `ipv4 // tcp / dst_port` (#PR, @samoht)
+
+- `Codec.View.fold c fields buf ~init ~f` checks each record of `buf`, back
+  to back, in slots of `~stride` bytes or in the frames of `~offs ~lens`, and
+  hands the fields it names to `f`; `~invalid` takes a refused slot or frame
+  (#PR, @samoht)
+
+- `Codec.get`, `Codec.set`, `Codec.writer`, `Codec.args`, `Codec.Word` and
+  `Codec.field_readers` are removed: read and write a field in place through
+  `Codec.View`, and a whole record with `Codec.decode` and `Codec.encode`
+  (#PR, @samoht)
+
+- The offset of `Codec.decode`, `validate`, `encode` and `size_at` is
+  labelled: `Codec.decode c buf ~off` (#PR, @samoht)
+
+- `Codec.size` is `Codec.fixed_size`, and `Codec.encoded_size` is
+  `Codec.size` (#PR, @samoht)
+
+- The decoders and encoders of a type, `Wire.of_string`, `of_bytes`,
+  `of_reader`, `to_string`, `to_bytes` and `to_writer`, are removed: a codec
+  is the unit, so put the type in a codec of one field (#PR, @samoht)
+
+- The EverParse plumbing (`Everparse.Raw`, `Everparse.struct_` and the
+  visitor tables), the struct validators, `Field.packed` and
+  `Ascii.of_struct` move to `Wire.Private`, which is not API; `Everparse.t` is
+  abstract, with `Everparse.name` (#PR, @samoht)
+
+- `Wire_runtime.Buf.length` and `Buf.local` are removed: a check reads the
+  buffer's length itself. `Wire_runtime.Unchecked`, `Errors`, `Arith`,
+  `Target` and each carrier's `le`, `be`, `get`, `set`, `set_*`,
+  `check_encode` and `int_eq` are hidden, since only generated code calls
+  them; `UInt8`, `UInt16`, `SInt8` and `SInt16` gain `compare` (#PR, @samoht)
+
 - `Wire.Staged` and `Wire_runtime.Staged` are removed: `Codec.get c f`,
   `Codec.set c f` and `Codec.writer c template fields`, applied once, are the
   reader or the writer; drop `Staged.unstage` (#570, @samoht)

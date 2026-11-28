@@ -203,3 +203,7 @@ val decode : 'r Types.walk -> (bytes -> int -> 'r) -> bytes -> int -> 'r
 val accepts : 'r Types.walk -> bytes -> int -> Input_end.t -> bool
 (** [accepts walk buf off stop] is [true] iff the [wskip] of [walk] accepts the
     record at [off] in the bytes of [buf] before [stop]. *)
+
+val end_of : 'r Types.walk -> bytes -> int -> Input_end.t -> int
+(** [end_of walk buf off stop] is where the record at [off] ends when {!accepts}
+    accepts it, and [-1] otherwise. *)

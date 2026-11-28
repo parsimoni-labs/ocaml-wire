@@ -194,11 +194,12 @@ module P = struct
   let check b ~off = View.check packet b ~off
   let is_ok = View.is_ok
   let get = View.get
-  let apid b v = View.read b v apid_f
-  let set_apid b v x = View.set b v apid_f x
 
   let fold ?stride ?offs ?lens ?invalid buf ~init ~f =
     View.fold ?stride ?offs ?lens ?invalid packet Codec.[ apid ] buf ~init ~f
+
+  let apid b v = View.read b v apid_f
+  let set_apid b v x = View.set b v apid_f x
 end
 
 (* [module P = Space_packet] runs it on the generated form. *)
@@ -226,12 +227,21 @@ called [ipv4], [protocol], [tcp] and [dst_port]. [ipv4] and [tcp] are
 optional fields that hold a codec: {!Wire.Codec.opt_layer} makes each a
 layer.
 
+{@ocaml[
+let eth = Packet_stack.codec
+let stack_ipv4 = Packet_stack.ipv4
+let ipv4 = Packet_stack.eth_ipv4
+let protocol = Packet_stack.ipv4_protocol
+let tcp = Packet_stack.ipv4_tcp
+let dst_port = Packet_stack.tcp_dst_port
+]}
+
 One check validates the frame and every layer present in it. Reaching a
 layer gives that codec's check, whose [is_ok] says whether the layer is
 present, and makes no check again. {!Wire.Codec.View.val-layer} resolves a layer
 in its codec, as [View.field] resolves any other field.
 
-{@ocaml skip[
+{@ocaml[
 let ipv4_l = Codec.opt_layer ipv4
 let ipv4_f = View.layer eth ipv4_l
 let protocol_f = View.field stack_ipv4 protocol
@@ -270,7 +280,7 @@ layer [l], and [l // l'] the layer [l'] under [l]. A field under an optional
 layer reaches [f] as an [option], [None] where the layer is absent, and one
 option however deep the path:
 
-{@ocaml skip[
+{@ocaml[
 let tcp_l = Codec.opt_layer tcp
 
 let count buf ~offs ~lens =
