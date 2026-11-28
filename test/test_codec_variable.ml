@@ -17,11 +17,11 @@ let zt_rep_codec =
 
 let test_repeat_zeroterm_element () =
   let v = { zn = UInt16.v 12; names = [ "abc"; "de"; "fghi" ] } in
-  let sz = Codec.encoded_size zt_rep_codec v in
+  let sz = Codec.size zt_rep_codec v in
   Alcotest.(check int) "wire size" 14 sz;
   let buf = Bytes.create sz in
-  Codec.encode zt_rep_codec v buf 0;
-  match Codec.decode zt_rep_codec buf 0 with
+  Codec.encode zt_rep_codec v buf ~off:0;
+  match Codec.decode zt_rep_codec buf ~off:0 with
   | Ok d -> Alcotest.(check (list string)) "names" v.names d.names
   | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
@@ -54,10 +54,10 @@ let opt_var_codec =
       ]
 
 let roundtrip codec v =
-  let n = Codec.encoded_size codec v in
+  let n = Codec.size codec v in
   let buf = Bytes.create n in
-  Codec.encode codec v buf 0;
-  (n, decode_ok (Codec.decode codec buf 0))
+  Codec.encode codec v buf ~off:0;
+  (n, decode_ok (Codec.decode codec buf ~off:0))
 
 let test_optional_var_byte_array () =
   let n, d =
@@ -199,11 +199,11 @@ let arr_chunks_codec =
 
 let test_array_byte_array_element () =
   let v = { atag = UInt8.v 7; addrs = [ "aaaa"; "bbbb"; "cccc" ] } in
-  let sz = Codec.encoded_size arr_chunks_codec v in
+  let sz = Codec.size arr_chunks_codec v in
   Alcotest.(check int) "wire size" 13 sz;
   let buf = Bytes.create sz in
-  Codec.encode arr_chunks_codec v buf 0;
-  match Codec.decode arr_chunks_codec buf 0 with
+  Codec.encode arr_chunks_codec v buf ~off:0;
+  match Codec.decode arr_chunks_codec buf ~off:0 with
   | Ok d -> Alcotest.(check (list string)) "addrs" v.addrs d.addrs
   | Error e -> Alcotest.failf "decode: %a" Error.pp e
 
@@ -269,7 +269,7 @@ let oversized_repeat_codec =
 
 let test_repeat_oversized_length_rejected () =
   let decodes bs =
-    match Codec.decode oversized_repeat_codec (Bytes.of_string bs) 0 with
+    match Codec.decode oversized_repeat_codec (Bytes.of_string bs) ~off:0 with
     | Ok _ | Error _ -> true
     | exception Invalid_argument _ -> false
   in
@@ -344,13 +344,13 @@ let validate_overrun_input =
 
 let test_validate_overrun_field_offset () =
   let buf = Bytes.of_string validate_overrun_input in
-  (match Codec.validate validate_overrun_codec buf 0 with
+  (match Codec.validate validate_overrun_codec buf ~off:0 with
   | Ok () ->
       Alcotest.fail "validate accepted a record whose fields run off the end"
   | Error _ -> ()
   | exception Invalid_argument m ->
       Alcotest.failf "validate crashed instead of failing cleanly: %s" m);
-  match Codec.decode validate_overrun_codec buf 0 with
+  match Codec.decode validate_overrun_codec buf ~off:0 with
   | Ok _ ->
       Alcotest.fail "decode accepted a record whose fields run off the end"
   | Error _ -> ()
@@ -414,7 +414,7 @@ let dynamic_subcodec_before_fixed =
    value, which the payload has moved. *)
 let test_decode_dynamic_field_past_end () =
   let decoding buf =
-    match Codec.decode dynamic_subcodec_before_fixed buf 0 with
+    match Codec.decode dynamic_subcodec_before_fixed buf ~off:0 with
     | Ok _ -> Ok ()
     | Error e -> Error e
     | exception Invalid_argument m ->
@@ -422,7 +422,7 @@ let test_decode_dynamic_field_past_end () =
   in
   let validate buf =
     validating "validate" (fun () ->
-        Codec.validate dynamic_subcodec_before_fixed buf 0)
+        Codec.validate dynamic_subcodec_before_fixed buf ~off:0)
   in
   let short = Bytes.of_string "\x01\x00\x00\x00" in
   check_located_eof "decode, short" ~at:0 ~expected:5 ~got:4 (decoding short);
@@ -431,7 +431,7 @@ let test_decode_dynamic_field_past_end () =
   check_located_eof "decode" ~at:3 ~expected:4 ~got:2 (decoding buf);
   check_located_eof "validate" ~at:3 ~expected:4 ~got:2 (validate buf)
 
-(* [Codec.validate_struct] runs the same populate-driven field pass as
+(* [Wire.Private.validate_struct] runs the same populate-driven field pass as
    [Codec.validate] and needs the same per-field bounds check. [Data] is sized
    by [Len], so a [Len] of 200 in a 5-byte buffer puts [V] at offset 201: the
    first byte read off the end. The trailing greedy [Z] keeps the struct's span
@@ -449,20 +449,17 @@ let validate_struct_overrun () =
 let validate_struct_overrun_input = "\xc8\x00\x00\x00\x00"
 
 let test_validate_struct_field_past_end () =
-  let module T = Wire.Private.Types in
   let s = validate_struct_overrun () in
-  let v = Codec.validator_of_struct s in
+  let v = Wire.Private.validator_of_struct s in
   let buf = Bytes.of_string validate_struct_overrun_input in
   (* [Data] is the field that overruns: it is declared 200 bytes at offset 1
      and the buffer holds 4 from there. The fields after it sit at offsets the
      overrun invented, so the failure belongs here rather than to [V] at 201. *)
   check_located_eof "validate_struct" ~at:1 ~expected:200 ~got:4
-    (validating "validate_struct" (fun () -> Codec.validate_struct v buf 0));
-  check_located_eof "of_string" ~at:1 ~expected:200 ~got:4
-    (validating "of_string" (fun () ->
-         of_string (T.struct_typ s) validate_struct_overrun_input))
+    (validating "validate_struct" (fun () ->
+         Wire.Private.validate_struct v buf 0))
 
-(* Unlike [Codec.validate], [Codec.validate_struct] has no whole-record bounds
+(* Unlike [Codec.validate], [Wire.Private.validate_struct] has no whole-record bounds
    check in front of the field pass, so even a statically placed field can be
    read off the end: [B] sits at offset 1 in a 1-byte buffer. The constraint is
    what makes the validator populate [B] at all. *)
@@ -475,11 +472,11 @@ let validate_struct_short () =
     ]
 
 let test_validate_struct_fixed_field_past_end () =
-  let v = Codec.validator_of_struct (validate_struct_short ()) in
+  let v = Wire.Private.validator_of_struct (validate_struct_short ()) in
   (* [B] wants 2 bytes at 1; the 1-byte buffer has none of them. *)
   check_located_eof "validate_struct" ~at:1 ~expected:2 ~got:0
     (validating "validate_struct" (fun () ->
-         Codec.validate_struct v (Bytes.of_string "\x01") 0))
+         Wire.Private.validate_struct v (Bytes.of_string "\x01") 0))
 
 (* An optional whose presence is a runtime expression has no wire size of its
    own: an absent one occupies nothing. A present one occupies exactly the
@@ -510,7 +507,7 @@ let test_validate_present_optional_past_end () =
      invented, so the failure belongs to the span. *)
   check_located_eof "validate" ~at:2 ~expected:200 ~got:3
     (validating "validate" (fun () ->
-         Codec.validate validate_optional_codec buf 0))
+         Codec.validate validate_optional_codec buf ~off:0))
 
 (* [optional_or] gates its read on the same kind of runtime expression and has
    the same hole. Same shape and same bytes as [validate_optional_codec]. *)
@@ -536,7 +533,7 @@ let test_validate_present_optional_or_past_end () =
   let buf = Bytes.of_string "\x01\xc8\x00\x00\x00" in
   check_located_eof "validate" ~at:2 ~expected:200 ~got:3
     (validating "validate" (fun () ->
-         Codec.validate validate_optional_or_codec buf 0))
+         Codec.validate validate_optional_or_codec buf ~off:0))
 
 (* A [uint_var] of runtime width reads its bytes directly instead of through
    the span reader every other variable-width field uses, so it needs that
@@ -559,7 +556,7 @@ let test_validate_uint_var_past_end () =
      buffer still had at offset 1, the way a truncated byte span does. *)
   check_located_eof "validate" ~at:1 ~expected:7 ~got:2
     (validating "validate" (fun () ->
-         Codec.validate validate_uint_var_codec buf 0))
+         Codec.validate validate_uint_var_codec buf ~off:0))
 
 (* A [Field.repeat] consumes its byte budget exactly, so an 11-byte budget over
    a 2-byte element is illegal however long the buffer is (here 64 bytes): the
@@ -603,9 +600,10 @@ let test_validate_repeat_partial_element () =
        2-byte element needs two. Both sides must report that same spot: a fix
        that made them agree on accepting would pass a bare "they agree" check. *)
     check_located_eof (name ^ " validate") ~at:12 ~expected:2 ~got:1
-      (validating (name ^ " validate") (fun () -> Codec.validate codec buf 0));
+      (validating (name ^ " validate") (fun () ->
+           Codec.validate codec buf ~off:0));
     check_located_eof (name ^ " decode") ~at:12 ~expected:2 ~got:1
-      (validating (name ^ " decode") (fun () -> Codec.decode codec buf 0))
+      (validating (name ^ " decode") (fun () -> Codec.decode codec buf ~off:0))
   in
   rejects "repeat" repeat_budget_codec;
   rejects "repeat_seq" repeat_seq_budget_codec;
@@ -615,12 +613,12 @@ let test_validate_repeat_partial_element () =
     Bytes.of_string ("\x00\x0a" ^ String.sub repeat_odd_budget 2 10)
   in
   let accepts name codec =
-    (match Codec.validate codec whole 0 with
+    (match Codec.validate codec whole ~off:0 with
     | Ok () -> ()
     | Error e ->
         Alcotest.failf "%s: validate rejected a whole budget: %a" name
           Wire.Error.pp e);
-    match Codec.decode codec whole 0 with
+    match Codec.decode codec whole ~off:0 with
     | Ok xs ->
         Alcotest.(check int) (name ^ ": elements decoded") 5 (List.length xs)
     | Error e ->
@@ -639,7 +637,7 @@ let test_eof_counts_are_base_invariant () =
   let buf = Bytes.of_string (String.make pad '\xee' ^ "\x07\x00\x00") in
   check_located_eof "validate at base 8" ~at:(pad + 1) ~expected:7 ~got:2
     (validating "validate at base 8" (fun () ->
-         Codec.validate validate_uint_var_codec buf pad))
+         Codec.validate validate_uint_var_codec buf ~off:pad))
 
 (* A byte_slice whose resolved size goes negative (here a [Sub] on an untrusted
    length field) must fail cleanly: [make_or_eod] would otherwise raise a raw
@@ -665,7 +663,7 @@ let test_byte_slice_negative_size () =
   let buf = Bytes.make 202 '\000' in
   Bytes.set_uint8 buf 0 200;
   Bytes.set_uint8 buf 201 1;
-  match Codec.decode c buf 0 with
+  match Codec.decode c buf ~off:0 with
   | Error _ -> ()
   | Ok _ ->
       Alcotest.fail "expected a parse error for a negative byte_slice size"
@@ -743,9 +741,9 @@ let test_sub_codec_min_size () =
   Alcotest.(check int) "min_wire_size" 4 (Codec.min_size sub_min_outer);
   let buf = Bytes.of_string "\000\001" in
   check_located_eof "decode" ~at:0 ~expected:4 ~got:2
-    (Result.map ignore (Codec.decode sub_min_outer buf 0));
+    (Result.map ignore (Codec.decode sub_min_outer buf ~off:0));
   check_located_eof "validate" ~at:0 ~expected:4 ~got:2
-    (Codec.validate sub_min_outer buf 0)
+    (Codec.validate sub_min_outer buf ~off:0)
 
 (* A span sized by a field times 2^31 needs a 64-bit size, which 3D does not
    have, so the sizes of a codec's spans cannot sum past [max_int]: such a
@@ -787,8 +785,8 @@ let test_error_order () =
   in
   let answers c buf =
     [
-      answer (fun () -> ignore (ok (Codec.decode c buf 0)));
-      answer (fun () -> ok (Codec.validate c buf 0));
+      answer (fun () -> ignore (ok (Codec.decode c buf ~off:0)));
+      answer (fun () -> ok (Codec.validate c buf ~off:0));
     ]
   in
   let check name buf want =

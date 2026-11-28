@@ -19,30 +19,32 @@ let zt_bounded_codec =
 
 let test_zeroterm_roundtrip () =
   let buf = Bytes.create 6 in
-  Codec.encode zt_codec "hello" buf 0;
+  Codec.encode zt_codec "hello" buf ~off:0;
   Alcotest.(check int) "NUL after name" 0 (Bytes.get_uint8 buf 5);
   Alcotest.(check string)
     "name" "hello"
-    (decode_ok (Codec.decode zt_codec buf 0));
+    (decode_ok (Codec.decode zt_codec buf ~off:0));
   let bounded = Bytes.create 9 in
-  Codec.encode zt_bounded_codec { tag = "ab"; n = UInt8.v 7 } bounded 0;
+  Codec.encode zt_bounded_codec { tag = "ab"; n = UInt8.v 7 } bounded ~off:0;
   Alcotest.(check int) "NUL after tag" 0 (Bytes.get_uint8 bounded 2);
-  let r = decode_ok (Codec.decode zt_bounded_codec bounded 0) in
+  let r = decode_ok (Codec.decode zt_bounded_codec bounded ~off:0) in
   Alcotest.(check string) "tag" "ab" r.tag;
   Alcotest.(check int) "n" 7 (UInt8.to_int r.n)
 
 let test_zeroterm_empty () =
   let buf = Bytes.create 1 in
-  Codec.encode zt_codec "" buf 0;
-  Alcotest.(check string) "name" "" (decode_ok (Codec.decode zt_codec buf 0));
+  Codec.encode zt_codec "" buf ~off:0;
+  Alcotest.(check string)
+    "name" ""
+    (decode_ok (Codec.decode zt_codec buf ~off:0));
   let bounded = Bytes.create 9 in
-  Codec.encode zt_bounded_codec { tag = ""; n = UInt8.v 0 } bounded 0;
-  let r = decode_ok (Codec.decode zt_bounded_codec bounded 0) in
+  Codec.encode zt_bounded_codec { tag = ""; n = UInt8.v 0 } bounded ~off:0;
+  let r = decode_ok (Codec.decode zt_bounded_codec bounded ~off:0) in
   Alcotest.(check string) "tag" "" r.tag
 
 let test_zeroterm_embedded_nul_rejected () =
   let buf = Bytes.create 4 in
-  match Codec.encode zt_codec "a\000b" buf 0 with
+  match Codec.encode zt_codec "a\000b" buf ~off:0 with
   | () -> Alcotest.fail "expected Invalid_argument for embedded NUL"
   | exception Invalid_argument _ -> ()
 
@@ -68,7 +70,7 @@ let zt_case_codec =
     Codec.[ (Field.v "body" zt_case_typ $ fun v -> v) ]
 
 (* One guard behind every encoder, so the message does not depend on whether the
-   value went through [Wire.to_string] or [Codec.encode], nor on whether the
+   value went through [encode_typ] or [Codec.encode], nor on whether the
    string sat in a field or in a casetype case body. *)
 let test_zeroterm_nul_message_shared () =
   let expected = "Wire.encode: zeroterm string contains a NUL byte" in
@@ -80,22 +82,21 @@ let test_zeroterm_nul_message_shared () =
         Alcotest.(check string) label expected msg
   in
   let nul = "x\000y" in
-  check "Wire.to_string zeroterm" (fun () ->
-      ignore (Wire.to_string zeroterm nul));
-  check "Wire.to_string zeroterm_at_most" (fun () ->
-      ignore (Wire.to_string (zeroterm_at_most ~size:(int 8)) nul));
+  check "encode_typ zeroterm" (fun () -> ignore (encode_typ zeroterm nul));
+  check "encode_typ zeroterm_at_most" (fun () ->
+      ignore (encode_typ (zeroterm_at_most ~size:(int 8)) nul));
   let field_buf = Bytes.create 4 in
   check "Codec.encode zeroterm field" (fun () ->
-      Codec.encode zt_codec nul field_buf 0);
+      Codec.encode zt_codec nul field_buf ~off:0);
   check "Codec.encode zeroterm_at_most field" (fun () ->
       Codec.encode zt_bounded_codec
         { tag = nul; n = UInt8.v 0 }
-        (Bytes.create 9) 0);
+        (Bytes.create 9) ~off:0);
   let case_buf = Bytes.create 16 in
   check "Codec.encode zeroterm case body" (fun () ->
-      Codec.encode zt_case_codec (Zt nul) case_buf 0);
+      Codec.encode zt_case_codec (Zt nul) case_buf ~off:0);
   check "Codec.encode zeroterm_at_most case body" (fun () ->
-      Codec.encode zt_case_codec (Zt_at_most nul) case_buf 0)
+      Codec.encode zt_case_codec (Zt_at_most nul) case_buf ~off:0)
 
 (* The region guard is shared the same way: a value with no room for its
    terminator reports one message from every [zeroterm_at_most] encoder. *)
@@ -109,19 +110,19 @@ let test_zeroterm_region_message_shared () =
         Alcotest.(check string) label expected msg
   in
   let full = String.make 8 'x' in
-  check "Wire.to_string" (fun () ->
-      ignore (Wire.to_string (zeroterm_at_most ~size:(int 8)) full));
+  check "encode_typ" (fun () ->
+      ignore (encode_typ (zeroterm_at_most ~size:(int 8)) full));
   check "Codec.encode field" (fun () ->
       Codec.encode zt_bounded_codec
         { tag = full; n = UInt8.v 0 }
-        (Bytes.create 9) 0);
+        (Bytes.create 9) ~off:0);
   check "Codec.encode case body" (fun () ->
-      Codec.encode zt_case_codec (Zt_at_most full) (Bytes.create 16) 0)
+      Codec.encode zt_case_codec (Zt_at_most full) (Bytes.create 16) ~off:0)
 
 let test_zeroterm_missing_terminator () =
   (* No NUL anywhere: decode must fail rather than read past the buffer. *)
   let buf = Bytes.make 6 'x' in
-  match Codec.decode zt_codec buf 0 with
+  match Codec.decode zt_codec buf ~off:0 with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected decode error on unterminated string"
 

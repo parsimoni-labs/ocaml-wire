@@ -1,7 +1,7 @@
 (* Tests for everparse.ml: declaration names, their clashes and escaping. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 open Test_helpers
 
 (* Two declarations under one name are two types with one name, and every
@@ -17,7 +17,8 @@ let test_duplicate_declaration_names_rejected () =
   in
   let refuses what c =
     match
-      to_3d ~enum_as_type:true (Everparse.project ~mode:`Standalone c).module_
+      to_3d ~enum_as_type:true
+        (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Standalone c))
     with
     | _ -> Alcotest.failf "%s: expected the collision to be refused" what
     | exception Invalid_argument msg ->
@@ -73,7 +74,9 @@ let test_3d_casetype_name_collision () =
   | exception Invalid_argument _ -> ());
   let b = body uint8 in
   let out =
-    to_3d (Everparse.project ~mode:`Ffi (two_bodies "SameBody" b b)).module_
+    to_3d
+      (Wire.Private.Everparse.module_
+         (Everparse.project ~mode:`Ffi (two_bodies "SameBody" b b)))
   in
   let count sub = List.length (Re.all (Re.compile (Re.str sub)) out) in
   Alcotest.(check int) "one dispatch" 1 (count "casetype _Body_Body");
@@ -197,9 +200,9 @@ let test_3d_escape_is_injective () =
       to_3d
         (module_of (param_struct "Kw" [ param "n" uint8 ] [ field "n" uint8 ])));
   invalid_arg_mentions "field ctx in FFI" [ "\"ctx\"" ] (fun () ->
-      Everparse.Raw.project_struct ~mode:`Ffi
+      Private.Everparse.Raw.project_struct ~mode:`Ffi
         (struct_ "Kw" [ field "ctx" uint8 ])
-      |> fun s -> to_3d s.Everparse.module_);
+      |> fun s -> to_3d (Wire.Private.Everparse.module_ s));
   (* Distinct names still project, the escaped one under its escape. *)
   let out =
     to_3d (module_of (struct_ "Kw" [ field "end" uint8; field "end2" uint8 ]))
@@ -265,7 +268,8 @@ let test_3d_typeof_reaches_c_escaped () =
 (* The 3D a codec projects to, with its enums declared as types, as the
    EverParse pipeline writes it. *)
 let codec_3d c =
-  to_3d ~enum_as_type:true (Everparse.project c).Everparse.module_
+  to_3d ~enum_as_type:true
+    (Wire.Private.Everparse.module_ (Everparse.project c))
 
 let one_field_codec name typ =
   let f = Field.v "k" typ in

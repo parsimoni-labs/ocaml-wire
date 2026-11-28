@@ -38,7 +38,7 @@ let test_casetype_field_login () =
   Bytes.set_int64_be buf 0 42L;
   Bytes.set_uint8 buf 8 1;
   Bytes.set_uint16_be buf 9 0x1234;
-  let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  let r = decode_ok (Codec.decode casetype_field_codec buf ~off:0) in
   Alcotest.(check int64) "ts" 42L r.ts;
   Alcotest.(check bool) "Login 0x1234" true (r.data = `Login (UInt16.v 0x1234))
 
@@ -47,7 +47,7 @@ let test_casetype_field_logout () =
   Bytes.set_int64_be buf 0 99L;
   Bytes.set_uint8 buf 8 2;
   Bytes.set_int32_be buf 9 0x55667788l;
-  let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  let r = decode_ok (Codec.decode casetype_field_codec buf ~off:0) in
   Alcotest.(check bool)
     "Logout" true
     (r.data = `Logout (UInt32.of_int32 0x55667788l))
@@ -57,7 +57,7 @@ let test_casetype_field_default () =
   Bytes.set_int64_be buf 0 0L;
   Bytes.set_uint8 buf 8 99;
   Bytes.set_uint8 buf 9 7;
-  let r = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  let r = decode_ok (Codec.decode casetype_field_codec buf ~off:0) in
   Alcotest.(check bool) "Other 7" true (r.data = `Other (UInt8.v 7))
 
 (* A casetype whose discriminant matches no case fails with a typed
@@ -75,7 +75,7 @@ let test_casetype_no_match_invalid_tag () =
       ]
   in
   let c = Codec.v "ClosedCt" Fun.id Codec.[ Field.v "d" typ $ Fun.id ] in
-  match Codec.decode c (Bytes.of_string "\x63\x00") 0 with
+  match Codec.decode c (Bytes.of_string "\x63\x00") ~off:0 with
   | Error { Error.kind = Invalid_tag n; _ } ->
       Alcotest.(check int) "unmatched tag" 99 n
   | Ok _ -> Alcotest.fail "decode accepted an unmatched casetype tag"
@@ -98,7 +98,7 @@ let test_casetype_no_match_names_field () =
       ]
   in
   let c = Codec.v "Tagged" Fun.id Codec.[ Field.v "body" typ $ Fun.id ] in
-  match Codec.decode c (Bytes.of_string "\x63\x00\x00") 0 with
+  match Codec.decode c (Bytes.of_string "\x63\x00\x00") ~off:0 with
   | Error { Error.kind = Invalid_tag n; field; at } ->
       Alcotest.(check int) "unmatched tag" 99 n;
       Alcotest.(check int) "at the casetype field" 0 at;
@@ -127,11 +127,11 @@ let tlv_codec =
 
 let test_casetype_default_recovers_tag () =
   let v = Unknown (UInt8.v 0x42, "ab") in
-  let buf = Bytes.create (Codec.encoded_size tlv_codec v) in
-  Codec.encode tlv_codec v buf 0;
+  let buf = Bytes.create (Codec.size tlv_codec v) in
+  Codec.encode tlv_codec v buf ~off:0;
   Alcotest.(check int)
     "encode writes the captured tag" 0x42 (Bytes.get_uint8 buf 0);
-  match Codec.decode tlv_codec buf 0 with
+  match Codec.decode tlv_codec buf ~off:0 with
   | Ok (Unknown (t, b)) ->
       Alcotest.(check int) "decode recovers the tag" 0x42 (UInt8.to_int t);
       Alcotest.(check string) "decode body" "ab" b
@@ -141,21 +141,21 @@ let test_casetype_default_recovers_tag () =
 let test_casetype_field_roundtrip () =
   let buf = Bytes.create 11 in
   let original = { ts = 123L; data = `Login (UInt16.v 0xabcd) } in
-  Codec.encode casetype_field_codec original buf 0;
-  let decoded = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  Codec.encode casetype_field_codec original buf ~off:0;
+  let decoded = decode_ok (Codec.decode casetype_field_codec buf ~off:0) in
   Alcotest.(check int64) "ts roundtrip" original.ts decoded.ts;
   Alcotest.(check bool) "data roundtrip" true (original.data = decoded.data)
 
-(* [Codec.encoded_size] counts a casetype field's tag plus its matched-case
+(* [Codec.size] counts a casetype field's tag plus its matched-case
    body, so a buffer sized from it holds the whole encoding. *)
 let test_casetype_size_of_value () =
   let original = { ts = 123L; data = `Login (UInt16.v 0xabcd) } in
   (* ts (8) + tag (1) + Login body uint16be (2) = 11 *)
-  let n = Codec.encoded_size casetype_field_codec original in
+  let n = Codec.size casetype_field_codec original in
   Alcotest.(check int) "size_of_value" 11 n;
   let buf = Bytes.create n in
-  Codec.encode casetype_field_codec original buf 0;
-  let decoded = decode_ok (Codec.decode casetype_field_codec buf 0) in
+  Codec.encode casetype_field_codec original buf ~off:0;
+  let decoded = decode_ok (Codec.decode casetype_field_codec buf ~off:0) in
   Alcotest.(check int64) "ts" original.ts decoded.ts;
   Alcotest.(check bool) "data" true (original.data = decoded.data)
 
@@ -185,7 +185,7 @@ let test_length_prefixed_casetype () =
   Bytes.set_uint16_be buf 1 3;
   Bytes.set_uint8 buf 3 1;
   Bytes.set_uint16_be buf 4 0x4242;
-  let r = decode_ok (Codec.decode lp_event_codec buf 0) in
+  let r = decode_ok (Codec.decode lp_event_codec buf ~off:0) in
   Alcotest.(check int) "tag" 0xAA (UInt8.to_int r.tag);
   Alcotest.(check int) "len" 3 (UInt16.to_int r.len);
   Alcotest.(check bool) "data" true (r.data = `Login (UInt16.v 0x4242))
@@ -247,7 +247,7 @@ let dhcp_codec =
 let test_repeat_casetype_decode () =
   (* total=10: 35 03 'abc' | 00 | 35 01 'z' | ff *)
   let buf = Bytes.of_string "\x0a\x35\x03abc\x00\x35\x01z\xff" in
-  let opts = decode_ok (Codec.decode dhcp_codec buf 0) in
+  let opts = decode_ok (Codec.decode dhcp_codec buf ~off:0) in
   Alcotest.(check int) "count" 4 (List.length opts);
   match opts with
   | [ Generic "abc"; Pad; Generic "z"; End ] -> ()
@@ -257,13 +257,13 @@ let test_repeat_casetype_roundtrip () =
   let v = [ Generic "abc"; Pad; Generic "z"; End ] in
   let total = List.fold_left (fun a o -> a + dhcp_opt_size o) 0 v in
   let buf = Bytes.create (1 + total) in
-  Codec.encode dhcp_codec v buf 0;
-  let decoded = decode_ok (Codec.decode dhcp_codec buf 0) in
+  Codec.encode dhcp_codec v buf ~off:0;
+  let decoded = decode_ok (Codec.decode dhcp_codec buf ~off:0) in
   Alcotest.(check bool) "roundtrip" true (decoded = v)
 
 let test_repeat_casetype_empty () =
   let buf = Bytes.of_string "\x00" in
-  let opts = decode_ok (Codec.decode dhcp_codec buf 0) in
+  let opts = decode_ok (Codec.decode dhcp_codec buf ~off:0) in
   Alcotest.(check int) "empty" 0 (List.length opts)
 
 (* A casetype case body that is a NUL-terminated string bounded to a fixed
@@ -301,11 +301,11 @@ let zt_codec =
 
 let test_repeat_casetype_zeroterm_at_most () =
   let v = [ Str "hi"; Num (UInt8.v 7); Str "" ] in
-  let buf = Bytes.create (Codec.encoded_size zt_codec v) in
-  Codec.encode zt_codec v buf 0;
+  let buf = Bytes.create (Codec.size zt_codec v) in
+  Codec.encode zt_codec v buf ~off:0;
   Alcotest.(check bool)
     "roundtrip" true
-    (decode_ok (Codec.decode zt_codec buf 0) = v)
+    (decode_ok (Codec.decode zt_codec buf ~off:0) = v)
 
 (* A casetype case body that is a lone bitfield, as a repeat element.
    read_elem / build_field_encoder / elem_size_of lacked the Bits case, so the
@@ -341,11 +341,11 @@ let bf_codec =
 
 let test_repeat_casetype_bits_case () =
   let v = [ Bf 5; Raw (UInt8.v 9); Bf 0 ] in
-  let buf = Bytes.create (Codec.encoded_size bf_codec v) in
-  Codec.encode bf_codec v buf 0;
+  let buf = Bytes.create (Codec.size bf_codec v) in
+  Codec.encode bf_codec v buf ~off:0;
   Alcotest.(check bool)
     "roundtrip" true
-    (decode_ok (Codec.decode bf_codec buf 0) = v)
+    (decode_ok (Codec.decode bf_codec buf ~off:0) = v)
 
 (* A casetype is repeatable only when every case body decodes one element at a
    time. A nested region case body has no per-element 3D projection inside a

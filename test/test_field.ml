@@ -26,16 +26,16 @@ let test_pp_prints_name () =
 
 let test_to_decl_named () =
   let f = Field.v "Flags" Types.uint8 in
-  let packed = Field.Named f in
-  match Field.decl_of_packed packed with
+  let packed = Wire.Private.Named f in
+  match Wire.Private.decl_of_packed packed with
   | Types.Field { field_name = Some name; _ } ->
       Alcotest.(check string) "decl name" "Flags" name
   | _ -> Alcotest.fail "expected named field declaration"
 
 let test_to_decl_anon () =
   let a = Field.anon Types.uint8 in
-  let packed = Field.Anon a in
-  match Field.decl_of_packed packed with
+  let packed = Wire.Private.Anon a in
+  match Wire.Private.decl_of_packed packed with
   | Types.Field { field_name = None; _ } -> ()
   | _ -> Alcotest.fail "expected anonymous field declaration"
 

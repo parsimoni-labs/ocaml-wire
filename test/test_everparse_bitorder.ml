@@ -1,7 +1,7 @@
 (* Tests for everparse.ml: the projection of bit groups and their order. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 open Test_helpers
 
 (* -- Bit-order projection tests --
@@ -25,7 +25,9 @@ let test_3d_bitorder_u8msb_reorder () =
       ]
   in
   let schema = Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  let s =
+    Wire.Private.Everparse.Raw.to_3d (Wire.Private.Everparse.module_ schema)
+  in
   let ia = index_of ~sub:"UINT8 a" s in
   let ib = index_of ~sub:"UINT8 b" s in
   Alcotest.(check bool) "a found" true (ia >= 0);
@@ -47,7 +49,9 @@ let test_3d_bitorder_u8msb_padding () =
       ]
   in
   let schema = Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  let s =
+    Wire.Private.Everparse.Raw.to_3d (Wire.Private.Everparse.module_ schema)
+  in
   Alcotest.(check bool)
     "has anonymous padding field" true
     (contains ~sub:"UINT8 _anon_" s);
@@ -78,7 +82,9 @@ let test_3d_bitorder_constraint_collapse () =
     v "Ranged" (fun a b -> (a, b)) [ f_a $ fst; f_b $ snd ]
   in
   let schema = Wire.Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  let s =
+    Wire.Private.Everparse.Raw.to_3d (Wire.Private.Everparse.module_ schema)
+  in
   (* b appears first in 3D (reversed), without a constraint block. *)
   let ia = index_of ~sub:"UINT8 a : 4" s in
   let ib = index_of ~sub:"UINT8 b : 4" s in
@@ -103,7 +109,9 @@ let test_3d_bitorder_native_noreorder () =
       ]
   in
   let schema = Everparse.project ~mode:`Ffi codec in
-  let s = Wire.Everparse.Raw.to_3d schema.module_ in
+  let s =
+    Wire.Private.Everparse.Raw.to_3d (Wire.Private.Everparse.module_ schema)
+  in
   let ix = index_of ~sub:"UINT32BE x" s in
   let iy = index_of ~sub:"UINT32BE y" s in
   Alcotest.(check bool) "x found" true (ix >= 0);
@@ -204,7 +212,9 @@ let test_3d_bitorder_msb_constrained_everywhere () =
     (fun (name, word, inner) ->
       List.iter
         (fun (label, project) ->
-          let out = to_3d (project () : Everparse.t).module_ in
+          let out =
+            to_3d (Wire.Private.Everparse.module_ (project () : Everparse.t))
+          in
           let body = typedef_body name out in
           let ia = index_of ~sub:(word ^ " a : 3") body in
           let ib = index_of ~sub:(word ^ " b : 5") body in

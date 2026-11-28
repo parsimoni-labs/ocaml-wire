@@ -1,7 +1,7 @@
 (* Tests for codec.ml: exact widths and encode refusals. *)
 
 open Wire
-open Wire.Everparse.Raw
+open Wire.Private.Everparse.Raw
 open Test_helpers
 
 (* A fixed-size byte field is exact: a value whose length differs from the
@@ -34,16 +34,16 @@ let exact_bs_codec =
 let test_exact_byte_field_literal_size () =
   let buf = Bytes.create 4 in
   expect_exact_byte_error "byte_array long" ~expected:4 ~actual:6 (fun () ->
-      Codec.encode exact_ba_codec "abcdef" buf 0);
+      Codec.encode exact_ba_codec "abcdef" buf ~off:0);
   expect_exact_byte_error "byte_array short" ~expected:4 ~actual:2 (fun () ->
-      Codec.encode exact_ba_codec "ab" buf 0);
+      Codec.encode exact_ba_codec "ab" buf ~off:0);
   expect_exact_byte_error "byte_slice long" ~expected:4 ~actual:6 (fun () ->
-      Codec.encode exact_bs_codec (slice_of_string "abcdef") buf 0);
+      Codec.encode exact_bs_codec (slice_of_string "abcdef") buf ~off:0);
   expect_exact_byte_error "byte_slice short" ~expected:4 ~actual:2 (fun () ->
-      Codec.encode exact_bs_codec (slice_of_string "ab") buf 0);
-  Codec.encode exact_ba_codec "abcd" buf 0;
+      Codec.encode exact_bs_codec (slice_of_string "ab") buf ~off:0);
+  Codec.encode exact_ba_codec "abcd" buf ~off:0;
   Alcotest.(check string) "exact string" "abcd" (Bytes.to_string buf);
-  Codec.encode exact_bs_codec (slice_of_string "wxyz") buf 0;
+  Codec.encode exact_bs_codec (slice_of_string "wxyz") buf ~off:0;
   Alcotest.(check string) "exact slice" "wxyz" (Bytes.to_string buf)
 
 (* The same contract on the variable-size encoder, where the declared size is a
@@ -73,14 +73,16 @@ let exact_vs_codec =
 let test_exact_byte_field_expression_size () =
   let buf = Bytes.create 16 in
   expect_exact_byte_error "byte_array long" ~expected:4 ~actual:6 (fun () ->
-      Codec.encode exact_vb_codec (UInt8.v 4, "abcdef") buf 0);
+      Codec.encode exact_vb_codec (UInt8.v 4, "abcdef") buf ~off:0);
   expect_exact_byte_error "byte_array short" ~expected:4 ~actual:2 (fun () ->
-      Codec.encode exact_vb_codec (UInt8.v 4, "ab") buf 0);
+      Codec.encode exact_vb_codec (UInt8.v 4, "ab") buf ~off:0);
   expect_exact_byte_error "byte_slice long" ~expected:4 ~actual:6 (fun () ->
-      Codec.encode exact_vs_codec (UInt8.v 4, slice_of_string "abcdef") buf 0);
+      Codec.encode exact_vs_codec
+        (UInt8.v 4, slice_of_string "abcdef")
+        buf ~off:0);
   expect_exact_byte_error "byte_slice short" ~expected:4 ~actual:2 (fun () ->
-      Codec.encode exact_vs_codec (UInt8.v 4, slice_of_string "ab") buf 0);
-  Codec.encode exact_vb_codec (UInt8.v 4, "abcd") buf 0;
+      Codec.encode exact_vs_codec (UInt8.v 4, slice_of_string "ab") buf ~off:0);
+  Codec.encode exact_vb_codec (UInt8.v 4, "abcd") buf ~off:0;
   Alcotest.(check string) "exact string" "\x04abcd" (Bytes.sub_string buf 0 5)
 
 (* Full-record encoding is deliberately non-transactional: a late refusal does
@@ -89,7 +91,7 @@ let test_exact_byte_field_expression_size () =
 let test_encode_failure_leaves_partial_record () =
   let buf = Bytes.make 6 '\xcc' in
   expect_exact_byte_error "late byte_array" ~expected:4 ~actual:2 (fun () ->
-      Codec.encode exact_vb_codec (UInt8.v 4, "ab") buf 0);
+      Codec.encode exact_vb_codec (UInt8.v 4, "ab") buf ~off:0);
   Alcotest.(check string)
     "earlier field remains written" "\x04\xcc\xcc\xcc\xcc\xcc"
     (Bytes.to_string buf)
@@ -111,7 +113,7 @@ let expect_encode_rejects label ~names f =
         names
 
 let expect_decode_rejects label codec s =
-  match Codec.decode codec (Bytes.of_string s) 0 with
+  match Codec.decode codec (Bytes.of_string s) ~off:0 with
   | Error _ -> ()
   | Ok _ -> Alcotest.failf "%s: decode accepted %S" label s
 
@@ -127,18 +129,18 @@ let open_enum_codec =
 let test_encode_rejects_unlisted_enum () =
   let buf = Bytes.create 1 in
   expect_encode_rejects "closed enum" ~names:[ "Code"; "got 99" ] (fun () ->
-      Codec.encode closed_enum_codec (UInt8.v 99) buf 0);
+      Codec.encode closed_enum_codec (UInt8.v 99) buf ~off:0);
   expect_decode_rejects "closed enum" closed_enum_codec "\099";
-  Codec.encode closed_enum_codec (UInt8.v 2) buf 0;
+  Codec.encode closed_enum_codec (UInt8.v 2) buf ~off:0;
   Alcotest.(check string) "listed value" "\002" (Bytes.to_string buf);
   (* An open enum documents its codes without restricting them, so encode
      stays permissive exactly where decode does. *)
-  Codec.encode open_enum_codec (UInt8.v 99) buf 0;
+  Codec.encode open_enum_codec (UInt8.v 99) buf ~off:0;
   Alcotest.(check string) "open enum" "\099" (Bytes.to_string buf)
 
 (* The compiled codec reaches an enum / lookup / variants / bit field through
    its own readers, writers and staged accessors, none of which the typ-level
-   [of_string] path shares. A base whose OCaml carrier is not [int] --
+   [decode_typ] path shares. A base whose OCaml carrier is not [int] --
    [uint32], [int32] -- must travel all of them: the integer the refinement is
    compiled against is the only thing these combinators take from their base. *)
 let carrier_enum_field =
@@ -148,19 +150,19 @@ let carrier_enum_codec = Codec.v "CarrierEnum" Fun.id [ carrier_enum_field ]
 
 let test_enum_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x02" in
-  (match Codec.decode carrier_enum_codec buf 0 with
+  (match Codec.decode carrier_enum_codec buf ~off:0 with
   | Ok v -> Alcotest.(check int) "decode listed code" 2 (UInt32.to_int v)
   | Error e -> Alcotest.failf "%a" Error.pp e);
-  decode_ok (Codec.validate carrier_enum_codec buf 0);
+  decode_ok (Codec.validate carrier_enum_codec buf ~off:0);
   let get = reader carrier_enum_codec carrier_enum_field in
   Alcotest.(check int) "get listed code" 2 (UInt32.to_int (get buf 0));
   expect_decode_rejects "unlisted code" carrier_enum_codec "\x00\x00\x00\x63";
   expect_encode_rejects "unlisted code" ~names:[ "Code32"; "got 99" ] (fun () ->
-      Codec.encode carrier_enum_codec (UInt32.of_int 99) buf 0);
-  Codec.encode carrier_enum_codec (UInt32.of_int 1) buf 0;
+      Codec.encode carrier_enum_codec (UInt32.of_int 99) buf ~off:0);
+  Codec.encode carrier_enum_codec (UInt32.of_int 1) buf ~off:0;
   Alcotest.(check string)
     "encode listed code" "\x00\x00\x00\x01" (Bytes.to_string buf);
-  let set = Codec.set carrier_enum_codec carrier_enum_field in
+  let set = setter carrier_enum_codec carrier_enum_field in
   set buf 0 (UInt32.of_int 2);
   Alcotest.(check string) "set" "\x00\x00\x00\x02" (Bytes.to_string buf)
 
@@ -177,13 +179,13 @@ let carrier_variants_codec =
 
 let test_variants_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x01" in
-  (match Codec.decode carrier_variants_codec buf 0 with
+  (match Codec.decode carrier_variants_codec buf ~off:0 with
   | Ok v -> Alcotest.(check bool) "decode variant" true (v = `Zero)
   | Error e -> Alcotest.failf "%a" Error.pp e);
-  decode_ok (Codec.validate carrier_variants_codec buf 0);
+  decode_ok (Codec.validate carrier_variants_codec buf ~off:0);
   let get = reader carrier_variants_codec carrier_variants_field in
   Alcotest.(check bool) "get variant" true (get buf 0 = `Zero);
-  Codec.encode carrier_variants_codec `Pos buf 0;
+  Codec.encode carrier_variants_codec `Pos buf ~off:0;
   Alcotest.(check string) "encode" "\x00\x00\x00\x02" (Bytes.to_string buf);
   expect_decode_rejects "index past the variant list" carrier_variants_codec
     "\x00\x00\x00\x07"
@@ -199,21 +201,21 @@ let carrier_bit_codec =
 
 let test_lookup_and_bit_over_carrier_base () =
   let buf = Bytes.of_string "\x00\x00\x00\x02" in
-  (match Codec.decode carrier_lookup_codec buf 0 with
+  (match Codec.decode carrier_lookup_codec buf ~off:0 with
   | Ok v -> Alcotest.(check string) "lookup decode" "c" v
   | Error e -> Alcotest.failf "%a" Error.pp e);
-  decode_ok (Codec.validate carrier_lookup_codec buf 0);
+  decode_ok (Codec.validate carrier_lookup_codec buf ~off:0);
   let get = reader carrier_lookup_codec carrier_lookup_field in
   Alcotest.(check string) "lookup get" "c" (get buf 0);
-  Codec.encode carrier_lookup_codec "b" buf 0;
+  Codec.encode carrier_lookup_codec "b" buf ~off:0;
   Alcotest.(check string)
     "lookup encode" "\x00\x00\x00\x01" (Bytes.to_string buf);
   expect_decode_rejects "index past the table" carrier_lookup_codec
     "\x00\x00\x00\x07";
-  (match Codec.decode carrier_bit_codec buf 0 with
+  (match Codec.decode carrier_bit_codec buf ~off:0 with
   | Ok v -> Alcotest.(check bool) "bit decode" true v
   | Error e -> Alcotest.failf "%a" Error.pp e);
-  Codec.encode carrier_bit_codec false buf 0;
+  Codec.encode carrier_bit_codec false buf ~off:0;
   Alcotest.(check string) "bit encode" "\x00\x00\x00\x00" (Bytes.to_string buf)
 
 (* An enum over a little-endian [uint32] keeps its named 3D type, exactly as one
@@ -246,9 +248,9 @@ let zeros_codec =
 let test_encode_rejects_non_zero_padding () =
   let buf = Bytes.create 4 in
   expect_encode_rejects "all_zeros" ~names:[ "all_zeros"; "0x61" ] (fun () ->
-      Codec.encode zeros_codec (UInt8.v 1, "abc") buf 0);
+      Codec.encode zeros_codec (UInt8.v 1, "abc") buf ~off:0);
   expect_decode_rejects "all_zeros" zeros_codec "\001abc";
-  Codec.encode zeros_codec (UInt8.v 1, "\000\000\000") buf 0;
+  Codec.encode zeros_codec (UInt8.v 1, "\000\000\000") buf ~off:0;
   Alcotest.(check string)
     "zero padding" "\001\000\000\000" (Bytes.to_string buf)
 
@@ -274,15 +276,15 @@ let per_byte_var_codec =
 let test_encode_rejects_refined_byte () =
   let buf = Bytes.create 3 in
   expect_encode_rejects "byte_array_where" ~names:[ "byte 1"; "0xff" ]
-    (fun () -> Codec.encode per_byte_codec "a\xffb" buf 0);
-  Codec.encode per_byte_codec "abc" buf 0;
+    (fun () -> Codec.encode per_byte_codec "a\xffb" buf ~off:0);
+  Codec.encode per_byte_codec "abc" buf ~off:0;
   Alcotest.(check string) "printable span" "abc" (Bytes.to_string buf)
 
 let decode_accepts codec s =
-  Result.is_ok (Codec.decode codec (Bytes.of_string s) 0)
+  Result.is_ok (Codec.decode codec (Bytes.of_string s) ~off:0)
 
 let validate_result codec s =
-  match Codec.validate codec (Bytes.of_string s) 0 with
+  match Codec.validate codec (Bytes.of_string s) ~off:0 with
   | Ok () -> Ok ()
   | Error e -> Error e
 
@@ -295,38 +297,35 @@ let expect_per_byte label ~at = function
   | Ok () -> Alcotest.failf "%s: accepted a byte violating the refinement" label
 
 (* The refinement belongs to the span itself, so the compiled reader has to
-   apply it: a [Codec.decode] more permissive than [Wire.of_string] is also more
+   apply it: a [Codec.decode] more permissive than [decode_typ] is also more
    permissive than the EverParse validator built from the same schema, and
    [Codec.validate] is the gate a caller runs before reading untrusted bytes
    zero-copy. *)
 let test_decode_rejects_refined_byte () =
   expect_per_byte "decode" ~at:1
     (Result.map ignore
-       (Codec.decode per_byte_codec (Bytes.of_string "a\xffb") 0));
+       (Codec.decode per_byte_codec (Bytes.of_string "a\xffb") ~off:0));
   expect_per_byte "validate" ~at:1 (validate_result per_byte_codec "a\xffb");
   expect_per_byte "decode var" ~at:2
     (Result.map ignore
-       (Codec.decode per_byte_var_codec (Bytes.of_string "\002a\xff") 0));
+       (Codec.decode per_byte_var_codec (Bytes.of_string "\002a\xff") ~off:0));
   expect_per_byte "validate var" ~at:2
     (validate_result per_byte_var_codec "\002a\xff");
-  (* [get] is documented as unchecked for other fields' constraints, but the
-     span's own refinement travels with the reader, as a closed enum's does. *)
-  let get = Codec.get per_byte_codec per_byte_cf in
-  (match get (Bytes.of_string "a\xffb") 0 with
-  | Ok s -> Alcotest.failf "get returned %S past the refinement" s
-  | Error { Error.kind = Constraint_failed { which = Per_byte; _ }; _ } -> ()
-  | Error e -> Alcotest.failf "get: wrong error %a" Error.pp e);
+  (* A view is made only of a record its check accepts. *)
+  Alcotest.(check bool)
+    "check" false
+    (accepts per_byte_codec (Bytes.of_string "a\xffb") 0);
   (* The direct parser has always rejected this; it must keep doing so. *)
-  match of_string per_byte_typ "a\xffb" with
+  match decode_typ per_byte_typ "a\xffb" with
   | Error { Error.kind = Constraint_failed { which = Per_byte; _ }; at; _ } ->
-      Alcotest.(check int) "of_string offset" 1 at
-  | Error e -> Alcotest.failf "of_string: wrong error %a" Error.pp e
-  | Ok _ -> Alcotest.fail "of_string accepted a byte violating the refinement"
+      Alcotest.(check int) "decode_typ offset" 1 at
+  | Error e -> Alcotest.failf "decode_typ: wrong error %a" Error.pp e
+  | Ok _ -> Alcotest.fail "decode_typ accepted a byte violating the refinement"
 
 let test_decode_accepts_conforming_refined_byte () =
   Alcotest.(check (result string string))
-    "of_string" (Ok "abc")
-    (Result.map_error (Fmt.str "%a" Error.pp) (of_string per_byte_typ "abc"));
+    "decode_typ" (Ok "abc")
+    (Result.map_error (Fmt.str "%a" Error.pp) (decode_typ per_byte_typ "abc"));
   Alcotest.(check bool) "decode" true (decode_accepts per_byte_codec "abc");
   Alcotest.(check (result unit string))
     "validate" (Ok ())
@@ -382,19 +381,19 @@ let codec_where_codec =
 let test_encode_rejects_where_violation () =
   let buf = Bytes.create 2 in
   expect_encode_rejects "typ where" ~names:[ "TypWhereEncode"; "constraint" ]
-    (fun () -> Codec.encode where_codec (UInt8.v 6, UInt8.v 0) buf 0);
+    (fun () -> Codec.encode where_codec (UInt8.v 6, UInt8.v 0) buf ~off:0);
   expect_decode_rejects "typ where" where_codec "\006\000";
-  Codec.encode where_codec (UInt8.v 1, UInt8.v 0) buf 0;
+  Codec.encode where_codec (UInt8.v 1, UInt8.v 0) buf ~off:0;
   Alcotest.(check string) "satisfied cond" "\001\000" (Bytes.to_string buf);
   expect_encode_rejects "codec where"
     ~names:[ "CodecWhereEncode"; "constraint" ] (fun () ->
-      Codec.encode codec_where_codec (UInt8.v 6, UInt8.v 0) buf 0);
+      Codec.encode codec_where_codec (UInt8.v 6, UInt8.v 0) buf ~off:0);
   expect_decode_rejects "codec where" codec_where_codec "\006\000";
-  Codec.encode codec_where_codec (UInt8.v 1, UInt8.v 0) buf 0;
+  Codec.encode codec_where_codec (UInt8.v 1, UInt8.v 0) buf ~off:0;
   Alcotest.(check string)
     "satisfied codec where" "\001\000" (Bytes.to_string buf)
 
-(* [Codec.set] writes in place, so a byte field whose size is only known at
+(* [View.set] writes in place, so a byte field whose size is only known at
    run time still owns exactly that many bytes: an oversized value that fits in
    the buffer would otherwise land on the fields that follow, with nothing to
    signal it. Each case checks the buffer as well as the exception, since a
@@ -445,7 +444,6 @@ let set_dyn_codec typ =
 let set_var_before = "\x02ab\xff\xee\xee\xee"
 let set_var_after = "\x02XY\xff\xee\xee\xee"
 let set_dyn_before = "\x01p\x02ab\xff\xee\xee\xee"
-let set_dyn_after = "\x01p\x02XY\xff\xee\xee\xee"
 
 let check_set_exact label ~before ~after ~oversized ~exact set =
   let buf = Bytes.of_string before in
@@ -462,38 +460,41 @@ let check_set_exact label ~before ~after ~oversized ~exact set =
 let test_set_exact_var_byte_array () =
   let codec, cf = set_var_codec (fun size -> byte_array ~size) in
   check_set_exact "byte_array at a static offset" ~before:set_var_before
-    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
+    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY" (setter codec cf)
 
 let test_set_exact_var_byte_array_where () =
   let codec, cf =
     set_var_codec (fun size -> byte_array_where ~size ~per_byte:printable_byte)
   in
   check_set_exact "byte_array_where at a static offset" ~before:set_var_before
-    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
+    ~after:set_var_after ~oversized:"ABCD" ~exact:"XY" (setter codec cf)
 
 let test_set_exact_var_byte_slice () =
   let codec, cf = set_var_codec (fun size -> byte_slice ~size) in
   check_set_exact "byte_slice at a static offset" ~before:set_var_before
     ~after:set_var_after ~oversized:(slice_of_string "ABCD")
-    ~exact:(slice_of_string "XY") (Codec.set codec cf)
+    ~exact:(slice_of_string "XY") (setter codec cf)
 
-let test_set_exact_dyn_byte_array () =
+(* At a run-time offset a field has no constant place: a set refuses it,
+   whatever the value, and leaves the buffer as it was. *)
+let test_set_dyn_byte_field_refused () =
+  let refused label set exact =
+    let buf = Bytes.of_string set_dyn_before in
+    (match set buf 0 exact with
+    | () -> Alcotest.failf "%s: set wrote a field with no constant place" label
+    | exception Invalid_argument _ -> ());
+    Alcotest.(check string)
+      (label ^ ": refused set left the buffer alone")
+      set_dyn_before (Bytes.to_string buf)
+  in
   let codec, cf = set_dyn_codec (fun size -> byte_array ~size) in
-  check_set_exact "byte_array at a run-time offset" ~before:set_dyn_before
-    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
-
-let test_set_exact_dyn_byte_array_where () =
+  refused "byte_array" (setter codec cf) "XY";
   let codec, cf =
     set_dyn_codec (fun size -> byte_array_where ~size ~per_byte:printable_byte)
   in
-  check_set_exact "byte_array_where at a run-time offset" ~before:set_dyn_before
-    ~after:set_dyn_after ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
-
-let test_set_exact_dyn_byte_slice () =
+  refused "byte_array_where" (setter codec cf) "XY";
   let codec, cf = set_dyn_codec (fun size -> byte_slice ~size) in
-  check_set_exact "byte_slice at a run-time offset" ~before:set_dyn_before
-    ~after:set_dyn_after ~oversized:(slice_of_string "ABCD")
-    ~exact:(slice_of_string "XY") (Codec.set codec cf)
+  refused "byte_slice" (setter codec cf) (slice_of_string "XY")
 
 (* A byte field with a literal size takes the fixed-offset writer, which shares
    the encoder's exact-size blit. *)
@@ -506,7 +507,7 @@ let test_set_exact_fixed_byte_array () =
         [ cf; Field.v "trailer" uint8 $ snd ])
   in
   check_set_exact "byte_array at a literal size" ~before:"ab\xff\xee\xee"
-    ~after:"XY\xff\xee\xee" ~oversized:"ABCD" ~exact:"XY" (Codec.set codec cf)
+    ~after:"XY\xff\xee\xee" ~oversized:"ABCD" ~exact:"XY" (setter codec cf)
 
 (* A width-refined leaf -- [bits ~width], [uint size] -- is exact for a
    harsher reason than a fixed-size byte field. A masked value is still a legal
@@ -556,21 +557,20 @@ let test_encode_exact_uint_width () =
           let label = Fmt.str "uint(%d,%s) <- 0x%X" n ename over in
           let sub = Fmt.str "does not fit an unsigned %d-byte field" n in
           let value = Wire.Private.UInt63.of_int over in
-          expect_exact_width_error (label ^ " to_string") ~sub (fun () ->
-              Wire.to_string typ value);
+          expect_exact_width_error (label ^ " encode_typ") ~sub (fun () ->
+              encode_typ typ value);
           expect_exact_width_error (label ^ " Codec.encode") ~sub (fun () ->
               let buf = Bytes.make 8 '\x00' in
-              Codec.encode codec value buf 0;
+              Codec.encode codec value buf ~off:0;
               Bytes.sub_string buf 0 n);
           (* The widest value the field does hold still encodes, identically
              through both entry points. *)
           let widest = Wire.Private.UInt63.of_int max_v in
           let buf = Bytes.make 8 '\x00' in
-          Codec.encode codec widest buf 0;
+          Codec.encode codec widest buf ~off:0;
           Alcotest.(check string)
             (label ^ ": widest legal value agrees across entry points")
-            (Wire.to_string typ widest)
-            (Bytes.sub_string buf 0 n))
+            (encode_typ typ widest) (Bytes.sub_string buf 0 n))
         uint_endians)
     uint_width_cases
 
@@ -580,7 +580,7 @@ let test_set_exact_uint_width () =
       List.iter
         (fun (endian, ename) ->
           let codec, cf = uint_width_codec ~endian n in
-          let set = Codec.set codec cf in
+          let set = setter codec cf in
           let buf = Bytes.make 8 '\x00' in
           let label = Fmt.str "set uint(%d,%s) <- 0x%X" n ename over in
           expect_exact_width_error label
@@ -613,12 +613,14 @@ let test_uint_width_decodes_exactly () =
           let label = Fmt.str "uint(%d,%s)" size ename in
           let wire = String.make size '\xff' in
           let widest = Int64.sub (Int64.shift_left 1L (8 * size)) 1L in
-          let v = decode_ok (Codec.decode codec (Bytes.of_string wire) 0) in
+          let v =
+            decode_ok (Codec.decode codec (Bytes.of_string wire) ~off:0)
+          in
           Alcotest.(check int64)
             (label ^ ": full-width frame decodes to the number it spells")
             widest (Optint.Int63.to_int64 v);
           let out = Bytes.make size '\x00' in
-          Codec.encode codec v out 0;
+          Codec.encode codec v out ~off:0;
           Alcotest.(check string)
             (label ^ ": full-width frame re-encodes unchanged")
             wire (Bytes.to_string out))
@@ -653,8 +655,8 @@ let iter_bits_widths f =
         [ 1; 3; total ])
     bits_width_bases
 
-(* [Wire.to_bytes (bits ~width:3 U8) 0x8] used to write 00 where [Codec.encode]
-   of the same value raised: the two encode entry points disagreed on a value
+(* An encode of [(bits ~width:3 U8) 0x8] alone used to write 00 where
+   [Codec.encode] of the same value in a record raised: the two disagreed on a value
    neither can represent. Swept over every base, bit order and boundary width so
    they cannot drift apart again. *)
 let test_encode_exact_bits_width () =
@@ -664,28 +666,27 @@ let test_encode_exact_bits_width () =
       let over = 1 lsl width in
       let label = Fmt.str "bits(%d,%s,%s) <- 0x%X" width bname oname over in
       let sub = Fmt.str "does not fit an unsigned %d-bit field" width in
-      expect_exact_width_error (label ^ " to_bytes") ~sub (fun () ->
-          Bytes.to_string (Wire.to_bytes typ over));
+      expect_exact_width_error (label ^ " encode_typ") ~sub (fun () ->
+          encode_typ typ over);
       expect_exact_width_error (label ^ " Codec.encode") ~sub (fun () ->
           let buf = Bytes.make 4 '\x00' in
-          Codec.encode codec over buf 0;
+          Codec.encode codec over buf ~off:0;
           Bytes.to_string buf);
       let widest = over - 1 in
       let buf = Bytes.make (Codec.min_size codec) '\x00' in
-      Codec.encode codec widest buf 0;
+      Codec.encode codec widest buf ~off:0;
       Alcotest.(check string)
         (label ^ ": widest legal value agrees across entry points")
-        (Bytes.to_string (Wire.to_bytes typ widest))
-        (Bytes.to_string buf))
+        (encode_typ typ widest) (Bytes.to_string buf))
 
-(* The worst of the family: [Codec.set] wrote 0xFF into a 3-bit field as 7,
-   which [Codec.get] reads back and [validate] accepts, so no later check can
+(* The worst of the family: a set wrote 0xFF into a 3-bit field as 7,
+   which a view reads back and [validate] accepts, so no later check can
    recover that the caller meant 255. *)
 let test_set_exact_bits_width () =
   iter_bits_widths (fun ~base ~bname ~width ~bit_order ~oname ->
       let codec, cf = bits_width_codec ~bit_order ~width base in
       let size = Codec.min_size codec in
-      let set = Codec.set codec cf in
+      let set = setter codec cf in
       let get = reader codec cf in
       let over = 1 lsl width in
       let buf = Bytes.make size '\x00' in
@@ -708,7 +709,7 @@ let test_set_exact_bits_width () =
 let test_set_bits_no_silent_truncation () =
   let cf = Codec.(Field.v "v" (bits ~width:3 U8) $ Fun.id) in
   let codec = Codec.v "SetBits3" Fun.id Codec.[ cf ] in
-  let set = Codec.set codec cf in
+  let set = setter codec cf in
   let buf = Bytes.make 1 '\x00' in
   (match set buf 0 0xFF with
   | () ->
@@ -722,16 +723,15 @@ let test_map_inherits_exact_width () =
   let typ = map ~decode:Fun.id ~encode:Fun.id (bits ~width:3 U8) in
   let cf = Codec.(Field.v "v" typ $ Fun.id) in
   let codec = Codec.v "MapBits3" Fun.id Codec.[ cf ] in
-  let set = Codec.set codec cf in
-  expect_exact_width_error "map(bits(3,U8)) to_string"
-    ~sub:"does not fit an unsigned 3-bit field" (fun () ->
-      Wire.to_string typ 0xFF);
+  let set = setter codec cf in
+  expect_exact_width_error "map(bits(3,U8)) encode_typ"
+    ~sub:"does not fit an unsigned 3-bit field" (fun () -> encode_typ typ 0xFF);
   expect_exact_width_error "map(bits(3,U8)) Codec.encode"
     ~sub:"does not fit an unsigned 3-bit field" (fun () ->
       let buf = Bytes.make 1 '\x00' in
-      Codec.encode codec 0xFF buf 0;
+      Codec.encode codec 0xFF buf ~off:0;
       Bytes.to_string buf);
-  expect_exact_width_error "map(bits(3,U8)) Codec.set"
+  expect_exact_width_error "map(bits(3,U8)) View.set"
     ~sub:"does not fit an unsigned 3-bit field" (fun () ->
       let buf = Bytes.make 1 '\x00' in
       set buf 0 0xFF;
@@ -814,11 +814,11 @@ let check_eight_byte_unsigned name typ =
   let wire = String.make 8 '\xff' in
   let cf = Codec.(Field.v "v" typ $ Fun.id) in
   let codec = Codec.v "EightByteUnsigned" Fun.id Codec.[ cf ] in
-  match Codec.decode codec (Bytes.of_string wire) 0 with
+  match Codec.decode codec (Bytes.of_string wire) ~off:0 with
   | Error _ -> ()
   | Ok v ->
       let out = Bytes.make 8 '\x00' in
-      Codec.encode codec v out 0;
+      Codec.encode codec v out ~off:0;
       Alcotest.(check string)
         (name ^ ": all-ones frame re-encodes unchanged")
         wire (Bytes.to_string out)
@@ -837,11 +837,11 @@ let test_eight_byte_unsigned_preserves_wire () =
 let check_four_byte_signed name typ wire =
   let cf = Codec.(Field.v "v" typ $ Fun.id) in
   let codec = Codec.v "FourByteSigned" Fun.id Codec.[ cf ] in
-  match Codec.decode codec (Bytes.of_string wire) 0 with
+  match Codec.decode codec (Bytes.of_string wire) ~off:0 with
   | Error _ -> ()
   | Ok v ->
       let out = Bytes.make 4 '\x00' in
-      Codec.encode codec v out 0;
+      Codec.encode codec v out ~off:0;
       Fmt.kstr
         (fun msg -> Alcotest.(check string) msg wire (Bytes.to_string out))
         "%s: frame %a re-encodes unchanged" name
@@ -863,12 +863,12 @@ let test_encode_int64_carrier_has_no_range () =
   let check name typ to_i64 of_i64 =
     List.iter
       (fun v ->
-        let s = Wire.to_string typ (of_i64 v) in
+        let s = encode_typ typ (of_i64 v) in
         Alcotest.(check int) (name ^ ": eight bytes") 8 (String.length s);
         Alcotest.(check int64)
           (Fmt.str "%s <- %Ld round-trips" name v)
           v
-          (to_i64 (decode_ok (Wire.of_string typ s))))
+          (to_i64 (decode_ok (decode_typ typ s))))
       Int64.[ min_int; -1L; zero; max_int ]
   in
   (* The two signednesses carry their values in different types now, so the
@@ -914,12 +914,12 @@ let test_constant_size_expression_folds () =
   let folded = codec "FoldConstant" (byte_array ~size:Expr.(int 2 + int 2)) in
   let buf = Bytes.create 4 in
   expect_exact_byte_error "literal long" ~expected:4 ~actual:6 (fun () ->
-      Codec.encode lit "abcdef" buf 0);
+      Codec.encode lit "abcdef" buf ~off:0);
   expect_exact_byte_error "constant long" ~expected:4 ~actual:6 (fun () ->
-      Codec.encode folded "abcdef" buf 0);
+      Codec.encode folded "abcdef" buf ~off:0);
   expect_exact_byte_error "constant short" ~expected:4 ~actual:2 (fun () ->
-      Codec.encode folded "ab" buf 0);
-  Codec.encode folded "abcd" buf 0;
+      Codec.encode folded "ab" buf ~off:0);
+  Codec.encode folded "abcd" buf ~off:0;
   Alcotest.(check string) "constant exact" "abcd" (Bytes.to_string buf);
   (* 2. wire_size *)
   Alcotest.(check int) "literal wire_size" 4 (Codec.min_size lit);
@@ -960,12 +960,12 @@ let test_uint_3byte_be () =
   in
   let original = { tag = UInt8.v 0x42; value = UInt63.of_int 0x1A2B3C } in
   let buf = Bytes.create 4 in
-  Codec.encode codec original buf 0;
+  Codec.encode codec original buf ~off:0;
   Alcotest.(check int) "tag byte" 0x42 (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "be byte 0" 0x1A (Bytes.get_uint8 buf 1);
   Alcotest.(check int) "be byte 1" 0x2B (Bytes.get_uint8 buf 2);
   Alcotest.(check int) "be byte 2" 0x3C (Bytes.get_uint8 buf 3);
-  let decoded = decode_ok (Codec.decode codec buf 0) in
+  let decoded = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.(check int)
     "tag"
     (UInt8.to_int original.tag)
@@ -978,9 +978,9 @@ let test_uint_1byte () =
     v "U1" (fun v -> v) [ (Field.v "V" (uint 1) $ fun v -> v) ]
   in
   let buf = Bytes.create 1 in
-  Codec.encode codec (UInt63.of_int 0xAB) buf 0;
+  Codec.encode codec (UInt63.of_int 0xAB) buf ~off:0;
   Alcotest.(check int) "byte" 0xAB (Bytes.get_uint8 buf 0);
-  let decoded = decode_ok (Codec.decode codec buf 0) in
+  let decoded = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.check u63 "roundtrip" (UInt63.of_int 0xAB) decoded
 
 let test_uint_5byte_le () =
@@ -994,13 +994,13 @@ let test_uint_5byte_le () =
      [Optint.Int63.t], not a native int. *)
   let value = Optint.Int63.of_int64 0x01_02_03_04_05L in
   let buf = Bytes.create 5 in
-  Codec.encode codec value buf 0;
+  Codec.encode codec value buf ~off:0;
   Alcotest.(check int) "le byte 0" 0x05 (Bytes.get_uint8 buf 0);
   Alcotest.(check int) "le byte 1" 0x04 (Bytes.get_uint8 buf 1);
   Alcotest.(check int) "le byte 2" 0x03 (Bytes.get_uint8 buf 2);
   Alcotest.(check int) "le byte 3" 0x02 (Bytes.get_uint8 buf 3);
   Alcotest.(check int) "le byte 4" 0x01 (Bytes.get_uint8 buf 4);
-  let decoded = decode_ok (Codec.decode codec buf 0) in
+  let decoded = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.check u63 "roundtrip" value decoded
 
 let test_uint_var_dynamic () =
@@ -1019,7 +1019,7 @@ let test_uint_var_dynamic () =
   Bytes.set_uint8 buf 0 2;
   Bytes.set_uint8 buf 1 0x12;
   Bytes.set_uint8 buf 2 0x34;
-  let n, value = decode_ok (Codec.decode codec buf 0) in
+  let n, value = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.(check int) "n" 2 (UInt8.to_int n);
   Alcotest.check u63 "value" (UInt63.of_int 0x1234) value
 
@@ -1046,12 +1046,12 @@ let test_fixed_encode_allocates_nothing () =
             ]
       in
       let buf = Bytes.of_string "\x01\x02\x03\x04\x05\x06\x07\x5a" in
-      let v = decode_ok (Codec.decode codec buf 0) in
-      Codec.encode codec v buf 0;
+      let v = decode_ok (Codec.decode codec buf ~off:0) in
+      Codec.encode codec v buf ~off:0;
       let n = 100 in
       let before = Gc.minor_words () in
       for _ = 1 to n do
-        Codec.encode codec v buf 0
+        Codec.encode codec v buf ~off:0
       done;
       let words = Gc.minor_words () -. before in
       if words >= float n then
@@ -1061,13 +1061,12 @@ let test_fixed_encode_allocates_nothing () =
    writes back the bytes, and [encoded_size] is what decode consumed. The size
    comes from the record, not from a parameter, so neither needs an [env]. *)
 let region_roundtrip label codec input =
-  let v = decode_ok (Codec.decode codec (Bytes.of_string input) 0) in
+  let v = decode_ok (Codec.decode codec (Bytes.of_string input) ~off:0) in
   Alcotest.(check int)
     (label ^ ": size_of_value")
-    (String.length input)
-    (Codec.encoded_size codec v);
+    (String.length input) (Codec.size codec v);
   let out = Bytes.make (String.length input) '\xff' in
-  Codec.encode codec v out 0;
+  Codec.encode codec v out ~off:0;
   Alcotest.(check string) (label ^ ": encode") input (Bytes.to_string out)
 
 let region_pair =
@@ -1195,12 +1194,8 @@ let suite =
         test_set_exact_var_byte_array_where;
       Alcotest.test_case "exact byte field: set var byte_slice" `Quick
         test_set_exact_var_byte_slice;
-      Alcotest.test_case "exact byte field: set dyn byte_array" `Quick
-        test_set_exact_dyn_byte_array;
-      Alcotest.test_case "exact byte field: set dyn byte_array_where" `Quick
-        test_set_exact_dyn_byte_array_where;
-      Alcotest.test_case "exact byte field: set dyn byte_slice" `Quick
-        test_set_exact_dyn_byte_slice;
+      Alcotest.test_case "set: a byte field at a run-time offset is refused"
+        `Quick test_set_dyn_byte_field_refused;
       Alcotest.test_case "exact byte field: set fixed byte_array" `Quick
         test_set_exact_fixed_byte_array;
       Alcotest.test_case "uint: 3-byte BE roundtrip" `Quick test_uint_3byte_be;

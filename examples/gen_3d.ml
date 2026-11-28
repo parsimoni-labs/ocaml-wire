@@ -1,4 +1,4 @@
-module Raw = Wire.Everparse.Raw
+module Raw = Wire.Private.Everparse.Raw
 
 let write_struct (s : Raw.struct_) =
   let name = Raw.struct_name s in
@@ -34,11 +34,11 @@ let () =
       Demo.param_payload_struct;
       Space.clcw_struct;
       Space.packet_struct;
-      Wire.Everparse.Raw.struct_of_codec Space.full_packet_codec;
+      Wire.Private.Everparse.Raw.struct_of_codec Space.full_packet_codec;
       Space.tm_frame_struct;
-      Wire.Everparse.Raw.struct_of_codec Space.tm_with_ocf_codec;
-      Wire.Everparse.Raw.struct_of_codec Space.inner_cmd_codec;
-      Wire.Everparse.Raw.struct_of_codec Space.outer_hdr_codec;
+      Wire.Private.Everparse.Raw.struct_of_codec Space.tm_with_ocf_codec;
+      Wire.Private.Everparse.Raw.struct_of_codec Space.inner_cmd_codec;
+      Wire.Private.Everparse.Raw.struct_of_codec Space.outer_hdr_codec;
       Net.ethernet_struct;
       Net.ipv4_struct;
       Net.tcp_struct;

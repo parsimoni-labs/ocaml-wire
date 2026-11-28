@@ -1,7 +1,7 @@
 (** Validate every example schema by feeding it to [3d.exe] (parse-only, no
     [--batch]). Skipped when [3d.exe] is unavailable. *)
 
-module Raw = Wire.Everparse.Raw
+module Raw = Wire.Private.Everparse.Raw
 
 (* Two emission paths matter and both should produce parseable 3D:
    - [Raw]: a hand-built struct or module written via [to_3d_file].

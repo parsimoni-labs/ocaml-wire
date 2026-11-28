@@ -17,7 +17,10 @@ let test_lookup_array_in_sub_codec () =
   let outer =
     Codec.v "Outer" (fun v -> v) Codec.[ Field.v "i" (codec inner) $ Fun.id ]
   in
-  let out = Everparse.Raw.to_3d (Everparse.project ~mode:`Ffi outer).module_ in
+  let out =
+    Private.Everparse.Raw.to_3d
+      (Wire.Private.Everparse.module_ (Everparse.project ~mode:`Ffi outer))
+  in
   Alcotest.(check bool)
     "the sub-codec names the refined element" true
     (contains ~sub:"_RefByte_lk3 k" out);

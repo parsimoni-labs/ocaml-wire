@@ -51,7 +51,7 @@ let test_tm_like_full () =
   Bytes.set_int32_be buf 9 0x33333333l;
   (* fecf *)
   Bytes.set_uint16_be buf 13 0x4444;
-  let r = decode_ok (Codec.decode c buf 0) in
+  let r = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check int) "hdr" 0xAAAA (UInt16.to_int r.hdr);
   Alcotest.(check int) "data_len" 6 (UInt8.to_int r.data_len);
   Alcotest.(check int) "packet count" 2 (List.length r.packets);
@@ -72,7 +72,7 @@ let test_tm_like_no_trailing () =
   Bytes.set_uint8 buf 2 3;
   Bytes.set_uint8 buf 3 0x01;
   Bytes.set_uint16_be buf 4 0x1111;
-  let r = decode_ok (Codec.decode c buf 0) in
+  let r = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check int) "packet count" 1 (List.length r.packets);
   Alcotest.(check (option int)) "ocf" None (Option.map UInt32.to_int r.ocf);
   Alcotest.(check (option int)) "fecf" None (Option.map UInt16.to_int r.fecf)
@@ -94,8 +94,8 @@ let test_tm_like_roundtrip () =
     }
   in
   let buf = Bytes.create 18 in
-  Codec.encode c original buf 0;
-  let decoded = decode_ok (Codec.decode c buf 0) in
+  Codec.encode c original buf ~off:0;
+  let decoded = decode_ok (Codec.decode c buf ~off:0) in
   Alcotest.(check int)
     "hdr"
     (UInt16.to_int original.hdr)
@@ -165,7 +165,7 @@ let test_multi_var_decode () =
   Bytes.blit_string "\xAA\xBB" 0 buf 2 2;
   Bytes.blit_string "\xCC\xDD\xEE" 0 buf 4 3;
   Bytes.blit_string "\xFF\x00" 0 buf 7 2;
-  let r = decode_ok (Codec.decode cfdp_codec buf 0) in
+  let r = decode_ok (Codec.decode cfdp_codec buf ~off:0) in
   Alcotest.(check int) "eid_len" 1 (UInt8.to_int r.eid_len);
   Alcotest.(check int) "txseq_len" 2 (UInt8.to_int r.txseq_len);
   Alcotest.(check string) "src" "\xAA\xBB" r.src;
@@ -183,8 +183,8 @@ let test_multi_var_roundtrip () =
     }
   in
   let buf = Bytes.create 9 in
-  Codec.encode cfdp_codec original buf 0;
-  let decoded = decode_ok (Codec.decode cfdp_codec buf 0) in
+  Codec.encode cfdp_codec original buf ~off:0;
+  let decoded = decode_ok (Codec.decode cfdp_codec buf ~off:0) in
   Alcotest.(check string) "src roundtrip" original.src decoded.src;
   Alcotest.(check string) "txseq roundtrip" original.txseq decoded.txseq;
   Alcotest.(check string) "dst roundtrip" original.dst decoded.dst
@@ -230,7 +230,7 @@ let test_multi_var_fixed_after () =
   Bytes.set_uint8 buf 2 0xAA;
   Bytes.blit_string "\xBB\xCC" 0 buf 3 2;
   Bytes.set_uint16_be buf 5 0xBEEF;
-  let _, _, src, tx, trail = decode_ok (Codec.decode codec buf 0) in
+  let _, _, src, tx, trail = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.(check string) "src" "\xAA" src;
   Alcotest.(check string) "tx" "\xBB\xCC" tx;
   Alcotest.(check int) "trail" 0xBEEF (UInt16.to_int trail)
@@ -282,8 +282,8 @@ let test_ssh_two_var_slices () =
     (UInt32.of_int 11, (mk_ssh_string "bye").data, (mk_ssh_string "en-US").data)
   in
   let buf = Bytes.create 200 in
-  Codec.encode codec v buf 0;
-  let r, d, l = decode_ok (Codec.decode codec buf 0) in
+  Codec.encode codec v buf ~off:0;
+  let r, d, l = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.(check int) "reason" 11 (UInt32.to_int r);
   Alcotest.(check string) "desc" "bye" (Slice.to_string d);
   Alcotest.(check string) "lang" "en-US" (Slice.to_string l)
@@ -299,8 +299,8 @@ let test_two_var_codecs_embedded () =
   in
   let v = (mk_ssh_string "abcd", mk_ssh_string "xy") in
   let buf = Bytes.create 200 in
-  Codec.encode pair_codec v buf 0;
-  let a, b = decode_ok (Codec.decode pair_codec buf 0) in
+  Codec.encode pair_codec v buf ~off:0;
+  let a, b = decode_ok (Codec.decode pair_codec buf ~off:0) in
   Alcotest.(check int) "a.len" 4 (UInt32.to_int a.len);
   Alcotest.(check string) "a.data" "abcd" (Slice.to_string a.data);
   Alcotest.(check int) "b.len" 2 (UInt32.to_int b.len);
@@ -323,8 +323,8 @@ let test_three_var_codecs_embedded () =
   in
   let v = (mk_ssh_string "alpha", mk_ssh_string "be", mk_ssh_string "gamma!") in
   let buf = Bytes.create 200 in
-  Codec.encode triple_codec v buf 0;
-  let a, b, c = decode_ok (Codec.decode triple_codec buf 0) in
+  Codec.encode triple_codec v buf ~off:0;
+  let a, b, c = decode_ok (Codec.decode triple_codec buf ~off:0) in
   Alcotest.(check string) "a" "alpha" (Slice.to_string a.data);
   Alcotest.(check string) "b" "be" (Slice.to_string b.data);
   Alcotest.(check string) "c" "gamma!" (Slice.to_string c.data)
@@ -351,13 +351,13 @@ let test_four_var_codecs_embedded () =
       mk_ssh_string "charlie",
       mk_ssh_string "d" )
   in
-  let len = Codec.encoded_size quad_codec v in
+  let len = Codec.size quad_codec v in
   let buf = Bytes.create len in
-  Codec.encode quad_codec v buf 0;
+  Codec.encode quad_codec v buf ~off:0;
   Alcotest.(check int)
     "size_at" len
-    (decode_ok (Codec.size_at quad_codec buf 0));
-  let a, b, c, d = decode_ok (Codec.decode quad_codec buf 0) in
+    (decode_ok (Codec.size_at quad_codec buf ~off:0));
+  let a, b, c, d = decode_ok (Codec.decode quad_codec buf ~off:0) in
   Alcotest.(check string) "a" "alpha" (Slice.to_string a.data);
   Alcotest.(check string) "b" "bravo" (Slice.to_string b.data);
   Alcotest.(check string) "c" "charlie" (Slice.to_string c.data);
@@ -380,13 +380,13 @@ let test_slice_then_array () =
       ]
   in
   let v = ((mk_ssh_string "slice").data, "array-data") in
-  let len = Codec.encoded_size mixed_codec v in
+  let len = Codec.size mixed_codec v in
   let buf = Bytes.create len in
-  Codec.encode mixed_codec v buf 0;
+  Codec.encode mixed_codec v buf ~off:0;
   Alcotest.(check int)
     "size_at" len
-    (decode_ok (Codec.size_at mixed_codec buf 0));
-  let slice, array = decode_ok (Codec.decode mixed_codec buf 0) in
+    (decode_ok (Codec.size_at mixed_codec buf ~off:0));
+  let slice, array = decode_ok (Codec.decode mixed_codec buf ~off:0) in
   Alcotest.(check string) "slice" "slice" (Slice.to_string slice);
   Alcotest.(check string) "array" "array-data" array
 
@@ -405,13 +405,13 @@ let test_codec_then_array () =
       ]
   in
   let v = (mk_ssh_string "message", "tail") in
-  let len = Codec.encoded_size mixed_codec v in
+  let len = Codec.size mixed_codec v in
   let buf = Bytes.create len in
-  Codec.encode mixed_codec v buf 0;
+  Codec.encode mixed_codec v buf ~off:0;
   Alcotest.(check int)
     "size_at" len
-    (decode_ok (Codec.size_at mixed_codec buf 0));
-  let msg, array = decode_ok (Codec.decode mixed_codec buf 0) in
+    (decode_ok (Codec.size_at mixed_codec buf ~off:0));
+  let msg, array = decode_ok (Codec.decode mixed_codec buf ~off:0) in
   Alcotest.(check string) "msg" "message" (Slice.to_string msg.data);
   Alcotest.(check string) "array" "tail" array
 
@@ -437,8 +437,8 @@ let test_repeat_after_var_slice () =
   let v =
     ((mk_ssh_string "PREFIX").data, List.map UInt16.v [ 0x0102; 0x0304; 0x0506 ])
   in
-  Codec.encode codec v buf 0;
-  let prefix, items = decode_ok (Codec.decode codec buf 0) in
+  Codec.encode codec v buf ~off:0;
+  let prefix, items = decode_ok (Codec.decode codec buf ~off:0) in
   Alcotest.(check string) "prefix" "PREFIX" (Slice.to_string prefix);
   Alcotest.(check (list int))
     "items" [ 0x0102; 0x0304; 0x0506 ]
