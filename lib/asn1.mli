@@ -321,7 +321,16 @@ val project : string -> 'r Codec.t -> schema
 
 val contained : 'r Codec.t -> Everparse.t list
 (** [contained c] is the 3D schema of each binary codec under a {!containing} of
-    [c]. *)
+    [c]; [Cbor.project] reads a CBOR codec under one. *)
+
+(** The type for the types under a {!containing}. *)
+type binary = Binary : 'a Types.typ -> binary
+
+val contents : path:string -> Types.struct_ -> (string * binary) list option
+(** [contents ~path s] is, if [s] is the struct of a DER codec, each type that
+    is not DER under a {!containing} of it, with its path, [path] if it has no
+    name of its own: a binary type, or a CBOR codec, which [Cbor.project] reads.
+    [None] for any other struct. *)
 
 val name : schema -> string
 (** [name s] is the module name of [s]. *)

@@ -1761,7 +1761,7 @@ module Asn1 : sig
 
   val contained : 'r Codec.t -> Everparse.t list
   (** [contained c] is the 3D schema of each binary codec under a {!containing}
-      of [c]. *)
+      of [c]; {!Cbor.project} reads a CBOR codec under one. *)
 
   val name : schema -> string
   (** [name s] is the module name of [s]. *)
@@ -1957,6 +1957,33 @@ module Cbor : sig
   (** [codec t] is the codec of the deterministic CBOR encoding of [t]. A view
       of it reads each member through {!Codec.View.val-field}, and sets none in
       place: a CBOR head moves every later offset. *)
+
+  (** {1:projection Projection to evercddl} *)
+
+  type schema
+  (** The type for CDDL modules, the input of evercddl. *)
+
+  val project : string -> 'r Codec.t -> schema
+  (** [project m c] is the CDDL module [m] of [c]: [c]'s own rules if [c] is a
+      CBOR codec, else the CBOR rules [c]'s fields hold, and those under the
+      containings of a DER codec. Raises [Invalid_argument] if [c] holds none.
+  *)
+
+  val contained : 'r Codec.t -> Everparse.t list
+  (** [contained c] is the 3D schema of each binary codec under a {!containing}
+      of [c]. *)
+
+  val name : schema -> string
+  (** [name s] is the module name of [s], evercddl's [--mname]. *)
+
+  val filename : schema -> string
+  (** [filename s] is the [.cddl] file name of [s]. *)
+
+  val pp : Format.formatter -> schema -> unit
+  (** [pp] prints a schema as its [.cddl] text. *)
+
+  val write : outdir:string -> schema list -> unit
+  (** [write ~outdir ss] writes the [.cddl] file of each schema in [outdir]. *)
 end
 
 (** {1:ascii Bit diagrams}

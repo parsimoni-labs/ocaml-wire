@@ -1,0 +1,14 @@
+(library
+ (name cbor_modules)
+ (modules cbor_modules)
+ (libraries wire))
+
+(test
+ (name test)
+ (modules test)
+ (libraries wire cbor_modules alcotest fmt re))
+
+(executable
+ (name print)
+ (modules print)
+ (libraries wire cbor_modules))

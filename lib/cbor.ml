@@ -1380,3 +1380,90 @@ let codec (type a) (t : a t) : a Codec.t =
       off + len)
     ~size_of_value:(fun v -> String.length (to_string t v))
     ~components:(components t)
+
+(* The projection to evercddl: the CDDL of each type, which Cbor_cddl names
+   and prints. *)
+let rec cddl : type a. a t -> Cbor_cddl.typ = function
+  | Uint -> Uint
+  | Nint -> Nint
+  | Int -> Int
+  | Range { min; max } -> Range (min, max)
+  | Bytes -> Bytes
+  | Text -> Text
+  | Bool -> Bool
+  | Null -> Null
+  | Literal l -> Literal l
+  | Any -> Any
+  | Size { min; max; inner } -> Size { min; max; inner = cddl inner }
+  | Tag { tag; inner } -> Tag (tag, cddl inner)
+  | Array { non_empty; elem } -> Array { non_empty; elem = cddl elem }
+  | Tuple (Group { name; entries; _ }) ->
+      Tuple { name; entries = List.map cddl_entry entries }
+  | Assoc { key; value } -> Assoc (cddl key, cddl value)
+  | Record (Group { name; entries; _ }) ->
+      Record { name; members = List.map cddl_member entries }
+  | Choice cases ->
+      Choice (List.map (fun (Case c) -> (c.name, cddl c.typ)) cases)
+  | Nullable t -> Nullable (cddl t)
+  | Encoded t -> Det_cbor (cddl t)
+  | Containing t -> Containing (Binary t)
+  | Keep_bytes t -> cddl t
+  | Map { inner; _ } -> cddl inner
+
+and cddl_entry (Entry e) : Cbor_cddl.entry =
+  match e.kind with
+  | Elem t -> { name = e.name; optional = false; typ = cddl t }
+  | Elem_opt t -> { name = e.name; optional = true; typ = cddl t }
+  | Mem _ | Mem_opt _ | Exclusive _ | Keep_unknown _ ->
+      invalid_arg "Wire.Cbor: a map member in an array"
+
+and cddl_member (Entry e) : Cbor_cddl.member =
+  match e.kind with
+  | Mem (key, t) -> Mem { name = e.name; key; optional = false; typ = cddl t }
+  | Mem_opt (key, t) ->
+      Mem { name = e.name; key; optional = true; typ = cddl t }
+  | Exclusive ms ->
+      Exclusive
+        {
+          name = e.name;
+          members = List.map (fun (Member m) -> (m.key, cddl m.typ)) ms;
+        }
+  | Keep_unknown (k, v) ->
+      Keep_unknown { name = e.name; key = cddl k; value = cddl v }
+  | Elem _ | Elem_opt _ -> invalid_arg "Wire.Cbor: an array entry in a map"
+
+(* The CDDL types of a codec of another backend: a CBOR codec's own, named
+   [path], and those under the containings of a DER codec, which Asn1.project
+   prints as OCTET STRING (docs/cbor.md, Backend selection). *)
+let rec whole path (s : Types.struct_) =
+  match
+    List.find_map
+      (fun (Types.Field f) ->
+        match f.field_typ with
+        | Types.Cbor (Root t) -> Some (cddl t)
+        | _ -> None)
+      s.fields
+  with
+  | Some t -> Some [ (path, t) ]
+  | None ->
+      Option.map
+        (List.concat_map (fun (p, Asn1.Binary t) ->
+             Cbor_cddl.held_in ~whole p t))
+        (Asn1.contents ~path s)
+
+let types_of ~base c = Cbor_cddl.held ~whole ~base (Codec.to_struct c)
+
+type schema = Cbor_cddl.schema
+
+let project m c =
+  match types_of ~base:m c with
+  | [] ->
+      Fmt.invalid_arg "Wire.Cbor.project %S: codec %S holds no CBOR type" m
+        (Codec.name c)
+  | types -> Cbor_cddl.project m types
+
+let contained c = Cbor_cddl.contained (types_of ~base:(Codec.name c) c)
+let name = Cbor_cddl.name
+let filename = Cbor_cddl.filename
+let pp = Cbor_cddl.pp
+let write = Cbor_cddl.write
