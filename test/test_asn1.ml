@@ -748,6 +748,46 @@ let test_der_in_binary () =
     "region cut" true
     (Result.is_error (Codec.validate c (frame (n - 1) spki_bytes) ~off:0))
 
+(* DER under an optional: present, the region holds the DER value; absent,
+   no byte is read or written. *)
+let opt_spki () =
+  let flag = Field.v "flag" uint8 in
+  let len = Field.v "len" uint8 in
+  let spki =
+    Field.optional "spki"
+      ~present:Expr.(Field.ref flag <> int 0)
+      (nested ~size:(Field.ref len) (codec (Asn1.codec (spki ()))))
+  in
+  Codec.v "OptFramed" mk3 (tuple3 flag len spki)
+
+let test_der_in_optional () =
+  let c = opt_spki () in
+  let v = { alg = { oid = ed25519; params = Absent }; key = (0, "k") } in
+  let der = Codec.to_string (Asn1.codec (spki ())) v in
+  let n = String.length der in
+  let frame flag len body =
+    String.make 1 (Char.chr flag) ^ String.make 1 (Char.chr len) ^ body
+  in
+  let present = frame 1 n der in
+  accepts ~msg:"present" c present;
+  (match verdict c present with
+  | Ok (_, _, Some k) -> Alcotest.(check string) "key" "k" (snd k.key)
+  | _ -> Alcotest.fail "present: no key");
+  writes ~msg:"present" c (UInt8.v 1, UInt8.v n, Some v) (to_hex present);
+  accepts ~msg:"absent" c (frame 0 0 "");
+  (match verdict c (frame 0 0 "") with
+  | Ok (_, _, None) -> ()
+  | _ -> Alcotest.fail "absent: a key");
+  writes ~msg:"absent" c (UInt8.v 0, UInt8.v 0, None) "0000";
+  (* absent, the length names no region *)
+  accepts ~msg:"absent with a length" c (frame 0 n "");
+  (* BIT STRING with 8 unused bits *)
+  let bad = Bytes.of_string der in
+  Bytes.set bad (n - 2) '\x08';
+  refuses ~msg:"bad DER" c (frame 1 n (Bytes.to_string bad));
+  refuses ~msg:"region not consumed" c (frame 1 (n + 1) (der ^ "\x00"));
+  refuses ~msg:"region cut" c (frame 1 (n - 1) (String.sub der 0 (n - 1)))
+
 let test_der_outside_nested () =
   let der = codec (Asn1.codec Asn1.bool) in
   rejects ~msg:"holds a DER codec outside nested ~size" (fun () ->
@@ -1032,6 +1072,8 @@ let suite =
       Alcotest.test_case "fold" `Quick test_fold;
       Alcotest.test_case "view field" `Quick test_view_field;
       Alcotest.test_case "nesting: DER in binary" `Quick test_der_in_binary;
+      Alcotest.test_case "nesting: DER in an optional" `Quick
+        test_der_in_optional;
       Alcotest.test_case "nesting: DER outside nested" `Quick
         test_der_outside_nested;
       Alcotest.test_case "nesting: binary in DER" `Quick test_binary_in_der;

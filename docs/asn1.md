@@ -180,7 +180,11 @@ handed over as a byte region, which each backend checks for its part:
   and everparse-asn1 the module of `SubjectPublicKeyInfo`. In the `` `Ffi ``
   mode the visitor receives the region's offset, from which a caller runs
   `validate_T(slice, &off) && off == e`, the full-consumption idiom of
-  `share/everparse/tests/asn1/tool/small_test.c:139-143`.
+  `share/everparse/tests/asn1/tool/small_test.c:139-143`. Under
+  `Field.optional` the region sits behind the optional's gate, as in
+  `test/asn1`'s `OptFramed`. A `where true` between `nested` and the DER
+  codec constrains nothing and projects to nothing; any other `where` there
+  is refused when the codec is built.
 - **Binary in DER.** `containing c` projects to `OCTET STRING`, since
   everparse-asn1 has no extern hook (`README:437-481` lists none), so
   everparse-asn1 checks the DER around the content and its length.
@@ -195,9 +199,9 @@ handed over as a byte region, which each backend checks for its part:
 regions; it raises `Invalid_argument` on a DER codec. `Asn1.project m c` is
 the ASN.1 module of a DER codec, or of the DER types a binary codec holds;
 `Asn1.contained c` is the 3D schemas of the binary codecs a DER codec holds.
-3d.exe and F* check each 3D schema (`make 3d`; `test/3d` verifies `Framed`'s
-and that of the binary codec `Wrapped` holds), everparse-asn1's F* proofs
-each ASN.1 module, tag ambiguity included (`README:8-27`).
+3d.exe and F* check each 3D schema (`make 3d`; `test/3d` verifies `Framed`'s,
+`OptFramed`'s and that of the binary codec `Wrapped` holds), everparse-asn1's
+F* proofs each ASN.1 module, tag ambiguity included (`README:8-27`).
 
 Not generated yet: the C that joins the two verdicts into one. For DER in
 binary it is the `:on-success` action of Q2, which passes `field_ptr` and `e`

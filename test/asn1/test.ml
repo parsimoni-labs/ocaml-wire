@@ -347,13 +347,70 @@ typedef struct WireFramed(mutable WireCtx *ctx)
 
 |}
 
+let to_3d ~mode c =
+  Private.Everparse.Raw.to_3d
+    (Private.Everparse.module_ (Everparse.project ~mode c))
+
 let test_framed_3d () =
-  let text mode =
-    Private.Everparse.Raw.to_3d
-      (Private.Everparse.module_ (Everparse.project ~mode Asn1_modules.framed))
+  Alcotest.(check string)
+    "standalone" framed_3d
+    (to_3d ~mode:`Standalone Asn1_modules.framed);
+  Alcotest.(check string)
+    "ffi" framed_3d_ffi
+    (to_3d ~mode:`Ffi Asn1_modules.framed)
+
+(* A [where true] between the region and the DER value constrains nothing, so
+   the region projects as it does without one. *)
+let test_framed_where_3d () =
+  let (Asn1_modules.Packed spki) = Asn1_modules.spki in
+  let len = Field.v "len" uint16be in
+  let key =
+    Field.v "key"
+      (nested ~size:(Field.ref len)
+         (where Expr.(bool true) (codec (Asn1.codec spki))))
   in
-  Alcotest.(check string) "standalone" framed_3d (text `Standalone);
-  Alcotest.(check string) "ffi" framed_3d_ffi (text `Ffi)
+  let c =
+    Codec.v "Framed" (fun len key -> (len, key)) Codec.[ len $ fst; key $ snd ]
+  in
+  Alcotest.(check string) "standalone" framed_3d (to_3d ~mode:`Standalone c);
+  Alcotest.(check string) "ffi" framed_3d_ffi (to_3d ~mode:`Ffi c)
+
+(* A DER value under an optional is the same byte region, behind the gate
+   the optional's condition sets; its ASN.1 half is the module of the DER it
+   holds. *)
+let opt_framed_3d =
+  {|typedef struct WireOptRegion_selen_SubjectPublicKeyInfo(UINT32 len)
+{
+   UINT8 v[:byte-size len];
+} OptRegion_selen_SubjectPublicKeyInfo;
+
+casetype _Opt_selen_SubjectPublicKeyInfo(UINT8 present,
+UINT32 len) {
+               switch (present) {
+               case 0: UINT8 v0[:byte-size 0];
+               default: OptRegion_selen_SubjectPublicKeyInfo(len) v1;
+               }
+} Opt_selen_SubjectPublicKeyInfo;
+
+entrypoint
+typedef struct WireOptFramed
+{
+   UINT8 flag;
+   UINT16BE len;
+   Opt_selen_SubjectPublicKeyInfo((((flag != 0)) ? 1 : 0),
+   len) key;
+} OptFramed;
+
+|}
+
+let test_opt_framed () =
+  Alcotest.(check string)
+    "3D" opt_framed_3d
+    (to_3d ~mode:`Standalone Asn1_modules.opt_framed);
+  let s = Asn1.project "Framed" Asn1_modules.opt_framed in
+  Alcotest.(check string) "ASN.1" framed_asn (printed s);
+  Alcotest.(check (list string))
+    "roots" [ "SubjectPublicKeyInfo" ] (Asn1.roots s)
 
 let test_wrapped () =
   Alcotest.(check (list string))
@@ -457,6 +514,9 @@ let suite =
         (check_module "Times" Asn1_modules.times ~roots:[ "Times" ] times_asn);
       Alcotest.test_case "DER in a binary codec" `Quick test_framed;
       Alcotest.test_case "DER in a binary codec: 3D" `Quick test_framed_3d;
+      Alcotest.test_case "DER under a trivial where: 3D" `Quick
+        test_framed_where_3d;
+      Alcotest.test_case "DER under an optional" `Quick test_opt_framed;
       Alcotest.test_case "DER under a containing" `Quick
         (check_module "Wrapped" Asn1_modules.wrapped ~roots:[ "Wrapped" ]
            wrapped_asn);

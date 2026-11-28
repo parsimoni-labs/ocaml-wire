@@ -223,11 +223,13 @@ region, as DER is (docs/asn1.md, Backend selection):
   sits under `nested ~size:e` (else `Codec.v` raises). `Everparse.project`
   emits it as `UINT8 f[:byte-size e]`, as it does DER (docs/asn1.md, Backend
   selection), so 3D checks the framing, and `Cbor.project` of the binary
-  codec is the module of `t`, so evercddl checks the region. The C that
-  joins the two runs `M_validate_and_parse_T(slice)` and requires `Some` with
-  an empty remainder, the full-consumption check; it comes with the stubs
-  (Q2 of docs/asn1.md decides whether an `:on-success` extern or glue after
-  validation carries it, for both formats).
+  codec is the module of `t`, so evercddl checks the region. A `where true`
+  between `nested` and the CBOR codec constrains nothing and projects to
+  nothing; any other `where` there is refused when the codec is built. The C
+  that joins the two runs `M_validate_and_parse_T(slice)` and requires `Some`
+  with an empty remainder, the full-consumption check; it comes with the
+  stubs (Q2 of docs/asn1.md decides whether an `:on-success` extern or glue
+  after validation carries it, for both formats).
 - **CBOR in DER.** `Asn1.containing (Wire.codec (Cbor.codec t))` is an OCTET
   STRING to everparse-asn1. `Cbor.project` of the DER codec is the module of
   the CBOR types under its containings, each named by its path,

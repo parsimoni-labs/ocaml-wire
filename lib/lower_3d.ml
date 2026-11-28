@@ -671,9 +671,13 @@ let backend (s : struct_) =
       | _ -> None)
     s.fields
 
+(* A [where true] constrains nothing and projects to nothing, so it is seen
+   through; any other [where] under [nested] is refused when the codec is
+   built ([Shape.reject_nested_where]). *)
 let rec backend_value : type a. a typ -> [ `Der | `Cbor ] option = function
   | Codec { codec_struct; _ } -> backend codec_struct
   | Map { inner; _ } -> backend_value inner
+  | Where { cond = Bool true; inner } -> backend_value inner
   | _ -> None
 
 let byte_region t = Option.is_some (backend_value t)

@@ -821,19 +821,23 @@ typedef struct WireFramed
 
 |}
 
-let test_cbor_in_binary_3d () =
+let framed_3d_of body =
   let len = Field.v "len" uint8 in
-  let body =
-    Field.v "body"
-      (nested ~size:(Field.ref len) (codec (Cbor.codec (Cbor.array Cbor.uint))))
-  in
+  let body = Field.v "body" (nested ~size:(Field.ref len) body) in
   let c =
     Codec.v "Framed" (fun l b -> (l, b)) Codec.[ len $ fst; body $ snd ]
   in
+  Private.Everparse.Raw.to_3d
+    (Private.Everparse.module_ (Everparse.project ~mode:`Standalone c))
+
+(* A [where true] between the region and the CBOR value constrains nothing,
+   so the region projects as it does without one. *)
+let test_cbor_in_binary_3d () =
+  let cbor = codec (Cbor.codec (Cbor.array Cbor.uint)) in
+  Alcotest.(check string) "3D" framed_3d (framed_3d_of cbor);
   Alcotest.(check string)
-    "3D" framed_3d
-    (Private.Everparse.Raw.to_3d
-       (Private.Everparse.module_ (Everparse.project ~mode:`Standalone c)))
+    "3D, where true" framed_3d
+    (framed_3d_of (where (bool true) cbor))
 
 let test_cbor_outside_nested () =
   let cbor = codec (Cbor.codec Cbor.bool) in
@@ -855,7 +859,9 @@ let test_containing_der () =
   rejects ~msg:"a DER codec in a byte string has no projection" (fun () ->
       Cbor.containing der);
   rejects ~msg:"a DER codec in a byte string has no projection" (fun () ->
-      Cbor.containing (map ~decode:not ~encode:not der))
+      Cbor.containing (map ~decode:not ~encode:not der));
+  rejects ~msg:"a DER codec in a byte string has no projection" (fun () ->
+      Cbor.containing (where (bool true) der))
 
 let test_containing_cbor () =
   rejects ~msg:"Cbor.encoded is the byte string evercddl checks" (fun () ->

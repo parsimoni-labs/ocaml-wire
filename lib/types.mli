@@ -991,7 +991,7 @@ val backend : struct_ -> [ `Der | `Cbor ] option
 
 val backend_value : 'a typ -> [ `Der | `Cbor ] option
 (** [backend_value t] is the {!backend} of [t] when [t] is a codec, seen through
-    {!constructor-Map}. *)
+    {!constructor-Map} and a {!constructor-Where} whose condition is [true]. *)
 
 val split_string_casetype_fields : struct_ -> struct_
 (** [split_string_casetype_fields s] rewrites each {!constructor:Casetype} field

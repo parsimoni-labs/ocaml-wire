@@ -133,12 +133,13 @@ val backend : struct_ -> [ `Der | `Cbor ] option
 
 val backend_value : 'a typ -> [ `Der | `Cbor ] option
 (** [backend_value t] is the {!backend} of [t] when [t] is a codec, seen through
-    [Map]. *)
+    [Map] and [where true]. *)
 
 val byte_region : 'a typ -> bool
 (** [byte_region t] is [true] when [t] is a DER or CBOR codec, seen through
-    [Map]: a [nested ~size] region holding one projects to 3D as a byte region
-    of that size, whose content everparse-asn1 or evercddl checks. *)
+    [Map] and [where true]: a [nested ~size] region holding one projects to 3D
+    as a byte region of that size, whose content everparse-asn1 or evercddl
+    checks. *)
 
 val primitive_region : 'a typ -> (int expr * packed_typ * int * bool) option
 (** [primitive_region t] is the size, element, element width and at-most flag of
