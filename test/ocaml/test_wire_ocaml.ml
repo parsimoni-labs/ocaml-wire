@@ -711,10 +711,10 @@ let test_view () =
       let c = G_mapped.check b ~off in
       if G_mapped.is_ok c then
         let v = G_mapped.get c in
-        Some
-          (Fmt.str "%d %ld %s %b %d" (G_mapped.len b v) (G_mapped.addr b v)
-             (proto (G_mapped.proto b v))
-             (G_mapped.flag b v) (G_mapped.rest b v))
+        Fmt.kstr Option.some "%d %ld %s %b %d" (G_mapped.len b v)
+          (G_mapped.addr b v)
+          (proto (G_mapped.proto b v))
+          (G_mapped.flag b v) (G_mapped.rest b v)
       else None)
 
 (* A check that failed gives no view: [get] refuses it. *)

@@ -203,7 +203,6 @@
  (modules test_diff)
  (libraries
   generated
-  schemas
   wire
   wire.runtime
   wire.ocaml

@@ -248,7 +248,9 @@
  (enabled_if
   (= %{ocaml-config:ox} true))
  (action
-  (copy test_signature.ox.ml test_signature.ml)))
+  (progn
+   (copy test_signature.ox.ml test_signature.ml)
+   (copy test_signature.ox.mli test_signature.mli))))
 
 (library
  (name signature_ox)
