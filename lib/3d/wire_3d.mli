@@ -366,6 +366,14 @@ val tool : string -> string option
     [~/.local/everparse/bin/]. [None] when it is in neither. [Wire_asn1] finds
     [everparse-asn1.exe] with it. *)
 
+val fstar_wrapper : string -> string
+(** [fstar_wrapper fstar] is the path of a script that runs the F* executable
+    [fstar] with a larger [--custard_norm_budget]: since v2026.10, EverParse
+    extracts C through Custard, whose default budget stops on records that
+    earlier releases compiled. The script lives in the temporary directory,
+    under a name derived from its contents. [Wire_asn1] passes it to
+    everparse-asn1 as [--fstar]. *)
+
 val ensure_dir : string -> unit
 (** [ensure_dir path] creates the directory [path] if it does not exist. *)
 
