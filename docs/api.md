@@ -137,6 +137,54 @@ and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
    reads the buffer's length itself, where a loop now reads it once; recount
    the rows of 1 with `check` reading it, and a cost beyond noise brings the
    length back as an argument.
+
+   **Measured (2026-11-28).** The rows of 1 on main (`8334c9ec`), built with
+   `--profile=bench` twice: as it is, the generated check taking the length
+   the loop read once (a), and with the generator patched so that every
+   function that took the length reads `Bytes.length` itself, the length
+   argument left unread (b: lib/ocaml/view_module.ml, scan_module.ml and
+   record_module.ml). The branch of this lane cannot run them: it removes
+   `Buf.length` before the generator lane rewrites the modules that take it.
+   Counted by `sh bench/count.sh 100000 LABEL bench.exe MODE FILE 100000 RUNS
+   wire.ocaml` on the inputs `bench/apps/bench.exe inputs DIR 100000 100000
+   100000` writes, and `sh bench/count.sh 1000000 LABEL bench.exe flow
+   mawi.pcap RUNS ROW` on the first 1,000,000 MAWI packets. Instructions
+   (cycles) per item, OCaml 5.4.1:
+
+   | Row | (a) length an argument | (b) check reads it |
+   |---|---:|---:|
+   | routing run, `wire.ocaml` | 44.5 (9.6) | 56.4 (11.0) |
+   | routing write, `wire.ocaml` | 111.3 (21.3) | 116.0 (18.6) |
+   | gateway run, `wire.ocaml` | 751.7 (220.9) | 880.8 (180.1) |
+   | gateway write, `wire.ocaml` | 991.2 (168.8) | 983.7 (167.6) |
+   | clcw run, `wire.ocaml` | 41.9 (7.7) | 54.1 (13.0) |
+   | clcw write, `wire.ocaml` | 74.1 (15.3) | 73.6 (9.8) |
+   | `wire.ocaml check/view, accessors` | 325.3 (337.5) | 360.9 (391.5) |
+   | `wire.ocaml check/view, accessors, parse only` | 237.5 (70.6) | 271.6 (78.5) |
+
+   On OxCaml 5.4.0-ox9, the same builds:
+
+   | Row | (a) length an argument | (b) check reads it |
+   |---|---:|---:|
+   | routing run, `wire.ocaml` | 34.9 (8.7) | 33.4 (6.1) |
+   | routing write, `wire.ocaml` | 87.0 (36.6) | 80.2 (19.4) |
+   | gateway run, `wire.ocaml` | 602.6 (189.9) | 610.2 (201.1) |
+   | gateway write, `wire.ocaml` | 597.0 (65.4) | 611.4 (139.7) |
+   | clcw run, `wire.ocaml` | 37.3 (4.9) | 40.9 (10.9) |
+   | clcw write, `wire.ocaml` | 61.1 (8.4) | 61.9 (18.3) |
+   | `wire.ocaml check/view, accessors` | 257.9 (272.3) | 277.6 (303.3) |
+   | `wire.ocaml check/view, accessors, parse only` | 173.7 (47.7) | 191.0 (54.9) |
+
+   Each pair gives the same result. On OCaml 5.4.1, reading the length in the
+   check costs the reading rows 11 to 29% more instructions (12 per item for
+   routing and CLCW, 34 for the flow rows) and the writing rows nothing; on
+   OxCaml, 10% for CLCW and the flow rows (4, 17 and 20 instructions), 1% for
+   gateway, and nothing for routing. Beyond noise on both compilers,
+   which by the rule above brings the length back as an argument of the
+   generated check. The decision is the orchestrator's. The interpreted
+   `View.check` reads the length itself, with `?len` for a window, as
+   lib/wire.mli states; no interpreted row was counted for this question.
+
 4. **Positional visitor fields swap silently** when two of them share a type:
    `~f:(fun acc seq_count apid -> ...)` over `[ apid; seq_count ]` type-checks.
    Labelled arguments would catch it but cannot be shared with the
@@ -156,6 +204,36 @@ and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
      a zero value (`<path>_present`, wire_ocaml.mli:213-218). Settled by the
      MAWI rows of `bench/count.sh` for a fold over `ipv4 / protocol` and
      `ipv4 / tcp / dst_port` both ways.
+
+   - **Measured for the interpreted fold (OCaml 5.4.1, 2026-11-28).**
+     `View.fold Packet_stack.codec` over the index (`~offs ~lens`) of the
+     first 1,000,000 packets of the MAWI trace, refused frames passed to
+     `~invalid`, built with `--profile=bench` and counted by `bench/count.sh
+     1000000 ROW q6.exe mawi.pcap RUNS ROW`. `bench/rust/bench.exe` does not
+     build on this branch until the generated modules move, so the rows ran
+     in a harness of their own over the same capture, with the alternative
+     added to a scratch copy of the library: a path read as its value or a
+     zero, beside a `bool` field for the layer's presence. Instructions
+     (cycles) per packet:
+
+     | Fold over | `option` (chosen) | presence `bool` and zero | zero only |
+     |---|---:|---:|---:|
+     | `ipv4 / protocol` | 722.3 (178.5) | 799.1 (200.3) | 721.2 (177.2) |
+     | `ipv4 // tcp / dst_port` | 763.4 (192.7) | 880.7 (214.1) | |
+
+     On OxCaml 5.4.0-ox9, the same harness:
+
+     | Fold over | `option` (chosen) | presence `bool` and zero | zero only |
+     |---|---:|---:|---:|
+     | `ipv4 / protocol` | 678.2 (166.7) | 751.9 (180.8) | 678.3 (171.2) |
+     | `ipv4 // tcp / dst_port` | 722.3 (170.4) | 834.1 (193.0) | |
+
+     The `Some` costs about one instruction per packet over a zero on OCaml
+     5.4.1 and none on OxCaml, and the
+     presence form costs more, since its `bool` and its value are two fields
+     and each enters the layers. The interpreted fold keeps the `option`.
+     The generated form's rows are the generator lane's to count.
+
    - The typed path combinator `Field.( / )`, and the type `Codec.layer` of
      a field that holds a record, so that a path through a field that holds
      none is a type error, and an optional layer under another gives one
