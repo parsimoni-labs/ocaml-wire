@@ -6,9 +6,6 @@ open Wire.Private.Everparse.Raw
 let simple_struct =
   struct_ "TestSimple" [ field "version" uint8; field "length" uint16be ]
 
-let needs_3d_exe () =
-  if Option.is_none (Wire_3d.locate_3d_exe ()) then Alcotest.skip ()
-
 let read_file path = In_channel.with_open_text path In_channel.input_all
 
 (* The fake EverParse below is a shell script, which only a POSIX system runs. *)
@@ -308,7 +305,7 @@ let test_max_jobs () =
 (* The real 3d.exe writes the same C spawned from here with [--odir] as it
    does started in its output directory. *)
 let test_spawned_3d_same_c () =
-  needs_3d_exe ();
+  Gate.needs_3d_exe ();
   let exe =
     Wire_3d.Private.locate_3d_exe ~win32:Sys.win32 ~getenv:Sys.getenv_opt
       ~executable:Sys.file_exists

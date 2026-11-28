@@ -8,11 +8,14 @@
  (modules
   test
   agree
+  gate
   test_wire_3d
   test_wire_3d_corpus
   test_wire_3d_proc
   test_wire_3d_shapes
   test_wire_3d_arith)
+ (deps
+  (env_var BUILD_EVERPARSE))
  (libraries wire wire.3d asn1_modules alcotest re unix threads.posix fmt))
 
 (rule
