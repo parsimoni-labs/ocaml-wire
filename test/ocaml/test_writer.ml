@@ -44,7 +44,7 @@ let test_fixed () =
         G_checked.fold buf ~offs:[| off |] ~lens:[| len |]
           ~invalid:(fun acc -> None :: acc)
           ~init:[]
-          ~f:(fun acc version ihl length ttl proto ->
+          ~f:(fun acc ~version ~ihl ~length ~ttl ~proto ->
             Some
               [
                 version;

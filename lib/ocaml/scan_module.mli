@@ -34,6 +34,7 @@ type scan = {
     how its fold is given its consumer. *)
 
 and arg = {
+  label : string;  (** The label [f] takes it with: its path joined by ['_']. *)
   value : output;  (** Its output. *)
   typed : string -> string;
       (** The text of its value in its carrier, from that of an [int]. *)

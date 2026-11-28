@@ -72,12 +72,16 @@
       [Records::Slots(stride)] or [Records::Frames(offs, lens)], where the OCaml
       fold takes [?stride] or [?offs ~lens]; [invalid], an
       [Option<&mut dyn FnMut(A) -> A>], is its [?invalid]; and
-      [f(acc, x1, ..., xn)] gets the fields [fold] names, each in its Rust type,
-      an [Option] as in the OCaml fold. It answers [Ok(acc)], or [Err((e, acc))]
-      at the first record refused with no [invalid]. [f] is a type parameter, so
-      the compiler calls it directly and inlines it. It panics on the misuses
-      the OCaml fold raises [Invalid_argument] on: a stride of 0, offsets and
-      lengths of two lengths, and [invalid] with records back to back.
+      [f(acc, x1, ..., xn)] gets the fields [fold] names, positionally in the
+      order of that list, each in its Rust type, an [Option] as in the OCaml
+      fold; Rust has no labelled arguments, so where the OCaml [f] takes
+      [~ipv4_protocol], the Rust closure takes the field at its position and a
+      closure over two fields of one type can swap them. It answers [Ok(acc)],
+      or [Err((e, acc))] at the first record refused with no [invalid]. [f] is a
+      type parameter, so the compiler calls it directly and inlines it. It
+      panics on the misuses the OCaml fold raises [Invalid_argument] on: a
+      stride of 0, offsets and lengths of two lengths, and [invalid] with
+      records back to back.
     - [Error], the codec's error ({!Wire.Error.t}): [at], the absolute offset of
       the failing field; [field], the [Path] of field names to it; and [kind], a
       [Kind] with a variant per {!Wire.Error.type-kind}. A decoder answers the

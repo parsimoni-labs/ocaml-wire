@@ -23,8 +23,9 @@ let uint32_eq : (Wire_runtime.UInt32.t, int) Type.eq =
 
 let[@inline always] step_opaque ~init ~f ~f14_ipv4_protocol =
   f init
-    (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-    None
+    ~ipv4_protocol:
+      (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+    ~ipv4_tcp_dst_port:None
 
 let[@inline always] step_tcp ~buf ~base ~init ~f ~invalid ~f6_ipv4_ihl
     ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -42,11 +43,13 @@ let[@inline always] step_tcp ~buf ~base ~init ~f ~invalid ~f6_ipv4_ihl
       invalid init
     else
       f init
-        (Some
-           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-        (Some
-           (Wire_runtime.UInt16.unsafe_of_int
-              (Int64.to_int f20_ipv4_tcp_dst_port)))
+        ~ipv4_protocol:
+          (Some
+             (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        ~ipv4_tcp_dst_port:
+          (Some
+             (Wire_runtime.UInt16.unsafe_of_int
+                (Int64.to_int f20_ipv4_tcp_dst_port)))
 
 let[@inline always] step_udp ~buf ~base ~init ~f ~invalid ~f6_ipv4_ihl
     ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -61,9 +64,10 @@ let[@inline always] step_udp ~buf ~base ~init ~f ~invalid ~f6_ipv4_ihl
     else if (f32_ipv4_udp_length : int64) > n17 then invalid init
     else
       f init
-        (Some
-           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-        None
+        ~ipv4_protocol:
+          (Some
+             (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        ~ipv4_tcp_dst_port:None
 
 let[@inline always] step_tcp_cases ~buf ~base ~init ~f ~invalid ~bw3
     ~f6_ipv4_ihl ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -110,7 +114,7 @@ let[@inline always] step_record ~buf ~base ~stop ~init ~f ~invalid =
     in
     if (f3_ether_type : int64) = 2048L then
       step_ipv4 ~buf ~base ~stop ~init ~f ~invalid
-    else f init None None
+    else f init ~ipv4_protocol:None ~ipv4_tcp_dst_port:None
 
 let[@inline always] fold_step_within buf ~length off len ~init ~f ~invalid =
   if off < 0 || len > length - off then invalid init
@@ -124,8 +128,9 @@ let[@inline always] fold_step buf off len ~init ~f ~invalid =
 
 let[@inline always] step_index_opaque ~current ~f ~f14_ipv4_protocol =
   f current
-    (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-    None
+    ~ipv4_protocol:
+      (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+    ~ipv4_tcp_dst_port:None
 
 let[@inline always] step_index_tcp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
     ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -143,11 +148,13 @@ let[@inline always] step_index_tcp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
       invalid current
     else
       f current
-        (Some
-           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-        (Some
-           (Wire_runtime.UInt16.unsafe_of_int
-              (Int64.to_int f20_ipv4_tcp_dst_port)))
+        ~ipv4_protocol:
+          (Some
+             (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        ~ipv4_tcp_dst_port:
+          (Some
+             (Wire_runtime.UInt16.unsafe_of_int
+                (Int64.to_int f20_ipv4_tcp_dst_port)))
 
 let[@inline always] step_index_udp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
     ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -162,9 +169,10 @@ let[@inline always] step_index_udp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
     else if (f32_ipv4_udp_length : int64) > n17 then invalid current
     else
       f current
-        (Some
-           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-        None
+        ~ipv4_protocol:
+          (Some
+             (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        ~ipv4_tcp_dst_port:None
 
 let[@inline always] step_index_tcp_cases ~buf ~base ~current ~f ~invalid ~bw3
     ~f6_ipv4_ihl ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -205,7 +213,7 @@ let[@inline always] step_index_record ~buf ~base ~stop ~current
   if (f3_ether_type : int64) = 2048L then
     step_index_ipv4 ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f ~invalid
       ~w12
-  else f current None None
+  else f current ~ipv4_protocol:None ~ipv4_tcp_dst_port:None
 
 let[@inline always] fold_step_index_known ~length base stop =
   base >= 0 && stop >= 34 && stop <= length - base
@@ -301,8 +309,9 @@ let[@inline never] fold_step_frames_short buf ~stride ~last ~off ~init ~f
 
 let[@inline always] step_frames_opaque ~current ~f ~f14_ipv4_protocol =
   f current
-    (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-    None
+    ~ipv4_protocol:
+      (Some (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+    ~ipv4_tcp_dst_port:None
 
 let[@inline always] step_frames_tcp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
     ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -320,11 +329,13 @@ let[@inline always] step_frames_tcp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
       invalid current
     else
       f current
-        (Some
-           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-        (Some
-           (Wire_runtime.UInt16.unsafe_of_int
-              (Int64.to_int f20_ipv4_tcp_dst_port)))
+        ~ipv4_protocol:
+          (Some
+             (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        ~ipv4_tcp_dst_port:
+          (Some
+             (Wire_runtime.UInt16.unsafe_of_int
+                (Int64.to_int f20_ipv4_tcp_dst_port)))
 
 let[@inline always] step_frames_udp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
     ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -339,9 +350,10 @@ let[@inline always] step_frames_udp ~buf ~base ~current ~f ~invalid ~f6_ipv4_ihl
     else if (f32_ipv4_udp_length : int64) > n17 then invalid current
     else
       f current
-        (Some
-           (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
-        None
+        ~ipv4_protocol:
+          (Some
+             (Wire_runtime.UInt8.unsafe_of_int (Int64.to_int f14_ipv4_protocol)))
+        ~ipv4_tcp_dst_port:None
 
 let[@inline always] step_frames_tcp_cases ~buf ~base ~current ~f ~invalid ~bw3
     ~f6_ipv4_ihl ~f9_ipv4_total_length ~f14_ipv4_protocol =
@@ -382,7 +394,7 @@ let[@inline always] step_frames_record ~buf ~base ~stop ~current
   if (f3_ether_type : int64) = 2048L then
     step_frames_ipv4 ~buf ~base ~stop ~current ~f14_ipv4_protocol ~f ~invalid
       ~w12
-  else f current None None
+  else f current ~ipv4_protocol:None ~ipv4_tcp_dst_port:None
 
 let[@inline always] fold_step_frames buf off len ~stride ~init ~f ~invalid =
   if stride <= 0 || off < 0 || len < 0 || len > Bytes.length buf - off then

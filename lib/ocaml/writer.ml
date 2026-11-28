@@ -141,7 +141,8 @@ let fold_arg ~codec (plan : plan) (views : View_module.t) path =
   let layered = List.length steps > 1 in
   let arg =
     {
-      Scan_module.value = o;
+      Scan_module.label = String.concat "_" steps;
+      value = o;
       typed = View_module.typed f;
       own;
       layered;
@@ -149,7 +150,7 @@ let fold_arg ~codec (plan : plan) (views : View_module.t) path =
     }
   in
   let typ =
-    View_module.carrier_type f
+    arg.label ^ ":" ^ View_module.carrier_type f
     ^ (if Option.is_some own then " option" else "")
     ^ if layered then " option" else ""
   in
@@ -157,6 +158,20 @@ let fold_arg ~codec (plan : plan) (views : View_module.t) path =
 
 let fold_of ~codec plan views paths =
   let args = List.map (fold_arg ~codec plan views) paths in
+  let rec distinct = function
+    | [] -> ()
+    | (p, (a : Scan_module.arg)) :: rest -> (
+        match
+          List.find_opt
+            (fun (_, (b : Scan_module.arg)) -> b.label = a.label)
+            rest
+        with
+        | Some (q, _) ->
+            Fmt.kstr (refuse ~codec)
+              "the fold paths %S and %S define the same label ~%s" p q a.label
+        | None -> distinct rest)
+  in
+  distinct (List.combine paths (List.map fst args));
   let used =
     List.concat_map
       (fun ((a : Scan_module.arg), _) ->

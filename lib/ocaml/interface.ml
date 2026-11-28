@@ -468,7 +468,7 @@ let scan_preamble ppf ~codec ~(plan : plan) =
      @\n"
     plan.record codec
 
-(* The fold, its [f] taking the fields [paths], of types [types]. *)
+(* The fold, its [f] taking the fields [paths], of labelled types [types]. *)
 let pp_fold ppf ~target ~paths ~types =
   pp_section ppf "folds" "Folds";
   let f = arrows (("'acc" :: types) @ [ "'acc" ]) in
@@ -487,13 +487,13 @@ let pp_fold ppf ~target ~paths ~types =
     (Fmt.str
        "[fold buf ~init ~f] checks each record of [buf], as {!val-check} does, \
         and folds [f] over those that pass, from [init]: [f acc%s], the fields \
-        %s of the record, read during its check, a field under an optional \
-        layer [None] where the layer is absent. The records lie back to back \
-        from offset [0], each where the one before ends, up to the end of \
-        [buf]; in slots of [stride] bytes, the [i]-th at [i * stride], over \
-        the whole slots of [buf]; or in the frames of [lens.(i)] bytes at \
-        [offs.(i)]. A record in a slot or a frame is checked in its window \
-        alone.@\n\
+        %s of the record, read during its check and labelled by their paths, a \
+        field under an optional layer [None] where the layer is absent. The \
+        records lie back to back from offset [0], each where the one before \
+        ends, up to the end of [buf]; in slots of [stride] bytes, the [i]-th \
+        at [i * stride], over the whole slots of [buf]; or in the frames of \
+        [lens.(i)] bytes at [offs.(i)]. A record in a slot or a frame is \
+        checked in its window alone.@\n\
         @\n\
         A refused record stops the fold with [Error (e, acc)], [e] the error \
         {!validate} answers on its window and [acc] the fold of the records \
@@ -502,7 +502,10 @@ let pp_fold ppf ~target ~paths ~types =
         [stride] is not positive, if [offs] and [lens] are not given together \
         or differ in length, if [stride] is given with [offs], and if \
         [invalid] is given with records back to back."
-       (String.concat "" (List.mapi (fun i _ -> Fmt.str " x%d" (i + 1)) paths))
+       (String.concat ""
+          (List.map
+             (fun p -> " ~" ^ String.concat "_" (String.split_on_char '.' p))
+             paths))
        (match paths with
        | [] -> "(none)"
        | ps -> String.concat ", " (List.map (fun p -> "[" ^ p ^ "]") ps)))

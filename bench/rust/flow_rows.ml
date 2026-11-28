@@ -232,8 +232,13 @@ let[@inline always] ports tcp_sp tcp_dp udp_sp udp_dp =
   | None, Some sp -> (UInt16.to_int sp lsl 16) lor u16 udp_dp
   | None, None -> 0
 
-let[@inline always] classify () len4 proto4 src4 dst4 tsp4 tdp4 usp4 udp4 len6
-    nh6 s0 s1 s2 s3 d0 d1 d2 d3 tsp6 tdp6 usp6 udp6 =
+let[@inline always] classify () ~ipv4_total_length:len4 ~ipv4_protocol:proto4
+    ~ipv4_src:src4 ~ipv4_dst:dst4 ~ipv4_tcp_src_port:tsp4
+    ~ipv4_tcp_dst_port:tdp4 ~ipv4_udp_src_port:usp4 ~ipv4_udp_dst_port:udp4
+    ~ipv6_payload_length:len6 ~ipv6_next_header:nh6 ~ipv6_src0:s0 ~ipv6_src1:s1
+    ~ipv6_src2:s2 ~ipv6_src3:s3 ~ipv6_dst0:d0 ~ipv6_dst1:d1 ~ipv6_dst2:d2
+    ~ipv6_dst3:d3 ~ipv6_tcp_src_port:tsp6 ~ipv6_tcp_dst_port:tdp6
+    ~ipv6_udp_src_port:usp6 ~ipv6_udp_dst_port:udp6 =
   match (proto4, nh6) with
   | Some proto, _ ->
       Flow_table.add4 ~src:(u32 src4) ~dst:(u32 dst4)

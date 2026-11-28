@@ -231,12 +231,16 @@ and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
    | labelled | 397.1, 396.6 | 94.0, 93.6 |
 
    Labels cost nothing on either compiler: they are erased at compile time,
-   and on stock OCaml the call through `caml_applyN` is the same. The count
-   does not settle the question against the default, which stays
-   positional, for the reason the question states: the interpreted fold's
-   fields are a value and cannot be labelled. The generated form alone could
-   take labels at no cost, with the swaps they catch in two of the three
-   folds; that trades the one shape of both forms for it.
+   and on stock OCaml the call through `caml_applyN` is the same. The
+   interpreted fold's fields are a value and cannot be labelled.
+
+   **Ruled (orchestrator, 2026-11-28):** the generated fold's `f` takes its
+   fields labelled by their paths, the accessor names joined with `_`
+   (`~ipv4_protocol`, `~ipv4_tcp_dst_port`), on OCaml and OxCaml, since the
+   labels catch the swaps of two of the three folds at no measured cost; two
+   paths that give one label are refused by `Wire_ocaml.v`. The interpreted
+   fold stays positional, its fields a list. The Rust fold's closure takes
+   them positionally, in the order of `?fold`, as Rust has no labels.
 5. **`View.get` against `View.read`.** Ruled: the proposal stands.
    `View.get` turns a check into a view and only that, as `Option.get`; a
    field is read by `View.read b v field` (the tip's name, wire.mli:1491).

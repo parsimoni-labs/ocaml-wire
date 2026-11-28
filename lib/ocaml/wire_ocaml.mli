@@ -77,13 +77,15 @@ val v :
     [CapturedIPv4] is [captured_ipv4]), for [target] (defaults to the compiler
     the generator runs on). The module never refers to [c].
 
-    [fold] names the fields the module's [fold] hands its visitor, in that
-    order, each by its path: the accessor names from the codec down, joined with
-    ['.'], as ["ipv4.tcp.dst_port"]. Each is an integer field, of the type its
-    accessor answers, an option where the field is optional; a field under a
-    layer is one option more, as {!Wire.Codec.( / )} types it, [None] where an
-    optional layer of its path is absent. Without [fold] the module has no fold;
-    two field sets over one codec are two modules, each with its own [name].
+    [fold] names the fields the module's [fold] hands its visitor, each by its
+    path: the accessor names from the codec down, joined with ['.'], as
+    ["ipv4.tcp.dst_port"]. The visitor takes each field labelled by its path,
+    the names joined with ['_'] ([~ipv4_tcp_dst_port]), so two fields of one
+    type cannot be swapped. Each is an integer field, of the type its accessor
+    answers, an option where the field is optional; a field under a layer is one
+    option more, as {!Wire.Codec.( / )} types it, [None] where an optional layer
+    of its path is absent. Without [fold] the module has no fold; two field sets
+    over one codec are two modules, each with its own [name].
 
     A field under a {!Wire.map} is specialised when [maps] names the map: the
     record holds the map's OCaml type, and the module calls the map's functions
@@ -98,10 +100,10 @@ val v :
     Raises [Invalid_argument], naming the field and the reason, for a codec no
     module covers: parameters, actions, a field of a type it does not read (a
     repetition, a tagged union), or a map [maps] does not name; for a path of
-    [fold] that names no field or a field no fold reads; for [~maps] or
-    [~simd:true] on a codec the module does not cover; for [~simd:true] with the
-    [`OCaml] target; and naming both fields when two of them would define the
-    same OCaml name. *)
+    [fold] that names no field or a field no fold reads, and for two paths of
+    [fold] that give one label; for [~maps] or [~simd:true] on a codec the
+    module does not cover; for [~simd:true] with the [`OCaml] target; and naming
+    both fields when two of them would define the same OCaml name. *)
 
 val name : t -> string
 (** [name t] is the name of [t]'s module: its file is [name t ^ ".ml"]. *)
@@ -143,12 +145,14 @@ val main : t list -> unit
     ...) takes a trailing ['_'], as a keyword does.
 
     The signatures are those of the [`OCaml] target. A module for [`OxCaml]
-    takes the buffers it does not keep [local], and a function of a [local]
-    buffer and an offset is no function of a global one, so it meets them with
-    each such buffer argument [local]. *)
+    takes every buffer it does not keep [local]: [check], [validate], [decode],
+    [encode], the accessors, the setters, [write] and [fold] take
+    [bytes @ local] or ['b Wire.Buf.t @ local], so a caller passes a buffer
+    allocated on its stack. A function of a [local] buffer is no function of a
+    global one, so such a module meets these signatures with each such buffer
+    argument [local], and a test ascribes it to that copy of them. *)
 
-(* Open question 1: a view does not carry its buffer unless a view that does
-   counts within noise on OCaml 5.4.1 and OxCaml. *)
+(* Open question 1, measured: a view does not carry its buffer. *)
 
 (** The records of a codec and their views, which every module and submodule
     has. *)
@@ -220,16 +224,13 @@ module type VARIABLE = sig
       is refused. *)
 end
 
-(* Open question 4: the visitor takes the fields positionally, in the order
-   of [v]'s [fold]. *)
-
 (** The fold of a module generated with [~fold]. *)
 module type FOLD = sig
   type 'acc visitor
-  (** The type for the visitor: ['acc -> x1 -> ... -> xn -> 'acc], over the
-      fields the [~fold] of {!val-v} names. A test substitutes it to ascribe a
-      module:
-      [module _ : FOLD with type 'acc visitor := 'acc -> int -> 'acc =
+  (** The type for the visitor: ['acc -> l1:x1 -> ... -> ln:xn -> 'acc], over
+      the fields the [~fold] of {!val-v} names, each labelled by its path. A
+      test substitutes it to ascribe a module:
+      [module _ : FOLD with type 'acc visitor := 'acc -> apid:int -> 'acc =
        Space_packet]. *)
 
   val fold :

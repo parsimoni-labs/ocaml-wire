@@ -36,22 +36,22 @@ let batch ~stride buf =
   G_selected.fold buf ~stride ~invalid:Fun.id ~init:0
     ~f:(fun
         acc
-        ether_type
-        src
-        dst
-        ttl
-        proto
-        len
-        tcp_sp
-        tcp_dp
-        seq
-        ack
-        win
-        flags
-        off
-        udp_sp
-        udp_dp
-        udp_len
+        ~ether_type
+        ~ipv4_src:src
+        ~ipv4_dst:dst
+        ~ipv4_ttl:ttl
+        ~ipv4_protocol:proto
+        ~ipv4_total_length:len
+        ~ipv4_tcp_src_port:tcp_sp
+        ~ipv4_tcp_dst_port:tcp_dp
+        ~ipv4_tcp_seq:seq
+        ~ipv4_tcp_ack:ack
+        ~ipv4_tcp_window:win
+        ~ipv4_tcp_flags:flags
+        ~ipv4_tcp_data_offset:off
+        ~ipv4_udp_src_port:udp_sp
+        ~ipv4_udp_dst_port:udp_dp
+        ~ipv4_udp_length:udp_len
       ->
       acc
       + contribution ether_type src dst ttl proto len tcp_sp tcp_dp seq ack win

@@ -153,7 +153,7 @@ let apid_of buf ~off =
   else None
 
 let routes buf =
-  Space_packet.fold buf ~init:(Array.make 4 0) ~f:(fun counts apid ->
+  Space_packet.fold buf ~init:(Array.make 4 0) ~f:(fun counts ~apid ->
       let r = route_of_apid apid in
       counts.(r) <- counts.(r) + 1;
       counts)
@@ -171,6 +171,8 @@ Switching is a one-to-one rename:
   {tr {td [View.set b v apid_f x]} {td [Space_packet.set_apid b v x]}}
   {tr {td [View.fold packet Codec.[ apid ] buf ~init ~f]}
       {td [Space_packet.fold buf ~init ~f], its fields declared in [gen.ml]}}
+  {tr {td [~f:(fun acc apid -> ...)], positional}
+      {td [~f:(fun acc ~apid -> ...)], labelled by path}}
   {tr {td [Codec.decode packet buf ~off], [Codec.validate packet buf ~off]}
       {td [Space_packet.decode buf ~off], [Space_packet.validate buf ~off]}}
 }
@@ -180,13 +182,16 @@ where the interpreted form's are values; it meets the signatures of
 [Wire_ocaml] ([FIXED], [FOLD]), which a test ascribes it to. The differential
 tests prove that both forms answer the same on the same bytes. A generated
 module has at most one fold: two field sets over one codec are two modules
-([v ~name:"space_packet_route" ~fold:[ ... ]]).
+([v ~name:"space_packet_route" ~fold:[ ... ]]). Its [f] takes each field
+labelled by its path, the accessor names joined with ['_'] ([~apid],
+[~ipv4_tcp_dst_port]), so two fields of one type cannot be swapped; the
+interpreted fold's fields are a list, a value, and reach [f] positionally.
 
 {2:same_shape The same shape as the generated module}
 
 A program can give the interpreted form the generated module's functions,
 with the same arguments and labels, so that one line switches between the
-two:
+two; its fold labels the fields it hands [f], as the generated one does:
 
 {@ocaml[
 module P = struct
@@ -196,7 +201,8 @@ module P = struct
   let get = View.get
 
   let fold ?stride ?offs ?lens ?invalid buf ~init ~f =
-    View.fold ?stride ?offs ?lens ?invalid packet Codec.[ apid ] buf ~init ~f
+    View.fold ?stride ?offs ?lens ?invalid packet Codec.[ apid ] buf ~init
+      ~f:(fun acc apid -> f acc ~apid)
 
   let apid b v = View.read b v apid_f
   let set_apid b v x = View.set b v apid_f x
@@ -295,7 +301,8 @@ let count buf ~offs ~lens =
 
 The generated module takes the same paths, spelled with its accessor names:
 [Wire_ocaml.v ~name:"eth" ~fold:[ "ipv4.protocol"; "ipv4.tcp.dst_port" ] eth]
-writes [Eth.fold buf ~offs ~lens ~init ~f].
+writes [Eth.fold buf ~offs ~lens ~init ~f], its [f] taking
+[~ipv4_protocol] and [~ipv4_tcp_dst_port].
 
 {1:backends Verified backends}
 

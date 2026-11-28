@@ -889,12 +889,12 @@ let opt = Option.fold ~none:(-1) ~some:u8
 let test_scan_overflow () =
   let sized =
     one (fun buf ~offs ~lens ~invalid ->
-        S_sized.fold buf ~offs ~lens ~invalid ~init:[] ~f:(fun acc n tail ->
+        S_sized.fold buf ~offs ~lens ~invalid ~init:[] ~f:(fun acc ~n ~tail ->
             Some [ u32 n; u8 tail ] :: acc))
   and overflow =
     one (fun buf ~offs ~lens ~invalid ->
         S_overflow.fold buf ~offs ~lens ~invalid ~init:[]
-          ~f:(fun acc a hi lo b c ->
+          ~f:(fun acc ~a ~hi ~lo ~b ~c ->
             Some [ u32 a; hi; lo; u32 b; u32 c ] :: acc))
   in
   List.iter
@@ -915,8 +915,8 @@ let test_scan_overflow () =
 let test_scan_skipped () =
   let skipped =
     one (fun buf ~offs ~lens ~invalid ->
-        S_skipped.fold buf ~offs ~lens ~invalid ~init:[] ~f:(fun acc n x a b ->
-            Some [ u32 n; u8 x; opt a; opt b ] :: acc))
+        S_skipped.fold buf ~offs ~lens ~invalid ~init:[]
+          ~f:(fun acc ~n ~x ~a ~b -> Some [ u32 n; u8 x; opt a; opt b ] :: acc))
   in
   List.iter
     (fun n ->
@@ -949,7 +949,7 @@ let test_huge_prefix () =
   ignore (ml array : string);
   let huge =
     one (fun buf ~offs ~lens ~invalid ->
-        S_huge.fold buf ~offs ~lens ~invalid ~init:[] ~f:(fun acc flag tail ->
+        S_huge.fold buf ~offs ~lens ~invalid ~init:[] ~f:(fun acc ~flag ~tail ->
             Some [ u8 flag; u8 tail ] :: acc))
   in
   List.iter
@@ -1002,13 +1002,13 @@ let words s =
    whose outputs are immutable, a level costs a walk about 21 lines: its
    three slots, the bound checks and reads of its two prefixes, its
    presence, its join and the jumps to it, or the short code after it copied
-   into its branches; and about 470 words on OCaml, 580 on OxCaml, whose
+   into its branches; and about 490 words on OCaml, 610 on OxCaml, whose
    arithmetic is spelled as calls: each call of [f] gives each field in its
-   carrier, an option under a layer. [pp] prints the three outputs of a
+   carrier, labelled, an option under a layer. [pp] prints the three outputs of a
    level on three lines. *)
 let nested_budget target n =
   match target with
-  | `OCaml -> ((47 * n) + 72, (480 * n) + 700)
+  | `OCaml -> ((47 * n) + 72, (490 * n) + 700)
   | `OxCaml -> ((132 * n) + 72, (1380 * n) + 250)
 
 (* The scanner's text before its views, and its views, which start with the
@@ -1110,8 +1110,24 @@ let test_nested_fold () =
   in
   let v x = UInt8.to_int x in
   let o = function Some x -> v x | None -> 0 in
-  let f acc t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 a11 a10 a9 a8 a7 a6 a5 a4 a3
-      a2 a1 a0 =
+  let f acc ~tag:t0 ~inner_tag:t1 ~inner_inner_tag:t2 ~inner_inner_inner_tag:t3
+      ~inner_inner_inner_inner_tag:t4 ~inner_inner_inner_inner_inner_tag:t5
+      ~inner_inner_inner_inner_inner_inner_tag:t6
+      ~inner_inner_inner_inner_inner_inner_inner_tag:t7
+      ~inner_inner_inner_inner_inner_inner_inner_inner_tag:t8
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_tag:t9
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_tag:t10
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_tag:t11
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_after:
+        a11
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_inner_after:a10
+      ~inner_inner_inner_inner_inner_inner_inner_inner_inner_after:a9
+      ~inner_inner_inner_inner_inner_inner_inner_inner_after:a8
+      ~inner_inner_inner_inner_inner_inner_inner_after:a7
+      ~inner_inner_inner_inner_inner_inner_after:a6
+      ~inner_inner_inner_inner_inner_after:a5 ~inner_inner_inner_inner_after:a4
+      ~inner_inner_inner_after:a3 ~inner_inner_after:a2 ~inner_after:a1
+      ~after:a0 =
     acc + v t0 + o t1 + o t2 + o t3 + o t4 + o t5 + o t6 + o t7 + o t8 + o t9
     + o t10 + o t11 + o a11 + o a10 + o a9 + o a8 + o a7 + o a6 + o a5 + o a4
     + o a3 + o a2 + o a1 + v a0
@@ -1164,7 +1180,7 @@ let test_fold_no_alloc () =
     fix_checked buf (i * size);
     Bytes.set_uint16_be buf ((i * size) + 1) 20
   done;
-  let f acc version ihl length ttl proto =
+  let f acc ~version ~ihl ~length ~ttl ~proto =
     acc + version + ihl + UInt16.to_int length + UInt8.to_int ttl
     + UInt8.to_int proto
   in
@@ -1204,7 +1220,7 @@ let test_scanner_refusals () =
   refused "two outputs of one name" (fun () -> scanner (pair "a_b" "a_B"));
   (* A fold names each field by its path: one that names no field, a field
      no fold reads or goes through a field that holds no record is refused,
-     naming the path. *)
+     naming the path, and so are two paths [f] would take under one label. *)
   let refused_path what make needle =
     match make () with
     | _ -> Alcotest.failf "%s: written" what
@@ -1221,6 +1237,7 @@ let test_scanner_refusals () =
   refused_path "a field holding a record"
     (fold Packet_stack.capture [ "ipv4.tcp" ])
     "\"ipv4.tcp\"";
+  refused_path "two paths of one label" (fold (pair "a" "b") [ "a"; "a" ]) "~a";
   Alcotest.(check bool)
     "a fold of no field" true
     (contains (scanner ~fields:[] (pair "a" "b")) "let[@inline] fold ");
@@ -1275,10 +1292,10 @@ let test_scanner_outputs () =
      not, as [Codec.( / )] types it. *)
   let intf = Wire_ocaml.(to_mli (v ~fold:[ "tag"; "x.a"; "y.b" ] outer)) in
   Alcotest.(check bool)
-    "f takes the fields in order" true
+    "f takes the fields labelled by their paths" true
     (contains intf
-       "f:('acc -> Wire_runtime.UInt8.t -> Wire_runtime.UInt8.t option -> \
-        Wire_runtime.UInt8.t option -> 'acc)");
+       "f:('acc -> tag:Wire_runtime.UInt8.t -> x_a:Wire_runtime.UInt8.t option \
+        -> y_b:Wire_runtime.UInt8.t option -> 'acc)");
   let padded =
     Wire.Private.Everparse.Raw.(
       struct_ "Padded" [ anon_field uint8; field "z" uint8 ])

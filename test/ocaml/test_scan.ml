@@ -41,7 +41,12 @@ let decoded buf off len =
           (ipv6 (fun (i : Packet_stack.ipv6) -> i.dst3))
 
 let invalid acc = "invalid" :: acc
-let f acc a b c d e g h = show a b c d e g h :: acc
+
+let f acc ~ipv4_protocol ~ipv4_src ~ipv4_dst ~ipv4_tcp_dst_port
+    ~ipv4_udp_dst_port ~ipv6_next_header ~ipv6_dst3 =
+  show ipv4_protocol ipv4_src ipv4_dst ipv4_tcp_dst_port ipv4_udp_dst_port
+    ipv6_next_header ipv6_dst3
+  :: acc
 
 let index buf ~offs ~lens =
   match S_capture_step.fold buf ~offs ~lens ~invalid ~init:[] ~f with

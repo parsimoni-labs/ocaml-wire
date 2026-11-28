@@ -37,11 +37,12 @@ type scan = {
           arguments; [None] for a fold that calls a visitor by name. *)
 }
 
-(* A field a fold hands its [f]: its output, the text of its value in its
-   carrier from an [int], the presence of the field itself when it is
-   optional, and through a layer one option more, [None] where the innermost
-   optional layer of [layer] is absent. *)
+(* A field a fold hands its [f]: the label [f] takes it with, its output, the
+   text of its value in its carrier from an [int], the presence of the field
+   itself when it is optional, and through a layer one option more, [None]
+   where the innermost optional layer of [layer] is absent. *)
 and arg = {
+  label : string;
   value : output;
   typed : string -> string;
   own : output option;
@@ -118,14 +119,14 @@ let opt w p v =
       | "true" -> Fmt.str "(Some %s)" v
       | p -> Fmt.str "(if %s then Some %s else None)" p v)
 
-(* The value of [a] as [f] takes it. *)
+(* The value of [a] as [f] takes it, labelled. *)
 let arg_text w a =
   let v = a.typed (to_int w a.value) in
   let v = if Option.is_some a.own then opt w a.own v else v in
-  if a.layered then opt w a.layer v else v
+  Fmt.str "~%s:%s" a.label (if a.layered then opt w a.layer v else v)
 
 (* The call of the visitor's [valid], applied to [acc], with the outputs,
-   where the walk [w] ends; or of [f], with its arguments in order. *)
+   where the walk [w] ends; or of [f], with its labelled arguments. *)
 let call s valid (w : w) =
   match s.args with
   | None ->
@@ -142,7 +143,7 @@ let reject s m acc =
   else Fmt.str "%s.invalid %s" m acc
 
 (* The acceptance of a record by the visitor [m] from [acc], with the outputs
-   positional to the argument [f] in a fold that takes its consumer as
+   labelled to the argument [f] in a fold that takes its consumer as
    arguments. *)
 let accept s m acc =
   if Option.is_some s.args then call s ("f " ^ acc)
