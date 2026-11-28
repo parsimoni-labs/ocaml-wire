@@ -240,6 +240,19 @@ and `make bench-apps-count` for the routing, gateway and CLCW rows, on OCaml
    on OCaml (936 against 881), and is beyond noise on both compilers. The
    interface is unchanged by this count: the decision is the orchestrator's.
 
+   **Cause (lane perf-q3).** The generated modules and the loops differ only
+   in `check`: the accessors, `is_ok` and `get` are the same text on both.
+   In the routing loop on arm64 (`otool -tV` of `Loops.routing`, OCaml
+   5.4.1), the path of one accepted packet is 56 instructions on main and 66
+   on `api-2.0`: 8 for the length, as `Bytes.length` in each `check` takes 9
+   that ocamlopt does not hoist out of the loop where main reloaded the
+   length the loop read once, and 2 for a test `off < 0` that main left to
+   the sign of the answer. The test came back because the generator decided
+   whether a walk reads its buffer by looking for `buf` in a header that now
+   always names it; it is gone again for a check that reads nothing (space
+   packet, TM frame, CLCW, Ethernet), which leaves 64. Only `check` taking
+   the length, the column (a) above, removes the other 8.
+
 4. **Positional visitor fields swap silently** when two of them share a type:
    `~f:(fun acc seq_count apid -> ...)` over `[ apid; seq_count ]` type-checks.
    Labelled arguments would catch it but cannot be shared with the

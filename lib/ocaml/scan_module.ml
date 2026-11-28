@@ -966,15 +966,20 @@ let pp_check ?size s =
       b
       (if unboxed then " @ local" else "")
       (if Option.is_some size then "~off" else "~off ~len");
-    if reads then
+    (* [buf] is named only for a walk that reads it, which the probe below
+       looks for. *)
+    if mentions "buf" body then
       Fmt.pf s.ppf
         "let buf = (b : _ Wire_runtime.Buf.t :> bytes) in@\n\
-         let length = Bytes.length buf in@\n";
+         let length = Bytes.length buf in@\n"
+    else if reads then
+      Fmt.pf s.ppf
+        "let length = Bytes.length (b : _ Wire_runtime.Buf.t :> bytes) in@\n";
     Option.iter (Fmt.pf s.ppf "let len = %d in@\n") size;
     Fmt.pf s.ppf "%s@\n" body
   in
-  (* A walk that reads nothing answers a negative [off] itself: whether it
-     reads is found by writing it once aside. *)
+  (* A walk that reads nothing answers a negative [off] itself, so needs no
+     test of its sign: whether it reads is found by writing it once aside. *)
   let probe = Buffer.create 4096 in
   let ppf = Format.formatter_of_buffer probe in
   with_cuts
