@@ -1,7 +1,10 @@
 A checked view of a codec: [Codec.View.check] answers without raising, a
 view comes only from a check that passed, and the types keep a view to the
 buffer it was checked in and to its record type. The buffers are named by
-[Wire.Buf], so the probe links [wire] alone.
+[Wire.Buf], so the probe links [wire] alone. The probes grep the
+compiler's messages, so the build prints them without colour codes:
+
+  $ unset CLICOLOR_FORCE
 
   $ cat > dune-project << 'EOF'
   > (lang dune 3.0)
