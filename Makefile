@@ -1,5 +1,5 @@
 .PHONY: build test test-wasm test-oxcaml fuzz fuzz-paranoid fuzz-afl fuzz-afl-diff \
-       fuzz-nightly fuzz-rust 3d asn1 bench bench-demo bench-routing bench-gateway \
+       fuzz-nightly fuzz-rust 3d asn1 cbor bench bench-demo bench-routing bench-gateway \
        bench-clcw bench-rust bench-flow bench-flow-swap bench-apps-rust bench-apps-count \
        prof memtrace memtrace-demo memtrace-routing memtrace-gateway memtrace-clcw \
        cppcheck prove verify clean
@@ -104,6 +104,12 @@ verify:
 # and libraries of its EverParse prefix).
 asn1:
 	BUILD_EVERPARSE=1 dune build @test/asn1/runtest
+
+# evercddl verifies every module of test/cbor in F*, and its C compiles (needs
+# everparse-cddl.exe in PATH or ~/.local/everparse/bin, with the F*, Z3 and
+# libraries of its EverParse prefix).
+cbor:
+	BUILD_EVERPARSE=1 dune build @test/cbor/runtest
 
 bench: bench-demo bench-routing bench-gateway bench-clcw
 

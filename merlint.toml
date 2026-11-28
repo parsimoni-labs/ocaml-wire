@@ -36,3 +36,10 @@ exclude = ["E001", "E010", "E106", "E110", "E210", "E310", "E332", "E505"]
 [[rules]]
 files = "lib/asn1/wire_asn1.ml"
 exclude = ["E605"]
+
+# The pipeline docs/cbor.md designs: test/cbor runs tool and run with
+# BUILD_EVERPARSE=1 (make cbor). The module loses this exclusion with the
+# tests of the stubs and harnesses it gains after 2.0.
+[[rules]]
+files = "lib/cbor/wire_cbor.ml"
+exclude = ["E605"]

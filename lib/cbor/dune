@@ -1,0 +1,4 @@
+(library
+ (name wire_cbor)
+ (public_name wire.cbor)
+ (libraries wire wire.3d fmt unix))
