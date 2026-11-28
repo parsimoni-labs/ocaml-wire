@@ -612,9 +612,10 @@ let nullable t =
 
 let encoded t = Encoded t
 
-(* A DER or CBOR codec under a byte string, through [map], would be checked
-   by no backend: evercddl sees a bstr, Asn1.project does not read a CBOR
-   codec, and the CDDL of a CBOR value in a byte string is [encoded]'s. *)
+(* A DER or CBOR codec under a byte string, through [map] or [where true],
+   would be checked by no backend: evercddl sees a bstr, Asn1.project does not
+   read a CBOR codec, and the CDDL of a CBOR value in a byte string is
+   [encoded]'s. *)
 let containing t =
   match Types.backend_value t with
   | None -> Containing t
