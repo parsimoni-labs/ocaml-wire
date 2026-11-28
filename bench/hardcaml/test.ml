@@ -24,7 +24,7 @@ let expected bytes =
         accepted = true;
         consumed;
         contribution =
-          Int64.of_int (Stack_read.fold 0 bytes 0 (Bytes.length bytes));
+          Int64.of_int (Selected_read.batch ~stride:(Bytes.length bytes) bytes);
       }
 
 let run ~stalls ~resets frames =
