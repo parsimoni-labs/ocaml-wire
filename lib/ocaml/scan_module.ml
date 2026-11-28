@@ -1057,7 +1057,9 @@ let walks ?decide ~target ?fold ?size ~taken plan =
    exception, and the error of the first refused record is found again, off
    the hot path, by [check] and [validate] on its window alone. *)
 
-let pp_fold ppf ~name ~size =
+(* The errors of the first refused window, slot or frame, which [fold]
+   finds off its hot path. *)
+let pp_fold_errors ppf ~size =
   Fmt.pf ppf
     "let[@inline never] window_error buf off len =@\n\
      let length = Bytes.length buf in@\n\
@@ -1096,37 +1098,43 @@ let pp_fold ppf ~name ~size =
      @\n"
     (match size with
     | Some n -> Fmt.str "len >= %d && is_ok (check b ~off)" n
-    | None -> "is_ok (check b ~off ~len)");
-  let back =
-    match size with
-    | Some 0 ->
-        Fmt.str "invalid_arg \"%s.fold: records of no bytes back to back\"" name
-    | Some n ->
-        Fmt.str
-          "let length = Bytes.length buf in@\n\
-           let whole = length / %d * %d in@\n\
-           match %s_frames buf 0 whole ~stride:%d ~init ~f ~invalid:stop with@\n\
-           | acc ->@\n\
-           if whole = length then Ok acc@\n\
-           else Error (window_error buf whole (length - whole), acc)@\n\
-           | exception Refused acc -> Error (slot_error buf ~stride:%d, acc)"
-          n n step n n
-    | None ->
-        Fmt.str
-          "let length = Bytes.length buf in@\n\
-           let rec go off acc =@\n\
-           if off >= length then Ok acc@\n\
-           else@\n\
-           match %s buf off (length - off) ~init:acc ~f ~invalid:stop with@\n\
-           | exception Refused acc ->@\n\
-           Error (window_error buf off (length - off), acc)@\n\
-           | acc ->@\n\
-           let next = end_at buf length off in@\n\
-           if next <= off then Ok acc else go next acc@\n\
-           in@\n\
-           go 0 init"
-          step
-  in
+    | None -> "is_ok (check b ~off ~len)")
+
+(* The fold of records back to back: a record of constant size through the
+   frame loop over slots of that size, any other one at a time. *)
+let fold_back ~name ~size =
+  match size with
+  | Some 0 ->
+      Fmt.str "invalid_arg \"%s.fold: records of no bytes back to back\"" name
+  | Some n ->
+      Fmt.str
+        "let length = Bytes.length buf in@\n\
+         let whole = length / %d * %d in@\n\
+         match %s_frames buf 0 whole ~stride:%d ~init ~f ~invalid:stop with@\n\
+         | acc ->@\n\
+         if whole = length then Ok acc@\n\
+         else Error (window_error buf whole (length - whole), acc)@\n\
+         | exception Refused acc -> Error (slot_error buf ~stride:%d, acc)"
+        n n step n n
+  | None ->
+      Fmt.str
+        "let length = Bytes.length buf in@\n\
+         let rec go off acc =@\n\
+         if off >= length then Ok acc@\n\
+         else@\n\
+         match %s buf off (length - off) ~init:acc ~f ~invalid:stop with@\n\
+         | exception Refused acc ->@\n\
+         Error (window_error buf off (length - off), acc)@\n\
+         | acc ->@\n\
+         let next = end_at buf length off in@\n\
+         if next <= off then Ok acc else go next acc@\n\
+         in@\n\
+         go 0 init"
+        step
+
+let pp_fold ppf ~name ~size =
+  pp_fold_errors ppf ~size;
+  let back = fold_back ~name ~size in
   Fmt.pf ppf
     "let[@inline] fold (type a) ?stride ?offs ?lens ?invalid buf ~(init : a) \
      ~f : (a, Wire_runtime.Error.t * a) result =@\n\

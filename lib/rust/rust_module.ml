@@ -1233,6 +1233,37 @@ let pp_end_at ppf c =
 
 (* {2 A record's module} *)
 
+(* The answer of a check, [Check], and its [is_ok] and [get]. *)
+let check_type =
+  "/// The answer of a check: a view of the record, or none.\n\
+   #[derive(Clone, Copy, Debug)]\n\
+   pub struct Check<'a>(pub(crate) Option<View<'a>>);\n\n\
+   impl<'a> Check<'a> {\n\
+  \    /// Whether the check passed.\n\
+  \    #[inline(always)]\n\
+  \    pub fn is_ok(&self) -> bool {\n\
+  \        self.0.is_some()\n\
+  \    }\n\n\
+  \    /// The view of the record the check passed.\n\
+  \    ///\n\
+  \    /// # Panics\n\
+  \    ///\n\
+  \    /// If the check failed: a refused record is input, test\n\
+  \    /// [`Check::is_ok`] first.\n\
+  \    #[inline(always)]\n\
+  \    pub fn get(self) -> View<'a> {\n\
+  \        match self.0 {\n\
+  \            Some(v) => v,\n\
+  \            None => failed(),\n\
+  \        }\n\
+  \    }\n\
+   }\n\n\
+   #[cold]\n\
+   #[inline(never)]\n\
+   fn failed() -> ! {\n\
+  \    panic!(\"Check::get: the check failed\")\n\
+   }\n\n"
+
 let pp_view ppf c =
   Fmt.pf ppf
     "/// The bytes at constant offsets a view of the record holds.\n\
@@ -1245,35 +1276,7 @@ let pp_view ppf c =
     \    at: usize,\n\
     \    head: &'a [u8; FIXED],\n\
      }\n\n\
-     /// The answer of a check: a view of the record, or none.\n\
-     #[derive(Clone, Copy, Debug)]\n\
-     pub struct Check<'a>(pub(crate) Option<View<'a>>);\n\n\
-     impl<'a> Check<'a> {\n\
-    \    /// Whether the check passed.\n\
-    \    #[inline(always)]\n\
-    \    pub fn is_ok(&self) -> bool {\n\
-    \        self.0.is_some()\n\
-    \    }\n\n\
-    \    /// The view of the record the check passed.\n\
-    \    ///\n\
-    \    /// # Panics\n\
-    \    ///\n\
-    \    /// If the check failed: a refused record is input, test\n\
-    \    /// [`Check::is_ok`] first.\n\
-    \    #[inline(always)]\n\
-    \    pub fn get(self) -> View<'a> {\n\
-    \        match self.0 {\n\
-    \            Some(v) => v,\n\
-    \            None => failed(),\n\
-    \        }\n\
-    \    }\n\
-     }\n\n\
-     #[cold]\n\
-     #[inline(never)]\n\
-     fn failed() -> ! {\n\
-    \    panic!(\"Check::get: the check failed\")\n\
-     }\n\n\
-     /// The record at `p` in `buf`, its fixed bytes in `buf`, with no check.\n\
+     %s/// The record at `p` in `buf`, its fixed bytes in `buf`, with no check.\n\
      #[inline(always)]\n\
      pub(crate) fn at(buf: &[u8], p: i64) -> Check<'_> {\n\
     \    let Ok(at) = usize::try_from(p) else {\n\
@@ -1290,7 +1293,7 @@ let pp_view ppf c =
     \    v.at\n\
      }\n\n\
      impl<'a> View<'a> {\n"
-    c.r.fixed;
+    c.r.fixed check_type;
   List.iter (pp_accessor ppf c) c.r.members;
   Fmt.pf ppf "}\n\n";
   List.iter (pp_setter ppf) (P.settable c.r)
@@ -1582,72 +1585,64 @@ let tuple = function
    [f] takes, and the loop over the records as [records] places them, with
    [window_error] the error [validate] answers on a record's window alone.
    A record of constant [size] back to back is one slot of that size each. *)
-let pp_fold ppf ~codec ~size plan all paths =
-  let args = List.map (fold_arg ~codec plan all) paths in
-  let outputs = fold_outputs plan args in
-  let code, _ =
-    body ~depth:1 plan outputs ~frame:"frame"
-      ~finish:[ Fmt.str "Some(%s)" (tuple (List.map arg_value args)) ]
-  in
-  let types = List.map arg_type args in
-  let xs = List.mapi (fun i _ -> Fmt.str "x%d" i) args in
-  let call = Fmt.str "f(%s)" (String.concat ", " ("acc" :: xs)) in
-  let bind = Fmt.str "let %s = t;" (tuple xs) in
-  let paths_doc =
-    match paths with
-    | [] -> "no field"
-    | ps -> String.concat ", " (List.map (Fmt.str "`%s`") ps)
-  in
-  let back =
-    match size with
-    | Some 0 ->
-        "            panic!(\"fold: records of no bytes back to back\");\n"
-    | Some n ->
-        Fmt.str
-          "            let mut off = 0usize;\n\
-          \            while off < buf.len() {\n\
-          \                match buf.get(off..off + %d).and_then(fold_frame) {\n\
-          \                    Some(t) => {\n\
-          \                        %s\n\
-          \                        acc = %s;\n\
-          \                    }\n\
-          \                    None => return Err((window_error(buf, off, \
-           buf.len() - off), acc)),\n\
-          \                }\n\
-          \                off += %d;\n\
-          \            }\n\
-          \            Ok(acc)\n"
-          n bind call n
-    | None ->
-        Fmt.str
-          "            let mut off = 0usize;\n\
-          \            while off < buf.len() {\n\
-          \                match fold_frame(&buf[off..]) {\n\
-          \                    Some(t) => {\n\
-          \                        %s\n\
-          \                        acc = %s;\n\
-          \                    }\n\
-          \                    None => return Err((window_error(buf, off, \
-           buf.len() - off), acc)),\n\
-          \                }\n\
-          \                match end_at(buf, off as i64).and_then(|e| \
-           usize::try_from(e).ok()) {\n\
-          \                    Some(next) if next > off => off = next,\n\
-          \                    _ => return Ok(acc),\n\
-          \                }\n\
-          \            }\n\
-          \            Ok(acc)\n"
-          bind call
-  in
-  let refused at len =
-    Fmt.str
-      "match invalid.as_mut() {\n\
-      \                        Some(g) => acc = g(acc),\n\
-      \                        None => return Err((window_error(buf, %s, %s), \
-       acc)),\n\
-      \                    }"
-      at len
-  in
+(* The loop of [fold] over records back to back, a record of [size] bytes or
+   one [end_at] ends, each frame's fields bound by [bind] and folded by
+   [call]. *)
+let fold_back ~size ~bind ~call =
+  match size with
+  | Some 0 ->
+      "            panic!(\"fold: records of no bytes back to back\");\n"
+  | Some n ->
+      Fmt.str
+        "            let mut off = 0usize;\n\
+        \            while off < buf.len() {\n\
+        \                match buf.get(off..off + %d).and_then(fold_frame) {\n\
+        \                    Some(t) => {\n\
+        \                        %s\n\
+        \                        acc = %s;\n\
+        \                    }\n\
+        \                    None => return Err((window_error(buf, off, \
+         buf.len() - off), acc)),\n\
+        \                }\n\
+        \                off += %d;\n\
+        \            }\n\
+        \            Ok(acc)\n"
+        n bind call n
+  | None ->
+      Fmt.str
+        "            let mut off = 0usize;\n\
+        \            while off < buf.len() {\n\
+        \                match fold_frame(&buf[off..]) {\n\
+        \                    Some(t) => {\n\
+        \                        %s\n\
+        \                        acc = %s;\n\
+        \                    }\n\
+        \                    None => return Err((window_error(buf, off, \
+         buf.len() - off), acc)),\n\
+        \                }\n\
+        \                match end_at(buf, off as i64).and_then(|e| \
+         usize::try_from(e).ok()) {\n\
+        \                    Some(next) if next > off => off = next,\n\
+        \                    _ => return Ok(acc),\n\
+        \                }\n\
+        \            }\n\
+        \            Ok(acc)\n"
+        bind call
+
+(* What a refused frame of [len] bytes at [at] does to the fold: [invalid],
+   or the error of its window. *)
+let fold_refused at len =
+  Fmt.str
+    "match invalid.as_mut() {\n\
+    \                        Some(g) => acc = g(acc),\n\
+    \                        None => return Err((window_error(buf, %s, %s), \
+     acc)),\n\
+    \                    }"
+    at len
+
+(* [fold_frame], which checks a frame and answers its fields, of [types], as
+   [code] reads them; the error of a refused window; and [Records]. *)
+let pp_fold_frame ppf ~types ~code =
   Fmt.pf ppf
     "#[inline(always)]\n\
      fn fold_frame(frame: &[u8]) -> Option<%s> {\n\
@@ -1676,8 +1671,13 @@ let pp_fold ppf ~codec ~size plan all paths =
     \    Slots(usize),\n\
     \    /// In frames, the `i`-th the `lens[i]` bytes at `offs[i]`.\n\
     \    Frames(&'r [usize], &'r [usize]),\n\
-     }\n\n\
-     /// Checks each record of `buf`, as [`check`] does, and folds `f` over\n\
+     }\n\n"
+    (tuple types) code
+
+(* The documentation of [fold], over the fields [paths_doc]. *)
+let pp_fold_doc ppf paths_doc =
+  Fmt.pf ppf
+    "/// Checks each record of `buf`, as [`check`] does, and folds `f` over\n\
      /// those that pass, from `init`: `f(acc, x1, ..., xn)`, the fields %s of\n\
      /// the record, read during its check, a field under a layer `None` where\n\
      /// the layer is absent. A record in a slot or a frame is checked in its\n\
@@ -1692,8 +1692,28 @@ let pp_fold ppf ~codec ~size plan all paths =
      ///\n\
      /// If the stride of [`Records::Slots`] is 0, if the slices of\n\
      /// [`Records::Frames`] differ in length, and if `invalid` is given with\n\
-     /// [`Records::BackToBack`].\n\
-     #[inline]\n\
+     /// [`Records::BackToBack`].\n"
+    paths_doc
+
+(* The body of the loop over slots or frames: the frame [frame] folded, its
+   fields bound by [bind] and folded by [call], or refused as [refused]. *)
+let fold_step ~frame ~bind ~call ~refused =
+  Fmt.str
+    "                match %s {\n\
+    \                    Some(t) => {\n\
+    \                        %s\n\
+    \                        acc = %s;\n\
+    \                    }\n\
+    \                    None => %s\n\
+    \                }\n"
+    frame bind call refused
+
+(* [fold], its [f] given the fields [paths_doc] of [types] by [bind] and
+   [call], records back to back read by [back]. *)
+let pp_fold_fn ppf ~paths_doc ~types ~back ~bind ~call =
+  pp_fold_doc ppf paths_doc;
+  Fmt.pf ppf
+    "#[inline]\n\
      pub fn fold<A, F>(\n\
     \    buf: &[u8],\n\
     \    records: Records<'_>,\n\
@@ -1713,38 +1733,47 @@ let pp_fold ppf ~codec ~size plan all paths =
     \        Records::Slots(stride) => {\n\
     \            assert!(stride > 0, \"fold: a stride of 0\");\n\
     \            for (i, frame) in buf.chunks_exact(stride).enumerate() {\n\
-    \                match fold_frame(frame) {\n\
-    \                    Some(t) => {\n\
-    \                        %s\n\
-    \                        acc = %s;\n\
-    \                    }\n\
-    \                    None => %s\n\
-    \                }\n\
-    \            }\n\
+     %s            }\n\
     \            Ok(acc)\n\
     \        }\n\
     \        Records::Frames(offs, lens) => {\n\
     \            assert!(offs.len() == lens.len(), \"fold: offs and lens \
      differ in length\");\n\
     \            for (&off, &len) in offs.iter().zip(lens) {\n\
-    \                match off.checked_add(len).and_then(|end| \
-     buf.get(off..end)).and_then(fold_frame) {\n\
-    \                    Some(t) => {\n\
-    \                        %s\n\
-    \                        acc = %s;\n\
-    \                    }\n\
-    \                    None => %s\n\
-    \                }\n\
-    \            }\n\
+     %s            }\n\
     \            Ok(acc)\n\
     \        }\n\
     \    }\n\
      }\n\n"
-    (tuple types) code paths_doc
     (String.concat ", " ("A" :: types))
-    back bind call
-    (refused "i * stride" "stride")
-    bind call (refused "off" "len")
+    back
+    (fold_step ~frame:"fold_frame(frame)" ~bind ~call
+       ~refused:(fold_refused "i * stride" "stride"))
+    (fold_step
+       ~frame:
+         "off.checked_add(len).and_then(|end| \
+          buf.get(off..end)).and_then(fold_frame)"
+       ~bind ~call ~refused:(fold_refused "off" "len"))
+
+let pp_fold ppf ~codec ~size plan all paths =
+  let args = List.map (fold_arg ~codec plan all) paths in
+  let outputs = fold_outputs plan args in
+  let code, _ =
+    body ~depth:1 plan outputs ~frame:"frame"
+      ~finish:[ Fmt.str "Some(%s)" (tuple (List.map arg_value args)) ]
+  in
+  let types = List.map arg_type args in
+  let xs = List.mapi (fun i _ -> Fmt.str "x%d" i) args in
+  let call = Fmt.str "f(%s)" (String.concat ", " ("acc" :: xs)) in
+  let bind = Fmt.str "let %s = t;" (tuple xs) in
+  let paths_doc =
+    match paths with
+    | [] -> "no field"
+    | ps -> String.concat ", " (List.map (Fmt.str "`%s`") ps)
+  in
+  pp_fold_frame ppf ~types ~code;
+  pp_fold_fn ppf ~paths_doc ~types ~bind ~call
+    ~back:(fold_back ~size ~bind ~call)
 
 (* {2 Names} *)
 

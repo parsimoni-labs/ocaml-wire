@@ -92,7 +92,9 @@ let rec placed around = function
       @ placed around rest
   | (Span _ | Test _) :: rest -> placed around rest
 
-let fold_arg ~codec (plan : plan) (views : View_module.t) path =
+(* The output a fold path names, and the presence outputs of the optional
+   layers it goes through, innermost first. *)
+let resolve_path ~codec (views : View_module.t) path steps =
   let refuse fmt = Fmt.kstr (refuse ~codec) fmt in
   let global prefix n = if prefix = "" then n else prefix ^ "_" ^ n in
   let member (r : View_module.record) c =
@@ -124,8 +126,12 @@ let fold_arg ~codec (plan : plan) (views : View_module.t) path =
               path c
         | None -> refuse "the fold path %S names no field %S" path c)
   in
+  go "" views.root [] steps
+
+let fold_arg ~codec (plan : plan) (views : View_module.t) path =
+  let refuse fmt = Fmt.kstr (refuse ~codec) fmt in
   let steps = String.split_on_char '.' path in
-  let name, layers = go "" views.root [] steps in
+  let name, layers = resolve_path ~codec views path steps in
   let o, f, around =
     match List.assoc_opt name (placed [] plan.nodes) with
     | Some x -> x

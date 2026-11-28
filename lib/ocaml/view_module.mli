@@ -77,7 +77,8 @@ val typed : field -> string -> string
 (** [typed f x] is the text of the [int] [x] in the carrier of [f]'s value. *)
 
 val carrier_type : field -> string
-(** [carrier_type f] is the type of [f]'s value: its carrier's [t], or [int]. *)
+(** [carrier_type f] is the type of [f]'s value: its carrier's type, such as
+    [Wire_runtime.UInt16.t], or [int]. *)
 
 val record_of_sub : t -> sub -> record
 (** [record_of_sub t sub] is the record of [t] the field [sub] holds. *)
