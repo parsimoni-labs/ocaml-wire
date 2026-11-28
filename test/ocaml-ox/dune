@@ -118,6 +118,13 @@
 (rule
  (enabled_if
   (= %{ocaml-config:ox} true))
+ (targets g_remainder.ml g_remainder.mli)
+ (action
+  (run %{dep:../ocaml/gen.exe} %{targets})))
+
+(rule
+ (enabled_if
+  (= %{ocaml-config:ox} true))
  (targets g_mapped.ml g_mapped.mli)
  (action
   (run %{dep:../ocaml/gen.exe} %{targets})))
@@ -228,6 +235,7 @@
   g_packed
   g_refined
   g_overflow
+  g_remainder
   g_mapped
   s_sized
   s_overflow

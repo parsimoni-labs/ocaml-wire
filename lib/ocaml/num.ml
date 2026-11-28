@@ -95,6 +95,7 @@ let unboxed_op = function
   | "+" -> "add"
   | "-" -> "sub"
   | "*" -> "mul"
+  | "mod" -> "rem"
   | "land" -> "logand"
   | "lor" -> "logor"
   | "lxor" -> "logxor"

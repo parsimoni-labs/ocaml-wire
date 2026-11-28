@@ -64,6 +64,7 @@ let modules =
     v "signed" Schemas.signed;
     v "sized" Schemas.sized;
     v "overflow" Schemas.overflow;
+    v "remainder" Schemas.remainder;
     v "gated" (Schemas.gated 8);
     v "nested" (Schemas.nested 8);
     v "shared" Schemas.shared;

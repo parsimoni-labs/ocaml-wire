@@ -33,6 +33,7 @@ let () =
         v ~name:"g_packed" Schemas.packed;
         v ~name:"g_refined" Schemas.refined;
         v ~name:"g_overflow" Schemas.overflow;
+        v ~name:"g_remainder" Schemas.remainder;
         v ~name:"g_lanes" ~simd Schemas.lanes;
         v ~name:"s_sized" ~fold:[ "n"; "tail" ] Schemas.sized;
         v ~name:"s_overflow"

@@ -231,6 +231,15 @@ val overflow : overflow Codec.t
 (** [overflow] has field constraints and a [where] clause whose arithmetic
     overflows the native int on some inputs. *)
 
+type remainder = UInt16.t * UInt32.t * int * int
+
+val remainder_make : UInt16.t -> UInt32.t -> int -> int -> remainder
+(** [remainder_make] builds a {!remainder} record. *)
+
+val remainder : remainder Codec.t
+(** [remainder] has constraints on remainders by constants: of a field, of a sum
+    past the native int, and of a sum of two bitfields of one word. *)
+
 type sized = UInt32.t * Bytesrw.Bytes.Slice.t option * UInt8.t
 
 val sized : sized Codec.t

@@ -147,6 +147,10 @@ let rec range ranges (e : int T.expr) =
   | T.Add (a, b) -> arith T.checked_add a b
   | T.Sub (a, b) -> arith T.checked_sub a b
   | T.Mul (a, b) -> arith T.checked_mul a b
+  | T.Mod (a, b) -> (
+      match (r a, r b) with
+      | (lo, hi), (lo', hi') when lo >= 0 && lo' > 0 -> (0, min hi (hi' - 1))
+      | _ -> full)
   | T.Land (a, b) -> (
       match (r a, r b) with
       | (lo, hi), (lo', hi') when lo >= 0 && lo' >= 0 -> (0, min hi hi')
@@ -190,6 +194,7 @@ let rec past_native ranges (e : int T.expr) =
   | T.Add (a, b) -> (not (fits ranges T.checked_add a b)) || p a || p b
   | T.Sub (a, b) -> (not (fits ranges T.checked_sub a b)) || p a || p b
   | T.Mul (a, b) -> (not (fits ranges T.checked_mul a b)) || p a || p b
+  | T.Mod (a, b) -> p a || p b
   | T.Lsl (a, b) ->
       let k = shift b and lo, hi = range ranges a in
       k < 0
@@ -219,6 +224,7 @@ let rec wide_expr : type a. (int * int) Smap.t -> a T.expr -> bool =
   | T.Add (a, b) -> int e || w a || w b
   | T.Sub (a, b) -> int e || w a || w b
   | T.Mul (a, b) -> int e || w a || w b
+  | T.Mod (a, b) -> int e || w a || w b
   | T.Land (a, b) -> int e || w a || w b
   | T.Lor (a, b) -> int e || w a || w b
   | T.Lxor (a, b) -> int e || w a || w b
@@ -238,7 +244,8 @@ let rec wide_expr : type a. (int * int) Smap.t -> a T.expr -> bool =
   | T.If_then_else (c, a, b) -> w c || w a || w b
   | _ -> false
 
-(* The expressions the generated code can write. *)
+(* The expressions the generated code can write. A remainder is by a positive
+   literal, so no input divides by zero. *)
 let rec supported : type a. a T.expr -> unit =
  fun e ->
   let both : type b. b T.expr -> b T.expr -> unit =
@@ -249,6 +256,7 @@ let rec supported : type a. a T.expr -> unit =
   match e with
   | T.Int _ | T.Bool _ | T.Ref (T.I, _) -> ()
   | T.Add (a, b) | T.Sub (a, b) | T.Mul (a, b) -> both a b
+  | T.Mod (a, T.Int n) when n > 0 -> supported a
   | T.Land (a, b) | T.Lor (a, b) | T.Lxor (a, b) -> both a b
   | T.Lsl (a, b) | T.Lsr (a, b) -> both a b
   | T.Lnot a -> supported a
@@ -670,6 +678,7 @@ let rec key : type a. a T.expr -> string =
   | T.Add (a, b) -> op "+" a b
   | T.Sub (a, b) -> op "-" a b
   | T.Mul (a, b) -> op "*" a b
+  | T.Mod (a, b) -> op "mod" a b
   | T.Land (a, b) -> op "land" a b
   | T.Lor (a, b) -> op "lor" a b
   | T.Lxor (a, b) -> op "lxor" a b

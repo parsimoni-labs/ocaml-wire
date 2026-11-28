@@ -465,6 +465,28 @@ let test_overflow () =
         (u32 1l, 0, 0, u32 Int32.min_int, u32 Int32.min_int);
       ])
 
+(* A remainder by a constant is the codec's, narrow or past the native int,
+   where a check fails and where it holds. *)
+let test_remainder () =
+  let fix buf off =
+    Bytes.set_uint8 buf (off + 1) (2 * Random.State.int rand 128)
+  in
+  reads ~fix Schemas.remainder
+    ~decode:(encoded G_remainder.min_size G_remainder.encode G_remainder.decode)
+    ~validate:G_remainder.validate;
+  let u16 = UInt16.v and u32 = UInt32.of_int32 in
+  writes Schemas.remainder
+    ~write:(fun (even, word, lo, hi) buf off ->
+      G_remainder.write buf ~off ~even ~word ~lo ~hi)
+    (decoded ~fix Schemas.remainder 200
+    @ [
+        (u16 1, u32 0l, 0, 0);
+        (u16 0, u32 5l, 0, 0);
+        (u16 0, u32 (-1l), 0, 0);
+        (u16 2, u32 0l, 1, 1);
+        (u16 2, u32 0l, 1, 0);
+      ])
+
 (* A codec the generator cannot specialise is refused when the code is
    generated, naming the field and why, rather than given a module with fewer
    functions. *)
@@ -515,7 +537,8 @@ let test_refused () =
 (* Shapes no module reads are refused, naming the field and the shape: an
    integer of [n] bytes, which holds an [Optint.Int63.t] that [wire.runtime]
    has no carrier for; a byte array whose bytes have a condition, which needs a
-   loop over its bytes; and a remainder. *)
+   loop over its bytes; and a remainder by anything but a positive literal,
+   which an input could make divide by zero. *)
 let test_refused_shapes () =
   let refused : type a. string -> a Field.t -> string list -> unit =
    fun what field needles ->
@@ -1679,6 +1702,7 @@ let suite =
       Alcotest.test_case "adjacent fields" `Quick test_packed;
       Alcotest.test_case "errors in the codec's order" `Quick test_refined;
       Alcotest.test_case "overflowing arithmetic" `Quick test_overflow;
+      Alcotest.test_case "remainders" `Quick test_remainder;
       Alcotest.test_case "refused shapes" `Quick test_refused_shapes;
       Alcotest.test_case "unsupported codecs are refused" `Quick test_refused;
       Alcotest.test_case "clashing names are refused" `Quick test_clash;

@@ -228,6 +228,9 @@
   `Check::is_ok`, `Check::get` and a closure fold taking the fields in `?fold`
   order (#439, #448, #509, #572, #PR, @samoht)
 
+- `Wire_ocaml` and `Wire_rust` generate a constraint with a remainder by a
+  positive literal, as `Expr.(self mod int 2 = int 0)` (#PR, @samoht)
+
 - `wire_hardcaml` (`Wire_hardcaml`), experimental and built only with
   `BUILD_HARDCAML=1`: generate a Hardcaml hardware decoder for a bounded
   frame or an AXI4-Stream (#477, @samoht)

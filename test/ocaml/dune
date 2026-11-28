@@ -71,6 +71,11 @@
   (run ./gen.exe %{targets})))
 
 (rule
+ (targets g_remainder.ml g_remainder.mli)
+ (action
+  (run ./gen.exe %{targets})))
+
+(rule
  (targets g_lanes.ml g_lanes.mli)
  (action
   (run ./gen.exe %{targets})))
@@ -153,6 +158,7 @@
   g_packed
   g_refined
   g_overflow
+  g_remainder
   g_lanes
   s_sized
   s_overflow

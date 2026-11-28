@@ -62,6 +62,7 @@ let rec expr_ok : type a. a T.expr -> bool = function
   | T.Lsl (a, b)
   | T.Lsr (a, b) ->
       expr_ok a && expr_ok b
+  | T.Mod (a, T.Int n) -> n > 0 && expr_ok a
   | T.Lnot a -> expr_ok a
   | T.Eq (a, b) -> expr_ok a && expr_ok b
   | T.Ne (a, b) -> expr_ok a && expr_ok b

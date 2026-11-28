@@ -71,6 +71,11 @@ let test_arithmetic () =
   let max = Fmt.str "%du64" max_int in
   has "overflow" overflow (Fmt.str "(((f1_a as u64) + %s) != %s)" near_max max);
   has "overflow" overflow (Fmt.str "(((f3_lo as u64) + %s) != %s)" near_max max);
+  let remainder = src Schemas.remainder in
+  has "remainder" remainder "((f1_even % 2i64) == 0i64)";
+  has "remainder" remainder
+    (Fmt.str "((((f2_word as u64) + %s) %% 7u64) != 3u64)" near_max);
+  has "remainder" remainder "((((f3_lo * 3i64) + f4_hi) % 5i64) != 4i64)";
   let sized = src Schemas.sized in
   has "sized" sized "if (((f1_n >> 16) * (f1_n >> 16)) != 1i64) {";
   has "sized" sized "if (n4 as u64) > (r2.len() as u64) { return None; }";
